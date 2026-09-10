@@ -95,7 +95,9 @@ function DesktopWorkspace() {
   const split = useCallback((source, axis, options = {}) => {
     if (layoutRef.current.panes.length >= MAX_PANES) return;
     const id = `pane-${++counter.current}`;
-    dispatch({ type: "split", source, axis, id, path: options.task?.rootPath ?? controllers.current.get(source)?.project?.rootPath, task: options.task, before: options.before });
+    const project = controllers.current.get(source)?.project;
+    const newChat = !options.task && project?.standalone;
+    dispatch({ type: "split", source, axis, id, path: newChat ? null : options.task?.rootPath ?? project?.rootPath, newChat, task: options.task, before: options.before });
     return id;
   }, []);
   const close = useCallback((id) => dispatch({ type: "close", id }), []);

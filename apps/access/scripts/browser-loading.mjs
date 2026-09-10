@@ -57,6 +57,9 @@ export async function checkLoading(window, origin) {
           });
           await navigation;
           await until(async () => (await snapshot()).visibility === 'visible', `${mode}: content revealed`);
+          // After the stalled-download fallback, visibility no longer signals font readiness.
+          // Navigation can also finish before Chromium has decoded the resumed font.
+          await until(async () => (await snapshot()).fontStatus === 'loaded', `${mode}: font loading settled`);
           const state = await snapshot();
           assert.equal(state.loading, false);
           assert.equal(state.fontReady, mode !== 'failed-font', `${mode}: expected font availability`);

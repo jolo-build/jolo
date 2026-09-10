@@ -38,7 +38,7 @@ const log = {
 
 /** Methods the renderer may invoke through the bridge; everything else fails closed. */
 const RENDERER_METHODS = new Set([
-  "engine.status", "project.open", "session.create", "session.list", "session.page",
+  "engine.status", "project.open", "chat.create", "session.create", "session.list", "session.page",
   "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",

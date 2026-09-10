@@ -11,7 +11,7 @@ import { PendingPermissions } from "./pending-permissions.js";
 import { useWorkingChanges } from './use-working-changes.js';
 
 const WORKSPACE_EVENTS = new Set(["workspace.created", "workspace.removed"]);
-export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, visible = true, watchChanges = false } = {}) {
+export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, initialNewChat = false, visible = true, watchChanges = false } = {}) {
   const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog } = useEngineConnection();
   const [agents, setAgents] = useState([]);
   const visibleRef = useRef(visible);
@@ -323,9 +323,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (!path && restoreLastProject && !window.jolo.smoke) {
       try { path = localStorage.getItem("jolo.lastProject"); } catch { /* optional */ }
     }
-    if (initialTask || path) void (initialTask ? openFromBoard(initialTask) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
+    if (initialNewChat || initialTask || path) void (initialNewChat ? newChat() : initialTask ? openFromBoard(initialTask) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
     else setRestoringProject(false);
-  }, [engine.connected, initialProject, initialTask, restoreLastProject, openProject, openFromBoard]);
+  }, [engine.connected, initialProject, initialTask, initialNewChat, restoreLastProject, openProject, openFromBoard, newChat]);
 
   const wasConnected = useRef(engine.connected);
   useEffect(() => {

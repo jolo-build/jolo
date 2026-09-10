@@ -33,6 +33,12 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   };
   const report = { measuredAt: new Date().toISOString(), electron: process.versions.electron, chrome: process.versions.chrome, checks: [] };
   await waitFor("Boolean(window.__joloSmoke)", "renderer hook");
+  if (process.env.JOLO_CHATS_SMOKE === '1') {
+    const { runStandaloneChatsSmoke } = await import('./standalone-chats-smoke.mjs');
+    try { await runStandaloneChatsSmoke({ window, bridge, project, results, evaluate, waitFor, report }); }
+    finally { fixture.close(); }
+    return;
+  }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");

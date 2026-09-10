@@ -162,7 +162,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       const target = event.target instanceof Element ? event.target : document.activeElement;
       // Selecting a task leaves focus on its sidebar button; typing should continue in that task.
       // Other buttons keep their keyboard behavior, including task options and unselected rows.
-      const selectedTask = target?.closest('.sidebar .task[aria-current="page"]');
+      const selectedTask = target?.closest('.sidebar .task[aria-current="page"], .sidebar .recent-chat[aria-current="page"]');
       if (!selectedTask && target?.closest('input, textarea, select, button, a[href], summary, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="tab"], [role="separator"], .terminal, .inspector')) return;
       const pane = target?.closest('.pane-slot');
       if (pane && pane !== input.current?.closest('.pane-slot')) return;
@@ -234,7 +234,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
         }
       }} />
     <div className="composer-controls">
-      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name="folder" size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
+      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton usage={usage} answererName={answerer ?? answererName} />
       <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} title={answerer ? `Answering: ${answerer}. Click to choose who answers.` : "Configure provider and model"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button><span className="grow" />

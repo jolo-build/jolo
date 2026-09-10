@@ -14,7 +14,7 @@ export function paneReducer(state, action) {
     case "split": {
       if (state.panes.length >= MAX_PANES || !state.panes.some((pane) => pane.id === action.source) || state.panes.some((pane) => pane.id === action.id)) return state;
       const tree = transform(state.tree, action.source, (leaf) => ({ id: `split-${action.id}`, axis: action.axis === "y" ? "y" : "x", ratio: .5, children: action.before ? [{ id: action.id }, leaf] : [leaf, { id: action.id }] }));
-      return { tree, panes: [...state.panes, { id: action.id, path: action.path ?? null, ...(action.task ? { task: action.task } : {}) }], active: action.id, zoom: null };
+      return { tree, panes: [...state.panes, { id: action.id, path: action.path ?? null, ...(action.task ? { task: action.task } : {}), ...(action.newChat ? { newChat: true } : {}) }], active: action.id, zoom: null };
     }
     case "close": {
       if (state.panes.length === 1 || !state.panes.some((pane) => pane.id === action.id)) return state;

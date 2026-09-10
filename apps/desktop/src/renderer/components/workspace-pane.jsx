@@ -30,7 +30,7 @@ export const WorkspacePane = memo(function WorkspacePane({ pane, active, visible
   const [view, setView] = useState(pane.id === "pane-1" ? "board" : "task");
   useLayoutEffect(() => { onViewChange(pane.id, view); }, [onViewChange, pane.id, view]);
   const [context, setContext] = useState(null);
-  const state = useEngine({ restoreLastProject: pane.id === "pane-1", initialProject: pane.path, initialTask: pane.task, visible: visible && view === "task", watchChanges: context === 'changes' || context === 'files' });
+  const state = useEngine({ restoreLastProject: pane.id === "pane-1", initialProject: pane.path, initialTask: pane.task, initialNewChat: pane.newChat, visible: visible && view === "task", watchChanges: context === 'changes' || context === 'files' });
   const connection = useEngineConnection();
   const { setOverlay } = connection;
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -110,7 +110,7 @@ export const WorkspacePane = memo(function WorkspacePane({ pane, active, visible
       openProject: (path) => state.openProject(path).then(() => setView("task")).catch((e) => state.setError(e.message)),
       showBoard: async () => { await state.refreshBoard(); setView("board"); },
       showTask: () => setView("task"),
-      newTask: () => state.newSession("").then(() => setView("task")),
+      newTask: () => (project?.standalone ? state.newChat() : state.newSession("")).then(() => setView("task")),
       newChat: () => state.newChat().then(() => setView('task')),
       board: () => state.board,
       closeTerminal: () => { setTerminalOpen(false); setToolsPanel(null); },
@@ -259,7 +259,7 @@ export const WorkspacePane = memo(function WorkspacePane({ pane, active, visible
             {context === "browser" && browser && workspaceId && <BrowserPane key={workspaceId} workspaceId={workspaceId} initialUrl={browser.url} onTitle={setBrowserTitle} onNavigate={(url) => setBrowser({ url })} />}
           </div>
         </aside>
-        <section className="task-tools" aria-label="Task tools" hidden={view === "board"}>
+        <section className="task-tools" aria-label="Task tools" hidden={view === "board" || project?.standalone}>
           <div className="tools-bar">
             <button aria-expanded={toolsPanel === "checks"} aria-controls={`${pane.id}-checks-panel`} onClick={() => setToolsPanel(toolsPanel === "checks" ? null : "checks")}><Icon name="circleCheck" />Checks<span className={verification?.status === "passed" ? "good" : "muted"}>{verificationLabel(verification)}</span></button>
             <button aria-expanded={toolsPanel === "terminal"} aria-controls={`${pane.id}-terminal-panel`} onClick={() => toolsPanel === "terminal" ? setToolsPanel(null) : openTerminal()} disabled={!project}><Icon name="terminal" />Terminal</button>

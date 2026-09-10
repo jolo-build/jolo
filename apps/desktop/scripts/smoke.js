@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
 const splits = process.argv.includes("--splits");
+const chats = process.argv.includes('--chats');
+if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
@@ -117,7 +119,7 @@ if(tasks) {
 }
 const child = Bun.spawn(command, {
   stdio: ["inherit", "inherit", "inherit"],
-  env: { ...process.env, JOLO_BUN: process.execPath, JOLO_HOME: home, JOLO_DESKTOP_SMOKE: "1", JOLO_TASKS_SMOKE: tasks ? "1" : "", JOLO_LOADING_SMOKE: loading ? "1" : "", JOLO_LIVE_RESULTS_SMOKE: liveResults ? "1" : "", JOLO_SPLIT_SMOKE: splits ? "1" : "", JOLO_SMOKE_PROJECT: project, JOLO_SMOKE_RESULTS: results, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: splits ? "600" : "3", JOLO_FAKE_DELAY_MS: splits ? "1" : "20", JOLO_FAKE_SCRIPT: splits ? "" : scriptPath },
+  env: { ...process.env, JOLO_BUN: process.execPath, JOLO_HOME: home, JOLO_DESKTOP_SMOKE: "1", JOLO_TASKS_SMOKE: tasks ? "1" : "", JOLO_LOADING_SMOKE: loading ? "1" : "", JOLO_LIVE_RESULTS_SMOKE: liveResults ? "1" : "", JOLO_SPLIT_SMOKE: splits ? "1" : "", JOLO_SMOKE_PROJECT: project, JOLO_SMOKE_RESULTS: results, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: splits ? "600" : "3", JOLO_FAKE_DELAY_MS: splits ? "1" : "20", JOLO_FAKE_SCRIPT: splits || chats ? "" : scriptPath },
 });
 const code = await child.exited;
 browserFixture.stop(true);

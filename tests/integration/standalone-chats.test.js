@@ -1,0 +1,50 @@
+import { expect, test } from 'bun:test';
+import { mkdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { startEngine, tempHome, removeHome, waitFor } from './helpers.js';
+
+test('standalone chats need no folder, keep separate storage, persist history, and page independently of workspaces', async () => {
+  const home = tempHome();
+  let engine, client;
+  try {
+    engine = await startEngine({ home, fakeSteps: 1, fakeDelayMs: 1 });
+    client = await engine.connect();
+    const first = await client.call('chat.create', {});
+    const second = await client.call('chat.create', { title: 'Another conversation' });
+    expect(first.session.workspaceId).not.toBe(second.session.workspaceId);
+    expect(first.rootPath).not.toBe(second.rootPath);
+    expect(statSync(first.rootPath).isDirectory()).toBe(true);
+    expect((await client.call('project.open', { path: first.rootPath })).standalone).toBe(true);
+    const repo = path.join(home, 'actual-project'); mkdirSync(repo);
+    const project = await client.call('project.open', { path: repo });
+    await client.call('session.create', { projectId: project.projectId, workspaceId: project.workspaceId, title: 'Workspace task' });
+    expect(project.standalone).toBe(false);
+    const { run } = await client.call('run.start', { sessionId: first.session.id, requestId: 'first', prompt: 'Help me write a short introduction' });
+    await waitFor(async () => (await client.call('run.snapshot', { runId: run.id })).run.state === 'completed');
+    const page = await client.call('session.page', { sessionId: first.session.id });
+    expect(page.session.title).toBe('Help me write a short introduction');
+    expect(page.messages.some(message => message.role === 'assistant')).toBe(true);
+    const recent = await client.call('board.tasks', { standalone: true, limit: 1 });
+    expect(recent.tasks).toHaveLength(1);
+    expect(recent.tasks[0].standalone).toBe(true);
+    expect(recent.hasMore).toBe(true);
+    const older = await client.call('board.tasks', { standalone: true, limit: 1, before: recent.nextCursor });
+    expect(older.tasks).toHaveLength(1);
+    expect(older.tasks[0].sessionId).not.toBe(recent.tasks[0].sessionId);
+    expect((await client.call('board.tasks', { standalone: false })).tasks.map(task => task.title)).toEqual(['Workspace task']);
+    const archived = (await client.call('session.archive', { sessionId: first.session.id, expectedRevision: page.session.revision, archived: true })).session;
+    expect((await client.call('board.tasks', { standalone: true })).tasks.map(task => task.sessionId)).toEqual([second.session.id]);
+    expect((await client.call('board.tasks', { standalone: true, state: 'archived' })).tasks[0].sessionId).toBe(first.session.id);
+    await client.call('session.archive', { sessionId: first.session.id, expectedRevision: archived.revision, archived: false });
+    client.close(); await engine.stop();
+    engine = await startEngine({ home, fakeSteps: 1, fakeDelayMs: 1 }); client = await engine.connect();
+    expect((await client.call('board.tasks', { standalone: true })).tasks).toHaveLength(2);
+    const followup = (await client.call('run.start', { sessionId: first.session.id, requestId: 'followup', prompt: 'Make it shorter' })).run;
+    await waitFor(async () => (await client.call('run.snapshot', { runId: followup.id })).run.state === 'completed');
+    const continued = await client.call('session.page', { sessionId: first.session.id });
+    expect(continued.messages.length).toBeGreaterThan(page.messages.length);
+    expect(continued.session.title).toBe(page.session.title);
+    await client.call('session.delete', { sessionId: first.session.id, expectedRevision: continued.session.revision });
+    expect((await client.call('board.tasks', { standalone: true })).tasks).toHaveLength(1);
+  } finally { client?.close(); await engine?.stop(); removeHome(home); }
+}, 20000);
