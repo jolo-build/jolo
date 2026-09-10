@@ -20,7 +20,7 @@ const submissions = [];
 const sessionToken = randomToken();
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
   const pathname = new URL(request.url).pathname;
-  if (pathname === '/styles.css' || /^\/assets\/[a-z0-9.-]+$/.test(pathname)) return new Response(Bun.file(new URL('../public' + pathname, import.meta.url)));
+  if (pathname === '/styles.css' || pathname === '/theme.js' || /^\/assets\/[a-z0-9.-]+$/.test(pathname)) return new Response(Bun.file(new URL('../public' + pathname, import.meta.url)));
   if (pathname === '/__fixture/session') return new Response(null, { status: 303, headers: { Location: '/__fixture/legacy', 'Set-Cookie': cookie('session', sessionToken, SESSION_SECONDS, false) } });
   if (pathname === '/__fixture/legacy') {
     const response = await app.fetch(new Request(approved.verification_uri_complete, { headers: request.headers }));

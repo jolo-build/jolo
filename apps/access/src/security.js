@@ -64,7 +64,7 @@ export function protect(response, secure = true) {
   headers.set('Referrer-Policy', 'strict-origin');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
-  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  headers.set('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
   headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   if (secure) headers.set('Strict-Transport-Security', 'max-age=31536000');
   return new Response(response.body, { status: response.status, headers });
