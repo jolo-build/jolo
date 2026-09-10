@@ -318,6 +318,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
           if (WORKSPACE_EVENTS.has(item.value.type) && item.value.payload.projectId === projectRef.current?.projectId || (item.value.type === "workspace.created" && item.value.payload.workspace?.projectId === projectRef.current?.projectId)) workspacesChanged = true;
           if (item.value.sessionId === sessionRef.current && current) current.applyEvent(item.value);
           if (item.value.sessionId === sessionRef.current) {
+            if (item.value.type === 'session.updated') {
+              const session = item.value.payload.session;
+              setSessions(sessionsRef.current.map(existing => existing.id === session.id ? session : existing));
+            }
             if (item.value.type === "context.compacted") setRelayNote(`context compacted: ${item.value.payload.summarizedItems} earlier items summarized`);
             permissions.current.apply(item.value);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));

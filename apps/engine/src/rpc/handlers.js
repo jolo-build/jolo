@@ -9,7 +9,7 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 
-export function createRpcHandlers({ storage, settingsService, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   const editSession = ({ sessionId, expectedRevision, title, state, deleted = false }) => storage.transaction(() => {
     const session = storage.getSession(sessionId);
     if (!session) throw new ProtocolError("not_found", "task no longer exists");
@@ -82,7 +82,14 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
     'account.cancel': (_params, conn) => { requireInteractive(conn); return account.cancel(); },
     'account.logout': (_params, conn) => { requireInteractive(conn); return account.logout(); },
     "settings.update": (params) => ({ settings: settingsService.update(params) }),
-    "credential.set": async ({ provider, value }) => ({ provider, stored: await credentials.set(provider, value) }),
+    "provider.presets": () => providerFactory.presets(),
+    "provider.models": ({ preset, refresh }) => providerFactory.models(preset, { refresh }),
+    "credential.set": async ({ provider, value }) => {
+      providerFactory?.catalog.get(provider);
+      const stored = await credentials.set(provider, value);
+      providerFactory?.directory.clear();
+      return { provider, stored };
+    },
     "credential.status": async ({ provider }) => credentials.status(provider),
     "workspace.create": async (params) => ({ workspace: await worktrees.create(params) }),
     "workspace.list": ({ projectId }) => {
@@ -108,6 +115,15 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
     }),
     "session.list": (params) => ({ sessions: storage.listSessions(params) }),
     "session.rename": (params) => editSession(params),
+    "session.setModel": ({ sessionId, model, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError('not_found', 'task no longer exists');
+      if (session.revision !== expectedRevision) throw new ProtocolError('conflict', 'task changed; refresh and try again');
+      if (model) providerFactory.catalog.get(model.preset);
+      const updated = storage.setSessionModel(sessionId, model);
+      storage.appendEvent({ sessionId, type: 'session.updated', payload: { session: updated } });
+      return { session: updated };
+    }),
     "session.setAgent": ({ sessionId, agentId, expectedRevision }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", "task no longer exists");
@@ -140,7 +156,7 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
       params = { ...params, taskReferences: resolved.references };
       // "@codex …" at the start of a message calls that agent into this conversation for one turn (§6.5).
       const session = storage.getSession(params.sessionId);
-      const named = params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
+      const named = params.execution?.preset ? { agentId: SELF_MENTION } : params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
       if (!named) return runs.start(params);
       if (named.agentId !== SELF_MENTION) {
         const manifest = agents.catalog.get(named.agentId); // throws when a client names an agent that is gone

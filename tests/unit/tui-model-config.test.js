@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { currentModelLabel, modelFields, modelForm, modelSettingsPatch, modelTargets, parseModelCommand, saveModelConfig, selectedAgent } from "../../apps/cli/src/tui/model-config.js";
 import { createPromptState, promptReducer } from "../../apps/cli/src/tui/prompt-history.js";
+import { DEMO_PROVIDER_SETTINGS } from "@jolo/protocol";
 
 const jolo = { id: "jolo" };
 const provider = { name: "openai", model: "test-model", contextWindowTokens: 64000, maxOutputTokens: 4000 };
+const patch = { model: { preset: 'openai', model: 'test-model', effort: null, contextWindowTokens: 64000, maxOutputTokens: 4000 }, providers: { openai: { baseUrl: null } } };
 const configured = () => modelForm(jolo, { provider });
 
 test("agent selection distinguishes Jolo from hosted agents and refuses unavailable agents", () => {
@@ -25,15 +27,29 @@ test("/model is a local command, not a task or a prompt-history entry", () => {
   expect(promptReducer(state, { type: "previous" }).value).toBe("fix this");
 });
 
-test("configuration edits preserve supported values and require explicit limits for a new provider", () => {
-  expect(modelSettingsPatch(jolo, configured())).toEqual({ provider });
-  expect(modelSettingsPatch(jolo, { ...configured(), name: "fake" })).toEqual({ provider: null });
+test("configuration edits preserve supported values and allow discovered limits", () => {
+  expect(modelSettingsPatch(jolo, configured())).toEqual(patch);
+  expect(modelSettingsPatch(jolo, { ...configured(), name: 'fake' }).model).toMatchObject({ preset: 'fake', model: 'fake' });
   const empty = { ...modelForm(jolo, { provider: null }), name: "openai", model: "new-model" };
-  expect(() => modelSettingsPatch(jolo, empty)).toThrow("Context tokens");
+  expect(modelSettingsPatch(jolo, empty).model.contextWindowTokens).toBeNull();
   for (const patch of [{ maxOutputTokens: "64000" }, { contextWindowTokens: "NaN" }, { model: "" }, { baseUrl: "not a url" }, { apiKey: "short" }, { apiKey: "x".repeat(4097) }]) {
     expect(() => modelSettingsPatch(jolo, { ...configured(), ...patch })).toThrow();
   }
   expect(modelFields(jolo, { name: "fake" }).map((field) => field.id)).toEqual(["name", "save"]);
+});
+
+test("terminal demo choices and labels follow the engine capability", () => {
+  for (const settings of [{ provider: null }, { provider: null, demoProviderEnabled: false }, { provider: DEMO_PROVIDER_SETTINGS, demoProviderEnabled: false }]) {
+    const form = modelForm(jolo, settings);
+    expect(form.name).toBe("openai");
+    expect(modelFields(jolo, form, settings)[0].choices).toEqual(["openai"]);
+    expect(currentModelLabel(settings)).toBe("Configure provider");
+  }
+  const development = { provider: null, demoProviderEnabled: true };
+  const form = modelForm(jolo, development);
+  expect(form.name).toBe("fake");
+  expect(modelFields(jolo, form, development)[0].choices).toEqual(["fake", "openai"]);
+  expect(currentModelLabel(development)).toBe("Demo provider");
 });
 
 test("hosted-agent patches affect only supported fields, and blank resets the default", () => {
@@ -49,10 +65,10 @@ test("keys use the credential RPC only; an empty key leaves existing credentials
   const client = { call: async (method, params) => { calls.push([method, params]); return method === "credential.set" ? { stored: "session" } : { settings: {} }; } };
   const key = "test-secret-key";
   expect(await saveModelConfig(client, jolo, { ...configured(), apiKey: key })).toContain("engine exits");
-  expect(calls).toEqual([["credential.set", { provider: "openai", value: key }], ["settings.update", { provider }]]);
+  expect(calls).toEqual([["credential.set", { provider: "openai", value: key }], ["settings.update", patch]]);
   calls.length = 0;
   await saveModelConfig(client, jolo, configured());
-  expect(calls).toEqual([["settings.update", { provider }]]);
+  expect(calls).toEqual([["settings.update", patch]]);
   calls.length = 0;
   await expect(saveModelConfig(client, jolo, { ...configured(), model: "", apiKey: key })).rejects.toThrow();
   expect(calls).toEqual([]);

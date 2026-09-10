@@ -3,12 +3,12 @@ import { createPortal } from 'react-dom';
 import { Icon } from './icon.jsx';
 
 /** An editable model choice: advertised options help discovery, custom values stay valid. */
-export function Combobox({ label, value, onChange, options = [], disabled = false }) {
+export function Combobox({ label, value, onChange, options = [], disabled = false, allowDefault = true, placeholder = "Default" }) {
   const id = useId();
   const field = useRef(null), input = useRef(null), popup = useRef(null);
   const [open, setOpen] = useState(false), [filter, setFilter] = useState(''), [active, setActive] = useState(0);
   const [position, setPosition] = useState({});
-  const choices = [{ value: '', label: 'Default' }, ...options.filter(option => option.value)];
+  const choices = [...(allowDefault ? [{ value: '', label: 'Default' }] : []), ...options.filter(option => option.value)];
   const matches = choices.filter(option => `${option.label} ${option.value}`.toLowerCase().includes(filter.toLowerCase()));
   const selected = Math.min(active, Math.max(0, matches.length - 1));
   const choose = (option) => { onChange(option.value); setOpen(false); input.current?.focus(); };
@@ -38,7 +38,7 @@ export function Combobox({ label, value, onChange, options = [], disabled = fals
 
   return <span className="combobox" ref={field}>
     <input ref={input} role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? id : undefined} aria-autocomplete="list" aria-activedescendant={open && matches.length ? `${id}-${selected}` : undefined}
-      value={value} placeholder="Default" disabled={disabled} autoComplete="off" spellCheck={false}
+      value={value} placeholder={placeholder} disabled={disabled} autoComplete="off" spellCheck={false}
       onChange={event => { onChange(event.target.value); setFilter(event.target.value); setActive(0); setOpen(true); }}
       onBlur={event => { if (!field.current?.contains(event.relatedTarget) && !popup.current?.contains(event.relatedTarget)) setOpen(false); }}
       onKeyDown={event => {

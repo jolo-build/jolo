@@ -39,7 +39,7 @@ async function enginePid(home, profile = "default") {
   throw new Error("engine did not publish");
 }
 
-const report = { measuredAt: new Date().toISOString(), host: { platform: process.platform, arch: process.arch, cpus: os.cpus()[0]?.model, memoryGiB: +(os.totalmem() / 2 ** 30).toFixed(1), release: os.release() }, bun: Bun.version, samples: [], caveat: "Single samples on the build host, not the 8 GiB reference machines; packaged artifacts with the fake provider." };
+const report = { measuredAt: new Date().toISOString(), host: { platform: process.platform, arch: process.arch, cpus: os.cpus()[0]?.model, memoryGiB: +(os.totalmem() / 2 ** 30).toFixed(1), release: os.release() }, bun: Bun.version, samples: [], caveat: "Single samples on the build host, not the 8 GiB reference machines; idle packaged artifacts without a model run." };
 const cli = path.join(DIST, "cli/bin/jolo");
 const compiled = path.join(DIST, "compiled/jolo");
 
@@ -47,10 +47,10 @@ const compiled = path.join(DIST, "compiled/jolo");
 {
   const home = mkdtempSync(path.join(short, "e-"));
   const repo = path.join(home, "repo"); mkdirSync(repo);
-  execFileSync(cli, ["run", "warm up", "--json", "--path", repo, "--home", home], { env: { ...process.env, JOLO_IDLE_MS: "60000", JOLO_FAKE_STEPS: "1", JOLO_FAKE_DELAY_MS: "1" }, stdio: "ignore" });
+  execFileSync(cli, ["provider", "show", "--json", "--home", home], { env: { ...process.env, JOLO_IDLE_MS: "60000" }, stdio: "ignore" });
   const pid = await enginePid(home);
   await sleep(1500);
-  report.samples.push({ ...measure([pid], "engine-bundled-idle"), note: "bundled engine.js on the pinned Bun after one fake run, no clients" });
+  report.samples.push({ ...measure([pid], "engine-bundled-idle"), note: "bundled engine.js on the pinned Bun after reading settings, no clients" });
   execFileSync(cli, ["engine", "stop", "--home", home], { stdio: "ignore" });
 }
 
@@ -58,10 +58,10 @@ const compiled = path.join(DIST, "compiled/jolo");
 if (existsSync(compiled)) {
   const home = mkdtempSync(path.join(short, "c-"));
   const repo = path.join(home, "repo"); mkdirSync(repo);
-  execFileSync(compiled, ["run", "warm up", "--json", "--path", repo, "--home", home], { env: { ...process.env, JOLO_IDLE_MS: "60000", JOLO_FAKE_STEPS: "1", JOLO_FAKE_DELAY_MS: "1" }, stdio: "ignore" });
+  execFileSync(compiled, ["provider", "show", "--json", "--home", home], { env: { ...process.env, JOLO_IDLE_MS: "60000" }, stdio: "ignore" });
   const pid = await enginePid(home);
   await sleep(1500);
-  report.samples.push({ ...measure([pid], "engine-compiled-idle"), note: "single-file compiled engine after one fake run, no clients" });
+  report.samples.push({ ...measure([pid], "engine-compiled-idle"), note: "single-file compiled engine after reading settings, no clients" });
   execFileSync(compiled, ["engine", "stop", "--home", home], { stdio: "ignore" });
 }
 

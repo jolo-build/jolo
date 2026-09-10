@@ -27,7 +27,12 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
       report.controlLayout[theme] = await checkSettingsLayout(evaluate);
       writeFileSync(path.join(results, `settings-agents-${theme}.png`), (await window.webContents.capturePage()).toPNG());
       await tab('provider');
-      await evaluate("(() => { const select = document.querySelector('.settings-provider select'); select.value = 'openai'; select.dispatchEvent(new Event('change', {bubbles:true})); })()");
+      await waitFor("[...document.querySelectorAll('.settings-provider-tabs button')].some(button => button.textContent === 'OpenAI')", 'provider presets loaded');
+      assert(await evaluate("[...document.querySelectorAll('.settings-provider-tabs button')].some(button => button.textContent === 'DeepSeek')"), 'the provider picker must expose newly registered presets');
+      await evaluate("[...document.querySelectorAll('.settings-provider-tabs button')].find(button => button.textContent === 'DeepSeek').click()");
+      await settle();
+      assert(await evaluate("document.querySelector('.settings-provider input[type=password]') && [...document.querySelectorAll('.settings-provider input')].some(input => input.placeholder === 'https://api.deepseek.com')"), 'a data-only preset must use the shared credential and endpoint controls');
+      await evaluate("[...document.querySelectorAll('.settings-provider-tabs button')].find(button => button.textContent === 'OpenAI').click()");
       await waitFor("Boolean(document.querySelector('.settings-advanced'))", 'provider fields shown');
       await evaluate("document.querySelector('.settings-advanced').open = true");
       await settle();
@@ -47,7 +52,16 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
       report.checks.push(`Account settings expose optional engine-backed sign-in in ${theme} mode`);
     }
     await tab('provider');
-    assert(await evaluate("document.querySelector('.settings-provider select').value === 'openai'"), 'switching settings sections lost the unsaved provider choice');
+    assert(await evaluate("document.querySelector('.settings-provider-tabs [aria-selected=true]')?.textContent === 'OpenAI'"), 'switching settings sections lost the unsaved provider choice');
+    await evaluate("[...document.querySelectorAll('.settings-provider-tabs button')].find(button => button.textContent === 'Smoke Model').click()");
+    await evaluate("[...document.querySelectorAll('.settings-provider button')].find(button => button.textContent === 'Find models').click()");
+    await waitFor("document.querySelector('.settings-provider [role=status]')?.textContent.includes('models available')", 'raw model discovery');
+    await evaluate("(() => { const input = document.querySelector('.settings-provider [role=combobox]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'test-model'); input.dispatchEvent(new Event('input', {bubbles:true})); })()");
+    await evaluate("[...document.querySelectorAll('.settings-provider button')].find(button => button.textContent === 'Use as default').click()");
+    await waitFor("document.querySelector('.settings-provider [role=status]')?.textContent.includes('Default model saved')", 'raw model saved');
+    assert(await evaluate("window.jolo.call('settings.get', {}).then(r => r.ok && r.result.settings.model.preset === 'smoke-model' && r.result.settings.model.model === 'test-model' && r.result.settings.model.contextWindowTokens === null)"), 'model selection or automatic limits were not saved');
+    await evaluate("window.jolo.call('settings.update', {model:null})");
+    report.checks.push('Models discovers a fixture endpoint and saves a raw model with automatic token limits through the renderer bridge');
     window.setSize(720, 560);
     await tab('agents');
     report.controlLayout.narrow = await checkSettingsLayout(evaluate);

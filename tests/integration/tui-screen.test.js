@@ -37,7 +37,7 @@ test("a mermaid diagram in a reply is drawn in the terminal, not printed as its 
   });
   const lines = () => Array.from({ length: screen.buffer.active.length }, (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? "");
   const text = () => lines().join("\n");
-  const draft = () => lines().filter((row) => /^▎ ›(?: |$)/.test(row)).at(-1) ?? "";
+  const draft = () => lines().filter((row) => /^▎❯(?: |$)/.test(row)).at(-1) ?? "";
   try {
     // The draft line means the client is listening; typing before it would go nowhere.
     await waitFor(() => text().includes("Welcome to Jolo") && draft(), { label: "welcome", timeoutMs: 20_000 });
@@ -82,11 +82,11 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
   });
   const lines = () => Array.from({ length: screen.buffer.active.length }, (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? "");
   const text = () => lines().join("\n");
-  const draft = () => lines().filter((row) => /^▎ ›(?: |$)/.test(row)).at(-1) ?? "";
+  const draft = () => lines().filter((row) => /^▎❯(?: |$)/.test(row)).at(-1) ?? "";
   const flush = () => new Promise((resolve) => screen.write("", resolve));
   const fitted = () => {
     const all = lines();
-    const prompt = all.findLastIndex((row) => row.startsWith("▎ › "));
+    const prompt = all.findLastIndex((row) => row.startsWith("▎❯ "));
     return all[prompt - 2]?.includes("Completed") && all[prompt - 1] === "▎" && all[prompt + 1] === "▎" && all[prompt + 2]?.includes("/model");
   };
   try {
@@ -113,7 +113,7 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
     await waitFor(() => draft().includes("unfinished draft"), { label: "draft" });
     if (color) {
       await flush();
-      const promptRow = lines().findLastIndex((row) => row.startsWith("▎ › "));
+      const promptRow = lines().findLastIndex((row) => row.startsWith("▎❯ "));
       for (const row of [promptRow - 1, promptRow, promptRow + 1]) {
         const cell = screen.buffer.active.getLine(row).getCell(screen.cols - 3);
         expect(cell.getBgColor()).toBe(0x242424);
@@ -124,14 +124,14 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
     await waitFor(() => draft().includes("native scroll task"), { label: "Up recalls prompt" });
     child.terminal.write("\x1b[B");
     await waitFor(() => draft().includes("unfinished draft"), { label: "Down restores draft" });
-    expect(lines().filter((row) => row.includes("› unfinished draft"))).toHaveLength(1);
+    expect(lines().filter((row) => row.includes("❯ unfinished draft"))).toHaveLength(1);
 
     for (const [cols, rows] of [[54, 14], [120, 36], [40, 10], [100, 30], [100, 12], [100, 40], [20, 6], [80, 24]]) {
       await flush();
       screen.resize(cols, rows);
       child.terminal.resize(cols, rows);
       await waitFor(() => cols < 32 ? text().includes("Enlarge terminal") : fitted(), { label: `native resize ${cols}x${rows}`, timeoutMs: 5000 });
-      if (cols >= 32) expect(lines().filter((row) => row.includes("› unfinished draft"))).toHaveLength(1);
+      if (cols >= 32) expect(lines().filter((row) => row.includes("❯ unfinished draft"))).toHaveLength(1);
     }
     for (let cycle = 0; cycle < 4; cycle++) {
       for (const [cols, rows] of [[112, 35], [56, 18], [81, 25], [80, 24]]) {
@@ -146,7 +146,7 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
     expect(text()).toContain("History row 000");
     expect(text()).toContain("History row 079");
     expect(text()).toContain("Welcome to Jolo");
-    expect(lines().filter((row) => row.includes("› unfinished draft"))).toHaveLength(1);
+    expect(lines().filter((row) => row.includes("❯ unfinished draft"))).toHaveLength(1);
     expect(lines().filter((row) => row.includes("Welcome to Jolo"))).toHaveLength(1);
     child.terminal.write("\x03");
     await waitFor(() => child.exitCode !== null, { label: "CLI exit" });
@@ -217,12 +217,12 @@ test("startup stays fresh until a saved session is explicitly restored", async (
     expect(text()).not.toContain("Enter view chat");
     child.terminal.write("\x1b[A");
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(text()).not.toContain("› previous task");
+    expect(text()).not.toContain("❯ previous task");
     expect(text()).toContain("Welcome to Jolo");
     child.terminal.write("\r");
     await new Promise((resolve) => setTimeout(resolve, 100));
     child.terminal.write("/model");
-    await waitFor(() => text().includes("› /model"));
+    await waitFor(() => text().includes("❯ /model"));
     child.terminal.write("\r");
     await waitFor(() => text().includes("Choose the agent for your prompts"));
     child.terminal.write("\x1b");
@@ -241,7 +241,7 @@ test("startup stays fresh until a saved session is explicitly restored", async (
     child.terminal.write(`/session restore ${saved.id}\r`);
     await waitFor(() => text().includes("Restored: previous task") && text().includes("done: previous task"), { label: "explicit restore opens saved conversation" });
     child.terminal.write("\x1b[A");
-    await waitFor(() => text().split("\n").filter((row) => row.startsWith("▎ › ")).at(-1)?.includes("previous task"), { label: "restored chat recalls its prompts" });
+    await waitFor(() => text().split("\n").filter((row) => row.startsWith("▎❯ ")).at(-1)?.includes("previous task"), { label: "restored chat recalls its prompts" });
     child.terminal.write("\x03");
     await waitFor(() => child.exitCode !== null, { label: "CLI exit" });
     expect(await child.exited).toBe(0);

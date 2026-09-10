@@ -5,12 +5,15 @@ import path from "node:path";
 import { ROOT, tempHome, removeHome, waitFor } from "./helpers.js";
 import { resolvePaths, discover } from '@jolo/launcher';
 import { connect } from '@jolo/client';
+import { startSmokeModel, SMOKE_MODEL_KEY } from '../fixtures/smoke-model.js';
 
 const DIST = path.join(ROOT, "dist-test"); // never clobber a release build in dist/
 const homes = [];
+let modelServer;
 beforeAll(async () => {
   const build = Bun.spawnSync([process.execPath, path.join(ROOT, "scripts/build.js"), "--cli-only", "--out", DIST], { stdout: "pipe", stderr: "pipe" });
   if (build.exitCode !== 0) throw new Error(`build failed: ${build.stderr.toString()}\n${build.stdout.toString()}`);
+  modelServer = startSmokeModel();
 }, 240_000);
 afterAll(async () => {
   for (const home of homes.splice(0)) {
@@ -18,11 +21,20 @@ afterAll(async () => {
     removeHome(home);
   }
   rmSync(DIST, { recursive: true, force: true });
+  modelServer?.stop();
 });
 
 function run(command, { home, env = {}, cwd } = {}) {
-  const proc = Bun.spawnSync(command, { cwd: cwd ?? ROOT, env: { ...process.env, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: "2", JOLO_FAKE_DELAY_MS: "5", ...env }, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawnSync(command, { cwd: cwd ?? ROOT, env: { ...process.env, JOLO_IDLE_MS: "1500", OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: "session", ...env }, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+}
+
+async function runModelTask(jolo, home, repo, prompt) {
+  const configured = run([jolo, 'provider', 'set', 'openai', '--model', 'smoke-model', '--context-window', '64000', '--max-output', '4000', '--base-url', modelServer.baseUrl, '--home', home]);
+  expect(configured.code).toBe(0);
+  const child = Bun.spawn([jolo, 'run', prompt, '--json', '--path', repo, '--home', home], { env: { ...process.env, OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session' }, stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { stdout, stderr, code };
 }
 
 describe("release build", () => {
@@ -70,7 +82,7 @@ describe("release build", () => {
     }
   }, 30_000);
 
-  test("the CLI tarball layout runs headless with its bundled engine and pinned runtime, without the interactive chunk", () => {
+  test("the CLI tarball layout runs headless with its bundled engine and pinned runtime, without the interactive chunk", async () => {
     const lib = path.join(DIST, "cli/lib");
     expect(existsSync(path.join(lib, "jolo.js"))).toBe(true);
     expect(existsSync(path.join(lib, "engine.js"))).toBe(true);
@@ -91,11 +103,18 @@ describe("release build", () => {
     const home = tempHome(); homes.push(home);
     const repo = path.join(home, "repo"); mkdirSync(repo, { recursive: true }); writeFileSync(path.join(repo, "README.md"), "# packaged\n");
     try {
-      const result = run([path.join(DIST, "cli/bin/jolo"), "run", "packaged hello", "--json", "--path", repo, "--home", home]);
+      const jolo = path.join(DIST, "cli/bin/jolo");
+      const demo = run([jolo, "provider", "set", "fake", "--home", home], { env: { NODE_ENV: "development", JOLO_FAKE_STEPS: "1" } });
+      expect(demo.code).not.toBe(0);
+      expect(demo.stderr).toContain("only available in development mode");
+      expect(JSON.parse(run([jolo, "provider", "show", "--json", "--home", home]).stdout).demoProviderEnabled).toBe(false);
+      const requestsBefore = modelServer.requests.length;
+      const result = await runModelTask(jolo, home, repo, "packaged hello");
       if (result.code !== 0) console.error(`packaged run failed:\n${result.stderr.slice(-1500)}`);
       expect(result.code).toBe(0);
       const records = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
       expect(records.at(-1)).toMatchObject({ type: "result", state: "completed" });
+      expect(modelServer.requests.length).toBe(requestsBefore + 1);
       const status = run([path.join(DIST, "cli/bin/jolo"), "status", "--json", "--home", home]);
       expect(JSON.parse(status.stdout).engine.build).not.toBe("dev");
       const account = run([path.join(DIST, "cli/bin/jolo"), "whoami", "--json", "--home", home]);
@@ -110,15 +129,14 @@ describe("release build", () => {
   }, 60_000);
 
   const compiledAvailable = existsSync(path.join(DIST, "compiled/jolo")) && Bun.spawnSync([path.join(DIST, "compiled/jolo"), "--help"], { stdout: "ignore", stderr: "ignore" }).exitCode !== null;
-  test.skipIf(!compiledAvailable)("compiled single-file executables serve and run a task (only when built with --compile and executable here)", () => {
+  test.skipIf(!compiledAvailable)("compiled single-file executables serve and run a task (only when built with --compile and executable here)", async () => {
     const jolo = path.join(DIST, "compiled/jolo");
     const engine = path.join(DIST, "compiled/jolo-engine");
     expect(existsSync(jolo) && existsSync(engine)).toBe(true);
     const home = tempHome(); homes.push(home);
     const repo = path.join(home, "repo"); mkdirSync(repo, { recursive: true }); writeFileSync(path.join(repo, "README.md"), "# compiled\n");
-    const result = run([jolo, "run", "compiled hello", "--json", "--path", repo, "--home", home]);
+    const result = await runModelTask(jolo, home, repo, "compiled hello");
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain("started engine");
     const records = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
     expect(records.at(-1)).toMatchObject({ type: "result", state: "completed" });
     const status = run([jolo, "status", "--json", "--home", home]);

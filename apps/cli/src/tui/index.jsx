@@ -184,7 +184,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows));
   const visible = previewRows > 0 ? live.slice(-previewRows) : [];
   const modelSelected = async (message, target) => {
-    const wanted = target?.id === "jolo" ? null : target?.id;
+    const wanted = (target?.id === "jolo" || target?.preset) ? null : target?.id;
     if (target && wanted !== agentId) {
       const current = sessionRef.current;
       if (current) {
@@ -194,6 +194,11 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         setSession(updated);
       } else setDraftAgent(wanted);
       onChooseAgent(wanted);
+    }
+    if (target && wanted === null && sessionRef.current) {
+      const current = (await client.call('session.page', { sessionId: sessionRef.current.id, limit: 1 })).session;
+      const { session: updated } = await client.call('session.setModel', { sessionId: current.id, expectedRevision: current.revision, model: target.modelRef ?? null });
+      sessionRef.current = updated; setSession(updated);
     }
     setModelConfig(null);
     if (message) setStatus(message);
@@ -207,7 +212,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
-      <Prompt value={input} model={currentModelLabel(settings, { agentId })} columns={columns} />
+      <Prompt value={input} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}

@@ -68,6 +68,11 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   }
   const { runSettingsSmoke } = await import('./settings-smoke.mjs');
   await runSettingsSmoke({ window, results, evaluate, waitFor, report });
+  if (process.env.JOLO_MODELS_SMOKE === '1') {
+    writeFileSync(path.join(results, 'smoke.json'), `${JSON.stringify(report, null, 2)}\n`);
+    fixture.close();
+    return;
+  }
   const assertSingleConversation = async () => {
     const counts = await evaluate('({ conversations: document.querySelectorAll(".conversation").length, composers: document.querySelectorAll(".composer").length, emptyStates: document.querySelectorAll(".empty-state").length })');
     if (counts.conversations !== 1 || counts.composers !== 1 || counts.emptyStates > 1) throw new Error(`duplicate workspace content: ${JSON.stringify(counts)}`);

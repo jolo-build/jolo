@@ -2,6 +2,8 @@
 // Imports no filesystem/process adapters; every tool goes through the dispatcher (§10.1).
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { resolveModelRef } from '../providers/index.js';
+import { portableItems } from '../providers/transcript.js';
 import { buildRequest } from "../context/builder.js";
 import { compact, providerItems } from "../context/compaction.js";
 import { hydrateRequestImages } from '../attachments.js';
@@ -47,7 +49,11 @@ export function createAgentExecutor(deps) {
       const session = storage.getSession(run.sessionId);
       const workspace = storage.getWorkspace(session.workspaceId);
       const config = settings.get();
-      const { provider, settings: providerSettings, configured } = await providerFactory.create(config.provider);
+      const savedProvider = storage.getRunProviderConfig?.(run.id);
+      const ref = savedProvider?.ref ?? resolveModelRef(config, session, run.execution);
+      const { provider, settings: providerSettings, configured } = await providerFactory.create(ref, { resolved: savedProvider, config });
+      if (!savedProvider || savedProvider.pending) storage.setRunProviderConfig?.(run.id, providerSettings);
+      const nativeRef = { protocol: providerSettings.protocol, preset: providerSettings.preset, model: providerSettings.model, baseUrl: providerSettings.baseUrl };
       if (!configured) log.warn("no provider configured; using the fake provider", { runId: run.id });
       const capabilities = provider.capabilities(providerSettings.model);
       const browserAvailable = () => dispatcher.hasBrowser(workspace.id);
@@ -119,14 +125,14 @@ export function createAgentExecutor(deps) {
         ctx.transition("model");
 
         let built;
-        let contextItems = providerItems(storage, session.id);
+        let contextItems = portableItems(providerItems(storage, session.id), nativeRef);
         const build = () => buildRequest({ capabilities, items: contextItems, tools: registry.declarations({ browserAvailable: browserAvailable() }), instructions, repoInstructions, sessionId: session.id, runId: run.id, reasoningEffort: providerSettings.reasoningEffort });
         try {
           built = build();
           if (built.accounting.nearLimit) {
             // Compact at this complete boundary (§7.2); a failure here is reported, not hidden.
-            const checkpoint = await compact({ storage, provider, capabilities, session, run, items: contextItems, fixedTokens: built.accounting.fixedTokens, signal, reason: built.accounting.droppedItems > 0 ? "request exceeded the usable window" : "usage approached the usable window", log });
-            if (checkpoint) { contextItems = providerItems(storage, session.id); built = build(); }
+            const checkpoint = await compact({ storage, provider, capabilities, session, run, items: contextItems, fixedTokens: built.accounting.fixedTokens, signal, reason: built.accounting.droppedItems > 0 ? "request exceeded the usable window" : "usage approached the usable window", log, reasoningEffort: providerSettings.reasoningEffort });
+            if (checkpoint) { contextItems = portableItems(providerItems(storage, session.id), nativeRef); built = build(); }
           }
         } catch (error) {
           return { outcome: "failed", failure: error.message };
@@ -136,16 +142,42 @@ export function createAgentExecutor(deps) {
         usage.contextUsed = built.accounting.estimatedInputTokens;
         usage.contextWindow = built.accounting.usableInputTokens;
 
-        const turn = await modelTurn({ ctx, provider, providerSettings, request: hydrateRequestImages(storage, built.request), usage, wait, log, storage, session, run });
-        if (turn.outcome !== "ok") { recordUsage(); return turn; }
+        let turn = await modelTurn({ ctx, provider, providerSettings, request: hydrateRequestImages(storage, built.request), usage, wait, log, storage, session, run });
+        if (turn.outcome === 'context_length') {
+          // The rejected request did not fit, whatever the byte estimate said. The window becomes the smaller of
+          // the stated maximum and the estimated size of that request, older history is compacted to fit, and
+          // the turn is retried once (§7.2). A later rejection shrinks it again.
+          const reported = turn.contextWindowTokens;
+          const assumed = built.accounting.estimatedInputTokens + capabilities.maxOutputTokens + Math.max(4_000, Math.ceil(capabilities.contextWindowTokens * 0.02));
+          const window = Math.min(capabilities.contextWindowTokens, reported || Infinity, assumed);
+          const learned = window < capabilities.contextWindowTokens;
+          if (learned) {
+            capabilities.contextWindowTokens = window;
+            providerSettings.contextWindowTokens = window;
+            storage.setRunProviderConfig?.(run.id, providerSettings);
+            providerFactory.learn?.(providerSettings, window);
+          }
+          try {
+            const checkpoint = await compact({ storage, provider, capabilities, session, run, items: contextItems, fixedTokens: built.accounting.fixedTokens, signal, reason: learned ? `provider rejected the request as too long; the context window is now taken to be ${window} tokens` : 'provider rejected the request as too long', log, reasoningEffort: providerSettings.reasoningEffort });
+            if (!checkpoint && !learned) throw new Error(`the request exceeds the model context limit and no older history can be compacted (${turn.failure})`);
+            contextItems = portableItems(providerItems(storage, session.id), nativeRef);
+            built = build();
+            if (!checkpoint && built.accounting.droppedItems) throw new Error('The latest request exceeds the model context limit');
+            built.request.turnIndex = turnIndex - 1;
+            usage.contextUsed = built.accounting.estimatedInputTokens;
+            usage.contextWindow = built.accounting.usableInputTokens;
+            turn = await modelTurn({ ctx, provider, providerSettings, request: hydrateRequestImages(storage, built.request), usage, wait, log, storage, session, run });
+          } catch (error) { recordUsage(); return { outcome: 'failed', failure: error.message }; }
+        }
+        if (turn.outcome !== "ok") { recordUsage(); return { ...turn, outcome: turn.outcome === 'context_length' ? 'failed' : turn.outcome }; }
         recordUsage();
 
         // Persist the turn in emission order so the next request replays it faithfully (§7.1).
         const groupId = newId("grp");
         for (const entry of turn.outputs) {
-          if (entry.kind === "reasoning") storage.insertItem({ sessionId: session.id, runId: run.id, kind: "reasoning", groupId, payload: { native: entry.native }, messageId: entry.messageId ?? null });
+          if (entry.kind === "reasoning") storage.insertItem({ sessionId: session.id, runId: run.id, kind: "reasoning", groupId, payload: { native: entry.native, nativeRef }, messageId: entry.messageId ?? null });
           else if (entry.kind === "assistant_message") storage.insertItem({ sessionId: session.id, runId: run.id, kind: "assistant_message", groupId, payload: { text: entry.text }, messageId: entry.messageId });
-          else if (entry.kind === "tool_call") storage.insertItem({ sessionId: session.id, runId: run.id, kind: "tool_call", groupId, payload: { callId: entry.callId, name: entry.name, arguments: entry.arguments, native: entry.native ?? null } });
+          else if (entry.kind === "tool_call") storage.insertItem({ sessionId: session.id, runId: run.id, kind: "tool_call", groupId, payload: { callId: entry.callId, name: entry.name, arguments: entry.arguments, native: entry.native ?? null, ...(entry.native ? { nativeRef } : {}) } });
         }
         const toolCalls = turn.outputs.filter((entry) => entry.kind === "tool_call");
         if (toolCalls.length === 0) {
@@ -162,11 +194,21 @@ export function createAgentExecutor(deps) {
   };
 }
 
+// Provider chunks can be larger than the UI preview frame; split at Unicode boundaries.
+function appendProviderText(ctx, message, text) {
+  for (let start = 0; start < text.length;) {
+    let end = Math.min(text.length, start + 8000);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+    ctx.appendText(message, text.slice(start, end));
+    start = end;
+  }
+}
+
 /** One model turn with bounded retries at request boundaries (§7.3). */
 async function modelTurn({ ctx, provider, providerSettings, request, usage, wait, log, storage, session, run }) {
   for (let attempt = 1; attempt <= 1 + PROVIDER_RETRIES; attempt += 1) {
     usage.attempts += 1;
-    const attemptEvent = (status, reason) => storage.appendEvent({ sessionId: session.id, runId: run.id, type: "provider.attempt", payload: { attempt, provider: provider.name, model: providerSettings.model, status, ...(reason ? { reason: reason.slice(0, 200) } : {}) } });
+    const attemptEvent = (status, reason) => storage.appendEvent({ sessionId: session.id, runId: run.id, type: "provider.attempt", payload: { attempt, provider: provider.name, preset: providerSettings.preset, model: providerSettings.model, status, ...(reason ? { reason: reason.slice(0, 200) } : {}) } });
     attemptEvent("started");
     const outputs = [];
     let textMessage = null;
@@ -181,13 +223,16 @@ async function modelTurn({ ctx, provider, providerSettings, request, usage, wait
         if (ctx.signal.aborted) break;
         switch (event.type) {
           case "text_delta":
+            if (!event.text) break; // an empty chunk must not become an empty assistant turn in the replayed history
             if (!textMessage) textMessage = ctx.startMessage("assistant", "text");
-            ctx.appendText(textMessage, event.text);
+            appendProviderText(ctx, textMessage, event.text);
             text += event.text;
+            if (outputs.at(-1)?.kind === 'assistant_message') outputs.at(-1).text += event.text;
+            else outputs.push({ kind: 'assistant_message', text: event.text, messageId: textMessage });
             break;
           case "reasoning_delta":
             if (!reasoningMessage) reasoningMessage = ctx.startMessage("assistant", "reasoning");
-            ctx.appendText(reasoningMessage, event.text);
+            appendProviderText(ctx, reasoningMessage, event.text);
             reasoningText += event.text;
             break;
           case "reasoning_complete":
@@ -199,12 +244,12 @@ async function modelTurn({ ctx, provider, providerSettings, request, usage, wait
           case "tool_call_delta":
             break;
           case "tool_call_complete":
-            if (textMessage && !outputs.some((o) => o.kind === "assistant_message")) { outputs.push({ kind: "assistant_message", text, messageId: textMessage }); }
             outputs.push({ kind: "tool_call", callId: event.callId, name: event.name, arguments: event.arguments });
             break;
           case "usage":
             usage.inputTokens += event.inputTokens ?? 0;
             usage.outputTokens += event.outputTokens ?? 0;
+            if (event.cachedInputTokens !== undefined) usage.cachedInputTokens = (usage.cachedInputTokens ?? 0) + event.cachedInputTokens;
             break;
           case "finished":
             finishedReason = event.reason;
@@ -227,9 +272,14 @@ async function modelTurn({ ctx, provider, providerSettings, request, usage, wait
       attemptEvent("interrupted", "cancelled");
       return { outcome: "cancelled" };
     }
+    if (!error && !finishedReason) error = { category: 'network', retryable: true, message: 'stream ended without a completion event' };
     if (error) {
       if (textMessage) ctx.finishMessage(textMessage, "interrupted");
       if (reasoningMessage) ctx.finishMessage(reasoningMessage, "interrupted");
+      if (error.category === 'context_length') {
+        attemptEvent('failed', error.message);
+        return { outcome: 'context_length', contextWindowTokens: error.contextWindowTokens, failure: `provider context_length: ${error.message ?? 'request too long'}`.slice(0, 500) };
+      }
       const canRetry = error.retryable && attempt <= PROVIDER_RETRIES;
       attemptEvent(canRetry ? "retrying" : "failed", `${error.category}: ${error.message ?? ""}`);
       if (!canRetry) return { outcome: "failed", failure: `provider ${error.category}: ${error.message ?? "error"}`.slice(0, 500) };
@@ -239,7 +289,6 @@ async function modelTurn({ ctx, provider, providerSettings, request, usage, wait
       continue;
     }
     if (reasoningMessage) ctx.finishMessage(reasoningMessage, "complete");
-    if (textMessage && !outputs.some((o) => o.kind === "assistant_message")) outputs.push({ kind: "assistant_message", text, messageId: textMessage });
     if (textMessage) ctx.finishMessage(textMessage, "complete");
     if (finishedReason && finishedReason.startsWith("incomplete:")) {
       attemptEvent("failed", finishedReason);

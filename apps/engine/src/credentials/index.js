@@ -3,8 +3,9 @@ const SERVICE = "jolo";
 const ENV_NAMES = Object.freeze({ openai: "OPENAI_API_KEY" });
 
 export class CredentialService {
-  constructor({ log, env = process.env, mode = env.JOLO_CREDENTIALS ?? "keychain" }) {
+  constructor({ log, env = process.env, mode = env.JOLO_CREDENTIALS ?? "keychain", catalog }) {
     this.log = log;
+    this.catalog = catalog;
     this.env = env;
     this.mode = mode; // "keychain" | "session" (tests and locked keyrings)
     /** @type {Map<string, string>} */
@@ -22,7 +23,7 @@ export class CredentialService {
         this.log?.warn("secret store unavailable; using session credentials", { provider, error: String(error?.message ?? error) });
       }
     }
-    const envValue = this.env[ENV_NAMES[provider]];
+    const envValue = this.env[this.catalog ? this.catalog.get(provider).auth.env : ENV_NAMES[provider]];
     if (envValue) return { value: envValue, source: "environment" };
     return null;
   }

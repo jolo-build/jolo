@@ -1,5 +1,6 @@
 // Automated desktop smoke run: real engine, fake provider, scripted renderer, screenshot, exit code.
 import electronPath from "electron";
+import { mockProvider } from "../../../tests/fixtures/mock-providers.js";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
 if (process.argv.includes('--attachments')) process.env.JOLO_ATTACHMENTS_SMOKE = '1';
+if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
 const home = mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "jolo-desktop-smoke-"));
 const project = path.join(home, "repo");
 mkdirSync(path.join(project, "src"), { recursive: true });
@@ -44,6 +46,10 @@ writeFileSync(path.join(agentsDir, "fixture.json"), JSON.stringify({
   rules: [{ id: "asks", state: "needs_input", priority: 1000, region: "bottom", regionLines: 6, contains: "(y/n)" }],
 }));
 
+const modelFixture = mockProvider('openai-responses');
+const providerDir = path.join(home, 'data', 'default', 'providers');
+mkdirSync(providerDir, { recursive: true });
+writeFileSync(path.join(providerDir, 'smoke-model.json'), JSON.stringify({ id: 'smoke-model', displayName: 'Smoke Model', protocol: 'openai-responses', baseUrl: modelFixture.baseUrl, auth: { kind: 'none' }, listing: 'openai', defaults: { contextWindowTokens: 64000, maxOutputTokens: 4096 } }));
 const results = path.join(root, "smoke-results");
 mkdirSync(results, { recursive: true });
 const script = [
@@ -94,6 +100,7 @@ const child = Bun.spawn(command, {
   env: { ...process.env, JOLO_BUN: process.execPath, JOLO_HOME: home, JOLO_DESKTOP_SMOKE: "1", JOLO_TASKS_SMOKE: tasks ? "1" : "", JOLO_LOADING_SMOKE: loading ? "1" : "", JOLO_LIVE_RESULTS_SMOKE: liveResults ? "1" : "", JOLO_SPLIT_SMOKE: splits ? "1" : "", JOLO_SMOKE_PROJECT: project, JOLO_SMOKE_RESULTS: results, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: splits ? "600" : "3", JOLO_FAKE_DELAY_MS: splits ? "1" : "20", JOLO_FAKE_SCRIPT: splits ? "" : scriptPath },
 });
 const code = await child.exited;
+modelFixture.stop();
 taskServer?.stop(true);
 if (code === 0) console.log(readFileSync(path.join(results, "smoke.json"), "utf8"));
 process.exit(code);
