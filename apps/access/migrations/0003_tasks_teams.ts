@@ -1,4 +1,5 @@
-ALTER TABLE device_flows ADD COLUMN scope TEXT NOT NULL DEFAULT 'account:read';
+// Preserve the released SQL text; Wrangler output is generated from this module.
+const sql = `ALTER TABLE device_flows ADD COLUMN scope TEXT NOT NULL DEFAULT 'account:read';
 ALTER TABLE devices ADD COLUMN scope TEXT NOT NULL DEFAULT 'account:read';
 
 CREATE TABLE teams (
@@ -72,3 +73,6 @@ CREATE TABLE task_audit (
   at INTEGER NOT NULL
 );
 CREATE INDEX task_audit_scope ON task_audit(team_id, account_id, id);
+`;
+
+export default sql;

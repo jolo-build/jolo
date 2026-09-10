@@ -10,5 +10,5 @@
     "strict": false,
     "types": ["bun-types"]
   },
-  "include": ["apps/**/*.js", "apps/**/*.jsx", "packages/**/*.js", "tests/**/*.js", "migrations/**/*.ts"]
+  "include": ["apps/**/*.js", "apps/**/*.jsx", "apps/**/*.ts", "packages/**/*.js", "tests/**/*.js", "migrations/**/*.ts"]
 }

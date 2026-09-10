@@ -12,6 +12,8 @@ bun run access:db:local
 bun run access
 ```
 
+Migration source lives in `migrations/*.ts`, registered in `migrations/index.ts`. Access commands generate Wrangler's `.sql` files under the ignored `.generated/migrations/` directory before using them. Run `bun run access:db:generate` to generate those files separately. Keep released SQL text and migration names unchanged so existing D1 databases retain their migration history.
+
 Open <http://127.0.0.1:8788>. Without OAuth credentials, the landing page explains that sign-in is unavailable. To enable sign-in, create a separate development GitHub OAuth app with callback `http://127.0.0.1:8788/callback`, copy [.dev.vars.example](.dev.vars.example) to `deploy/.dev.vars.development`, and fill in its two values locally. Restart the server afterward. Keep this file out of Git; do not paste secrets into issues or chat.
 
 ## Validate
@@ -38,7 +40,7 @@ Tests exercise the OAuth exchange and device approval, polling, expiry, cancella
 | `src/security.js` | Origin validation, tokens, cookies, response headers |
 | `src/storage.js`, `migrations/` | Accounts, one-time login/device flows, browser sessions, and devices |
 | `src/pages.js`, `public/styles.css` | Shared viewport shell, navigation, and account/authentication panels; no browser JavaScript |
-| `scripts/` | Licensed font assets and deployment configuration check |
+| `scripts/` | Licensed font assets, D1 migration generation, and deployment configuration check |
 
 ## Tasks and teams
 
@@ -50,7 +52,7 @@ For task references in desktop or CLI chat, connect with `jolo login --tasks` or
 
 ## Deploy your own service
 
-Create a Cloudflare D1 database and put its ID in `deploy/access.wrangler.jsonc`. Configure your own domain and `ACCESS_ORIGIN`, and register a GitHub OAuth application with callback `<ACCESS_ORIGIN>/callback`. Add `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` with Wrangler secrets; never put their values in tracked configuration. Apply the migrations in this app's `migrations/` directory to the production database, then run `bun run access:deploy` from the repository root.
+Create a Cloudflare D1 database and put its ID in `deploy/access.wrangler.jsonc`. Configure your own domain and `ACCESS_ORIGIN`, and register a GitHub OAuth application with callback `<ACCESS_ORIGIN>/callback`. Add `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` with Wrangler secrets; never put their values in tracked configuration. Run `bun run access:db:remote` to generate and apply the migrations to production, then run `bun run access:deploy` from the repository root.
 
 The checked-in production database ID is a placeholder. `bun run access:build` only performs a deployment dry run.
 
@@ -63,4 +65,4 @@ bun run --cwd apps/desktop build
 bun apps/desktop/scripts/smoke.js --tasks
 ```
 
-Apply migration `0003_tasks_teams.sql` with `bun run access:db:local` before running the updated local service. Existing device credentials remain identity-only until task access is approved.
+Apply migration `0003_tasks_teams.ts` with `bun run access:db:local` before running the updated local service. The command generates `0003_tasks_teams.sql` for D1 under its original name. Existing device credentials remain identity-only until task access is approved.

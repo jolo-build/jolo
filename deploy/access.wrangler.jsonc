@@ -22,7 +22,7 @@
     "binding": "ACCESS_DB",
     "database_name": "jolo-access",
     "database_id": "00000000-0000-0000-0000-000000000000",
-    "migrations_dir": "../apps/access/migrations"
+    "migrations_dir": "../apps/access/.generated/migrations"
   }],
   "env": {
     "development": {
@@ -38,7 +38,7 @@
         "binding": "ACCESS_DB",
         "database_name": "jolo-access-local",
         "database_id": "00000000-0000-0000-0000-000000000001",
-        "migrations_dir": "../apps/access/migrations"
+        "migrations_dir": "../apps/access/.generated/migrations"
       }]
     }
   }

@@ -1,4 +1,5 @@
-ALTER TABLE login_flows ADD COLUMN return_to TEXT;
+// Preserve the released SQL text; Wrangler output is generated from this module.
+const sql = `ALTER TABLE login_flows ADD COLUMN return_to TEXT;
 
 CREATE TABLE device_flows (
   token_hash TEXT PRIMARY KEY NOT NULL,
@@ -23,3 +24,6 @@ CREATE TABLE devices (
 );
 CREATE INDEX devices_account ON devices(account_id);
 CREATE INDEX devices_expiry ON devices(expires_at);
+`;
+
+export default sql;

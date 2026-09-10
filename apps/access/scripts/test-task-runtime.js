@@ -26,7 +26,7 @@ const runtime=new Miniflare(convertV4MiniflareOptions({
 }));
 try {
   const db=await runtime.getD1Database('DB');
-  const migrations=new URL('../migrations/',import.meta.url);
+  const migrations=new URL('../.generated/migrations/',import.meta.url);
   for(const name of readdirSync(migrations).filter(n=>n.endsWith('.sql')).sort()) {
     const sql=readFileSync(new URL(name,migrations),'utf8').replace(/--[^\n]*/g,'');
     await db.batch(sql.split(';').map(s=>s.trim()).filter(Boolean).map(s=>db.prepare(s)));

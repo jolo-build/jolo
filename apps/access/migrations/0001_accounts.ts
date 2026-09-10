@@ -1,4 +1,5 @@
-PRAGMA foreign_keys = ON;
+// Preserve the released SQL text; Wrangler output is generated from this module.
+const sql = `PRAGMA foreign_keys = ON;
 
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY NOT NULL,
@@ -26,3 +27,6 @@ CREATE TABLE sessions (
 );
 CREATE INDEX sessions_expiry ON sessions(expires_at);
 CREATE INDEX sessions_account ON sessions(account_id);
+`;
+
+export default sql;

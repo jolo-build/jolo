@@ -4,12 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun scripts/assets.js && wrangler dev --config ../../deploy/access.wrangler.jsonc --env development --port 8788",
-    "build": "bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env '' --dry-run --outdir dist",
-    "deploy": "bun scripts/check-deploy.js && bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env ''",
-    "db:local": "wrangler d1 migrations apply ACCESS_DB --local --config ../../deploy/access.wrangler.jsonc --env development",
-    "test": "bun test test && node scripts/test-worker.js && node scripts/test-task-runtime.js",
-    "test:browser": "bun scripts/test-browser.js"
+    "dev": "bun scripts/migrations.js && bun scripts/assets.js && wrangler dev --config ../../deploy/access.wrangler.jsonc --env development --port 8788",
+    "build": "bun scripts/migrations.js && bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env '' --dry-run --outdir dist",
+    "deploy": "bun scripts/check-deploy.js && bun scripts/migrations.js && bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env ''",
+    "db:local": "bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --local --config ../../deploy/access.wrangler.jsonc --env development",
+    "test": "bun scripts/migrations.js && bun test test && node scripts/test-worker.js && node scripts/test-task-runtime.js",
+    "test:browser": "bun scripts/test-browser.js",
+    "db:generate": "bun scripts/migrations.js",
+    "db:remote": "bun scripts/check-deploy.js && bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --remote --config ../../deploy/access.wrangler.jsonc --env ''"
   },
   "devDependencies": {
     "wrangler": "4.130.0"

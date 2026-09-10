@@ -32,7 +32,9 @@
     "access:test": "bun run --cwd apps/access test",
     "access:test:browser": "bun run --cwd apps/access test:browser",
     "access:db:local": "bun run --cwd apps/access db:local",
-    "access:deploy": "bun run --cwd apps/access deploy"
+    "access:deploy": "bun run --cwd apps/access deploy",
+    "access:db:generate": "bun run --cwd apps/access db:generate",
+    "access:db:remote": "bun run --cwd apps/access db:remote"
   },
   "engines": {
     "bun": ">=1.3.12"

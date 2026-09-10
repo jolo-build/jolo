@@ -1,10 +1,10 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync, readdirSync } from 'node:fs';
+import { migrations } from '../migrations/index.ts';
 
 // Adapt only D1's API; all fixtures execute the real migrations and queries.
 export function testDatabase() {
   const sqlite = new Database(':memory:');
-  for (const name of readdirSync(new URL('../migrations/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) sqlite.exec(readFileSync(new URL('../migrations/' + name, import.meta.url), 'utf8'));
+  for (const { sql } of migrations) sqlite.exec(sql);
   const db = {
     prepare(sql) {
       let values = [];
