@@ -85,7 +85,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
           {open && visible && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
         </div>;
       })}
-      {!rows.length && <p className="sidebar-empty">{board ? 'Open a folder to get started.' : 'Loading workspaces…'}</p>}
+      {!rows.length && <p className="sidebar-empty">{board ? 'No workspaces yet.' : 'Loading workspaces…'}</p>}
       {visible && <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
         selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} />}
     </nav>

@@ -213,7 +213,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       <li className="mention-hint">{taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
-    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
+    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
       onSelect={(e) => setCaret(e.target.selectionStart ?? 0)}

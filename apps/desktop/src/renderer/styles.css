@@ -226,7 +226,7 @@ strong { font-weight: 550; }
 .sidebar-workspace-new:hover, .sidebar-workspace-new:focus-visible { color: var(--text); }
 .sidebar-workspace-heading.current .sidebar-workspace-name { font-weight: 600; }
 .workspace-folder { display: inline-flex; flex: none; color: var(--muted); }
-.new-chat { flex: 1; justify-content: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; white-space: nowrap; }
+.new-chat { flex: 1; min-width: 0; justify-content: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; white-space: nowrap; }
 .new-task-row:has(.new-chat) .new-task { flex: none; padding: 8px; }
 .recent-chats { margin-top: 26px; min-width: 0; }
 .recent-chats h2 { margin: 0 10px 10px; font-size: 11px; font-weight: 500; color: var(--muted); }

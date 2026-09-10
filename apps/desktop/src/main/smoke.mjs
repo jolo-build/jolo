@@ -302,7 +302,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     }
     await evaluate("window.__joloSmoke.showBoard()");
     await waitFor("window.__joloSmoke.state().view === 'board' && document.querySelectorAll('.board-row').length >= 1", "board view", 10_000);
-    await waitFor("window.__joloSmoke.state().needsYou === 0 && /done|ready|stopped|idle/i.test(document.querySelector('.board-row .chip')?.textContent ?? '')", "board row refreshed after completion", 10_000);
+    await waitFor("window.__joloSmoke.state().needsYou === 0 && Boolean(document.querySelector('.board-card .workspace-folder')) && !document.querySelector('.board-card .workspace-folder.working, .board-card .board-workspace-activity.needs')", "board row refreshed after completion", 10_000);
     await waitFor("document.querySelectorAll('.board-row').length >= 4", "multiple board projects");
     const boardTheme = nativeTheme.themeSource;
     const boardWindowSize = window.getSize();
