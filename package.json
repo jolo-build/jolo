@@ -10,6 +10,7 @@
   "scripts": {
     "setup:tgrep": "bun scripts/setup-tgrep.js",
     "test": "bun test tests packages apps",
+    "security:audit": "bun audit",
     "engine": "bun apps/engine/src/main.js serve",
     "jolo": "bun apps/cli/src/main.js",
     "desktop": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/start.js",
