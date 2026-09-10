@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
+import { checkHostedBrowser } from './browser-agent-check.js';
 
 const engines = [];
 const homes = [];
@@ -12,6 +13,10 @@ afterEach(async () => {
 
 const FAKE = path.join(ROOT, "tests", "fixtures", "fake-claude.js");
 const TERMINAL = ["completed", "failed", "cancelled", "interrupted"];
+
+test('Claude controls the inline browser on first and resumed turns with Jolo guidance', async () => {
+  await checkHostedBrowser(await boot());
+}, 30_000);
 
 /** A profile whose "claude" is the protocol fixture, so nothing here reaches the real CLI or its API. */
 async function boot({ clientKind = "test" } = {}) {
@@ -44,6 +49,24 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Claude Code through its structured stream", () => {
+  test('Claude gets browser tools only while its own workspace is displayed in desktop', async () => {
+    const { client, engine, project, events, runTo, messagesOf, text } = await boot();
+    const host = await engine.connect({ clientKind: 'desktop' });
+    try {
+      const run = await runTo('req_browser', 'browser-check');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
+      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+      await host.call('browser.setOpener', { workspaceIds: [project.workspaceId, 'stale-workspace'] });
+      const discovered = await runTo('req_browser_visible', 'browser-discovery');
+      expect(discovered.state).toBe('completed');
+      expect(await text((await messagesOf(discovered.id)).at(-1))).toBe('Browser tools available');
+      await host.call('browser.setOpener', { workspaceIds: [] });
+      const closed = await runTo('req_browser_closed', 'browser-check');
+      expect(await text((await messagesOf(closed.id)).at(-1))).toBe('Browser tools unavailable');
+      expect(events.some(event => event.type === 'permission.requested')).toBe(false);
+    } finally { await host.close(); await client.close(); }
+  }, 25_000);
   test("a hosted session streams replies as Jolo messages and continues the same Claude session next turn", async () => {
     const { client, events, session, runTo, text, messagesOf } = await boot();
     expect(session.agentId).toBe("claude");

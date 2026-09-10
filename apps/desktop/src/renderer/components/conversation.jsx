@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
@@ -92,7 +92,7 @@ function ToolBlock({ message }) {
   const [expanded, setExpanded] = useState(false);
   const loading = !head && message.committedBytes > message.renderedBytes;
   let screenshot = null;
-  if (head.startsWith("browser_screenshot") && message.status !== "streaming") {
+  if (/^(?:jolo_browser\/|mcp__jolo_browser__)?browser_screenshot(?:\s|$)/.test(head) && message.status !== "streaming") {
     try { const parsed = JSON.parse(rest[0] ?? ""); if (parsed.ok && parsed.mimeType === "image/png" && parsed.artifactId) screenshot = parsed.artifactId; } catch { /* not JSON yet */ }
   }
   return (
@@ -125,13 +125,38 @@ function ActivityGroup({ messages, identity }) {
   return <details className="activity-group"><summary><ActivityIcon name={working ? "spinner" : "check"} active={working} /><span className="activity-label" title={label}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
-export function Conversation({ projection, hasProject, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
+  const historyAnchor = useRef(null);
+  const adjustedTop = useRef(null);
   const messages = projection ? projection.ordered() : [];
   const runs = projection ? [...projection.runs.values()] : [];
-  useEffect(() => {
-    if (follow.current && container.current) container.current.scrollTop = container.current.scrollHeight;
+  const captureAnchor = () => {
+    const el = container.current;
+    const top = el.getBoundingClientRect().top;
+    // Articles retain their identity when adjacent tool groups combine across
+    // a page boundary. Fall back to the scroll height for tool-only pages.
+    const node = [...el.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > top);
+    return { id: node?.dataset.messageId, offset: node ? node.getBoundingClientRect().top - top : 0, height: el.scrollHeight, scrollTop: el.scrollTop };
+  };
+  const loadOlder = () => {
+    if (!history?.hasOlder || history.loading) return;
+    follow.current = false;
+    historyAnchor.current = captureAnchor();
+    void history.loadOlder();
+  };
+  useLayoutEffect(() => {
+    const el = container.current;
+    if (!el) return;
+    const anchor = historyAnchor.current;
+    if (anchor) {
+      const node = [...el.querySelectorAll('[data-message-id]')].find(node => node.dataset.messageId === anchor.id);
+      el.scrollTop = node ? el.scrollTop + node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.offset
+        : anchor.scrollTop + el.scrollHeight - anchor.height;
+      adjustedTop.current = el.scrollTop;
+      if (!history?.loading) historyAnchor.current = null;
+    } else if (follow.current) el.scrollTop = el.scrollHeight;
   });
   const activeRun = runs.find(run => ['preparing', 'model', 'tools', 'awaiting_permission', 'cancelling'].includes(run.state));
   // Queued messages (and ones removed before starting) have no transcript yet.
@@ -148,9 +173,18 @@ export function Conversation({ projection, hasProject, changesCount, verificatio
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
     } else groups.push({ type: "message", id: message.id, message });
   }
-  return <div className="conversation" ref={container} onScroll={() => { const el = container.current; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
+  return <div className="conversation" ref={container} onScroll={() => {
+    const el = container.current;
+    if (historyAnchor.current && el.scrollTop !== adjustedTop.current) historyAnchor.current = captureAnchor();
+    follow.current = !history?.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    if (el.scrollTop < 100 && !history?.error) loadOlder();
+  }}>
     <div className={`transcript${messages.length ? "" : " empty-transcript"}`}>
-      {!messages.length && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>A little help. A lot of possibility.</h2><p>{hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
+      {history?.hasOlder && <div className="history-loader">
+        <button type="button" onClick={loadOlder} disabled={history.loading}>{history.loading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
+        {history.error && <p role="alert">Couldn’t load earlier messages. Try again.</p>}
+      </div>}
+      {!messages.length && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} identity={identityFor(projection?.runs.get(group.runId))} />;
         const message = group.message;
@@ -160,7 +194,7 @@ export function Conversation({ projection, hasProject, changesCount, verificatio
         // A turn someone else was called into says so, so a reply is never read as the usual answerer's (§6.5).
         const calledIn = projection?.runs.get(message.runId)?.agentId ?? null;
         const guestName = calledIn === "jolo" ? "Jolo" : calledIn ? agents.find((entry) => entry.id === calledIn)?.displayName ?? calledIn : null;
-        return <article key={message.id} className={`message ${message.role} ${message.kind}${message.status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
+        return <article key={message.id} data-message-id={message.id} className={`message ${message.role} ${message.kind}${message.status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
           {message.role === 'user' && projection?.runs.get(message.runId)?.attachments?.length > 0 && <div className="message-attachments">{projection.runs.get(message.runId).attachments.map((attachment, index) => <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
           {message.role === 'user' && projection?.runs.get(message.runId)?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{projection.runs.get(message.runId).taskReferences.map(task => <button type="button" key={task.key} title={`${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>r{task.revision} ↗</span></button>)}</div>}
           {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}

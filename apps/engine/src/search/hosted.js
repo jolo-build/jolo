@@ -4,10 +4,14 @@ import path from 'node:path';
 
 export function searchMcpConfig(paths, workspaceId, enabled) {
   if (!enabled) return null;
+  return scopedMcpConfig(paths, workspaceId, 'search-mcp');
+}
+
+export function scopedMcpConfig(paths, workspaceId, subcommand) {
   // The engine can also be started by `jolo engine serve`; argv[1] is then the CLI, not our entry.
   const entry = [path.join(import.meta.dir, 'engine.js'), path.resolve(import.meta.dir, '../main.js')].find(file => !file.startsWith('/$bunfs/') && existsSync(file));
   const command = entry ? process.execPath : path.join(path.dirname(process.execPath), 'jolo-engine');
-  return { command, args: [...(entry ? [entry] : []), 'search-mcp', '--socket', paths.socketPath, '--token-file', paths.tokenPath, '--workspace', workspaceId] };
+  return { command, args: [...(entry ? [entry] : []), subcommand, '--socket', paths.socketPath, '--token-file', paths.tokenPath, '--workspace', workspaceId] };
 }
 
 export const codexSearchArgs = config => config ? ['-c', `mcp_servers.jolo_search.command=${JSON.stringify(config.command)}`, '-c', `mcp_servers.jolo_search.args=${JSON.stringify(config.args)}`] : [];

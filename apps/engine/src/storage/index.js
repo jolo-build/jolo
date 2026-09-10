@@ -216,8 +216,14 @@ export class Storage {
     this.db.query("UPDATE workspaces SET removed_at = ?1 WHERE id = ?2").run(now(), id);
   }
 
-  countSessionsForWorkspace(workspaceId) {
-    return this.db.query("SELECT COUNT(*) AS n FROM sessions WHERE workspace_id = ?1 AND deleted_at IS NULL").get(workspaceId).n;
+  countSessionsForWorkspace(workspaceId, state = null) {
+    return this.db.query("SELECT COUNT(*) AS n FROM sessions WHERE workspace_id = ?1 AND deleted_at IS NULL AND (?2 IS NULL OR state = ?2)").get(workspaceId, state).n;
+  }
+
+  workspaceHasWorkingRuns(workspaceId) {
+    return Boolean(this.db.query(`SELECT 1 FROM runs r JOIN sessions s ON s.id = r.session_id
+      WHERE s.workspace_id = ?1 AND s.deleted_at IS NULL AND s.state = 'open'
+      AND r.state IN ('preparing', 'model', 'tools', 'cancelling') LIMIT 1`).get(workspaceId));
   }
 
   workspaceHasUnfinishedRuns(workspaceId) {
@@ -232,7 +238,8 @@ export class Storage {
   boardRunForWorkspace(workspaceId) {
     const open = "FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.workspace_id = ?1 AND s.deleted_at IS NULL AND s.state = 'open'";
     const waiting = this.db.query(`SELECT r.*, s.title AS session_title ${open} AND r.state IN ('awaiting_permission', 'paused') ORDER BY r.created_at LIMIT 1`).get(workspaceId);
-    const r = waiting ?? this.db.query(`SELECT r.*, s.title AS session_title ${open} ORDER BY r.created_at DESC LIMIT 1`).get(workspaceId);
+    const r = waiting ?? this.db.query(`SELECT r.*, s.title AS session_title ${open}
+      ORDER BY CASE WHEN r.state IN ('preparing','model','tools','cancelling') THEN 0 ELSE 1 END, r.created_at DESC, r.id DESC LIMIT 1`).get(workspaceId);
     return r ? { run: this.runRecord(r), sessionTitle: r.session_title } : null;
   }
 
@@ -295,21 +302,26 @@ export class Storage {
    * Every open task across every project, newest activity first, with the project and checkout it belongs to
    * and its most recent run. One query, so a sidebar listing all projects costs the same as listing one.
    */
-  listSessionActivity({ limit = 200, state = "open" } = {}) {
+  listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null } = {}) {
     const rows = this.db.query(`
-      SELECT s.*, p.root_path AS project_root, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
+      SELECT s.*, p.root_path AS project_root, COALESCE(json_extract(p.preferences, '$.standalone'), 0) AS standalone, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
              r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note
       FROM sessions s
       JOIN projects p ON p.id = s.project_id
       JOIN workspaces w ON w.id = s.workspace_id
-      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE session_id = s.id ORDER BY created_at DESC LIMIT 1)
+      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE session_id = s.id
+        ORDER BY CASE WHEN state IN ('preparing','model','tools','awaiting_permission','cancelling') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1)
       WHERE s.deleted_at IS NULL AND s.state = ?1 AND w.removed_at IS NULL
-      ORDER BY COALESCE(r.updated_at, s.updated_at) DESC
+        AND (?3 IS NULL OR s.workspace_id = ?3)
+        AND (?6 IS NULL OR COALESCE(json_extract(p.preferences, '$.standalone'), 0) = ?6)
+        AND (?4 IS NULL OR COALESCE(r.updated_at, s.updated_at) < ?4 OR (COALESCE(r.updated_at, s.updated_at) = ?4 AND s.id < ?5))
+      ORDER BY COALESCE(r.updated_at, s.updated_at) DESC, s.id DESC
       LIMIT ?2
-    `).all(state, limit);
+    `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone));
     return rows.map((row) => ({
       session: mapSession(row),
       projectRootPath: row.project_root,
+      standalone: Boolean(row.standalone),
       workspace: { id: row.workspace_id, branch: row.workspace_branch ?? null, mode: row.workspace_mode, lastViewedAt: row.workspace_last_viewed_at ?? null },
       run: row.run_id ? { id: row.run_id, sessionId: row.id, state: row.run_state, pauseReason: row.run_pause_reason ?? null, createdAt: row.run_created_at, updatedAt: row.run_updated_at, note: row.run_note ? JSON.parse(row.run_note) : null } : null,
     }));

@@ -55,7 +55,18 @@ async function turn(prompt, images = []) {
   };
   let turns = 1;
   let match;
-  if (prompt === 'image-check') {
+  if (prompt === 'browser-discovery') {
+    say(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo_browser ? 'Browser tools available' : 'Browser tools unavailable');
+  } else if (prompt === 'browser-check') {
+    if (!valueOf('--append-system-prompt')?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo_browser;
+    if (!config) say('Browser tools unavailable');
+    else {
+      const { browserMcpCheck } = await import('./browser-mcp-client.js');
+      const result = await tool('mcp__jolo_browser__browser_screenshot', {}, async () => ({ content: await browserMcpCheck(config) }));
+      say(result.denied ? result.message : result.content);
+    }
+  } else if (prompt === 'image-check') {
     say(`Images received: ${images.map(image => `${image.source.media_type}:${Buffer.from(image.source.data, 'base64').length}`).join(', ')}`);
   } else if ((match = prompt.match(/^run (.+)$/s))) {
     turns = 2;

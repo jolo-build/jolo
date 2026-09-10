@@ -16,6 +16,10 @@ Migration source lives in `migrations/*.ts`, registered in `migrations/index.ts`
 
 Open <http://127.0.0.1:8788>. Without OAuth credentials, the landing page explains that sign-in is unavailable. To enable sign-in, create a separate development GitHub OAuth app with callback `http://127.0.0.1:8788/callback`, copy [.dev.vars.example](.dev.vars.example) to `deploy/.dev.vars.development`, and fill in its two values locally. Restart the server afterward. Keep this file out of Git; do not paste secrets into issues or chat.
 
+The header's **Theme** selector offers System, Light, and Dark. System follows the browser's color preference, including when JavaScript is disabled. Explicit choices are saved in this browser and applied before rendering subsequent pages. The small same-origin theme script does not change account data; account and task forms remain server-rendered.
+
+Pages preload the bundled font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
+
 ## Validate
 
 After configuring GitHub, connect a source client with `bun run jolo login --server http://127.0.0.1:8788`, or set that URL under desktop Settings → Account → Account server. GitHub's own Device Flow option can remain disabled.
@@ -39,7 +43,7 @@ Tests exercise the OAuth exchange and device approval, polling, expiry, cancella
 | `src/tasks/` | Task/team/label forms, validation, live role checks, conditional D1 writes, and audit records |
 | `src/security.js` | Origin validation, tokens, cookies, response headers |
 | `src/storage.js`, `migrations/` | Accounts, one-time login/device flows, browser sessions, and devices |
-| `src/pages.js`, `public/styles.css` | Shared viewport shell, navigation, and account/authentication panels; no browser JavaScript |
+| `src/pages.js`, `public/styles.css`, `public/theme.js` | Shared viewport shell, navigation, account/authentication panels, and browser theme preference |
 | `scripts/` | Licensed font assets, D1 migration generation, and deployment configuration check |
 
 ## Tasks and teams

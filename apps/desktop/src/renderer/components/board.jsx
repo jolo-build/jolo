@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./icon.jsx";
-import { StopIndicator } from "./stop-indicator.jsx";
 import { JoloMark } from "./brand.jsx";
-import { branchLabel, checksLabel, elapsedLabel, relativeTime, stateLabel, summaryLine, clip } from "@jolo/client/board";
+import { branchLabel, relativeTime, stateLabel, summaryLine } from "@jolo/client/board";
+import { basename } from '../presentation.js';
+import { useWorkspaceTasks } from '../use-workspace-tasks.js';
+import { useTaskDrag } from '../task-drag.jsx';
+import { RecentChats } from './recent-chats.jsx';
 
-const GROUPS = [["needs_you", "Needs attention"], ["done", "Recently completed"], ["running", "In progress"], ["idle", "Projects"]];
-const chipClass = (row) => row.attention === "needs_you" ? "chip needs" : row.attention === "running" ? "chip running" : row.reason === "completed" ? "chip good" : "chip";
-const checksClass = (row) => ({ passed: "chip good", failed: "chip needs" })[row.run?.verification?.status] ?? "chip";
-const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+const capitalize = text => text.charAt(0).toUpperCase() + text.slice(1);
+const chipClass = row => row.attention === 'needs_you' ? 'chip needs' : row.attention === 'running' ? 'chip running' : row.reason === 'completed' ? 'chip good' : 'chip';
 
 function ProjectStatus({ row }) {
   const state = row.run?.state;
@@ -32,85 +32,63 @@ function ProjectStatus({ row }) {
   </span>;
 }
 
-function Question({ row, onDecide }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const request = row.pendingPermission;
-  const decide = async (decision) => {
-    if (busy) return;
-    setBusy(true); setError(null);
-    try { await onDecide(decision); } catch (e) { setError(e.message); setBusy(false); }
-  };
-  return <div className="board-question">
-    <div className="label">Pending question</div>
-    <div>Run this command in <code>{request.cwd}</code>?</div>
-    <pre>{request.argv ? request.argv.join(" ") : request.script ?? request.summary}</pre>
-    {error && <p className="negative" role="alert">{error}</p>}
-    <div className="modal-actions"><button className="primary" disabled={busy} onClick={() => decide("allow_once")}>Allow once</button><button className="outline" disabled={busy} onClick={() => decide("allow_run")}>Allow for task</button><button className="outline" disabled={busy} onClick={() => decide("deny")}>Deny</button></div>
+
+function WorkspaceTasks({ row, revision, now, call, onOpen }) {
+  const drag = useTaskDrag();
+  const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, workspaceId: row.workspaceId, revision });
+  return <div className="board-workspace-tasks" id={`workspace-tasks-${row.workspaceId}`} role="region" aria-label={`Tasks in ${basename(row.workspace.path)}`}>
+    {error && <div className="board-task-feedback" role="alert">{error}<button onClick={retry}>Retry</button></div>}
+    {!result && loading && <p className="board-task-feedback" role="status">Loading tasks…</p>}
+    {result?.tasks.length === 0 && !loading && !error && <p className="board-task-feedback">No tasks yet. Create a new task to start a chat in this workspace.</p>}
+    {result?.tasks.length > 0 && <ul className="board-task-list">{result.tasks.map(task => <li key={task.sessionId}>
+      <button className="board-task" {...drag({ ...row, session: { id: task.sessionId, title: task.title } })} data-session-id={task.sessionId} onClick={() => onOpen({ ...row, session: { id: task.sessionId, title: task.title }, run: task.run })}>
+        <ProjectStatus row={task} />
+        <span className="board-task-title">{task.title || 'New task'}</span>
+        <span className={chipClass(task)}>{['preparing', 'model', 'tools'].includes(task.run?.state) ? 'Working' : task.run ? capitalize(stateLabel({ ...task, actions: [] })) : 'Ready'}</span>
+        <span className="board-task-updated">{relativeTime(task.updatedAt, now)}</span>
+        <Icon name="right" size={13} />
+      </button>
+    </li>)}</ul>}
+    {result?.hasMore && <div className="board-task-feedback"><button disabled={loading} onClick={loadMore}>{loading ? 'Loading tasks…' : 'Load more tasks'}</button></div>}
   </div>;
 }
 
-function Detail({ row, now, onOpen, onDecide, onStop, onResume }) {
-  const run = row.run;
-  return <div className="board-detail" id={`board-detail-${row.workspaceId}`} role="region" aria-label={`${row.name} details`}>
-    <div>
-      <div><div className="label">Where you left off</div><div className="lead">{row.summary}</div></div>
-      {run && <div><div className="label">Task</div><div>{run.prompt}</div></div>}
-      {row.actions.length > 0 && <div><div className="label">Last actions</div><div className="action-list">{row.actions.map((action) => <div key={action.invocationId} className={`action-row ${action.status}`}><code title={action.preview}>{action.name} · {clip(action.preview.startsWith(action.name) ? action.preview.slice(action.name.length) : action.preview, 110)}</code><span>{action.status === "running" ? "running" : action.status === "ok" ? time(action.at) : action.status}</span></div>)}</div></div>}
-      {row.nextStep && <div><div className="label">Next step</div><div>{row.nextStep}</div></div>}
-    </div>
-    <div>
-      {row.pendingPermission && <Question row={row} onDecide={onDecide} />}
-      {run && <div><div className="label">Changed files</div><div>{row.changedFiles === 0 ? "None" : `${row.changedFiles} file${row.changedFiles === 1 ? "" : "s"}`}</div></div>}
-      {run && <div><div className="label">Checks</div><div className="board-checks"><span className={checksClass(row)}>{capitalize(checksLabel(row))}</span>{run.verification?.checks?.length > 0 && <span className="muted">last {time(run.verification.checks.at(-1).at)}</span>}</div></div>}
-      {run && <div><div className="label">Started</div><div>{relativeTime(run.createdAt, now)} · {elapsedLabel(row, now)}</div></div>}
-      <div className="board-actions detail-actions">
-        <button className="primary" onClick={onOpen}>{run ? "Open task" : "Open project"}<Icon name="right" size={14} /></button>
-        {run && (run.state === "paused" && run.pauseReason !== "permission" || run.state === "interrupted") && <button className="outline" onClick={onResume}>Resume</button>}
-        {run && ["queued", "preparing", "model", "tools", "awaiting_permission"].includes(run.state) && <button className="stop-button" onClick={onStop}><StopIndicator size={18} />Stop</button>}
-      </div>
-    </div>
-  </div>;
-}
-
-function Row({ row, now, expanded, onToggle, onOpen, onDecide, onStop, onResume }) {
-  const run = row.run;
+export function WorkspaceRow({ row, revision, now, expanded, onToggle, onOpen, onNewTask, call }) {
   const branch = branchLabel(row);
-  return <div className={`board-card${expanded ? " expanded" : ""}`}>
+  const name = basename(row.workspace.path) || row.name;
+  const count = row.taskCount;
+  const working = row.working ?? row.attention === 'running';
+  return <div className={`board-card${expanded ? ' expanded' : ''}`} data-workspace-id={row.workspaceId}>
     <div className="board-row">
-      <button className="board-project" aria-expanded={expanded} aria-controls={expanded ? `board-detail-${row.workspaceId}` : undefined} onClick={onToggle} title={`Show details for ${row.name}`}>
-        <ProjectStatus row={row} />
+      <button className="board-expand" onClick={onToggle} aria-expanded={expanded} aria-controls={`workspace-tasks-${row.workspaceId}`} aria-label={`${expanded ? 'Hide' : 'Show'} tasks in ${name}`}><Icon name="chevron" size={15} /></button>
+      <button className="board-project" onClick={onToggle} aria-expanded={expanded} title={row.workspace.path}>
+        <span className={`workspace-folder${working ? ' working' : ''}`} role={working ? 'img' : undefined} aria-label={working ? 'Tasks working' : undefined}><Icon name="folder" size={20} /></span>
         <span className="board-title">
-          <span className="board-name-line"><span className="name">{row.name}</span>{row.workspace.mode === "worktree" && <span className="worktree-tag">worktree</span>}{branch !== "—" && <span className="branch" title={branch}><Icon name="branch" size={12} />{branch}</span>}</span>
-          <span className={`prompt${run ? "" : " no-task"}`} title={run?.prompt}>{run ? run.prompt : "Ready for a new task"}</span>
-          {run && <span className="board-meta"><span><Icon name="clock" size={11} />{elapsedLabel(row, now)} run</span><span className={run.verification?.status === "failed" ? "negative" : ""}>Checks {checksLabel(row)}</span>{row.changedFiles > 0 && <span>{row.changedFiles} {row.changedFiles === 1 ? "file changed" : "files changed"}</span>}</span>}
+          <span className="board-name-line"><span className="name">{name}</span>{row.workspace.mode === 'worktree' && <span className="worktree-tag">worktree</span>}{branch !== '—' && <span className="branch" title={branch}><Icon name="branch" size={12} />{branch}</span>}</span>
+          <span className="prompt">{row.workspace.path}</span>
+          <span className="board-meta"><span>{count === undefined ? 'Tasks' : `${count} ${count === 1 ? 'task' : 'tasks'}`}</span>
+            {working && <span className="board-workspace-activity">Working</span>}
+            {row.attention === 'needs_you' && <span className="board-workspace-activity needs">Needs attention</span>}
+          </span>
         </span>
       </button>
-      <div className="board-state">
-        <span className={chipClass(row)} title={row.summary}>{run?.state === "tools" ? "Running tools" : run ? capitalize(stateLabel(row)) : "Ready"}</span>
-        {row.lastActivityAt && <span className="board-updated" title={`Last activity: ${new Date(row.lastActivityAt).toLocaleString()}`}>{relativeTime(row.lastActivityAt, now)}</span>}
-      </div>
-      <div className="board-actions">
-        <button className={row.pendingPermission ? "primary" : "board-open"} onClick={onOpen} aria-label={`${row.pendingPermission ? "Review request for" : "Open"} ${row.name}`}>{row.pendingPermission ? "Review" : "Open"}<Icon name="right" size={13} /></button>
-        <button className="board-expand" onClick={onToggle} aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${row.name}`}><Icon name="down" size={14} className={expanded ? "flipped" : ""} /></button>
-      </div>
+      <div className="board-actions"><button onClick={() => onNewTask(row)} aria-label={`New task in ${name}`}><Icon name="plus" size={13} />New task</button></div>
     </div>
-    {expanded && <Detail row={row} now={now} onOpen={onOpen} onDecide={onDecide} onStop={onStop} onResume={onResume} />}
+    {expanded && <WorkspaceTasks row={row} revision={revision} now={now} call={call} onOpen={onOpen} />}
   </div>;
 }
 
-export function Board({ board, connected, onOpen, onDecide, onStop, onResume, onOpenFolder }) {
+export function Board({ board, connected, onOpen, onNewTask, onNewChat, onChatMenu, onOpenFolder, call }) {
   const [now, setNow] = useState(Date.now());
-  const [expanded, setExpanded] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 15_000); return () => clearInterval(timer); }, []);
-  useEffect(() => { setNow(Date.now()); }, [board]);
-  const rows = board?.projects ?? [];
-  const groups = GROUPS.map(([key, title]) => ({ key, title, rows: rows.filter((row) => row.attention === key) })).filter((group) => group.rows.length);
-  return <div className="board" aria-label="Work board">
-    <div className="board-content">
-    <div className="board-head"><div><div className="eyebrow">Workspace overview</div><h1>Your projects<span className="board-total">{rows.length}</span></h1><p><span className={`state-dot ${connected ? "" : "offline"}`} />{connected ? rows.length ? capitalize(summaryLine(rows)) : "A place for your next idea." : "Connecting to the engine…"}</p></div><button className="outline board-add" onClick={onOpenFolder}><Icon name="plus" size={14} />Open project</button></div>
-    {!rows.length && board && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>Nothing on the board yet.</h2><p>Open a project and give Jolo a task. Every project you work on shows up here with what it needs from you.</p><button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button></div>}
-    {groups.map((group) => <section key={group.key} className={`board-group ${group.key}`}><h2>{group.title}<span>{group.rows.length}</span></h2><div className="board-list">{group.rows.map((row) => <Row key={row.workspaceId} row={row} now={now} expanded={expanded === row.workspaceId} onToggle={() => setExpanded(expanded === row.workspaceId ? null : row.workspaceId)} onOpen={() => onOpen(row)} onDecide={(decision) => onDecide(row, decision)} onStop={() => onStop(row)} onResume={() => onResume(row)} />)}</div></section>)}
-    </div>
-  </div>;
+  const rows = (board?.projects ?? []).filter(row => !row.standalone).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path));
+  const toggle = id => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  return <div className="board" aria-label="Work board"><div className="board-content">
+    <div className="board-head"><div><div className="eyebrow">Workspace overview</div><h1>Your workspaces<span className="board-total">{rows.length}</span></h1><p><span className={`state-dot ${connected ? '' : 'offline'}`} />{connected ? rows.length ? capitalize(summaryLine(rows)) : 'A folder for your next idea.' : 'Connecting to the engine…'}</p></div><button className="outline board-add" onClick={onOpenFolder}><Icon name="plus" size={14} />Open folder</button></div>
+    <div className="board-chat-actions"><button onClick={onNewChat} className="outline" disabled={!connected}><Icon name="edit" size={15} />New chat</button><span>Start a conversation without a workspace.</span></div>
+    {!rows.length && board && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>Start with a chat.</h2><p>You can also open a folder when you want to work on a project.</p></div>}
+    {rows.length > 0 && <div className="board-list">{rows.map(row => <WorkspaceRow key={row.workspaceId} row={row} revision={board.generatedAt} now={now} expanded={expanded.has(row.workspaceId)} onToggle={() => toggle(row.workspaceId)} onOpen={onOpen} onNewTask={onNewTask} call={call} />)}</div>}
+    <RecentChats call={call} revision={board?.generatedAt} onOpen={onOpen} onMenu={onChatMenu} />
+  </div></div>;
 }

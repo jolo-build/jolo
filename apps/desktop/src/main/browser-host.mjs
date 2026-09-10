@@ -1,5 +1,5 @@
 // Inline browser host: trusted webview attachment, guest policy, white canvas.
-// Agent control over CDP (§5.3) is registered here in the next step; this host only enforces policy.
+// Agent control is attached by browser-agent.mjs; this host enforces guest policy.
 
 const PARTITION_PATTERN = /^jolo-browser-[A-Za-z0-9_-]{1,64}$/;
 const ALLOWED_SCHEMES = new Set(["http:", "https:"]);

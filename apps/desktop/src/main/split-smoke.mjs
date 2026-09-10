@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nativeTheme } from "electron";
 import { runPromptFocusSmoke } from './prompt-focus-smoke.mjs';
+import { runTaskDragSmoke } from './task-drag-smoke.mjs';
 
 export async function runSplitSmoke({ window, bridge, project, results, evaluate, waitFor, report }) {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -88,6 +89,7 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
   await type(third, "keep the third draft");
   report.checks.push("nested horizontal and vertical splits support different projects through the project/task picker");
   await runPromptFocusSmoke({ window, evaluate, waitFor, report });
+  await runTaskDragSmoke({ window, evaluate, waitFor, report, results, first, second, third });
 
   await evaluate("window.__joloSmoke.showSettings()");
   await waitFor("Boolean(document.querySelector('.settings-page'))", 'Settings opened over the split workspace');

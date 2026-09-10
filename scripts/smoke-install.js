@@ -5,8 +5,10 @@ import path from 'node:path';
 import { startSmokeModel, SMOKE_MODEL_KEY } from '../tests/fixtures/smoke-model.js';
 
 const root = path.resolve(import.meta.dir, '..');
-const [originFlag, remoteOrigin, ...extra] = process.argv.slice(2);
-if ((originFlag && (originFlag !== '--origin' || !/^https:\/\/[A-Za-z0-9.-]+$/.test(remoteOrigin))) || extra.length) throw new Error('Usage: bun scripts/smoke-install.js [--origin https://HOST]');
+const [flag, value, ...extra] = process.argv.slice(2);
+if ((flag && !['--origin', '--dist'].includes(flag)) || (flag && !value) || extra.length || (flag === '--origin' && !/^https:\/\/[A-Za-z0-9.-]+$/.test(value))) throw new Error('Usage: bun scripts/smoke-install.js [--origin https://HOST | --dist BUILD_DIR]');
+const remoteOrigin = flag === '--origin' ? value : null;
+const buildDirectory = flag === '--dist' ? path.resolve(value) : null;
 const temporary = await mkdtemp('/tmp/jolo-install-smoke-');
 const prefix = path.join(temporary, 'install prefix');
 const home = path.join(temporary, 'home');
@@ -31,6 +33,15 @@ try {
     const publicRoot = path.join(root, 'apps/website/dist');
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       const pathname = new URL(request.url).pathname;
+      if (buildDirectory) {
+        const manifest = JSON.parse(await readFile(path.join(buildDirectory, 'manifest.json'), 'utf8'));
+        if (pathname === '/install.sh') return new Response(Bun.file(path.join(root, 'scripts/install.sh')));
+        if (pathname === '/releases/latest.txt') return new Response(`${manifest.version}\n`);
+        const prefix = `/releases/${manifest.version}/`;
+        const name = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
+        if (![manifest.archive.name, `${manifest.archive.name}.sha256`].includes(name)) return new Response('Not found', { status: 404 });
+        return new Response(Bun.file(path.join(buildDirectory, name)));
+      }
       if (pathname !== '/install.sh' && !/^\/releases\/[A-Za-z0-9./_-]+$/.test(pathname)) return new Response('Not found', { status: 404 });
       const file = Bun.file(path.join(publicRoot, pathname));
       return await file.exists() ? new Response(file) : new Response('Not found', { status: 404 });

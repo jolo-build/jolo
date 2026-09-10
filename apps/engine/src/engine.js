@@ -32,6 +32,7 @@ import { createLifetime } from "./lifetime.js";
 import { createLogger } from "./log.js";
 import { TgrepService } from "./search/tgrep.js";
 import { searchMcpConfig } from "./search/hosted.js";
+import { createBrowserConfig } from './browser/hosted.js';
 
 export { OwnershipError, SchemaError } from "./storage/index.js";
 
@@ -108,7 +109,8 @@ export function createEngine(options) {
       return searchMcpConfig(toolEnv.tgrep ? { ...paths, tokenPath: capabilityTokens.issue(run.id, workspace.id).tokenPath } : paths, workspace.id, Boolean(toolEnv.tgrep));
     };
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      searchConfig, providerFactory, settings: settingsService, native: jolo,
+      searchConfig, browserConfig: createBrowserConfig({ browser, paths, capabilityTokens }),
+      providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
     runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
       const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;

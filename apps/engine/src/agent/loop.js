@@ -56,8 +56,6 @@ export function createAgentExecutor(deps) {
       const nativeRef = { protocol: providerSettings.protocol, preset: providerSettings.preset, model: providerSettings.model, baseUrl: providerSettings.baseUrl };
       if (!configured) log.warn("no provider configured; using the fake provider", { runId: run.id });
       const capabilities = provider.capabilities(providerSettings.model);
-      const browserAvailable = () => dispatcher.hasBrowser(workspace.id);
-      const instructions = applicationInstructions({ workspaceRoot: workspace.path, toolNames: registry.names({ browserAvailable: true }) });
       const repoInstructions = readRepoInstructions(workspace.path);
 
       permissions?.grantEdit(workspace.id, run.id); // starting an editing task permits structured edits for it (§10.1)
@@ -126,7 +124,11 @@ export function createAgentExecutor(deps) {
 
         let built;
         let contextItems = portableItems(providerItems(storage, session.id), nativeRef);
-        const build = () => buildRequest({ capabilities, items: contextItems, tools: registry.declarations({ browserAvailable: browserAvailable() }), instructions, repoInstructions, sessionId: session.id, runId: run.id, reasoningEffort: providerSettings.reasoningEffort });
+        const build = () => {
+          const tools = registry.declarations({ browserAvailable: dispatcher.hasBrowser(workspace.id) });
+          const instructions = applicationInstructions({ workspaceRoot: workspace.path, toolNames: tools.map(tool => tool.name), standalone: storage.getProject?.(session.projectId)?.preferences?.standalone === true });
+          return buildRequest({ capabilities, items: contextItems, tools, instructions, repoInstructions, sessionId: session.id, runId: run.id, reasoningEffort: providerSettings.reasoningEffort });
+        };
         try {
           built = build();
           if (built.accounting.nearLimit) {

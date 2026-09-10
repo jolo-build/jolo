@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
+import { checkHostedBrowser } from './browser-agent-check.js';
 
 const engines = [];
 const homes = [];
@@ -12,6 +13,10 @@ afterEach(async () => {
 
 const FAKE = path.join(ROOT, "tests", "fixtures", "fake-acp.js");
 const TERMINAL = ["completed", "failed", "cancelled", "interrupted"];
+
+test('ACP controls the inline browser on first and resumed turns with Jolo guidance', async () => {
+  await checkHostedBrowser(await boot());
+}, 30_000);
 
 /** A profile with an ACP agent played by the fixture, so nothing here reaches any vendor's CLI or account. */
 async function boot({ clientKind = "test" } = {}) {
@@ -44,6 +49,17 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('ACP omits unavailable browser tools when creating and resuming a session', async () => {
+    const { client, events, runTo, messagesOf, text } = await boot();
+    try {
+      for (const request of ['browser-first', 'browser-resumed']) {
+        const run = await runTo(request, 'browser-check');
+        expect(run.state).toBe('completed');
+        expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
+      }
+      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+    } finally { await client.close(); }
+  }, 25_000);
   test("reopened sessions include pending approvals until they are decided or cancelled", async () => {
     const { client, events, session } = await boot();
     const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'restore-approval', prompt: 'run echo restore-approval' });

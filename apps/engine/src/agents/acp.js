@@ -16,6 +16,9 @@ import path from "node:path";
 import { RESULT_DISPLAY_MAX, hostedPath, createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { acpSearchServers } from '../search/hosted.js';
+import { acpBrowserServers } from '../browser/hosted.js';
+import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, acpImageContent } from '../attachments.js';
 
 export const PROTOCOL_VERSION = 1;
@@ -58,7 +61,7 @@ export function modelSelector(configOptions) {
 /**
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any }} deps
  */
-export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, searchConfig, providerFactory = null, settings = null }) {
+export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
   return {
     name: "acp",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -66,7 +69,8 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       const { run, signal } = ctx;
       const session = storage.getSession(run.sessionId);
       const workspace = storage.getWorkspace(session.workspaceId);
-      const mcpServers = acpSearchServers(searchConfig?.(workspace, run));
+      const browserServer = browserConfig?.(workspace, run);
+      const mcpServers = [...acpSearchServers(searchConfig?.(workspace, run)), ...acpBrowserServers(browserServer)];
       const manifest = answerer ?? catalog.get(session.agentId);
       // What this run was told to use, when a plan task chose something other than the agent's default (§6.6).
       const wanted = runChoice(ctx.run);
@@ -266,7 +270,8 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           try { await request("session/set_config_option", { sessionId: state.sessionId, configId: selector.id, value: chosen.model }); }
           catch (error) { log.warn("acp agent refused the configured model", { agentId: manifest.id, model: chosen.model, error: String(error?.message ?? error) }); }
         }
-        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...acpImageContent(readImages(storage, run))] });
+        const prompt = await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
+        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });
         state.stopReason = typeof result?.stopReason === "string" ? result.stopReason : "end_turn";
         closeTurn();
       };

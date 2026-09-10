@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { runBrowserChatSmoke, runBrowserContentionSmoke } from './browser-chat-smoke.mjs';
 /** Scripted end-to-end check used by `bun run smoke`; never active in normal launches. */
 export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }) {
   const results = process.env.JOLO_SMOKE_RESULTS;
@@ -12,7 +13,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     response.end("<!doctype html><title>Jolo smoke page</title><h1 id=\"h\">Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>");
   });
   await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
-  const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
+  const fixtureUrl = process.env.JOLO_SMOKE_BROWSER_URL || `http://127.0.0.1:${fixture.address().port}/`;
   const evaluate = (code) => window.webContents.executeJavaScript(code, true);
   // Exercise the dialog's Enter handler even when another app owns OS keyboard focus.
   const permissionEnter = async () => {
@@ -32,9 +33,48 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   };
   const report = { measuredAt: new Date().toISOString(), electron: process.versions.electron, chrome: process.versions.chrome, checks: [] };
   await waitFor("Boolean(window.__joloSmoke)", "renderer hook");
+  if (process.env.JOLO_CHATS_SMOKE === '1') {
+    const { runStandaloneChatsSmoke } = await import('./standalone-chats-smoke.mjs');
+    try { await runStandaloneChatsSmoke({ window, bridge, project, results, evaluate, waitFor, report }); }
+    finally { fixture.close(); }
+    return;
+  }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_REAL_BROWSER_AGENT) {
+    const { runRealBrowserAgentSmoke } = await import('./browser-chat-smoke.mjs');
+    try {
+      await runRealBrowserAgentSmoke({ window, bridge, browserHost, fixtureUrl, evaluate, waitFor, report, results, agentId: process.env.JOLO_REAL_BROWSER_AGENT });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_BOARD_SMOKE === '1') {
+    const { runBoardSmoke } = await import('./board-smoke.mjs');
+    try {
+      await runBoardSmoke({ window, bridge, project, results, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_HISTORY_SMOKE === '1') {
+    const { runHistorySmoke } = await import('./history-smoke.mjs');
+    try {
+      await runHistorySmoke({ window, bridge, results, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_BROWSER_CHAT_SMOKE === '1') {
+    try {
+      await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report });
+      await runBrowserContentionSmoke({ browserHost, project, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'browser-chat.png'), (await window.webContents.capturePage()).toPNG());
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_TASKS_SMOKE === '1') {
     const { runTasksSmoke } = await import('./tasks-smoke.mjs');
     try {
@@ -222,35 +262,8 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     report.checks.push("Python code loaded its highlighting chunk, preserved the source, and displayed distinct syntax colors in both themes");
   }
   report.relay = bridge.relay.stats;
-  await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
-  await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", "webview loaded");
-  report.checks.push("inline webview attached under host policy and loaded a local page");
-  await new Promise((resolve) => setTimeout(resolve, 300));
   if (process.env.JOLO_FAKE_SCRIPT) {
-    const registered = () => [...bridge.agent.hosts.values()].some((h) => h.capabilityId);
-    const deadline = Date.now() + 10_000;
-    while (!registered()) { if (Date.now() > deadline) throw new Error("smoke timeout: browser capability registration"); await new Promise((r) => setTimeout(r, 50)); }
-    report.checks.push("browser host registered a capability with the engine");
-    const runsBefore = await evaluate("window.__joloSmoke.state().runCount");
-    await evaluate("window.__joloSmoke.send('use the browser')");
-    await waitFor(`window.__joloSmoke.state().runCount > ${runsBefore} && ['completed','failed','paused'].includes(window.__joloSmoke.state().runState)`, "browser run finished", 30_000);
-    const state = await evaluate("window.__joloSmoke.state()");
-    if (state.runState !== "completed") throw new Error(`browser run ended ${state.runState}: ${JSON.stringify(state.toolText).slice(0, 800)}`);
-    const answer = state.assistantText;
-    if (!answer.includes("Clicked the button.")) throw new Error(`unexpected browser-run text: ${answer}\n${state.toolText.slice(0, 800)}`);
-    const guest = [...browserHost.guests.values()][0]?.guest;
-    // The click reaches the page through the debugger; the run can report completion before the guest repaints.
-    let buttonText = null;
-    for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
-      buttonText = await guest.executeJavaScript("document.querySelector('button').textContent");
-      if (buttonText === "Clicked") break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (buttonText !== "Clicked") throw new Error(`agent click did not reach the page: ${buttonText}`);
-    const toolText = await evaluate("window.__joloSmoke.state().toolText");
-    if (!toolText.includes('"artifactId"') || !toolText.includes("browser_screenshot")) throw new Error("screenshot tool result missing");
-    if (!toolText.includes("browser_network") || !toolText.includes(`"url":"${fixtureUrl}"`)) throw new Error(`network observation missing: ${toolText.slice(-600)}`);
-    report.checks.push("agent navigated, snapshotted, clicked a real element, and captured a screenshot through the engine broker");
+    await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report });
 
     const before = await evaluate("window.__joloSmoke.state().runCount");
     await evaluate("window.__joloSmoke.send('run a command')");
@@ -289,7 +302,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     }
     await evaluate("window.__joloSmoke.showBoard()");
     await waitFor("window.__joloSmoke.state().view === 'board' && document.querySelectorAll('.board-row').length >= 1", "board view", 10_000);
-    await waitFor("window.__joloSmoke.state().needsYou === 0 && /done|ready|stopped|idle/i.test(document.querySelector('.board-row .chip')?.textContent ?? '')", "board row refreshed after completion", 10_000);
+    await waitFor("window.__joloSmoke.state().needsYou === 0 && Boolean(document.querySelector('.board-card .workspace-folder')) && !document.querySelector('.board-card .workspace-folder.working, .board-card .board-workspace-activity.needs')", "board row refreshed after completion", 10_000);
     await waitFor("document.querySelectorAll('.board-row').length >= 4", "multiple board projects");
     const boardTheme = nativeTheme.themeSource;
     const boardWindowSize = window.getSize();
@@ -306,15 +319,15 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
       if (await evaluate("Boolean(document.querySelector('.board button button'))")) throw new Error("board contains nested buttons");
       writeFileSync(path.join(results, "board-narrow.png"), (await window.webContents.capturePage()).toPNG());
     } finally { window.setSize(...boardWindowSize); nativeTheme.themeSource = boardTheme; }
-    report.checks.push("the project board renders multiple compact rows in both themes and fits a narrow window without nested buttons");
-    await evaluate("document.querySelector('.board-project').click()");
-    await waitFor("document.querySelector('.board-detail')?.textContent.includes('Where you left off')", "board detail", 5_000);
+    report.checks.push("the workspace board renders multiple compact rows in both themes and fits a narrow window without nested buttons");
+    await evaluate("[...document.querySelectorAll('.board-card')].find(card => card.dataset.workspaceId === window.__joloSmoke.state().workspaceId).querySelector('.board-expand').click()");
+    await waitFor("Boolean(document.querySelector('.board-workspace-tasks .board-task'))", "workspace task list", 5_000);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const settled = await boardRow();
     if (!settled?.run?.note || settled.attention === "needs_you") throw new Error(`board row after completion: ${JSON.stringify(settled)?.slice(0, 500)}`);
     writeFileSync(path.join(results, "board.png"), (await window.webContents.capturePage()).toPNG());
     await evaluate("window.__joloSmoke.showTask()");
-    report.checks.push("the board view rendered the project with its end-of-run note, and the badge cleared once nothing needed the user");
+    report.checks.push("the board expanded the workspace into its chats, and the badge cleared once nothing needed the user");
 
     await evaluate("window.__joloSmoke.openTerminal()");
     await waitFor("Boolean(window.__joloTerminal?.ready) && window.__joloSmoke.state().terminalText.length > 0", "terminal ready with a prompt", 15_000);

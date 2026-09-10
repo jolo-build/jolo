@@ -1,5 +1,25 @@
 import { expect, test } from "bun:test";
 import { initialLayout, MAX_PANES, paneRects, paneReducer } from "../../apps/desktop/src/renderer/pane-layout.js";
+import { taskDropSide } from '../../apps/desktop/src/renderer/task-drag.jsx';
+
+test('task drops place an existing chat on every edge without replacing its target', () => {
+  const task = { rootPath: '/other', session: { id: 'existing' }, historyState: 'archived' };
+  const bounds = { left: 200, top: 100, width: 800, height: 600 };
+  for (const [x, y, side, expected] of [
+    [210, 400, 'left', { x: 0, y: 0, width: 50, height: 100 }],
+    [990, 400, 'right', { x: 50, y: 0, width: 50, height: 100 }],
+    [600, 110, 'top', { x: 0, y: 0, width: 100, height: 50 }],
+    [600, 690, 'bottom', { x: 0, y: 50, width: 100, height: 50 }],
+  ]) {
+    expect(taskDropSide(x, y, bounds)).toBe(side);
+    const initial = initialLayout();
+    const state = paneReducer(initial, { type: 'split', source: 'pane-1', id: 'new', axis: ['top', 'bottom'].includes(side) ? 'y' : 'x', before: ['left', 'top'].includes(side), task });
+    expect(state.panes[0]).toBe(initial.panes[0]);
+    expect(state.panes[1].task).toBe(task);
+    expect(paneRects(state.tree).panes.new).toEqual(expected);
+  }
+  expect(taskDropSide(600, 400, bounds)).toBe('right');
+});
 
 test("nested splits tile the workspace without overlap and preserve existing pane identities", () => {
   let state = initialLayout();

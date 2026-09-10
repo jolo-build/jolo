@@ -10,10 +10,12 @@
   "scripts": {
     "setup:tgrep": "bun scripts/setup-tgrep.js",
     "test": "bun test tests packages apps",
+    "security:audit": "bun audit",
     "engine": "bun apps/engine/src/main.js serve",
     "jolo": "bun apps/cli/src/main.js",
     "desktop": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/start.js",
     "desktop:smoke": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/smoke.js",
+    "desktop:browser-smoke": "bun apps/desktop/scripts/browser-smoke.js",
     "build": "bun scripts/build.js",
     "build:cli": "bun scripts/build.js --cli-only",
     "release:stage": "bun scripts/releases.js stage",
@@ -53,6 +55,9 @@
   ],
   "patchedDependencies": {
     "ink@7.1.1": "patches/ink@7.1.1.patch"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
   },
   "license": "MIT",
   "repository": {

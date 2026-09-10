@@ -1,4 +1,4 @@
-// Cross-project work board: one row per project, sorted by how much it needs the user (§4.1).
+// Work board: one row per workspace folder, with chats listed separately on expansion.
 // Every number comes from durable records; nothing here runs a model or reads project files
 // beyond one bounded `git status` per workspace, cached briefly.
 import { capture } from "../processes/capture.js";
@@ -82,7 +82,7 @@ export function createBoard({ storage, env, log }) {
   const buildRow = (project, workspace) => {
     const latest = storage.boardRunForWorkspace(workspace.id);
     const run = latest?.run ?? null;
-    const session = run ? storage.getSession(run.sessionId) : null;
+    const session = run ? storage.getSession(run.sessionId) : project.preferences.standalone ? storage.listSessions({ projectId: project.id, limit: 1 })[0] : null;
     const pendingRecord = run && (run.state === "awaiting_permission" || run.state === "paused") ? storage.pendingPermissionForRun(run.id) : null;
     const pendingPermission = pendingRecord ? { permissionId: pendingRecord.id, tool: pendingRecord.tool, summary: pendingRecord.request.summary ?? pendingRecord.tool, ...(pendingRecord.request.argv ? { argv: pendingRecord.request.argv } : {}), ...(pendingRecord.request.script ? { script: pendingRecord.request.script } : {}), cwd: pendingRecord.request.cwd ?? ".", createdAt: pendingRecord.createdAt } : null;
     const actions = run ? storage.recentToolActivity(run.id, 3) : [];
@@ -91,9 +91,12 @@ export function createBoard({ storage, env, log }) {
     const note = stopped ? run.note : null;
     return {
       projectId: project.id,
+      standalone: project.preferences.standalone === true,
       rootPath: project.rootPath,
-      name: path.basename(project.rootPath) || project.rootPath,
+      name: project.preferences.standalone ? 'Chat' : path.basename(project.rootPath) || project.rootPath,
       workspaceId: workspace.id,
+      taskCount: storage.countSessionsForWorkspace(workspace.id, 'open'),
+      working: storage.workspaceHasWorkingRuns(workspace.id),
       workspace: { id: workspace.id, mode: workspace.mode, branch: workspace.branch, path: workspace.path },
       lastViewedAt: workspace.lastViewedAt,
       attention,
@@ -112,13 +115,13 @@ export function createBoard({ storage, env, log }) {
 
   return {
     async list() {
-      const workspaces = storage.listProjects().flatMap(project => storage.listWorkspaces(project.id));
+      const workspaces = storage.listProjects().filter(project => !project.preferences.standalone).flatMap(project => storage.listWorkspaces(project.id));
       // Two concurrent status calls, outside SQLite transactions.
       let index = 0;
       const worker = async () => { while (index < workspaces.length) await gitInfo(workspaces[index++].path); };
       await Promise.all([worker(), worker()]);
-      // The direct checkout always has a row; a worktree appears once a task lives in it.
-      const rows = storage.transaction(() => storage.listProjects().flatMap((project) => storage.listWorkspaces(project.id).filter((workspace) => workspace.mode === "direct" || storage.countSessionsForWorkspace(workspace.id) > 0).map((workspace) => buildRow(project, workspace))));
+      // A folder remains available even before its first chat is created.
+      const rows = storage.transaction(() => storage.listProjects().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace))));
       rows.sort((a, b) => ATTENTION_ORDER[a.attention] - ATTENTION_ORDER[b.attention] || (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || a.name.localeCompare(b.name));
       return { projects: rows, generatedAt: new Date().toISOString() };
     },
@@ -126,17 +129,19 @@ export function createBoard({ storage, env, log }) {
      * Every open task across every project, for a task list that is not scoped to one project (§5.1). The
      * same attention rule the board rows use, so a task reads the same wherever it is shown.
      */
-    tasks({ limit = 200 } = {}) {
+    tasks({ limit = 200, workspaceId, before, state = 'open', standalone } = {}) {
       const generatedAt = new Date().toISOString();
-      const rows = storage.listSessionActivity({ limit }).map((entry) => {
+      const entries = storage.listSessionActivity({ limit: limit + 1, workspaceId, before, state, standalone });
+      const rows = entries.slice(0, limit).map((entry) => {
         const { attention, reason } = attentionFor(entry.run, entry.workspace);
         const stopped = entry.run && (TERMINAL_RUN_STATES.includes(entry.run.state) || entry.run.state === "paused");
         return {
           sessionId: entry.session.id,
+          standalone: entry.standalone,
           title: entry.session.title,
           agentId: entry.session.agentId,
           projectId: entry.session.projectId,
-          projectName: path.basename(entry.projectRootPath) || entry.projectRootPath,
+          projectName: entry.standalone ? 'Chat' : path.basename(entry.projectRootPath) || entry.projectRootPath,
           rootPath: entry.projectRootPath,
           workspaceId: entry.workspace.id,
           branch: entry.workspace.branch,
@@ -148,7 +153,9 @@ export function createBoard({ storage, env, log }) {
           run: entry.run ? { id: entry.run.id, state: entry.run.state, pauseReason: entry.run.pauseReason, createdAt: entry.run.createdAt, updatedAt: entry.run.updatedAt } : null,
         };
       });
-      return { tasks: rows, generatedAt };
+      const last = rows.at(-1);
+      return { tasks: rows, generatedAt, hasMore: entries.length > limit,
+        nextCursor: entries.length > limit && last ? { updatedAt: last.updatedAt, sessionId: last.sessionId } : null };
     },
     viewed(workspaceId) {
       return storage.transaction(() => {

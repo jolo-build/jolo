@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const pendingReads = new Map();
-const COALESCED = new Set(["engine.status", "session.list", "workspace.list", "plan.list", "plan.get", "agent.list", "agent.catalog", "settings.get", "board.list"]);
+const COALESCED = new Set(["engine.status", "session.list", "workspace.list", "plan.list", "plan.get", "agent.list", "agent.catalog", "settings.get", "board.list", "board.tasks"]);
 export function engineCall(method, params) {
   const key = COALESCED.has(method) ? `${method}:${JSON.stringify(params)}` : null;
   if (key && pendingReads.has(key)) return pendingReads.get(key);
@@ -24,10 +24,6 @@ export function EngineProvider({ children }) {
   const [initializing, setInitializing] = useState(true);
   const [settings, setSettings] = useState(null);
   const [board, setBoard] = useState(null);
-  const [tasks, setTasks] = useState([]); // every open task, across every project (§5.1)
-  // null until the engine has been asked; false when it cannot answer, so a caller can fall back to what it
-  // already has rather than showing an empty list as though there were nothing to show.
-  const [tasksAvailable, setTasksAvailable] = useState(null);
   const [agentCatalog, setAgentCatalog] = useState([]);
   const overlays = useRef(new Set());
   const setOverlay = useCallback((id, active) => {
@@ -40,21 +36,6 @@ export function EngineProvider({ children }) {
   const refreshBoard = useCallback(async () => {
     try { const next = await engineCall("board.list", {}); setBoard(next); return next; }
     catch (error) { console.error("board refresh failed", error); return null; }
-  }, []);
-
-  const refreshTasks = useCallback(async () => {
-    try {
-      const next = await engineCall("board.tasks", {});
-      setTasks(next.tasks);
-      setTasksAvailable(true);
-      return next.tasks;
-    } catch (error) {
-      // An engine older than this method cannot list across projects. Say so, so the list falls back to the
-      // open project's own tasks instead of reading as "you have none".
-      setTasksAvailable(false);
-      if (error?.code !== "unknown_method") console.error("task list refresh failed", error);
-      return null;
-    }
   }, []);
 
   // In-app notices. The main process shows an OS notification when the window is not focused; these are for
@@ -80,7 +61,7 @@ export function EngineProvider({ children }) {
       if (disposed) return;
       setEngine(next);
       if (next.connected) {
-        void Promise.allSettled([refreshSettings(), refreshBoard(), refreshTasks(), refreshCatalog()]).then(() => {
+        void Promise.allSettled([refreshSettings(), refreshBoard(), refreshCatalog()]).then(() => {
           if (!disposed) setInitializing(false);
         });
       } else if (next.error) setInitializing(false); // let the interface show connection failures
@@ -88,7 +69,7 @@ export function EngineProvider({ children }) {
     const offEngine = window.jolo.onEngine((next) => { notified = true; receive(next); });
     void engineCall("engine.status", {}).then((status) => { if (!notified) receive({ connected: true, status }); }).catch((error) => { if (!notified) receive({ connected: false, error: error.message }); });
     const offEvents = window.jolo.onEvents((items) => {
-      if (!timer && items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); void refreshTasks(); }, 400);
+      if (!timer && items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
       // A request that has been answered is no longer news, wherever it was answered.
       for (const item of items) {
         if (item.kind !== "event" || item.value.type !== "permission.resolved") continue;
@@ -115,7 +96,7 @@ export function EngineProvider({ children }) {
       });
     });
     return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); };
-  }, [refreshSettings, refreshBoard, refreshTasks, refreshCatalog, showNotice]);
-  return <Context.Provider value={{ engine, initializing, settings, board, tasks, tasksAvailable, refreshTasks, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }}>{children}</Context.Provider>;
+  }, [refreshSettings, refreshBoard, refreshCatalog, showNotice]);
+  return <Context.Provider value={{ engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }}>{children}</Context.Provider>;
 }
 export const useEngineConnection = () => useContext(Context);

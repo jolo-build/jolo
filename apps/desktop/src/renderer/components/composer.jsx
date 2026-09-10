@@ -72,7 +72,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
+export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
@@ -162,7 +162,7 @@ export function Composer({ disabled, autoFocusOnType = false, running, queuedRun
       const target = event.target instanceof Element ? event.target : document.activeElement;
       // Selecting a task leaves focus on its sidebar button; typing should continue in that task.
       // Other buttons keep their keyboard behavior, including task options and unselected rows.
-      const selectedTask = target?.closest('.sidebar .task[aria-current="page"]');
+      const selectedTask = target?.closest('.sidebar .task[aria-current="page"], .sidebar .recent-chat[aria-current="page"]');
       if (!selectedTask && target?.closest('input, textarea, select, button, a[href], summary, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="tab"], [role="separator"], .terminal, .inspector')) return;
       const pane = target?.closest('.pane-slot');
       if (pane && pane !== input.current?.closest('.pane-slot')) return;
@@ -213,7 +213,7 @@ export function Composer({ disabled, autoFocusOnType = false, running, queuedRun
       <li className="mention-hint">{taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
-    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
+    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
       onSelect={(e) => setCaret(e.target.selectionStart ?? 0)}
@@ -234,14 +234,14 @@ export function Composer({ disabled, autoFocusOnType = false, running, queuedRun
         }
       }} />
     <div className="composer-controls">
-      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name="folder" size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
+      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton usage={usage} answererName={answerer ?? answererName} />
       <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} title={answerer ? `Answering: ${answerer}. Click to choose who answers.` : "Configure provider and model"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button><span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}
-      {(!running || text.trim() || attachments.length) && <button type="submit" className="primary composer-submit" disabled={disabled || sending || readingImages || (!text.trim() && !attachments.length)} aria-label={sending ? 'Sending message' : running ? 'Queue message' : 'Send message'} title={running ? 'Queue message · Enter. Enter twice to interrupt and send now.' : 'Send message · Enter'}><Icon name="arrow" size={15} /></button>}
+      {(!running || text.trim() || attachments.length > 0) && <button type="submit" className="primary composer-submit" disabled={disabled || sending || readingImages || (!text.trim() && !attachments.length)} aria-label={sending ? 'Sending message' : running ? 'Queue message' : 'Send message'} title={running ? 'Queue message · Enter. Enter twice to interrupt and send now.' : 'Send message · Enter'}><Icon name="arrow" size={15} /></button>}
     </div>
   </form></div></div></div>;
 }

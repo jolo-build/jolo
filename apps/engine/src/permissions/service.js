@@ -26,7 +26,7 @@ export class PermissionService {
     return { grant: this.storage.insertGrant({ scope, constraints }), created: true };
   }
 
-  /** Attaching the inline browser to a workspace is a user action that permits agent browsing there (§5.3). */
+  /** Attaching the inline browser, via the Browser button or chat, permits browsing in that workspace. */
   grantBrowse(workspaceId) {
     return this.grantScope(SCOPES.browse, { workspaceId });
   }
@@ -46,14 +46,14 @@ export class PermissionService {
    * forbids it outright and PermissionRequired when a user decision could allow it.
    */
   authorize({ toolClass, workspaceId, runId, approvedPermissionId, argumentDigest, toolName }) {
-    if (toolClass === "read") {
+    if (toolClass === "read" || toolClass === 'browser_open') {
       const grant = this.storage.findGrant({ scope: SCOPES.inspect, workspaceId });
       if (!grant) throw new ProtocolError("permission_denied", "no inspection grant for this workspace");
       return grant;
     }
     if (toolClass === "browser_read" || toolClass === "browser_action") {
       const grant = this.storage.findGrant({ scope: SCOPES.browse, workspaceId });
-      if (!grant) throw new ProtocolError("permission_denied", "no browsing grant for this workspace; attach the inline browser first");
+      if (!grant) throw new ProtocolError("permission_denied", "no browsing grant for this workspace; call browser_open first");
       return grant;
     }
     if (toolClass === "mutation") {

@@ -32,7 +32,7 @@ export function createAccessApp(env, options = {}) {
     const url = new URL(request.url);
     if (url.origin !== config.origin) return html(errorPage(421), 421);
     const path = url.pathname;
-    if ((path === '/styles.css' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
+    if ((path === '/styles.css' || path === '/theme.js' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
       return env.ASSETS?.fetch(request) ?? html(errorPage(404), 404);
     }
     if (request.method === 'GET' && path === '/health') {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, nativeTheme } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { once } from 'node:events';
+import { checkLoading } from './browser-loading.mjs';
 
 app.setPath('userData', process.env.JOLO_ACCESS_TEST_HOME);
 let phase = 'starting Electron';
@@ -13,13 +14,15 @@ async function checkForms() {
   window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'jolo-access-browser-smoke' } });
   const contents = window.webContents;
   contents.setBackgroundThrottling(false);
+  phase = 'checking initial asset loading';
+  await checkLoading(window, origin);
   const text = () => contents.executeJavaScript('document.body.textContent');
   const settle = () => contents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   const fit = async (label, controls = []) => {
     await settle();
     const metrics = await contents.executeJavaScript(`(() => {
       const root=document.documentElement, content=document.querySelector('.task-content');
-      const selectors=${JSON.stringify(controls)};
+      const selectors=${JSON.stringify(['#color-theme', ...controls])};
       return { width:innerWidth,height:innerHeight,pageWidth:root.scrollWidth,pageHeight:root.scrollHeight,
         contentOverflow:content ? Math.max(0,content.scrollHeight-content.clientHeight) : 0, contentWidthOverflow:content ? Math.max(0,content.scrollWidth-content.clientWidth) : 0,
         controls:selectors.map(selector=>{const element=document.querySelector(selector),r=element?.getBoundingClientRect();return {selector,visible:Boolean(r&&r.width&&r.height&&r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth)};}) };
@@ -45,6 +48,25 @@ async function checkForms() {
     window.setContentSize(1280,720);
   };
   window.setContentSize(1280,720);
+  const chooseTheme = value => contents.executeJavaScript(`(() => {
+    const picker=document.getElementById('color-theme');picker.value=${JSON.stringify(value)};picker.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  const background = () => contents.executeJavaScript('getComputedStyle(document.documentElement).backgroundColor');
+  nativeTheme.themeSource='dark';
+  await window.loadURL(origin+'/');
+  assert.equal(await background(),'rgb(22, 22, 22)','System follows dark OS preference');
+  await chooseTheme('light');
+  assert.equal(await background(),'rgb(255, 255, 255)','Light overrides dark OS preference');
+  await window.loadURL(origin+'/device');
+  assert.equal(await background(),'rgb(255, 255, 255)','Explicit theme survives navigation');
+  await chooseTheme('dark');nativeTheme.themeSource='light';
+  await settle();
+  assert.equal(await background(),'rgb(22, 22, 22)','Dark overrides light OS preference');
+  await chooseTheme('system');await settle();
+  assert.equal(await background(),'rgb(255, 255, 255)','System restores the OS preference');
+  nativeTheme.themeSource='dark';await settle();
+  assert.equal(await background(),'rgb(22, 22, 22)','System follows live OS changes');
+  await chooseTheme(process.env.JOLO_ACCESS_TEST_THEME ?? 'light');
   phase = 'loading approval page';
   await window.loadURL(origin + '/__fixture/session');
   phase = 'reading approval page';

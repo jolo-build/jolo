@@ -12,6 +12,9 @@
 import { createHostedTurn, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { codexSearchArgs } from '../search/hosted.js';
+import { codexBrowserArgs, browserPreview } from '../browser/hosted.js';
+import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages } from '../attachments.js';
 
 const APPROVAL_POLICY = "untrusted";
@@ -57,7 +60,11 @@ function itemOutcome(item) {
       return { status: jolo, text: [output.trimEnd(), status === "declined" ? "declined" : exit].filter(Boolean).join("\n") };
     }
     case "fileChange": return { status: jolo, text: status };
-    case "mcpToolCall": return { status: jolo, text: item.error ? String(item.error?.message ?? item.error) : JSON.stringify(item.result ?? null) };
+    case "mcpToolCall": {
+      // The vendor receives MCP images; Jolo's transcript keeps the artifact metadata, not base64.
+      if (!item.error && item.server === 'jolo_browser' && Array.isArray(item.result?.content)) return { status: item.result.isError ? 'error' : jolo, text: item.result.content.filter(part => part.type === 'text').map(part => browserPreview(part.text)).join('\n') };
+      return { status: jolo, text: item.error ? String(item.error?.message ?? item.error) : JSON.stringify(item.result ?? null) };
+    }
     case "dynamicToolCall": return { status: jolo, text: JSON.stringify(item.contentItems ?? null) };
     default: return { status: jolo, text: status };
   }
@@ -66,7 +73,7 @@ function itemOutcome(item) {
 /**
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any }} deps
  */
-export function createCodexAppServerExecutor({ storage, catalog, permissions, supervisor, build = "dev", log, searchConfig, providerFactory = null, settings = null }) {
+export function createCodexAppServerExecutor({ storage, catalog, permissions, supervisor, build = "dev", log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
   return {
     name: "codex-app-server",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -80,6 +87,8 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       const chosen = catalog.config(manifest, wanted); // Codex takes the model over the protocol rather than as a flag
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
       const env = hostedEnvironment(supervisor);
+      const browserServer = browserConfig?.(workspace, run);
+      const developerInstructions = [inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n');
 
       const state = {
         threadId: null, turnId: null, completed: null, failure: null, done: false,
@@ -97,7 +106,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         return true;
       };
       try {
-        link = spawnLineChild({ argv: [binary, ...extraArgs, ...codexSearchArgs(searchConfig?.(workspace, run)), "app-server"], cwd: workspace.path, env, signal, onCancel, log, agentId: manifest.id });
+        link = spawnLineChild({ argv: [binary, ...extraArgs, ...codexSearchArgs(searchConfig?.(workspace, run)), ...codexBrowserArgs(browserServer), "app-server"], cwd: workspace.path, env, signal, onCancel, log, agentId: manifest.id });
       } catch (error) {
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
@@ -163,7 +172,18 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
             return respond(id, { decision: decision === "allow" ? "approved" : decision === null ? "abort" : "denied" });
           }
           case "item/tool/requestUserInput":
+            return refuse(id, "Jolo does not relay questions to the user; ask in your reply instead");
           case "mcpServer/elicitation/request":
+            // Codex asks for a second MCP approval even though this server is
+            // Jolo's own scoped bridge. Let the actual tool call reach Jolo's
+            // dispatcher, which enforces workspace, live-run and browse policy.
+            // Never accept external-server forms, URL flows or persistent grants.
+            if (browserServer && params.serverName === 'jolo_browser' && params.threadId === state.threadId
+              && params.turnId === state.turnId && params.mode === 'form'
+              && params._meta?.codex_approval_kind === 'mcp_tool_call'
+              && params.requestedSchema?.type === 'object'
+              && Object.keys(params.requestedSchema.properties ?? {}).length === 0
+              && (params.requestedSchema.required ?? []).length === 0) return respond(id, { action: 'accept', content: {} });
             return refuse(id, "Jolo does not relay questions to the user; ask in your reply instead");
           default:
             return refuse(id, `Jolo does not handle ${method}`);
@@ -295,10 +315,10 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         let thread = null;
         let resumed = false;
         if (remembered) {
-          try { thread = (await request("thread/resume", { threadId: remembered, cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, ...(chosen.model ? { model: chosen.model } : {}) })).thread; resumed = Boolean(thread); }
+          try { thread = (await request("thread/resume", { threadId: remembered, cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, developerInstructions, ...(chosen.model ? { model: chosen.model } : {}) })).thread; resumed = Boolean(thread); }
           catch (error) { log.warn("codex thread could not be resumed; starting a new one", { threadId: remembered, error: rpcFailure(error) }); }
         }
-        if (!thread) thread = (await request("thread/start", { cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, ...(chosen.model ? { model: chosen.model } : {}) })).thread;
+        if (!thread) thread = (await request("thread/start", { cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, developerInstructions, ...(chosen.model ? { model: chosen.model } : {}) })).thread;
         if (!thread?.id) throw new Error("Codex did not return a thread");
         state.threadId = thread.id;
         if (thread.id !== remembered) turn.remember({ codexThreadId: thread.id });

@@ -30,6 +30,13 @@ export class ToolRegistry {
     return [...this.tools.values()].filter((tool) => browserAvailable || !tool.browserOperation).map((tool) => {
       const schema = z.toJSONSchema(tool.params);
       delete schema.$schema;
+      const portable = node => {
+        if (!node || typeof node !== 'object') return;
+        delete node.additionalProperties;
+        for (const value of Object.values(node)) portable(value);
+      };
+      portable(schema);
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(tool.name)) throw new Error(`Invalid model tool name: ${tool.name}`);
       return { name: tool.name, description: tool.description, parameters: schema, executionClass: tool.executionClass };
     });
   }

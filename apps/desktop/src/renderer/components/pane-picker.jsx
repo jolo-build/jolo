@@ -5,12 +5,12 @@ import { basename } from "../presentation.js";
 import { engineCall } from "../engine-context.jsx";
 
 export function PanePicker({ project, sessionId, board, onOpen, onClose }) {
-  const [path, setPath] = useState(project?.rootPath ?? "");
+  const [path, setPath] = useState(project?.standalone ? '' : project?.rootPath ?? "");
   const [sessions, setSessions] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState(false);
-  const paths = [...new Set([project?.rootPath, path, ...(board?.projects ?? []).map((row) => row.rootPath)].filter(Boolean))];
+  const paths = [...new Set([project?.standalone ? null : project?.rootPath, path, ...(board?.projects ?? []).filter(row => !row.standalone).map((row) => row.rootPath)].filter(Boolean))];
   useEffect(() => {
     let cancelled = false;
     setSessions([]); setError(null);

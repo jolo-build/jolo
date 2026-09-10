@@ -156,7 +156,8 @@ export async function buildHandoff(storage, { summarize = null, ...options }) {
 export function createSummarizer({ providerFactory, settings, log, sessionId, runId }) {
   if (!providerFactory) return null;
   return async (source) => {
-    const providerSettings = settings?.get?.().provider ?? null;
+    const config = settings?.get?.();
+    const providerSettings = config?.model ?? config?.provider ?? null;
     const { provider, settings: effective, configured } = await providerFactory.create(providerSettings);
     if (!configured) return null;
     const capabilities = provider.capabilities(effective.model);

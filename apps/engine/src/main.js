@@ -48,6 +48,6 @@ export async function serve(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.main) {
-  const task = process.argv[2] === 'search-mcp' ? import('./search/mcp.js').then(module => module.runSearchMcp()).then(() => 0) : serve();
+  const task = process.argv[2] === 'browser-mcp' ? import('./browser/mcp.js').then(module => module.runBrowserMcp()).then(() => 0) : process.argv[2] === 'search-mcp' ? import('./search/mcp.js').then(module => module.runSearchMcp()).then(() => 0) : serve();
   task.then((code) => process.exit(code), (error) => { process.stderr.write(`${error?.stack ?? error}\n`); process.exit(1); });
 }

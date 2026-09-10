@@ -6,14 +6,14 @@ import path from 'node:path';
 
 export class CapabilityTokens {
   constructor(directory) { this.directory = directory; this.tokens = new Map(); this.revoked = new Set(); }
-  issue(runId, workspaceId) {
-    const existing = [...this.tokens.values()].find(entry => entry.runId === runId && entry.workspaceId === workspaceId);
+  issue(runId, workspaceId, methods = ['workspace.search']) {
+    const existing = [...this.tokens.values()].find(entry => entry.runId === runId && entry.workspaceId === workspaceId && JSON.stringify(entry.methods) === JSON.stringify(methods));
     if (existing) return existing;
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const token = randomBytes(32).toString('hex');
     const tokenPath = path.join(this.directory, randomBytes(16).toString('hex'));
     writeFileSync(tokenPath, token, { mode: 0o600, flag: 'wx' });
-    const entry = { tokenPath, runId, workspaceId, methods: ['workspace.search'] };
+    const entry = { tokenPath, runId, workspaceId, methods: [...methods] };
     this.tokens.set(token, entry);
     return entry;
   }

@@ -36,6 +36,7 @@ let counter = 0;
 let client = null; // what the client said it can do
 let cancelled = null; // resolver for a "sleep" prompt
 const sessions = new Map();
+let browserServer = null;
 const ask = (method, params) => new Promise((resolve) => { const id = ++counter; pending.set(id, resolve); out({ id, method, params }); });
 const stateFile = (sessionId) => (stateDir ? path.join(stateDir, `${sessionId}.json`) : null);
 const persist = (sessionId) => { const file = stateFile(sessionId); if (file) { mkdirSync(stateDir, { recursive: true }); writeFileSync(file, JSON.stringify(sessions.get(sessionId))); } };
@@ -45,7 +46,12 @@ async function prompt(id, params) {
   const session = sessions.get(sessionId);
   if (!session) return out({ id, error: { code: -32602, message: "unknown session" } });
   const received = (params.prompt ?? []).map((block) => (block?.type === "text" ? block.text : `[${block?.type}]`)).join("");
-  const text = received.split("\n\nCurrent request:\n").at(-1);
+  // Browser guidance is the ACP system preamble; history assertions inspect the
+  // handoff context that follows it, keeping any nested current-request marker.
+  const boundary = "\n\nCurrent request:\n";
+  const context = received.startsWith("This conversation is hosted inside Jolo.") && received.includes(boundary)
+    ? received.slice(received.indexOf(boundary) + boundary.length) : received;
+  const text = context.split(boundary).at(-1);
   const update = (value) => notify("session/update", { sessionId, update: value });
   const say = (reply) => { for (const piece of reply.match(/.{1,12}/gs) ?? []) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: piece } }); };
   const finish = (reply, stopReason = "end_turn") => {
@@ -65,6 +71,12 @@ async function prompt(id, params) {
   update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking about it." } });
   if (text.startsWith('image-check')) return finish(`Images received: ${(params.prompt ?? []).filter(part => part.type === 'image').map(image => `${image.mimeType}:${Buffer.from(image.data, 'base64').length}`).join(', ')}`);
   let match;
+  if (text === 'browser-check') {
+    if (!received.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    if (!browserServer) return finish('Browser tools unavailable');
+    const { browserMcpCheck } = await import('./browser-mcp-client.js');
+    return finish(await browserMcpCheck(browserServer));
+  }
   if ((match = text.match(/^run (.+)$/s))) {
     const command = match[1];
     const toolCallId = tool({ title: `Execute \`${command}\``, kind: "execute", rawInput: { command } });
@@ -141,7 +153,7 @@ async function prompt(id, params) {
     update({ sessionUpdate: "tool_call_update", toolCallId, status: "completed" });
     return finish("Written.");
   }
-  if (text === "history") return finish(`${session.loaded ? "Resumed" : "Fresh agent"} context: ${received}`);
+  if (text === "history") return finish(`${session.loaded ? "Resumed" : "Fresh agent"} context: ${context}`);
   if (text.startsWith("model")) return finish(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}.`);
   if (text.startsWith("fail")) return out({ id, error: { code: -32000, message: "scripted failure" } });
   if (text.startsWith("sleep")) {
@@ -167,12 +179,14 @@ async function handle(message) {
       return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: [], agentInfo: { name: "fake-acp", version: "0.0.0" } });
     case "session/new": {
       if (!client) return fail(-32002, "initialize first");
+      browserServer = params.mcpServers?.find(server => server.name === 'jolo_browser');
       const sessionId = `acp-${Math.random().toString(36).slice(2, 10)}`;
       sessions.set(sessionId, { cwd: params.cwd, history: [], loaded: false });
       persist(sessionId);
       return reply({ sessionId, configOptions: configOptions() });
     }
     case "session/load": {
+      browserServer = params.mcpServers?.find(server => server.name === 'jolo_browser');
       const file = stateFile(params.sessionId);
       if (!file || !existsSync(file)) return fail(-32602, "unknown session");
       const saved = JSON.parse(readFileSync(file, "utf8"));

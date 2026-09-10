@@ -51,12 +51,19 @@ test('guest credential cannot claim interactive authority, cross workspaces, or 
   const f = await fixture();
   try {
     const entry = f.capabilities.issue('run', 'workspace');
+    const browser = f.capabilities.issue('run', 'workspace', ['browser.call']);
+    expect(browser.tokenPath).not.toBe(entry.tokenPath);
+    expect(entry.methods).toEqual(['workspace.search']);
+    const browserClient = await connect({ ...f.options, token: readFileSync(browser.tokenPath, 'utf8'), clientKind: 'desktop' });
+    await expect(browserClient.call('browser.call', { workspaceId: 'other', name: 'browser_tabs', arguments: {} })).rejects.toMatchObject({ code: 'permission_denied' });
+    await expect(browserClient.call('workspace.search', { workspaceId: 'workspace', pattern: 'test' })).rejects.toMatchObject({ code: 'unknown_method' });
     const client = await connect({ ...f.options, token: readFileSync(entry.tokenPath, 'utf8'), clientKind: 'test' });
     await expect(client.call('permission.resolve', { permissionId: 'p', decision: 'allow_once' })).rejects.toMatchObject({ code: 'unknown_method' });
     await expect(client.call('workspace.search', { workspaceId: 'other', pattern: 'test' })).rejects.toMatchObject({ code: 'permission_denied' });
     await expect(client.call('task.list', {})).rejects.toMatchObject({ code: 'unknown_method' });
     await expect(client.call('task.get', { key: 'JOLO-1' })).rejects.toMatchObject({ code: 'unknown_method' });
     f.capabilities.revoke('run');
+    await expect(browserClient.call('browser.call', { workspaceId: 'workspace', name: 'browser_tabs', arguments: {} })).rejects.toMatchObject({ code: 'unavailable' });
     await expect(client.call('workspace.search', { workspaceId: 'workspace', pattern: 'test' })).rejects.toMatchObject({ code: 'unavailable' });
     await client.close();
   } finally { await f.close(); }

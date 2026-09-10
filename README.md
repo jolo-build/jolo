@@ -30,6 +30,12 @@ bun run desktop
 
 In Jolo, use `/model` to choose an installed coding agent or configure an API provider. Hosted agents must already be installed and authenticated separately. The demo provider is available only in development mode; release builds require a configured model provider or an installed coding agent.
 
+In the desktop board and sidebar, each folder is a workspace and each task is a chat. Expand a workspace to list its tasks, click a task to open its conversation, or choose **New task** in that workspace. The board uses the full window; the workspace sidebar returns when you open a chat. Archived tasks stay grouped by folder in the sidebar’s **Archive** tab.
+
+Choose **New chat** to start a conversation without selecting a folder. These chats appear under **Recents**, below your workspace folders, and support the same model and agent choices, saved history, archive, and split views. Chats receive a title from their first message. Each chat has private working storage for agents and generated files, separate from your projects.
+
+Drag a task from the sidebar or board onto a chat to open it in a split pane. Move toward the left, right, top, or bottom to preview its placement; dropping in the center opens it on the right. Existing chats and drafts stay in place, and the divider resizes the panes.
+
 Open a project or start a headless run:
 
 ```sh

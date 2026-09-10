@@ -51,7 +51,7 @@ export class SessionProjection {
   }
 
   /** Seed from a snapshot or page; committed text is fetched lazily by the caller via fill(). */
-  seed({ messages = [], runs = [], cursor }) {
+  seed({ messages = [], runs = [], cursor, advanceCursor = true }) {
     for (const message of messages) {
       if (cursor && BigInt(this.messageSeq.get(message.id) ?? "0") > BigInt(cursor)) continue;
       const existing = this.messages.get(message.id);
@@ -64,7 +64,7 @@ export class SessionProjection {
       this.runs.set(run.id, { ...run, agentId: run.agentId ?? run.execution?.agentId ?? null });
       if (cursor) this.runSeq.set(run.id, cursor);
     }
-    if (cursor && BigInt(cursor) > BigInt(this.lastSeq)) this.lastSeq = cursor;
+    if (advanceCursor && cursor && BigInt(cursor) > BigInt(this.lastSeq)) this.lastSeq = cursor;
     this.onChange();
   }
 
