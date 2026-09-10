@@ -16,6 +16,7 @@ export class RunService {
   constructor(options) {
     this.storage = options.storage;
     this.executor = options.executor;
+    this.captureProvider = options.captureProvider;
     this.lifetime = options.lifetime;
     this.log = options.log;
     this.maxActive = options.maxActive ?? 2;
@@ -77,6 +78,8 @@ export class RunService {
       }
       const images = validateAttachments(this.storage, sessionId, attachments);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });
+      const providerConfig = this.captureProvider?.(session, execution);
+      if (providerConfig) this.storage.setRunProviderConfig(run.id, providerConfig);
       this.storage.bumpSessionRevision(sessionId);
       this.storage.appendEvent({ sessionId, runId: run.id, type: "run.state", payload: { state: run.state, revision: run.revision, agentId: run.execution?.agentId ?? null, promptPreview: prompt.slice(0, 500), ...(images.length ? { attachments: images } : {}), ...(run.taskReferences?.length ? { taskReferences: run.taskReferences } : {}) } });
       return { run, deduplicated: false };

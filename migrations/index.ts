@@ -13,6 +13,8 @@ import imageAttachments from "./0010_image_attachments.ts";
 
 import taskReferences from "./0011_task_references.ts";
 
+import modelHarness from "./0012_model_harness.ts";
+
 export interface Migration {
   readonly version: number;
   /** Stable database identity; keep the original name even when the source file moves. */
@@ -37,4 +39,5 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 9, name: "0009_runtime_indexes.sql", sql: runtimeIndexes },
   { version: 10, name: "0010_image_attachments.sql", sql: imageAttachments },
   { version: 11, name: "0011_task_references.sql", sql: taskReferences },
+  { version: 12, name: "0012_model_harness.sql", sql: modelHarness },
 ]);

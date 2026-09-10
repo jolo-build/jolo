@@ -1,3 +1,4 @@
+import { ProviderModels } from './provider-models.jsx';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
@@ -5,10 +6,11 @@ import { Combobox } from './combobox.jsx';
 import { FONT_DEFAULTS, readFonts, saveFonts } from '../fonts.js';
 import { AccountSettings } from './account-settings.jsx';
 
+
 const sections = [
   { id: 'account', label: 'Account', icon: 'shield', description: 'Connect your Jolo account and manage this device.' },
   { id: 'agents', label: 'Coding agents', icon: 'agents', description: 'Choose how each installed agent answers your tasks.' },
-  { id: 'provider', label: 'Model provider', icon: 'settings', description: 'Connect the model Jolo uses to answer your prompts.' },
+  { id: 'provider', label: 'Models', icon: 'settings', description: 'Connect the model Jolo uses to answer your prompts.' },
   { id: 'appearance', label: 'Appearance', icon: 'board', description: 'Make your workspace comfortable to read.' },
 ];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -60,17 +62,15 @@ function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
   </div>;
 }
 
-export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDiscoverModels, onSetCredential, onClose }) {
-  const provider = settings?.provider;
-  const [section, setSection] = useState('agents');
-  const [form, setForm] = useState(() => ({ name: provider?.name ?? 'fake', model: provider?.model ?? '', contextWindowTokens: provider?.contextWindowTokens ?? 200000, maxOutputTokens: provider?.maxOutputTokens ?? 8000, baseUrl: provider?.baseUrl ?? '', reasoningEffort: provider?.reasoningEffort ?? '' }));
+export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDiscoverModels, onSetCredential, onClose, initialSection = 'agents', session, onPresets, onDiscoverProviderModels, onSaveConnection, onUseModel }) {
+  const [section, setSection] = useState(initialSection);
   const [agentForm, setAgentForm] = useState(() => Object.fromEntries(agents.map(agent => [agent.id, { model: agent.model ?? '', effort: agent.effort ?? '' }])));
   const [fonts, setFonts] = useState(readFonts);
-  const [saved, setSaved] = useState(() => ({ form, agents: agentForm, fonts }));
-  const [key, setKey] = useState(''), [note, setNote] = useState(null), [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(() => ({ agents: agentForm, fonts }));
+  const [note, setNote] = useState(null), [busy, setBusy] = useState(false);
   const id = useId(), heading = useRef(null), scroll = useRef(null), close = useRef(onClose);
   close.current = onClose;
-  const dirty = !same(form, saved.form) || !same(agentForm, saved.agents) || !same(fonts, saved.fonts) || Boolean(key);
+  const dirty = !same(agentForm, saved.agents) || !same(fonts, saved.fonts);
   const current = sections.find(item => item.id === section);
   useEffect(() => { heading.current?.focus(); }, []);
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 0; }, [section]);
@@ -86,21 +86,15 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
   }, [busy]);
-  const update = field => event => { setForm({ ...form, [field]: event.target.value }); setNote(null); if (field === 'name' && event.target.value === 'fake') setKey(''); };
-  const discard = () => { setForm(saved.form); setAgentForm(saved.agents); setFonts(saved.fonts); setKey(''); setNote(null); };
+  const discard = () => { setAgentForm(saved.agents); setFonts(saved.fonts); setNote(null); };
   const save = async event => {
     event.preventDefault();
     if (busy || !dirty) return;
     setBusy(true); setNote(null);
     try {
-      if (!same(form, saved.form)) {
-        const value = form.name === 'fake' ? null : { name: form.name, model: form.model.trim(), contextWindowTokens: Number(form.contextWindowTokens), maxOutputTokens: Number(form.maxOutputTokens), ...(form.baseUrl.trim() ? { baseUrl: form.baseUrl.trim() } : {}), ...(form.reasoningEffort ? { reasoningEffort: form.reasoningEffort } : {}) };
-        await onSave(value);
-      }
       if (!same(agentForm, saved.agents) && onSaveAgents) await onSaveAgents(Object.fromEntries(Object.entries(agentForm).map(([agentId, entry]) => [agentId, { model: entry.model.trim() || null, effort: entry.effort.trim() || null }])));
-      if (key && form.name === 'openai') await onSetCredential('openai', key);
       const nextFonts = !same(fonts, saved.fonts) ? saveFonts(fonts) : fonts;
-      setFonts(nextFonts); setKey(''); setSaved({ form, agents: agentForm, fonts: nextFonts }); setNote({ text: 'Changes saved.' });
+      setFonts(nextFonts); setSaved({ agents: agentForm, fonts: nextFonts }); setNote({ text: 'Changes saved.' });
     } catch (error) { setNote({ text: error.message, error: true }); }
     finally { setBusy(false); }
   };
@@ -124,22 +118,8 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
           <fieldset disabled={busy} className="settings-fields">
             <div role="tabpanel" id={`${id}-account`} aria-labelledby={`${id}-account-tab`} hidden={section !== 'account'}>{section === 'account' && <AccountSettings />}</div>
             <div role="tabpanel" id={`${id}-agents`} aria-labelledby={`${id}-agents-tab`} hidden={section !== 'agents'}><AgentModels agents={agents} form={agentForm} disabled={busy} onChange={(agentId, entry) => { setAgentForm({ ...agentForm, [agentId]: entry }); setNote(null); }} onDiscover={onDiscoverModels} /></div>
-            <div role="tabpanel" id={`${id}-provider`} aria-labelledby={`${id}-provider-tab`} hidden={section !== 'provider'} className="settings-provider">
-              <section className="settings-card">
-                <label>Provider<Select value={form.name} onChange={update('name')}><option value="fake">Demo provider</option><option value="openai">OpenAI</option></Select></label>
-                {form.name === 'fake' ? <p className="hint">Try Jolo locally without an API key.</p> : <>
-                  <label>Model<input value={form.model} onChange={update('model')} placeholder="Model ID" autoComplete="off" spellCheck={false} /></label>
-                  <label>API key<input type="password" value={key} onChange={event => { setKey(event.target.value); setNote(null); }} autoComplete="off" placeholder="Enter a key to add or replace it" /><span className="hint">Stored securely in your OS keychain.</span></label>
-                </>}
-              </section>
-              {form.name !== 'fake' && <details className="settings-advanced"><summary><Icon name="chevron" size={13} />Advanced configuration</summary>
-                <div className="settings-card">
-                  <div className="settings-field-grid"><label>Context window (tokens)<input type="number" min="1" value={form.contextWindowTokens} onChange={update('contextWindowTokens')} /></label><label>Max output (tokens)<input type="number" min="1" value={form.maxOutputTokens} onChange={update('maxOutputTokens')} /></label></div>
-                  <p className="hint">Set the limits supported by your model.</p>
-                  <label>Base URL<input value={form.baseUrl} onChange={update('baseUrl')} placeholder="https://api.openai.com/v1" autoComplete="off" spellCheck={false} /></label>
-                  <label>Reasoning effort<Select value={form.reasoningEffort} onChange={update('reasoningEffort')}><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></Select></label>
-                </div>
-              </details>}
+            <div role="tabpanel" id={`${id}-provider`} aria-labelledby={`${id}-provider-tab`} hidden={section !== 'provider'}>
+              <ProviderModels settings={settings} session={session} onPresets={onPresets} onDiscover={onDiscoverProviderModels} onSaveConnection={onSaveConnection} onSaveDefault={onSave} onUseModel={onUseModel} onSetCredential={onSetCredential} />
             </div>
             <div role="tabpanel" id={`${id}-appearance`} aria-labelledby={`${id}-appearance-tab`} hidden={section !== 'appearance'}>
               <section className="settings-card">
@@ -152,7 +132,7 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
           </fieldset>
         </div>
       </div>
-      <footer className="settings-savebar"><span role={note?.error ? 'alert' : 'status'} className={note?.error ? 'settings-save-error' : 'hint'}>{note?.text || (dirty ? 'Unsaved changes' : 'All changes saved')}</span><div>{dirty && <button type="button" disabled={busy} onClick={discard}>Discard changes</button>}<button type="submit" className="primary" disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button></div></footer>
+      <footer className="settings-savebar">{section === "provider" ? <span className="hint">Model choices apply to future runs.</span> : <><span role={note?.error ? 'alert' : 'status'} className={note?.error ? 'settings-save-error' : 'hint'}>{note?.text || (dirty ? 'Unsaved changes' : 'All changes saved')}</span><div>{dirty && <button type="button" disabled={busy} onClick={discard}>Discard changes</button>}<button type="submit" className="primary" disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button></div></>}</footer>
     </form>
   </section>;
 }

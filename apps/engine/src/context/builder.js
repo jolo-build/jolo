@@ -1,5 +1,6 @@
 // Context assembly under the model window and an independent byte cap.
 import { ProtocolError } from "@jolo/protocol";
+import { completeToolCalls } from "../providers/transcript.js";
 
 export const REQUEST_MAX_BYTES = 2 * 1024 * 1024;
 export const COMPACT_AT_RATIO = 0.9; // compact when usage approaches the usable window (§7.2)
@@ -54,7 +55,7 @@ export function buildRequest(input) {
     sessionId: input.sessionId,
     runId: input.runId,
     instructions,
-    items: included,
+    items: completeToolCalls(included),
     tools: input.tools,
     maxOutputTokens: capabilities.maxOutputTokens,
     reasoningEffort: input.reasoningEffort,

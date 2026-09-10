@@ -266,6 +266,20 @@ export class Storage {
     return this.getSession(id);
   }
 
+  setSessionModel(id, model) {
+    this.db.query("UPDATE sessions SET model_ref = ?1, updated_at = ?2, revision = revision + 1 WHERE id = ?3").run(model ? JSON.stringify(model) : null, now(), id);
+    return this.getSession(id);
+  }
+
+  getRunProviderConfig(id) {
+    const row = this.db.query('SELECT provider_config FROM runs WHERE id = ?1').get(id);
+    return row?.provider_config ? JSON.parse(row.provider_config) : null;
+  }
+
+  setRunProviderConfig(id, config) {
+    this.db.query('UPDATE runs SET provider_config = ?1 WHERE id = ?2').run(JSON.stringify(config), id);
+  }
+
   getSession(id) {
     return mapSession(this.statements.getSession.get(id));
   }

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { startSmokeModel, SMOKE_MODEL_KEY } from '../tests/fixtures/smoke-model.js';
 
 const root = path.resolve(import.meta.dir, '..');
 const [originFlag, remoteOrigin, ...extra] = process.argv.slice(2);
@@ -11,8 +12,9 @@ const prefix = path.join(temporary, 'install prefix');
 const home = path.join(temporary, 'home');
 const project = path.join(temporary, 'project');
 const executable = path.join(prefix, 'bin/jolo');
-const environment = { ...process.env, PATH: '/usr/bin:/bin', JOLO_IDLE_MS: '1500', JOLO_FAKE_STEPS: '2', JOLO_FAKE_DELAY_MS: '5' };
+const environment = { ...process.env, PATH: '/usr/bin:/bin', JOLO_IDLE_MS: '1500', OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session' };
 let server;
+const modelServer = startSmokeModel();
 
 async function run(args, env = environment) {
   const child = Bun.spawn(args, { cwd: temporary, env, stdout: 'pipe', stderr: 'pipe' });
@@ -46,13 +48,18 @@ try {
   assert.match(await run([executable, '--help']), /usage:/);
   await mkdir(project);
   await writeFile(path.join(project, 'README.md'), '# Installer smoke test\n');
+  const settings = JSON.parse(await run([executable, 'provider', 'show', '--json', '--home', home]));
+  assert.equal(settings.demoProviderEnabled, false);
+  await run([executable, 'provider', 'set', 'openai', '--model', 'smoke-model', '--context-window', '64000', '--max-output', '4000', '--base-url', modelServer.baseUrl, '--home', home]);
   const output = await run([executable, 'run', 'installer smoke test', '--json', '--path', project, '--home', home]);
   const records = output.trim().split('\n').map(line => JSON.parse(line));
   assert.equal(records.at(-1).state, 'completed');
   assert.equal(records.at(-1).type, 'result');
+  assert.equal(modelServer.requests.length, 1);
   console.log(`PASS: ${origin} installer, archive verification, installed launcher, help/version, and bundled engine task.`);
 } finally {
   if (await Bun.file(executable).exists()) await run([executable, 'engine', 'stop', '--cancel', '--home', home]).catch(error => console.error(error.message));
   server?.stop(true);
+  modelServer.stop();
   await rm(temporary, { recursive: true, force: true });
 }

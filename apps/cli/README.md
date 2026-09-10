@@ -12,7 +12,7 @@ jolo --help
 jolo /path/to/project
 ```
 
-Inside the terminal UI, use `/model` to choose an agent or configure a provider. Hosted agents must already be installed and authenticated separately. The fake provider produces demo responses until a real provider or hosted agent is selected.
+Inside the terminal UI, use `/model` to choose an agent or configure a provider. Hosted agents must already be installed and authenticated separately. The demo provider is available only in development mode; release builds require a configured model provider or an installed coding agent.
 
 To inspect installed hosted agents and run a task:
 
@@ -21,13 +21,19 @@ jolo agent list
 jolo run --agent claude "Explain this repository" --path /path/to/project
 ```
 
-For Jolo's direct API provider, replace the placeholders with your model's settings, then enter the API key through standard input:
+For Jolo's model harness, enter an API key through standard input, discover models, and select a default:
 
 ```sh
-jolo provider set openai --model <model-name> --context-window <tokens> --max-output <tokens>
+jolo provider list
 jolo auth set openai
-jolo auth status openai
+jolo model list openai
+jolo model set openai/<model-id>
+jolo run --model openai/<model-id> "Explain this repository"
 ```
+
+Token limits are optional: `--context-window` and `--max-output` override discovery and conservative defaults. `--effort` sets reasoning effort. Model IDs may contain slashes, such as `openrouter/vendor/model`. `jolo provider set <preset> --base-url <url>` configures an endpoint without changing the selected model. The legacy `provider set openai --model …` command remains available for one release.
+
+`/model <preset>` configures a provider and can find models. Saving selects it for the current task and sets the profile default; selecting a hosted agent keeps the conversation. API keys go only through the credential RPC.
 
 ## Everyday use
 

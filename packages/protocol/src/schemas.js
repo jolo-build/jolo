@@ -1,6 +1,8 @@
 // Runtime schemas are the source of truth for the wire contract.
 // Both Bun (engine/CLI) and Electron main validate with these; JSDoc only documents shapes.
 import { z } from "zod";
+import { PresetId, ModelRefSchema, ProviderOverridesSchema, ProviderEntrySchema, ProviderModelsSchema } from './models.js';
+export * from './models.js';
 import { IMAGE_LIMITS, IMAGE_MIME_TYPES } from './attachments.js';
 
 export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 1 });
@@ -53,6 +55,7 @@ export const PauseReasonSchema = z.enum(PAUSE_REASONS);
  */
 export const UsageSchema = z.object({
   inputTokens: z.number().int().nonnegative().default(0),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().default(0),
   attempts: z.number().int().nonnegative().default(0),
   iterations: z.number().int().nonnegative().default(0),
@@ -72,6 +75,7 @@ export const RunNoteSchema = z.object({
  * `agentId` is the catalog id of a guest agent, or "jolo" for Jolo's own loop (§6.5, §6.6).
  */
 export const RunExecutionSchema = z.object({
+  preset: PresetId.nullable().optional(),
   agentId: Id.nullable().default(null),
   model: z.string().max(200).nullable().default(null),
   effort: z.string().max(40).nullable().default(null),
@@ -118,6 +122,7 @@ export const RunSchema = z.object({
 });
 
 export const SessionSchema = z.object({
+  model: ModelRefSchema.nullable().default(null),
   id: Id,
   projectId: Id,
   workspaceId: Id,
@@ -450,7 +455,7 @@ export const EventPayloadSchemas = Object.freeze({
   "run.verification": z.object({ status: z.enum(["passed", "failed", "not_run", "interrupted", "stale"]), checks: z.array(z.object({ invocationId: Id, argv: z.array(z.string()), exitCode: z.number().int().nullable(), signal: z.string().nullable(), at: IsoTimestamp })) }),
   "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative() }),
   "run.usage": UsageSchema,
-  "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
+  "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), preset: PresetId.optional(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
   "tool.started": z.object({ invocationId: Id, callId: z.string(), name: z.string(), argumentDigest: z.string(), preview: z.string().max(200) }),
   "tool.completed": z.object({ invocationId: Id, callId: z.string(), name: z.string(), status: z.enum(["ok", "error", "timeout", "denied", "cancelled"]), durationMs: z.number().int().nonnegative(), resultBytes: z.number().int().nonnegative(), truncated: z.boolean(), resultArtifactId: Id.optional(), errorCode: z.string().optional() }),
   "grant.created": z.object({ grantId: Id, scope: z.string(), workspaceId: Id.optional() }),
@@ -540,6 +545,10 @@ export const MethodSchemas = {
   },
   "session.rename": {
     params: z.object({ sessionId: Id, title: z.string().trim().min(1).max(200), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
+  "session.setModel": {
+    params: z.object({ sessionId: Id, model: ModelRefSchema.nullable(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
   "session.setAgent": {
@@ -643,6 +652,7 @@ Object.assign(MethodSchemas, {
 
 
 export const PROVIDER_NAMES = Object.freeze(["fake", "openai"]);
+export const DEMO_PROVIDER_SETTINGS = Object.freeze({ name: "fake", model: "fake", contextWindowTokens: 128_000, maxOutputTokens: 4_096 });
 
 export const ProviderSettingsSchema = z.object({
   name: z.enum(PROVIDER_NAMES),
@@ -660,13 +670,17 @@ export const BudgetSettingsSchema = z.object({
 });
 
 export const SettingsSchema = z.object({
+  model: ModelRefSchema.nullable().default(null),
+  providers: ProviderOverridesSchema.default({}),
   provider: ProviderSettingsSchema.nullable(),
+  /** Read-only engine capability; older engines do not advertise demo support. */
+  demoProviderEnabled: z.boolean().default(false),
   budgets: BudgetSettingsSchema,
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
 });
 
-const CredentialProvider = z.enum(["openai"]);
+const CredentialProvider = PresetId;
 
 export const AccountIdentitySchema = z.object({ id: Id, name: z.string().min(1).max(500), email: z.string().min(1).max(500) });
 export const AccountDeviceSchema = z.object({ id: Id, name: z.string().min(1).max(500), expiresAt: IsoTimestamp, scopes: z.array(z.enum(['account:read', 'tasks:read'])).default(['account:read']) });
@@ -721,11 +735,15 @@ Object.assign(MethodSchemas, {
     params: z.object({ workspaceId: Id }),
     result: z.object({ files: z.array(z.object({ path: z.string(), newPath: z.string().optional(), op: z.enum(['create', 'replace', 'delete', 'rename']), revision: z.string() })), source: z.enum(['git', 'none']), truncated: z.boolean() }),
   },
+  "provider.presets": { params: z.object({}), result: z.object({ presets: z.array(ProviderEntrySchema).max(100) }) },
+  "provider.models": { params: z.object({ preset: PresetId, refresh: z.boolean().default(false) }), result: ProviderModelsSchema },
   "settings.get": { params: z.object({}), result: z.object({ settings: SettingsSchema }) },
   "settings.update": {
     // agents is a patch: an entry merges into that agent's settings, and null forgets the agent entirely.
     params: z.object({
       provider: ProviderSettingsSchema.nullable().optional(),
+      model: ModelRefSchema.nullable().optional(),
+      providers: ProviderOverridesSchema.optional(),
       budgets: BudgetSettingsSchema.partial().optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
     }),

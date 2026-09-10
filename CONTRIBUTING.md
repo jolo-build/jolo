@@ -20,7 +20,7 @@ bun run jolo provider set fake
 bun run desktop
 ```
 
-The fake provider needs no API key. `JOLO_CREDENTIALS=session` keeps credentials entered during development out of the OS secret store. Use `bun run jolo` in the same shell for terminal development. Finish active work before `bun run jolo engine stop`, then unset `JOLO_HOME` and `JOLO_CREDENTIALS`.
+The fake provider needs no API key and works only in development mode. Source runs enable it unless `NODE_ENV=production`; release bundles always disable it, even if launched with `NODE_ENV=development`. `JOLO_CREDENTIALS=session` keeps credentials entered during development out of the OS secret store. Use `bun run jolo` in the same shell for terminal development. Finish active work before `bun run jolo engine stop`, then unset `JOLO_HOME` and `JOLO_CREDENTIALS`.
 
 Optional native search is installed with `bun run setup:tgrep`; see [vendor/tgrep](vendor/tgrep/README.md). For web development, see [apps/website](apps/website/README.md) and [apps/access](apps/access/README.md).
 

@@ -28,7 +28,7 @@ bun run jolo
 bun run desktop
 ```
 
-In Jolo, use `/model` to choose an installed coding agent or configure an API provider. Hosted agents must already be installed and authenticated separately. Until a provider or hosted agent is selected, the fake provider produces demo responses.
+In Jolo, use `/model` to choose an installed coding agent or configure an API provider. Hosted agents must already be installed and authenticated separately. The demo provider is available only in development mode; release builds require a configured model provider or an installed coding agent.
 
 Open a project or start a headless run:
 
@@ -41,9 +41,13 @@ bun run jolo run --agent claude "Explain this repository" --path /path/to/projec
 For the direct API provider, configure a model and enter its API key interactively:
 
 ```sh
-bun run jolo provider set openai --model <model-name> --context-window <tokens> --max-output <tokens>
+bun run jolo provider list
 bun run jolo auth set openai
+bun run jolo model list openai
+bun run jolo model set openai/<model-id>
 ```
+
+Models can be selected per task in **Settings → Models**, or overridden for one command with `jolo run --model <preset>/<model>`. OpenAI Responses, chat completions, Anthropic Messages, and Gemini are supported without vendor SDKs. Token limits are discovered where reported, with optional overrides.
 
 See the [CLI guide](apps/cli/README.md) for commands, profiles, installation, and removal. The engine starts automatically and may outlive a client; finish active work before stopping it.
 

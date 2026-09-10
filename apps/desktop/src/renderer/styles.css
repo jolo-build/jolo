@@ -797,3 +797,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .message-task-references { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
 .message-task-references button { display:flex; align-items:center; gap:6px; max-width:100%; padding:5px 8px; border:1px solid var(--border); border-radius:5px; color:inherit; font-size:11px; overflow-wrap:anywhere; text-align:left; }
 .message-task-references button span { opacity:.65; white-space:nowrap; }
+
+/* Provider selection in Settings → Models. */
+.settings-provider-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.settings-provider-tabs [aria-selected="true"] { font-weight: 600; outline: 1px solid currentColor; }
+.settings-model-actions { display: flex; flex-wrap: wrap; gap: 8px; }

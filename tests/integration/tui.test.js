@@ -29,7 +29,7 @@ describe("ink interactive client", () => {
         if (!replied && output.includes("\x1b[?u")) { replied = true; terminal.write("\x1b[?0u"); }
       } },
     });
-    const draft = () => strip(output).split("\n").filter((row) => row.startsWith("▎ › ")).at(-1)?.slice(4).trimEnd();
+    const draft = () => strip(output).split("\n").filter((row) => row.startsWith("▎❯ ")).at(-1)?.slice(3).trimEnd();
     const typeDraft = async (keys, expected) => {
       child.terminal.write(keys);
       await waitFor(() => draft() === expected, { label: `draft ${JSON.stringify(expected)}`, timeoutMs: 5000 });

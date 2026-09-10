@@ -37,12 +37,12 @@ export async function exitWithin(child, ms) {
 
 /**
  * Start a real engine process for a temporary profile.
- * @param {{ home: string, profile?: string, idleMs?: number, fakeSteps?: number, fakeDelayMs?: number, env?: Record<string, string> }} options
+ * @param {{ home: string, profile?: string, entrypoint?: string, idleMs?: number, fakeSteps?: number, fakeDelayMs?: number, env?: Record<string, string> }} options
  */
 export async function startEngine(options) {
   const profile = options.profile ?? "t";
   const paths = resolvePaths({ home: options.home, profile });
-  const child = Bun.spawn([process.execPath, ENGINE_ENTRY, "serve", "--home", options.home, "--profile", profile, "--idle-ms", String(options.idleMs ?? 2000)], {
+  const child = Bun.spawn([process.execPath, options.entrypoint ?? ENGINE_ENTRY, "serve", "--home", options.home, "--profile", profile, "--idle-ms", String(options.idleMs ?? 2000)], {
     env: { ...process.env, JOLO_FAKE_STEPS: String(options.fakeSteps ?? 10), JOLO_FAKE_DELAY_MS: String(options.fakeDelayMs ?? 30), ...(options.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",

@@ -4,7 +4,7 @@ import { connectResumable } from "@jolo/client";
 // Headless CLI. Interactive mode is a later milestone and is never imported here.
 import { fileURLToPath } from "node:url";
 import { resolvePaths, connectOrStart, tryConnect } from "@jolo/launcher";
-import { compareSeq } from "@jolo/protocol";
+import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema } from "@jolo/protocol";
 import { findProject, renderBoardDetail, renderBoardTable } from "./board.js";
 import { deleteSession, listSessions, restoreSession } from "./sessions.js";
 import { runAccountCommand } from './account.js';
@@ -51,8 +51,13 @@ const USAGE = `usage:
   jolo worktree add [--path <dir>] [--branch <name>] [--base <ref>] [--json]
   jolo worktree remove <branch|workspace-id> [--path <dir>] [--force]
   jolo provider show [--json]
+  jolo provider list [--json]
+  jolo provider set <preset> [--base-url <url>]
+  jolo model list <preset> [--refresh] [--json]
+  jolo model set <preset>/<model> [--effort <level>] [--context-window <tokens>] [--max-output <tokens>]
+  jolo run --model <preset>/<model> <prompt>
   jolo provider set openai --model <name> --context-window <tokens> --max-output <tokens> [--base-url <url>] [--reasoning <effort>]
-  jolo provider set fake
+  jolo provider set fake                development mode only
   jolo auth set openai        (reads the API key from stdin, never from arguments)
   jolo auth status openai
   jolo login [--tasks] [--no-open] [--server <url>] [--device-name <name>] [--json]
@@ -95,8 +100,13 @@ async function commandRun({ positional, flags }) {
   const json = flags.json === true;
   const { client } = await attachEngine(flags);
   try {
+    if (flags.agent && flags.model) throw new Error('Choose --agent or --model for this run');
+    const modelOverride = flags.model ? parseModelTarget(flags.model) : null;
     const project = await client.call("project.open", { path: flags.path ?? process.cwd() });
-    if (!json) { const { settings } = await client.call("settings.get", {}); if (!settings.provider) err("no provider configured; using the fake provider (see `jolo provider set`)"); }
+    if (!json && !flags.agent) {
+      const { settings } = await client.call("settings.get", {});
+      if (!settings.model && !settings.provider && !flags.model) err(settings.demoProviderEnabled ? "no provider configured; using the development demo provider (see `jolo provider set`)" : "no model provider configured; configure one with `jolo provider set` or choose an agent with --agent");
+    }
     let workspaceId = project.workspaceId;
     if (flags.worktree) {
       const { workspace } = await client.call("workspace.create", { projectId: project.projectId, ...(flags.branch ? { branch: flags.branch } : {}), ...(flags.base ? { base: flags.base } : {}), title: prompt.slice(0, 80) });
@@ -111,7 +121,7 @@ async function commandRun({ positional, flags }) {
     return await followRun(client, {
       session, cursor, json,
       startRun: async () => {
-        const { run } = await client.call("run.start", { sessionId: session.id, requestId, prompt, expectedSessionRevision: session.revision });
+        const { run } = await client.call("run.start", { sessionId: session.id, requestId, prompt, expectedSessionRevision: session.revision, ...(modelOverride ? { execution: { agentId: "jolo", preset: modelOverride.preset, model: modelOverride.model, effort: flags.effort ?? null } } : {}) });
         emit(json, { type: "run.started", runId: run.id, sessionId: session.id, requestId });
         return run;
       },
@@ -494,35 +504,54 @@ async function commandSession({ positional, flags }) {
   }
 }
 
+function modelWithFlags(target, flags) {
+  return ModelRefSchema.parse({ ...parseModelTarget(target), effort: flags.effort ?? flags.reasoning ?? null,
+    contextWindowTokens: flags['context-window'] ? Number(flags['context-window']) : null,
+    maxOutputTokens: flags['max-output'] ? Number(flags['max-output']) : null });
+}
+
+async function commandModel({ positional, flags }) {
+  const { client } = await attachEngine(flags);
+  try {
+    if (positional[1] === 'list' && positional[2]) {
+      const report = await client.call('provider.models', { preset: positional[2], refresh: flags.refresh === true });
+      if (flags.json) out(JSON.stringify(report));
+      else { for (const m of report.models) out(`${m.id}  ${m.displayName}  context ${m.contextWindowTokens ?? 'unknown'}  max-output ${m.maxOutputTokens ?? 'unknown'}`); if (report.note) err(report.note); }
+    } else if (positional[1] === 'set' && positional[2]) {
+      const model = modelWithFlags(positional[2], flags);
+      const { settings } = await client.call('settings.update', { model });
+      out(flags.json ? JSON.stringify(settings) : `default model ${model.preset}/${model.model} configured`);
+    } else { err(USAGE); return EXIT.usage; }
+    return EXIT.completed;
+  } finally { await client.close(); }
+}
+
 async function commandProvider({ positional, flags }) {
   const sub = positional[1];
   const { client } = await attachEngine(flags);
   try {
-    if (sub === "show") {
-      const { settings } = await client.call("settings.get", {});
-      out(flags.json ? JSON.stringify(settings) : settings.provider ? `provider ${settings.provider.name} model ${settings.provider.model} window ${settings.provider.contextWindowTokens} max-output ${settings.provider.maxOutputTokens}${settings.provider.baseUrl ? ` base ${settings.provider.baseUrl}` : ""}` : "provider: none configured (runs use the fake provider)");
-      return EXIT.completed;
-    }
-    if (sub === "set") {
+    if (sub === 'list') {
+      const report = await client.call('provider.presets', {});
+      if (flags.json) out(JSON.stringify(report));
+      else for (const p of report.presets) out(`${p.id}  ${p.displayName}  ${p.protocol}  ${p.available ? 'ready' : 'API key needed'}  ${p.baseUrl}`);
+    } else if (sub === 'show') {
+      const { settings } = await client.call('settings.get', {});
+      out(flags.json ? JSON.stringify(settings) : settings.model ? `provider ${settings.model.preset} model ${settings.model.model}` : settings.demoProviderEnabled ? 'provider: none configured (development runs use the demo provider)' : 'provider: none configured; configure a model provider or select an installed coding agent');
+    } else if (sub === 'set' && positional[2]) {
       const name = positional[2];
-      if (name === "fake") {
-        await client.call("settings.update", { provider: null });
-        err("provider cleared; runs use the fake provider");
-        return EXIT.completed;
+      if (name === 'fake') {
+        await client.call('settings.update', { provider: DEMO_PROVIDER_SETTINGS });
+        err('development demo provider configured');
+      } else {
+        const providers = { [name]: { baseUrl: flags['base-url'] ?? null } };
+        const model = flags.model ? modelWithFlags(`${name}/${flags.model}`, flags) : null;
+        const { settings } = await client.call('settings.update', { providers, ...(model ? { model } : {}) });
+        out(flags.json ? JSON.stringify(settings) : model ? `provider ${name} model ${model.model} configured` : `provider ${name} endpoint configured; select a model with jolo model set ${name}/<model>`);
+        if (model) err(`Use jolo model set ${name}/${model.model} next time; provider set --model is kept for compatibility.`);
       }
-      if (name !== "openai" || !flags.model || !flags["context-window"] || !flags["max-output"]) { err(USAGE); return EXIT.usage; }
-      const provider = { name, model: flags.model, contextWindowTokens: Number(flags["context-window"]), maxOutputTokens: Number(flags["max-output"]) };
-      if (flags["base-url"]) provider.baseUrl = flags["base-url"];
-      if (flags.reasoning) provider.reasoningEffort = flags.reasoning;
-      const { settings } = await client.call("settings.update", { provider });
-      out(flags.json ? JSON.stringify(settings) : `provider ${settings.provider.name} model ${settings.provider.model} configured`);
-      return EXIT.completed;
-    }
-    err(USAGE);
-    return EXIT.usage;
-  } finally {
-    await client.close();
-  }
+    } else { err(USAGE); return EXIT.usage; }
+    return EXIT.completed;
+  } finally { await client.close(); }
 }
 
 async function readSecretFromStdin() {
@@ -552,7 +581,7 @@ async function readSecretFromStdin() {
 async function commandAuth({ positional, flags }) {
   const sub = positional[1];
   const provider = positional[2];
-  if (!["set", "status"].includes(sub) || provider !== "openai") { err(USAGE); return EXIT.usage; }
+  if (!["set", "status"].includes(sub) || !/^[a-z][a-z0-9-]{0,38}$/.test(provider ?? "")) { err(USAGE); return EXIT.usage; }
   const { client } = await attachEngine(flags);
   try {
     if (sub === "status") {
@@ -642,7 +671,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, auth: commandAuth, engine: commandEngine };
+  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, engine: commandEngine };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);
