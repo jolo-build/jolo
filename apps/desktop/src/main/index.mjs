@@ -1,7 +1,7 @@
 import { engineCommand as resolveEngineCommand } from "@jolo/launcher/executable";
 // Electron main process: windows, narrow IPC, engine client, bounded relay,
 // browser host. Owns no provider calls, workspace mutation, shell execution, or database.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, session, shell } from "electron";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,7 @@ const PACKAGED_LAYOUT = existsSync(path.join(here, "dist", "index.html")) && exi
 const ROOT = PACKAGED_LAYOUT ? here : path.resolve(here, "..", "..");
 const ENGINE_ENTRY = PACKAGED_LAYOUT ? path.join(ROOT, "engine", "engine.js") : path.resolve(ROOT, "..", "engine", "src", "main.js");
 const PRELOAD = PACKAGED_LAYOUT ? path.join(ROOT, "preload", "index.cjs") : path.join(ROOT, "src", "preload", "index.cjs");
+const APP_ICON = path.join(ROOT, "dist", "jolo-app.png");
 const BUILD = process.env.JOLO_BUILD ?? "dev";
 // What a source-run engine loads: its own modules and the shared packages. Read only to compare timestamps.
 const REPO_ROOT = PACKAGED_LAYOUT ? ROOT : path.resolve(ROOT, "..", "..");
@@ -146,6 +147,7 @@ function createWindow() {
     show: false,
     backgroundColor: backgroundColor(),
     title: "Jolo",
+    icon: APP_ICON,
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: { x: 14, y: 17 },
@@ -238,6 +240,17 @@ if (SMOKE && process.env.JOLO_HOME) app.setPath("userData", path.join(process.en
 app.setName("Jolo"); // what the system calls this application, including in its notification settings
 app.whenReady().then(async () => {
   const window = createWindow();
+  const lightIcon = nativeImage.createFromPath(APP_ICON);
+  const darkIcon = nativeImage.createFromPath(path.join(ROOT, "dist", "jolo-app-dark.png"));
+  const updateIcon = () => {
+    if (window.isDestroyed()) return;
+    const icon = nativeTheme.shouldUseDarkColors ? darkIcon : lightIcon;
+    if (process.platform === "darwin") app.dock.setIcon(icon);
+    else window.setIcon(icon);
+  };
+  updateIcon();
+  nativeTheme.on("updated", updateIcon);
+  window.once("closed", () => nativeTheme.removeListener("updated", updateIcon));
   const bridge = new EngineBridge({ window });
   registerIpc(window, bridge);
   const agent = createBrowserAgent({ bridge, log, isOverlayActive: () => bridge.overlayActive });

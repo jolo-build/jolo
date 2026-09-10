@@ -1,4 +1,5 @@
--- Provider-facing conversation items and message kinds.
+// Preserve this SQL text exactly: existing databases verify its checksum.
+const sql = `-- Provider-facing conversation items and message kinds.
 ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'reasoning', 'tool'));
 
 CREATE TABLE conversation_items (
@@ -16,3 +17,6 @@ CREATE TABLE conversation_items (
   UNIQUE (session_id, ordinal)
 );
 CREATE INDEX conversation_items_session ON conversation_items(session_id, ordinal);
+`;
+
+export default sql;

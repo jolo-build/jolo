@@ -27,7 +27,7 @@ export function newestSourceTime(roots) {
       if (entry.name.startsWith(".") || SKIP.has(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) { visit(full); continue; }
-      if (!/\.(js|mjs|cjs|jsx|json|sql)$/.test(entry.name)) continue;
+      if (!/\.(js|mjs|cjs|jsx|ts|tsx|json|sql)$/.test(entry.name)) continue;
       seen += 1;
       try {
         const at = statSync(full).mtimeMs;

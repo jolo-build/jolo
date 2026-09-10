@@ -30,6 +30,7 @@ The engine owns application state and side effects. Desktop and CLI clients shar
 
 - Update protocol schemas, callers, and wire fixtures together.
 - Keep database migrations ordered and compatible with existing data.
+- Engine migrations are TypeScript modules in `migrations/`, registered in `migrations/index.ts`. Preserve released SQL strings and migration names exactly; add a new migration for schema changes. The Access service uses its separate D1 SQL migrations.
 - Use temporary profiles and fixture providers in tests.
 - Keep credentials, private conversations, generated bundles, and local measurements out of commits.
 - Review the [Ink patch notes](patches/README.md) before updating terminal dependencies.

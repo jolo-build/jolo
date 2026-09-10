@@ -43,6 +43,8 @@ describe("measuring when the code on disk last changed", () => {
   });
 
   test("counts the file kinds an engine actually loads", () => {
+    const ts = tree({ "migrations/0009_x.ts": NOON + 1_000, "engine/src/main.js": NOON });
+    expect(newestSourceTime([ts])).toBe(NOON + 1_000);
     const sql = tree({ "migrations/0009_x.sql": NOON + 1_000, "engine/src/main.js": NOON });
     expect(newestSourceTime([sql])).toBe(NOON + 1_000); // a migration is code the engine runs
     const json = tree({ "packages/protocol/package.json": NOON + 1_000, "engine/src/main.js": NOON });

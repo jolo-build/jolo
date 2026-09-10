@@ -1,4 +1,5 @@
--- Permission requests and command recovery bookkeeping.
+// Preserve this SQL text exactly: existing databases verify its checksum.
+const sql = `-- Permission requests and command recovery bookkeeping.
 CREATE TABLE permissions (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id),
@@ -15,3 +16,6 @@ CREATE TABLE permissions (
 );
 CREATE INDEX permissions_run ON permissions(run_id, created_at);
 CREATE INDEX permissions_state ON permissions(state);
+`;
+
+export default sql;

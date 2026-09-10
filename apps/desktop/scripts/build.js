@@ -26,6 +26,7 @@ if (!result.success) {
 }
 cpSync(path.join(root, "src/renderer/index.html"), path.join(dist, "index.html"));
 cpSync(path.join(root, "src/renderer/styles.css"), path.join(dist, "styles.css"));
+cpSync(path.join(root, "../../assets/brand"), dist, { recursive: true });
 cpSync(path.join(root, "../../assets/fonts"), path.join(dist, "fonts"), { recursive: true }); // bundled typefaces and their licences
 cpSync(path.join(root, "node_modules/@xterm/xterm/css/xterm.css"), path.join(dist, "xterm.css"));
 console.log(`renderer bundled: ${result.outputs.map((o) => `${path.basename(o.path)} ${(o.size / 1024).toFixed(0)} KiB`).join(", ")}`);

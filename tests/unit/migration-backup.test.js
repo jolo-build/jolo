@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { migrate } from '../../apps/engine/src/storage/db.js';
 import { Storage } from '../../apps/engine/src/storage/index.js';
-import { migrations } from '../../migrations/index.js';
+import { migrations } from '../../migrations/index.ts';
 
 test('an existing profile is backed up before applying a new schema', () => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'jolo-backup-')), databasePath = path.join(home, 'state.sqlite');

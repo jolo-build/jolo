@@ -1,4 +1,5 @@
--- Core schema. Bodies and raw output live in artifacts; events carry references.
+// Preserve this SQL text exactly: existing databases verify its checksum.
+const sql = `-- Core schema. Bodies and raw output live in artifacts; events carry references.
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
   identity TEXT NOT NULL UNIQUE,
@@ -135,3 +136,6 @@ CREATE TABLE events (
   at TEXT NOT NULL
 );
 CREATE INDEX events_session_seq ON events(session_id, seq);
+`;
+
+export default sql;

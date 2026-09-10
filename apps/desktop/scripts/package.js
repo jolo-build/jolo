@@ -21,6 +21,7 @@ const out = await packager({
   name: "Jolo",
   executableName: "Jolo",
   appBundleId: "dev.jolo.desktop",
+  icon: platform === "darwin" ? path.join(root, "assets", "brand", "jolo.icns") : platform === "linux" ? path.join(root, "assets", "brand", "jolo-app.png") : undefined,
   platform,
   arch,
   electronVersion,

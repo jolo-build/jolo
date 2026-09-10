@@ -171,9 +171,10 @@ strong { font-weight: 550; }
 .header button { font-size: 12px; }
 /* Each header action carries one glyph of one or two strokes beside its word. The glyphs are drawn plainly on
    purpose: this bar sits above someone's work all day and should not compete with it. */
-/* Text identity uses the same theme colors as the surrounding controls. */
+/* The original mark follows the surrounding theme without depending on a font. */
 .jolo-mark { display: inline-block; position: relative; flex: none; border-radius: 22%; background: linear-gradient(135deg, light-dark(#fafafa, #484848), light-dark(#cfcfcf, #181818)); }
-.header-mark { width: 26px; height: 26px; }
+.jolo-mark::before { content: ''; position: absolute; inset: 0; background: light-dark(#111, #fff); mask: url('./jolo-mark.svg') center / contain no-repeat; }
+.header-mark { width: 20px; height: 20px; }
 .header-separator { color: var(--muted); opacity: .65; }
 .workspace-title { color: var(--muted); min-width: 0; max-width: 200px; white-space: nowrap; }
 .workspace-title > span { overflow: hidden; text-overflow: ellipsis; }

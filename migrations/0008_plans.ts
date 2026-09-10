@@ -1,4 +1,5 @@
--- Plans: work split into ordered tasks, each answered by a chosen agent.
+// Preserve this SQL text exactly: existing databases verify its checksum.
+const sql = `-- Plans: work split into ordered tasks, each answered by a chosen agent.
 -- A task is the unit of work and outlives any single try at it; an execution is one try, tied to the run
 -- that carried it out. Keeping the two apart is what lets a task be retried, reassigned to another agent, or
 -- reviewed without losing what happened before.
@@ -63,3 +64,6 @@ ALTER TABLE runs ADD COLUMN execution TEXT;
 -- The task a session was opened for, so a plan's transcripts are findable from either side.
 ALTER TABLE sessions ADD COLUMN plan_task_id TEXT;
 CREATE INDEX sessions_plan_task ON sessions(plan_task_id);
+`;
+
+export default sql;
