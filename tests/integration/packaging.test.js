@@ -79,7 +79,8 @@ describe("release build", () => {
       expect(statSync(path.join(lib, 'tgrep')).mode & 0o111).toBeTruthy();
       expect(readFileSync(path.join(lib, 'tgrep-LICENSE'), 'utf8')).toContain('MIT License');
       const native = run([path.join(lib, 'tgrep'), '--version']);
-      expect(native.code).toBe(0); expect(native.stdout).toContain('tgrep 1.0.5');
+      const vendorRelease = JSON.parse(readFileSync(path.join(lib, 'tgrep-release.json'), 'utf8'));
+      expect(native.code).toBe(0); expect(native.stdout.trim()).toBe(`tgrep ${vendorRelease.version}`);
     }
     // Code splitting yields shared chunks (client, protocol) plus the interactive chunk that carries Ink and its
     // layout engine. Only the latter must be unnecessary for headless use: hide exactly that and run anyway.
