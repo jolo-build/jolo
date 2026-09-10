@@ -8,6 +8,8 @@ The **Dependency security** GitHub Actions workflow runs the same audit on every
 
 Review findings and update the affected direct dependency or its parent dependency, then rerun the audit and relevant tests. This is a known-vulnerability check, not a review of package source or a guarantee that a dependency is safe. Bun skips packages from non-default registries. See the [Bun audit documentation](https://bun.com/docs/pm/cli/audit) for details.
 
+The root `sharp` override pins the patched 0.35.4 release because Wrangler 4.130.0's Miniflare dependency still pins vulnerable 0.35.2. Remove the override once Wrangler includes a patched version. Desktop packaging uses `@electron/packager` 20.3.0, which replaces the affected `extract-zip` dependency with Electron's maintained extractor. Its Node requirement is 22.12 or newer; Jolo's packaging command runs under the pinned Bun runtime.
+
 ## Report a vulnerability
 
 Do not put exploit details, credentials, owner tokens, or private conversation data in a public issue.

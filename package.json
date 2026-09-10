@@ -55,6 +55,9 @@
   "patchedDependencies": {
     "ink@7.1.1": "patches/ink@7.1.1.patch"
   },
+  "overrides": {
+    "sharp": "0.35.4"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
