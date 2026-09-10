@@ -5,7 +5,7 @@ const ORIGIN = 'https://access.jolo.build';
 const databases = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
-export function fixture(overrides = {}) {
+export function fixture(overrides = {}, options = {}) {
   const { sqlite, db } = testDatabase();
   databases.push(sqlite);
   let time = Date.now();
@@ -31,7 +31,7 @@ export function fixture(overrides = {}) {
     if (url === 'https://api.github.com/user/emails?per_page=100') return Response.json(emails);
     throw new Error('Unexpected network request');
   };
-  const app = createAccessApp(env, { now: () => time, fetch: upstream });
+  const app = createAccessApp(env, { now: () => time, fetch: upstream, ...options });
   const send = async (path, init = {}) => {
     const headers = new Headers(init.headers);
     if (!headers.has('cookie')) headers.set('cookie', [...cookies].map(([k, v]) => `${k}=${v}`).join('; '));

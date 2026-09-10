@@ -12,7 +12,8 @@ const runtime=new Miniflare(convertV4MiniflareOptions({
     import { taskRepository } from './repository.js';
     export default {async fetch(request,env) {
       const repo=taskRepository(env.DB); const team=await repo.createTeam('owner','Runtime team');
-      const invitation=await repo.invite('owner',team.id,'member@example.com','member');
+      const invitation=await repo.invite('owner',team.id,'member@example.com','member',{from:'fixture@example.com',to:['member@example.com'],subject:'Fixture',text:'Fixture'});
+      const mail=await env.DB.prepare('SELECT state,payload FROM mail_outbox WHERE id=?').bind(invitation.id).first();
       await repo.accept('member',invitation.id,'member@example.com');
       const label=await repo.createLabel('owner',team.id,'Bug','red');
       const fields={team:team.id,title:'Runtime task',description:'Fixture',project:'jolo',state:'todo',priority:'normal',labels:[label.id],requestID:crypto.randomUUID()};
@@ -21,7 +22,7 @@ const runtime=new Miniflare(convertV4MiniflareOptions({
       await repo.removeMember('owner',team.id,'member',1);
       const denied=await repo.task('member',task.id);
       const stale=await repo.updateTask('member',task.id,{...fields,state:'done'},2);
-      return Response.json({revision:edited.revision,denied,stale,audit:await repo.audit('owner',team.id)});
+      return Response.json({revision:edited.revision,denied,stale,mail,audit:await repo.audit('owner',team.id)});
     }};`},...['repository.js','permissions.js'].map(name=>({type:'ESModule',path:fileURLToPath(new URL(name,root)),contents:readFileSync(new URL(name,root),'utf8')}))],
 }));
 try {
@@ -35,6 +36,7 @@ try {
   const response=await runtime.dispatchFetch('https://fixture.example/');
   assert.equal(response.status,200,await response.clone().text());
   const result=await response.json(); assert.equal(result.revision,2); assert.equal(result.denied,null);assert.equal(result.stale,null);
+  assert.equal(result.mail.state,'pending');assert.equal(JSON.parse(result.mail.payload).to[0],'member@example.com');
   assert.equal(result.audit.length,7); assert(result.audit.some(a=>a.action==='task.created'&&a.subject==='JOLO-1'));
   console.log('D1 runtime checks passed: scoped task/label writes, invitation acceptance, audit transactions, revocation, and stale-write rejection.');
 } finally {await runtime.dispose();}

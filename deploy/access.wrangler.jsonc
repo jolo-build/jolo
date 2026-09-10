@@ -1,17 +1,19 @@
 {
   "$schema": "../apps/access/node_modules/wrangler/config-schema.json",
   "name": "jolo-access",
+  "account_id": "cd1b34c2fe997744ebe40ae4c24d069b",
   "main": "../apps/access/src/worker.js",
   "compatibility_date": "2026-09-09",
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": false, "redact_query_string": true },
-  "triggers": { "crons": ["0 * * * *"] },
+  "triggers": { "crons": ["*/5 * * * *"] },
   "ratelimits": [{ "name": "ACCESS_RATE_LIMIT", "namespace_id": "2026091001", "simple": { "limit": 20, "period": 60 } }],
   "routes": [{ "pattern": "access.jolo.build", "custom_domain": true }],
   "vars": {
     "ACCESS_ORIGIN": "https://access.jolo.build",
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    "MAIL_FROM": "Jolo <noreply@notifications.jolo.build>"
   },
   "assets": {
     "directory": "../apps/access/public",
@@ -21,7 +23,7 @@
   "d1_databases": [{
     "binding": "ACCESS_DB",
     "database_name": "jolo-access",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "76f4e8dc-7767-4185-bd47-94bdf4b30adc",
     "migrations_dir": "../apps/access/.generated/migrations"
   }],
   "env": {

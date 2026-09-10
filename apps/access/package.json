@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bun scripts/migrations.js && bun scripts/assets.js && wrangler dev --config ../../deploy/access.wrangler.jsonc --env development --port 8788",
     "build": "bun scripts/migrations.js && bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env '' --dry-run --outdir dist",
-    "deploy": "bun scripts/check-deploy.js && bun scripts/migrations.js && bun scripts/assets.js && wrangler deploy --config ../../deploy/access.wrangler.jsonc --env ''",
+    "deploy": "bun scripts/check-deploy.js && bun scripts/migrations.js && bun scripts/assets.js && bun scripts/deploy.js",
+    "secrets:store": "bun scripts/deploy.js store",
     "db:local": "bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --local --config ../../deploy/access.wrangler.jsonc --env development",
     "test": "bun scripts/migrations.js && bun test test && node scripts/test-worker.js && node scripts/test-task-runtime.js",
     "test:browser": "bun scripts/test-browser.js",

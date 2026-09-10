@@ -46,15 +46,26 @@ Tests exercise the OAuth exchange and device approval, polling, expiry, cancella
 
 Open **Tasks** to create personal tasks or tasks in a team workspace. Tasks open in a read-only detail view; **Edit task** opens the editor, and Save or Cancel returns to the view. Tasks have permanent IDs, descriptions, states, priorities, assignees, and labels. Archive removes a task from active lists and chat lookups; restore makes it available again.
 
-Team creators are owners. Owners manage admins, members, and viewers; admins manage members and viewers. Members can edit tasks they created or are assigned. Viewers can read tasks. Invitations require the recipient's exact verified email and explicit acceptance on **Teams**. Invitations expire after seven days; no invitation email is sent automatically. Labels do not grant access.
+Team creators are owners. Owners manage admins, members, and viewers; admins manage members and viewers. Members can edit tasks they created or are assigned. Viewers can read tasks. Invitations require the recipient's exact verified email and explicit acceptance on **Teams**. Invitations expire after seven days. When `RESEND_API_KEY` and `MAIL_FROM` are configured, creating an invitation queues a Resend email in the same D1 transaction. The page displays delivery status. Failed transient deliveries retry from the five-minute scheduled handler, with a stable idempotency key and payload; revoked, accepted, expired, or no-longer-authorized invitations are cancelled before dispatch. Labels do not grant access.
 
 For task references in desktop or CLI chat, connect with `jolo login --tasks` or desktop Settings → Account → Connect tasks. Then use `@codex #JOLO-123 fix this problem` in the correct local project. Explicitly referenced descriptions are sent to the selected agent. Revoking access prevents new lookups but does not remove content already captured in conversation history. The agent does not automatically update the web task's state.
 
 ## Deploy your own service
 
-Create a Cloudflare D1 database and put its ID in `deploy/access.wrangler.jsonc`. Configure your own domain and `ACCESS_ORIGIN`, and register a GitHub OAuth application with callback `<ACCESS_ORIGIN>/callback`. Add `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` with Wrangler secrets; never put their values in tracked configuration. Run `bun run access:db:remote` to generate and apply the migrations to production, then run `bun run access:deploy` from the repository root.
+Configure your Cloudflare account and D1 database in `deploy/access.wrangler.jsonc`, plus your domain, `ACCESS_ORIGIN`, and verified Resend `MAIL_FROM` address. Register a GitHub OAuth application with callback `<ACCESS_ORIGIN>/callback` (Jolo uses `https://access.jolo.build/callback`). Sign-in requires the app's Client ID and Client Secret, not a personal access token.
 
-The checked-in production database ID is a placeholder. `bun run access:build` only performs a deployment dry run.
+Deployment credentials live in the private R2 bucket/object named in `deploy/access-secrets.json`. Keep r2.dev disabled, attach no custom domains, and do not bind this bucket to a public Worker. Authenticate the deployer with `wrangler login` or a separate `CLOUDFLARE_API_TOKEN` authorized for R2, D1, and Worker deployment; this bootstrap authentication must be available before reading R2.
+
+Store an OAuth file containing `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...` (one per line), and a separate file containing the bare Resend key. Import or rotate them with:
+
+```sh
+bun run --cwd apps/access secrets:store /tmp/jolo_oauth_key.txt /tmp/jolo_key.txt
+bun run access:deploy
+```
+
+The import checks bucket privacy, uploads the three credentials, and verifies the stored values without printing them. Deployment reads them from R2, validates them, applies the generated D1 migrations, and publishes them atomically with the Worker as secret bindings. Temporary credential files have mode 0600 and are removed on completion or failure. Credentials never enter tracked configuration or website assets. Updating R2 takes effect on the next deployment.
+
+`bun run access:build` only performs a deployment dry run and needs no production credentials. Invitations remain usable locally without email configuration. Unit and runtime checks mock external services and send no real emails.
 
 ## Task workflow checks
 

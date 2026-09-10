@@ -4,6 +4,7 @@ import { taskRoutes } from './tasks/routes.js';
 import { createRepository } from './storage.js';
 import { accountPage, errorPage, signInPage } from './pages.js';
 import { SignInError, reportSignInFailure } from './errors.js';
+import { deliverMail } from './mail.js';
 import { FLOW_SECONDS, SESSION_SECONDS, configuration, cookie, hashToken, protect, randomToken, readToken, readForm, formValue, deviceUserCode } from './security.js';
 
 const html = (body, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -19,7 +20,7 @@ export function createAccessApp(env, options = {}) {
     return token && repository ? repository.getSession(await hashToken(token)) : null;
   };
   const handleDevices = deviceRoutes({ env, config, repository, session, now });
-  const handleTasks = taskRoutes({ env, config, repository, session, now });
+  const handleTasks = taskRoutes({ env, config, repository, session, now, mailFetch: options.mailFetch });
   const failedSignIn = error => {
     reportSignInFailure(env, error);
     const response = redirect(error instanceof SignInError && error.reason === 'github_email' ? '/?error=email' : '/?error=signin');
@@ -27,7 +28,7 @@ export function createAccessApp(env, options = {}) {
     return response;
   };
 
-  async function route(request) {
+  async function route(request, context) {
     const url = new URL(request.url);
     if (url.origin !== config.origin) return html(errorPage(421), 421);
     const path = url.pathname;
@@ -57,7 +58,7 @@ export function createAccessApp(env, options = {}) {
     }
     const deviceResponse = await handleDevices(request);
     if (deviceResponse) return deviceResponse;
-    const taskResponse = await handleTasks(request);
+    const taskResponse = await handleTasks(request, context);
     if (taskResponse) return taskResponse;
     if (request.method === 'GET' && path === '/login') {
       const previous = readToken(request, 'flow', config.secure);
@@ -118,8 +119,8 @@ export function createAccessApp(env, options = {}) {
   }
 
   return {
-    async fetch(request) {
-      try { return protect(await route(request), config.secure); }
+    async fetch(request, context) {
+      try { return protect(await route(request, context), config.secure); }
       catch { return protect(html(errorPage(503), 503), config.secure); }
     },
   };
@@ -128,6 +129,7 @@ export function createAccessApp(env, options = {}) {
 const applications = new WeakMap();
 export default {
   async scheduled(_controller, env) {
+    await deliverMail(env);
     await createRepository(env.ACCESS_DB).cleanup();
   },
   async fetch(request, env, context) {

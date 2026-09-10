@@ -81,6 +81,7 @@ export function createRepository(db, now = Date.now) {
         db.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(now()),
         db.prepare('DELETE FROM device_flows WHERE expires_at <= ?').bind(now()),
         db.prepare('DELETE FROM devices WHERE expires_at <= ?').bind(now()),
+        db.prepare('DELETE FROM mail_outbox WHERE created_at <= ?').bind(now() - 14 * 86400_000),
       ]);
     },
   };

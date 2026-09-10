@@ -49,7 +49,7 @@ try {
   const repository = createRepository(db, () => time);
   const account = await repository.account({ id: 'browser-fixture', name: 'Browser fixture', email: 'browser@example.com' });
   await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), time + SESSION_SECONDS * 1000);
-  app = createAccessApp({ ACCESS_ORIGIN: origin, ENVIRONMENT: 'development', ACCESS_DB: db, GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture' }, { now: () => time, fetch: () => { throw new Error('Browser smoke must not contact GitHub'); } });
+  app = createAccessApp({ ACCESS_ORIGIN: origin, ENVIRONMENT: 'development', ACCESS_DB: db, GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture', RESEND_API_KEY: 're_fixture', MAIL_FROM: 'Jolo <noreply@notifications.jolo.build>' }, { now: () => time, fetch: () => { throw new Error('Browser smoke must not contact GitHub'); }, mailFetch: async () => Response.json({id:'browser-mail-fixture'}) });
   const start = async (scope = 'account:read') => (await app.fetch(new Request(origin + '/device/code', { method: 'POST', body: new URLSearchParams({ client_id: 'jolo', device_name: 'Browser smoke device', scope }) }))).json();
   approved = await start('account:read tasks:read'); declined = await start();
   child = Bun.spawn([electron, fileURLToPath(new URL('browser-forms.mjs', import.meta.url))], { env: { ...process.env, JOLO_ACCESS_TEST_ORIGIN: origin, JOLO_ACCESS_TEST_HOME: home }, stdout: 'pipe', stderr: 'pipe' });
@@ -75,6 +75,7 @@ try {
   assert.equal(sqlite.query('SELECT state FROM tasks').get().state, 'in_progress');
   assert.equal(sqlite.query('SELECT count(*) n FROM teams').get().n, 1);
   assert.equal(sqlite.query('SELECT count(*) n FROM task_labels').get().n, 1);
+  assert.equal(sqlite.query('SELECT state FROM mail_outbox').get().state, 'sent');
   console.log('Browser task, team, label, archive and restore forms passed. Browser account forms passed: device approval and denial, device revocation, and browser sign-out.');
 } finally {
   if (child && child.exitCode === null) { child.kill(); await child.exited; }

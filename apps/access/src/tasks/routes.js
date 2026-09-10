@@ -4,13 +4,14 @@ import { canManage, canWriteTask } from './permissions.js';
 import { TaskError, value, optional, choice, revision, taskFields, labelFields, inviteFields, uuid } from './validation.js';
 import { formValue, readForm, hashToken } from '../security.js';
 import { taskKey, TASK_STATES } from '../../../../packages/protocol/src/tasks.js';
+import { deliverMail, invitationEmail, mailConfigured } from '../mail.js';
 
 const html = (body,status=200) => new Response(body,{status,headers:{'Content-Type':'text/html; charset=utf-8'}});
 const redirect = location => new Response(null,{status:303,headers:{Location:location}});
 const fail = (status,message) => { throw new TaskError(status,message); };
 const changed = result => result ?? fail(409,'This record changed or your permission was removed. Refresh the page and review before saving again.');
 
-export function taskRoutes({env,config,repository:auth,session,now}) {
+export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
   const repo=env.ACCESS_DB?taskRepository(env.ACCESS_DB,now):null;
   async function selectedTeam(actor,id) { if (!id) return null; if(!uuid(id)) fail(404,'Workspace not found.'); return await repo.team(actor,id)??fail(404,'Workspace not found.'); }
   async function serialize(actor,row,description=true) {
@@ -28,7 +29,7 @@ export function taskRoutes({env,config,repository:auth,session,now}) {
   async function taskView(account,task,team,error=null) {
     return taskViewPage({account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],error});
   }
-  return async request => {
+  return async (request,context) => {
     const url=new URL(request.url),path=url.pathname,api=path==='/api/tasks'||path.startsWith('/api/tasks/');
     if(!api&&!/^\/(tasks|teams|labels|invitations)(?:\/|$)/.test(path)) return null;
     try {
@@ -125,10 +126,18 @@ export function taskRoutes({env,config,repository:auth,session,now}) {
       const teamMatch=/^\/teams\/([a-f0-9-]{36})(?:\/(rename|invite|members\/([a-f0-9-]{36})\/(role|remove)|invitations\/([a-f0-9-]{36})\/revoke))?$/.exec(path);
       if(teamMatch) {
         const team=await selectedTeam(actor,teamMatch[1]);
-        if(request.method==='GET'&&!teamMatch[2]) return html(teamPage({account,team,members:await repo.members(actor,team.id),invitations:await repo.teamInvitations(actor,team.id),audit:await repo.audit(actor,team.id)}));
+        if(request.method==='GET'&&!teamMatch[2]) return html(teamPage({account,team,members:await repo.members(actor,team.id),invitations:await repo.teamInvitations(actor,team.id),audit:await repo.audit(actor,team.id),mailEnabled:mailConfigured(env)}));
         if(request.method==='POST') {
           if(teamMatch[2]==='rename') changed(await repo.renameTeam(actor,team.id,value(form,'name',100,true),revision(form)));
-          else if(teamMatch[2]==='invite') { const i=inviteFields(form); changed(await repo.invite(actor,team.id,i.email,i.role)); }
+          else if(teamMatch[2]==='invite') {
+            const i=inviteFields(form);
+            const mail=invitationEmail(env,{team,inviter:account,recipient:i.email,role:i.role});
+            const invitation=changed(await repo.invite(actor,team.id,i.email,i.role,mail));
+            if(mail) {
+              const delivery=deliverMail(env,{id:invitation.id,now,fetchImpl:mailFetch}).catch(() => {});
+              if(context?.waitUntil) context.waitUntil(delivery); else await delivery;
+            }
+          }
           else if(teamMatch[3]) {
             if(teamMatch[4]==='role') changed(await repo.setMember(actor,team.id,teamMatch[3],choice(form,'role',['admin','member','viewer']),revision(form)));
             else changed(await repo.removeMember(actor,team.id,teamMatch[3],revision(form)));

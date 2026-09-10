@@ -6,10 +6,11 @@ export function taskRepository(db, now = Date.now) {
   const all = async (sql, values) => (await statement(sql, values).all()).results;
   // Mutation and audit commit together. The audit's changes() refers to the
   // immediately preceding conditional mutation in the same D1 transaction.
-  const mutate = async (sql, values, { actor, team = null, action, subject }) => {
+  const mutate = async (sql, values, { actor, team = null, action, subject, after = [] }) => {
     const results = await db.batch([
       statement(sql, values),
       statement("INSERT INTO task_audit(team_id,account_id,actor_id,action,subject,at) SELECT ?,?,?,?,CASE WHEN ?='task.created' THEN (SELECT 'JOLO-'||id FROM tasks WHERE mutation_id=?) ELSE ? END,? WHERE changes() > 0", [team, actor, actor, action, action, subject, subject, now()]),
+      ...after,
     ]);
     return results[0].results?.[0] ?? null;
   };
@@ -29,12 +30,14 @@ export function taskRepository(db, now = Date.now) {
     member: (actor, id, target) => one(`SELECT * FROM team_members WHERE team_id=?2 AND account_id=?3 AND ${role('team_members.team_id')} IS NOT NULL`, [actor,id,target]),
     setMember: (actor,id,target,nextRole,revision) => mutate(`UPDATE team_members SET role=?4,revision=revision+1 WHERE team_id=?2 AND account_id=?3 AND account_id!=?1 AND revision=?5 AND (${role('team_members.team_id')}='owner' OR (${role('team_members.team_id')}='admin' AND role IN ('member','viewer') AND ?4 IN ('member','viewer'))) RETURNING *`, [actor,id,target,nextRole,revision], {actor,team:id,action:'member.role_changed',subject:target}),
     removeMember: (actor,id,target,revision) => mutate(`DELETE FROM team_members WHERE team_id=?2 AND account_id=?3 AND revision=?4 AND (account_id=?1 OR ${role('team_members.team_id')}='owner' OR (${role('team_members.team_id')}='admin' AND role IN ('member','viewer'))) RETURNING *`, [actor,id,target,revision], {actor,team:id,action:'member.removed',subject:target}),
-    invite: (actor,id,email,nextRole) => {
+    invite: (actor,id,email,nextRole,mail = null) => {
       const invitation = crypto.randomUUID();
-      return mutate(`INSERT INTO team_invitations(id,team_id,inviter_id,email,role,expires_at,created_at) SELECT ?3,?2,?1,?4,?5,?6,?7 WHERE (${role('?2')}='owner' OR (${role('?2')}='admin' AND ?5 IN ('member','viewer'))) AND NOT EXISTS(SELECT 1 FROM team_invitations WHERE team_id=?2 AND email=?4 AND accepted_by IS NULL AND revoked_at IS NULL AND expires_at>?7) RETURNING *`, [actor,id,invitation,email,nextRole,now()+7*86400_000,now()], {actor,team:id,action:'invitation.created',subject:invitation});
+      const after = mail ? [statement(`INSERT INTO mail_outbox(id,payload,available_at,created_at)
+        SELECT ?1,?2,?3,?3 WHERE EXISTS(SELECT 1 FROM team_invitations WHERE id=?1)`, [invitation,JSON.stringify(mail),now()])] : [];
+      return mutate(`INSERT INTO team_invitations(id,team_id,inviter_id,email,role,expires_at,created_at) SELECT ?3,?2,?1,?4,?5,?6,?7 WHERE (${role('?2')}='owner' OR (${role('?2')}='admin' AND ?5 IN ('member','viewer'))) AND NOT EXISTS(SELECT 1 FROM team_invitations WHERE team_id=?2 AND email=?4 AND accepted_by IS NULL AND revoked_at IS NULL AND expires_at>?7) RETURNING *`, [actor,id,invitation,email,nextRole,now()+7*86400_000,now()], {actor,team:id,action:'invitation.created',subject:invitation,after});
     },
     invitations: (actor,email) => all(`SELECT i.id,i.team_id,i.role,i.email,t.name AS team_name,i.expires_at FROM team_invitations i JOIN teams t ON t.id=i.team_id WHERE i.email=?2 AND i.accepted_by IS NULL AND i.revoked_at IS NULL AND i.expires_at>?3 AND (?1!=t.owner_id) ORDER BY i.created_at DESC LIMIT 100`, [actor,email,now()]),
-    teamInvitations: (actor,id) => all(`SELECT * FROM team_invitations WHERE team_id=?2 AND accepted_by IS NULL AND revoked_at IS NULL AND expires_at>?3 AND ${role('team_invitations.team_id')} IN ('owner','admin') ORDER BY created_at DESC LIMIT 100`, [actor,id,now()]),
+    teamInvitations: (actor,id) => all(`SELECT team_invitations.*,(SELECT state FROM mail_outbox WHERE id=team_invitations.id) AS mail_state FROM team_invitations WHERE team_id=?2 AND accepted_by IS NULL AND revoked_at IS NULL AND expires_at>?3 AND ${role('team_invitations.team_id')} IN ('owner','admin') ORDER BY created_at DESC LIMIT 100`, [actor,id,now()]),
     async accept(actor,id,email) {
       // Acceptance is one transaction. Recheck the inviter's current authority,
       // exact verified recipient, expiry, and absence of membership in the INSERT.

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateMigrations } from '../scripts/migrations.js';
+import { migrations } from '../migrations/index.ts';
 
 // D1 remembers these released filenames. Their SQL must remain byte-for-byte identical.
 const released = [
@@ -24,8 +25,8 @@ const released = [
 test('TypeScript migrations generate the original D1 filenames and SQL checksums', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'access-migrations-'));
   try {
-    expect(generateMigrations(directory)).toEqual(released.map(migration => migration.name));
-    expect(readdirSync(directory).sort()).toEqual(released.map(migration => migration.name));
+    expect(generateMigrations(directory)).toEqual(migrations.map(migration => migration.name));
+    expect(readdirSync(directory).sort()).toEqual(migrations.map(migration => migration.name));
     for (const { name, checksum } of released) {
       expect(createHash('sha256').update(readFileSync(path.join(directory, name))).digest('hex')).toBe(checksum);
     }

@@ -84,6 +84,10 @@ async function checkForms() {
   assert.match(await text(), /TEAM · owner/);
   const team = new URL(contents.getURL()).pathname.split('/').at(-1);
   await fit('team detail', ['form[action$="/invite"] button']);
+  assert.match(await text(), /Send invitation/);
+  await fill({email:'invitee@example.com',role:'member'});await submit('form[action$="/invite"] button');
+  assert.match(await text(), /Email sent/);
+  await fit('team invitation delivery', ['form[action$="/invite"] button']);
   await window.loadURL(origin + '/labels?team='+team);
   await fit('labels', ['form[method=post][action="/labels"] button']);
   await fill({name:'Bug',color:'red'}); await submit('form[method="post"][action="/labels"] button');
