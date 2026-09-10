@@ -1,0 +1,64 @@
+{
+  "name": "jolo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup:tgrep": "bun scripts/setup-tgrep.js",
+    "test": "bun test tests packages apps",
+    "engine": "bun apps/engine/src/main.js serve",
+    "jolo": "bun apps/cli/src/main.js",
+    "desktop": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/start.js",
+    "desktop:smoke": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/smoke.js",
+    "build": "bun scripts/build.js",
+    "build:cli": "bun scripts/build.js --cli-only",
+    "release:stage": "bun scripts/releases.js stage",
+    "release:restore": "bun scripts/releases.js restore",
+    "release:smoke": "bun scripts/smoke-install.js",
+    "package:desktop": "bun scripts/build.js && bun apps/desktop/scripts/package.js",
+    "install:desktop": "bun scripts/build.js && bun apps/desktop/scripts/package.js --install",
+    "benchmark": "bun scripts/benchmark.js",
+    "website": "bun run --cwd apps/website dev",
+    "website:build": "bun run --cwd apps/website build",
+    "website:preview": "bun run --cwd apps/website preview",
+    "website:deploy": "bun run --cwd apps/website deploy",
+    "website:deploy:check": "bun run --cwd apps/website deploy:check",
+    "access": "bun run --cwd apps/access dev",
+    "access:build": "bun run --cwd apps/access build",
+    "access:test": "bun run --cwd apps/access test",
+    "access:test:browser": "bun run --cwd apps/access test:browser",
+    "access:db:local": "bun run --cwd apps/access db:local",
+    "access:deploy": "bun run --cwd apps/access deploy"
+  },
+  "engines": {
+    "bun": ">=1.3.12"
+  },
+  "devDependencies": {
+    "@jolo/protocol": "workspace:*",
+    "@jolo/client": "workspace:*",
+    "@jolo/launcher": "workspace:*",
+    "@jolo/engine": "workspace:*",
+    "@jolo/cli": "workspace:*",
+    "@jolo/desktop": "workspace:*",
+    "@jolo/markdown": "workspace:*"
+  },
+  "trustedDependencies": [
+    "electron"
+  ],
+  "patchedDependencies": {
+    "ink@7.1.1": "patches/ink@7.1.1.patch"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jolo-build/jolo.git"
+  },
+  "homepage": "https://jolo.build",
+  "bugs": {
+    "url": "https://github.com/jolo-build/jolo/issues"
+  }
+}

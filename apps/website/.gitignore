@@ -1,0 +1,9 @@
+dist/
+public/brand/
+public/fonts/
+public/install.sh
+public/releases/
+.wrangler/
+.env
+.env.*
+!.env.example

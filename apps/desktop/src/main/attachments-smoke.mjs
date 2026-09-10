@@ -1,0 +1,76 @@
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+/** Exercise the native paste event through the real composer, bridge, engine and agent fixture. */
+export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, results, report }) {
+  await evaluate("window.__joloSmoke.showTask()");
+  await evaluate("window.__joloSmoke.selectSession(null)");
+  await evaluate("window.__joloSmoke.pickAnswerer('claude')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", 'image answerer');
+  await evaluate(`(() => {
+    const input = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'image-check');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const clipboard = new DataTransfer(); clipboard.setData('text/plain', 'ordinary text');
+    const paste = new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true });
+    input.dispatchEvent(paste);
+    if (paste.defaultPrevented) throw new Error('ordinary text paste was intercepted');
+  })()`);
+  const png = await evaluate(`(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
+    const ctx = canvas.getContext('2d'); ctx.fillStyle = '#253447'; ctx.fillRect(0, 0, 320, 180);
+    ctx.fillStyle = '#f8fafc'; ctx.font = '22px sans-serif'; ctx.fillText('Pasted screenshot', 22, 45);
+    ctx.fillStyle = '#5bb4ca'; ctx.fillRect(22, 70, 170, 16); ctx.fillRect(22, 98, 270, 16); ctx.fillRect(22, 126, 215, 16);
+    return canvas.toDataURL('image/png');
+  })()`);
+  const pasteImages = (count, type = 'image/png') => evaluate(`(() => {
+    const data = Uint8Array.from(atob(${JSON.stringify(png.split(',')[1])}), c => c.charCodeAt(0));
+    const clipboard = new DataTransfer();
+    for (let n = 0; n < ${count}; n++) clipboard.items.add(new File([data], 'Screenshot-' + n + '.png', { type: ${JSON.stringify(type)} }));
+    document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }));
+  })()`);
+  await pasteImages(2);
+  await waitFor("document.querySelectorAll('.composer-attachment img').length === 2 && !document.querySelector('.attachment-note[role=status]')", 'two pasted images');
+  await evaluate("document.querySelector('.composer-attachment button').click()");
+  await waitFor("document.querySelectorAll('.composer-attachment img').length === 1", 'remove attachment');
+  const call = bridge.call;
+  let uploadSessionId;
+  bridge.call = function(method, params) {
+    if (method === 'attachment.write') {
+      uploadSessionId = params.sessionId;
+      return Promise.resolve({ ok: false, error: { code: 'unavailable', message: 'Image upload interrupted for retry check' } });
+    }
+    return call.call(this, method, params);
+  };
+  try {
+    await evaluate("document.querySelector('.composer button[type=submit]').click()");
+    await waitFor("document.body.textContent.includes('Image upload interrupted for retry check')", 'upload failure');
+    if (!(await evaluate("document.querySelector('.composer textarea').value === 'image-check' && document.querySelectorAll('.composer-attachment').length === 1"))) throw new Error('failed first send lost its text or image');
+  } finally { bridge.call = call; }
+  writeFileSync(path.join(results, 'image-paste-draft.png'), (await window.webContents.capturePage()).toPNG());
+  await evaluate("document.querySelector('.composer button[type=submit]').click()");
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && document.querySelector('.message.assistant')?.textContent.includes('Images received: image/png:')", 'image delivered to Claude');
+  await waitFor("document.querySelector('.message-attachment img')?.naturalWidth === 320", 'sent image preview');
+  if (await evaluate("document.querySelectorAll('.composer-attachment').length")) throw new Error('sent image remained attached to the next draft');
+  const sessionId = await evaluate('window.__joloSmoke.state().sessionId');
+  if (sessionId !== uploadSessionId) throw new Error('retry created another task instead of reusing the draft task');
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(sessionId)})`);
+  await waitFor("document.querySelector('.message-attachment img')?.naturalWidth === 320", 'saved attachment after reopening');
+  writeFileSync(path.join(results, 'image-paste-sent.png'), (await window.webContents.capturePage()).toPNG());
+
+  // An image-only message can be queued, and unsupported image formats have a visible error.
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate("window.__joloSmoke.pickAnswerer('grok')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Grok CLI'", 'queue image answerer');
+  const running = await evaluate("window.__joloSmoke.send('sleep for image queue')");
+  await waitFor("Boolean(document.querySelector('.composer [aria-label=\"Stop task\"]'))", 'image queue running');
+  await pasteImages(1, 'image/svg+xml');
+  await waitFor("document.querySelector('.attachment-note[role=alert]')?.textContent.includes('PNG')", 'unsupported image format explained');
+  await pasteImages(1);
+  await waitFor("document.querySelector('.composer button[type=submit]') && !document.querySelector('.composer button[type=submit]').disabled", 'image-only queue enabled');
+  await evaluate("document.querySelector('.composer button[type=submit]').click()");
+  await waitFor("document.querySelector('.message-queue')?.textContent.includes('1 image')", 'image-only message queued');
+  await evaluate("document.querySelector('.message-queue [aria-label=\"Remove queued message\"]').click()");
+  await bridge.rawCall('run.cancel', { runId: running.id });
+  report.checks.push('image paste previews and removal, first-send failure retains the draft, retry delivers pixels to Claude, sent images survive reopening, image-only queueing, and unsupported-format errors');
+}

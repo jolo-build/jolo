@@ -1,0 +1,17 @@
+{
+  "name": "@jolo/engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/engine.js",
+    "./main": "./src/main.js"
+  },
+  "dependencies": {
+    "@jolo/protocol": "workspace:*",
+    "@jolo/launcher": "workspace:*",
+    "zod": "4.5.4",
+    "@xterm/headless": "6.0.0",
+    "@xterm/addon-serialize": "0.14.0"
+  }
+}

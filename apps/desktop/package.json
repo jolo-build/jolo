@@ -1,0 +1,27 @@
+{
+  "name": "@jolo/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/main/index.mjs",
+  "scripts": {
+    "build": "bun scripts/build.js",
+    "start": "bun scripts/build.js && bun scripts/start.js",
+    "smoke": "bun scripts/build.js && bun scripts/smoke.js",
+    "package": "bun scripts/package.js"
+  },
+  "dependencies": {
+    "@jolo/client": "workspace:*",
+    "@jolo/launcher": "workspace:*",
+    "@jolo/markdown": "workspace:*",
+    "@jolo/protocol": "workspace:*",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "electron": "44.2.0",
+    "@electron/packager": "18.3.6"
+  }
+}

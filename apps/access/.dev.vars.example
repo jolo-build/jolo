@@ -1,0 +1,5 @@
+# Copy to deploy/.dev.vars.development for Wrangler's development environment.
+# Register a separate GitHub OAuth app with callback:
+# http://127.0.0.1:8788/callback
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=

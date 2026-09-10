@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "strict": false,
+    "types": ["bun-types"]
+  },
+  "include": ["apps/**/*.js", "apps/**/*.jsx", "packages/**/*.js", "tests/**/*.js"]
+}

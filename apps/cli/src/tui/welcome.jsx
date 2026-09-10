@@ -1,0 +1,26 @@
+// First-run panel for the interactive client: the shortcuts a new user needs,
+// degrading by height so a short terminal still shows something useful.
+import React from "react";
+import { Box, Text } from "ink";
+
+const LOGO = [
+  "     _       _       ",
+  "    | | ___ | | ___  ",
+  " _  | |/ _ \\| |/ _ \\ ",
+  "| |_| | (_) | | (_) |",
+  " \\___/ \\___/|_|\\___/ ",
+];
+
+export function Welcome({ height, columns, hasHistory }) {
+  const roomy = height >= 12;
+  return <Box flexDirection="column" height={height} justifyContent="center" alignItems="center" overflow="hidden">
+    {roomy && <Box flexDirection="column" marginBottom={1}>{LOGO.map((row, i) => <Text bold key={i}>{row}</Text>)}</Box>}
+    {height > 0 && <Text bold wrap="truncate-end">Welcome to Jolo</Text>}
+    {height > 2 && <Text dimColor wrap="truncate-end">{columns >= 60 ? "Build something. Fix a bug. Explore your project." : "What would you like to build?"}</Text>}
+    {roomy && <Box flexDirection="column" marginTop={1} alignItems="center">
+      <Text dimColor wrap="truncate-end">{hasHistory ? <>Type <Text>a task</Text>  ·  Enter <Text>view chat</Text></> : <>Enter <Text>send</Text>  ·  Tab <Text>tool output</Text></>}</Text>
+      <Text dimColor wrap="truncate-end">↑/↓ <Text>prompts</Text>  ·  Ctrl+C <Text>exit</Text></Text>
+      <Text dimColor wrap="truncate-end">/model <Text>configure</Text>  ·  /sessions <Text>saved chats</Text></Text>
+    </Box>}
+  </Box>;
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@jolo/launcher",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./paths": "./src/paths.js",
+    "./executable": "./src/executable.js"
+  },
+  "dependencies": {
+    "@jolo/protocol": "workspace:*",
+    "@jolo/client": "workspace:*"
+  }
+}

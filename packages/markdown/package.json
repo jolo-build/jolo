@@ -1,0 +1,16 @@
+{
+  "name": "@jolo/markdown",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./tokens": "./src/tokens.js",
+    "./mermaid": "./src/mermaid.js",
+    "./mermaid-layout": "./src/mermaid-layout.js",
+    "./text": "./src/text.js"
+  },
+  "dependencies": {
+    "prismjs": "1.30.0"
+  }
+}

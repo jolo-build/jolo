@@ -1,0 +1,76 @@
+diff --git a/build/ink.js b/build/ink.js
+index 0082666b281ec2db77b875d6b8460bcc19a59ce7..24db44dc20fb272a81c90e996a1f398675b284b3 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -278,6 +278,35 @@ export default class Ink {
+     }
+     resized = () => {
+         const currentWidth = getWindowSize(this.options.stdout).columns;
++        if (this.options.nativeScrollback && !this.alternateScreen) {
++            // Normal-buffer terminals reflow the previous live frame before emitting
++            // SIGWINCH. Erase its physical rows at the new width, not its old row count.
++            this.throttledOnRender?.cancel();
++            this.throttledLog?.cancel();
++            this.hasPendingThrottledRender = false;
++            if (this.lastOutputToRender) {
++                const reflowed = wrapAnsi(this.lastOutputToRender, currentWidth, {
++                    hard: true,
++                    wordWrap: false,
++                    trim: false,
++                });
++                this.log.sync(reflowed);
++                this.log.clear();
++            }
++            this.lastOutput = '';
++            this.lastOutputToRender = '';
++            this.lastOutputHeight = 0;
++            this.lastTerminalWidth = currentWidth;
++            // useWindowSize's listener must commit the new geometry before painting.
++            // Painting here immediately would redraw the old-width composer first.
++            setImmediate(() => {
++                if (this.isUnmounted) return;
++                this.calculateLayout();
++                dom.emitLayoutListeners(this.rootNode);
++                this.onRender();
++            });
++            return;
++        }
+         if (currentWidth < this.lastTerminalWidth) {
+             // We clear the screen when decreasing terminal width to prevent duplicate overlapping re-renders.
+             this.log.clear();
+@@ -748,12 +777,21 @@ export default class Ink {
+     renderInteractiveFrame(output, outputHeight, staticOutput) {
+         const hasStaticOutput = staticOutput !== '';
+         const isTty = this.options.stdout.isTTY;
++        if (this.options.nativeScrollback && isTty) {
++            // Paint trailing background with EL instead of literal spaces. Empty
++            // background cells do not reflow into text rows on a narrow resize.
++            // Leave the cursor at the last column so log-update's following EL
++            // cannot erase the fill; keep that column as a one-cell right gutter.
++            const lastColumn = getWindowSize(this.options.stdout).columns;
++            output = output.replace(/ +\x1b\[49m(?=\n|$)/g,
++                `\x1b[K\x1b[49m\x1b[${lastColumn}G\x1b[K`);
++        }
+         // Detect fullscreen: output fills or exceeds terminal height.
+         // Only apply when writing to a real TTY — piped output always gets trailing newlines.
+         const viewportRows = isTty ? getWindowSize(this.options.stdout).rows : 24;
+         const isFullscreen = isTty && outputHeight >= viewportRows;
+         const outputToRender = isFullscreen ? output : output + '\n';
+-        const shouldClearTerminal = shouldClearTerminalForFrame({
++        const shouldClearTerminal = !this.options.nativeScrollback && shouldClearTerminalForFrame({
+             isTty,
+             viewportRows,
+             previousOutputHeight: this.lastOutputHeight,
+diff --git a/build/render.d.ts b/build/render.d.ts
+index 867edcaf84fe7229c30fb072227a10c2a97ba1c1..91b4ea688b8e04c78c211a64f3398187c8df90b5 100644
+--- a/build/render.d.ts
++++ b/build/render.d.ts
+@@ -116,6 +116,8 @@ export type RenderOptions = {
+     @default false
+     */
+     alternateScreen?: boolean;
++    /** Preserve normal-buffer scrollback and account for terminal reflow on resize. */
++    nativeScrollback?: boolean;
+ };
+ export type Instance = {
+     /**

@@ -1,0 +1,13 @@
+{
+  "origin": "https://jolo.build",
+  "latest": "0.1.0",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "platform": "darwin",
+      "arch": "arm64",
+      "sha256": "7bc94f85d2d05d8e862fbc08f9f9467eee36b6b556ad2e33478d2159b185792d",
+      "size": 25228382
+    }
+  ]
+}

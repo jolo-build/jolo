@@ -1,0 +1,20 @@
+{
+  "$schema": "../apps/website/node_modules/wrangler/config-schema.json",
+  "name": "jolo-website",
+  "compatibility_date": "2026-09-09",
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "jolo.build",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "../apps/website/dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+    "binding": "ASSETS"
+  },
+  "main": "website-worker.js"
+}

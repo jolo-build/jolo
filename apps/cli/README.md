@@ -1,0 +1,44 @@
+# Jolo CLI
+
+This archive contains Jolo's CLI, engine, and pinned Bun runtime. A global Bun or Node installation is not required. The CLI currently ships for macOS Apple Silicon; the desktop is a separate application.
+
+## Start
+
+Run `bin/jolo` from this archive, or `jolo` if installed on your `PATH`:
+
+```sh
+jolo --version
+jolo --help
+jolo /path/to/project
+```
+
+Inside the terminal UI, use `/model` to choose an agent or configure a provider. Hosted agents must already be installed and authenticated separately. The fake provider produces demo responses until a real provider or hosted agent is selected.
+
+To inspect installed hosted agents and run a task:
+
+```sh
+jolo agent list
+jolo run --agent claude "Explain this repository" --path /path/to/project
+```
+
+For Jolo's direct API provider, replace the placeholders with your model's settings, then enter the API key through standard input:
+
+```sh
+jolo provider set openai --model <model-name> --context-window <tokens> --max-output <tokens>
+jolo auth set openai
+jolo auth status openai
+```
+
+## Everyday use
+
+Enter sends a prompt, Esc stops the active task, Tab reveals tool output, and `/sessions` opens saved conversations. `/model` changes the answerer. `jolo --help` lists headless commands for sessions, worktrees, plans, approvals, and engine control.
+
+Headless exit codes are 0 for success, 1 for failure, 2 for usage errors, 3 for permission pauses, 4 for budget pauses, 5 for other pauses, and 130 for cancellation. Use `--json` on supported commands for structured output.
+
+The engine starts automatically and can outlive a client. Finish work before `jolo engine stop`. Use `--home <dir>` and `--profile <name>` for separate state. Browser tools need a connected desktop host. Hosted programs retain your local user's privileges; Jolo mediates the operations exposed through its tools and adapters.
+
+## Updates and removal
+
+The [Jolo website](https://jolo.build) provides the installer. Rerunning it switches the launcher to a new versioned directory. Previous installations remain under `PREFIX/share/jolo/releases/` until removed after their processes stop.
+
+To uninstall, stop the engine and remove the managed `PREFIX/bin/jolo` symlink and `PREFIX/share/jolo/` directory. Conversations/settings are stored separately: macOS uses `~/Library/Application Support/jolo/<profile>`; Linux uses `$XDG_DATA_HOME/jolo/<profile>` or `~/.local/share/jolo/<profile>`. A custom home stores them under `<home>/data/<profile>`.

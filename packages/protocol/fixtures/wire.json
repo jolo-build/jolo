@@ -1,0 +1,326 @@
+{
+  "envelopes": [
+    {
+      "name": "request run.start",
+      "valid": true,
+      "value": {
+        "jsonrpc": "2.0",
+        "id": "ui:42",
+        "method": "run.start",
+        "params": {
+          "sessionId": "ses_01",
+          "requestId": "req_01",
+          "expectedSessionRevision": 7,
+          "prompt": "Fix the failing parser test"
+        }
+      }
+    },
+    {
+      "name": "response result",
+      "valid": true,
+      "value": {
+        "jsonrpc": "2.0",
+        "id": "ui:42",
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "response error",
+      "valid": true,
+      "value": {
+        "jsonrpc": "2.0",
+        "id": "ui:42",
+        "error": {
+          "code": -32000,
+          "message": "conflict",
+          "data": {
+            "code": "conflict"
+          }
+        }
+      }
+    },
+    {
+      "name": "event notification",
+      "valid": true,
+      "value": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "engineBootId": "boot_01",
+          "eventSeq": "1042",
+          "sessionId": "ses_01",
+          "runId": "run_01",
+          "type": "run.state",
+          "payload": {
+            "state": "completed",
+            "revision": 9
+          },
+          "at": "2026-09-07T12:00:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "numeric id rejected",
+      "valid": false,
+      "value": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "engine.status"
+      }
+    },
+    {
+      "name": "wrong jsonrpc version",
+      "valid": false,
+      "value": {
+        "jsonrpc": "1.0",
+        "id": "a",
+        "method": "engine.status"
+      }
+    },
+    {
+      "name": "unknown notification method",
+      "valid": false,
+      "value": {
+        "jsonrpc": "2.0",
+        "method": "gossip",
+        "params": {}
+      }
+    },
+    {
+      "name": "error with unstable code",
+      "valid": false,
+      "value": {
+        "jsonrpc": "2.0",
+        "id": "a",
+        "error": {
+          "code": -32000,
+          "message": "x",
+          "data": {
+            "code": "made_up"
+          }
+        }
+      }
+    }
+  ],
+  "params": [
+    {
+      "method": "run.start",
+      "valid": true,
+      "value": {
+        "sessionId": "ses_01",
+        "requestId": "req_01",
+        "prompt": "hello"
+      }
+    },
+    {
+      "method": "run.start",
+      "valid": false,
+      "value": {
+        "sessionId": "ses_01",
+        "requestId": "req_01",
+        "prompt": ""
+      }
+    },
+    {
+      "method": "events.subscribe",
+      "valid": true,
+      "value": {
+        "after": "1042"
+      }
+    },
+    {
+      "method": "events.subscribe",
+      "valid": false,
+      "value": {
+        "after": 1042
+      }
+    },
+    {
+      "method": "artifact.read",
+      "valid": false,
+      "value": {
+        "artifactId": "art_1",
+        "length": 1000000
+      }
+    },
+    {
+      "method": "no.such.method",
+      "valid": false,
+      "value": {}
+    },
+    {
+      "method": "account.status",
+      "value": {},
+      "valid": true
+    },
+    {
+      "method": "account.status",
+      "value": {
+        "refresh": true
+      },
+      "valid": true
+    },
+    {
+      "method": "account.login",
+      "value": {
+        "origin": "http://127.0.0.1:8788",
+        "deviceName": "My desktop"
+      },
+      "valid": true
+    },
+    {
+      "method": "account.login",
+      "value": {
+        "token": "must-not-cross-rpc"
+      },
+      "valid": false
+    },
+    {
+      "method": "account.cancel",
+      "value": {},
+      "valid": true
+    },
+    {
+      "method": "account.logout",
+      "value": {},
+      "valid": true
+    },
+    {
+      "method": "attachment.create",
+      "value": {
+        "sessionId": "s",
+        "mimeType": "image/png"
+      },
+      "valid": true
+    },
+    {
+      "method": "attachment.create",
+      "value": {
+        "sessionId": "s",
+        "mimeType": "image/svg+xml"
+      },
+      "valid": false
+    },
+    {
+      "method": "attachment.write",
+      "value": {
+        "sessionId": "s",
+        "artifactId": "a",
+        "offset": 0,
+        "data": "aGVsbG8=",
+        "final": true
+      },
+      "valid": true
+    },
+    {
+      "method": "run.start",
+      "value": {
+        "sessionId": "s",
+        "requestId": "r",
+        "prompt": "Inspect this image",
+        "attachments": [
+          {
+            "artifactId": "a",
+            "name": "Screenshot.png",
+            "mimeType": "image/png",
+            "bytes": 68
+          }
+        ]
+      },
+      "valid": true
+    },
+    {
+      "method": "task.list",
+      "value": {},
+      "valid": true
+    },
+    {
+      "method": "task.list",
+      "value": {
+        "q": "JOLO-123",
+        "before": 124
+      },
+      "valid": true
+    },
+    {
+      "method": "task.list",
+      "value": {
+        "before": 0
+      },
+      "valid": false
+    },
+    {
+      "method": "task.get",
+      "value": {
+        "key": "JOLO-123"
+      },
+      "valid": true
+    },
+    {
+      "method": "task.get",
+      "value": {
+        "key": "../../accounts"
+      },
+      "valid": false
+    },
+    {
+      "method": "account.login",
+      "value": {
+        "tasks": true
+      },
+      "valid": true
+    },
+    {
+      "method": "account.login",
+      "value": {
+        "tasks": "true"
+      },
+      "valid": false
+    }
+  ],
+  "events": [
+    {
+      "valid": true,
+      "value": {
+        "engineBootId": "boot_01",
+        "eventSeq": "1",
+        "sessionId": null,
+        "runId": null,
+        "type": "grant.created",
+        "payload": {
+          "grantId": "grant_1",
+          "scope": "inspect"
+        },
+        "at": "2026-09-07T12:00:00.000Z"
+      }
+    },
+    {
+      "valid": false,
+      "value": {
+        "engineBootId": "boot_01",
+        "eventSeq": 1,
+        "sessionId": null,
+        "runId": null,
+        "type": "x",
+        "payload": {},
+        "at": "2026-09-07T12:00:00.000Z"
+      }
+    },
+    {
+      "valid": true,
+      "value": {
+        "engineBootId": "boot_test",
+        "eventSeq": "1",
+        "sessionId": null,
+        "runId": null,
+        "type": "account.changed",
+        "payload": {
+          "state": "signed_in"
+        },
+        "at": "2026-09-10T00:00:00.000Z"
+      }
+    }
+  ]
+}

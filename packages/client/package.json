@@ -1,0 +1,15 @@
+{
+  "name": "@jolo/client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./projection": "./src/projection.js",
+    "./board": "./src/board.js",
+    "./run-state": "./src/run-state.js"
+  },
+  "dependencies": {
+    "@jolo/protocol": "workspace:*"
+  }
+}

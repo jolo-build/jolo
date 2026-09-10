@@ -1,0 +1,17 @@
+{
+  "name": "@jolo/protocol",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./framing": "./src/framing.js",
+    "./schemas": "./src/schemas.js",
+    "./run-state": "./src/run-state.js",
+    "./attachments": "./src/attachments.js",
+    "./tasks": "./src/tasks.js"
+  },
+  "dependencies": {
+    "zod": "4.5.4"
+  }
+}

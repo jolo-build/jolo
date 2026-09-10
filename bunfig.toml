@@ -1,0 +1,3 @@
+[test]
+# Product tests live under tests/, packages/, and apps/.
+root = "."
