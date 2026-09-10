@@ -59,14 +59,14 @@ export async function runLiveResultsSmoke({ window, bridge, results, evaluate, w
   const current = await evaluate('window.__joloSmoke.state()');
   const { sessions } = await bridge.rawCall('session.list', { projectId: current.projectId, state: 'open' });
   for (let n = sessions.length; n < 6; n++) await bridge.rawCall('session.create', { projectId: current.projectId, workspaceId: current.workspaceId, title: `Tab fixture ${n}` });
-  await waitFor("document.querySelector('#open-tasks-tab .task-tab-count')?.textContent === '6'", 'count inside All projects tab');
+  await waitFor("document.querySelector('.sidebar-workspace-toggle .task-tab-count')?.textContent === '6'", 'task count inside workspace row');
   if (await evaluate("Boolean(document.querySelector('#archived-tasks-tab .task-tab-count'))")) throw new Error('open task count appears in Archive');
   writeFileSync(path.join(results, 'task-tabs.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate("document.querySelector('#archived-tasks-tab').click()");
   await waitFor("document.querySelector('#archived-tasks-tab')?.getAttribute('aria-selected') === 'true' && document.querySelector('.task-list')?.textContent.includes('No archived tasks')", 'Archive tab selected');
   await evaluate("document.querySelector('#archived-tasks-tab').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))");
-  await waitFor("document.querySelector('#open-tasks-tab')?.getAttribute('aria-selected') === 'true' && document.querySelector('#open-tasks-tab .task-tab-count')?.textContent === '6'", 'keyboard selects All projects with its count');
-  report.checks.push('All projects owns the six-task count; Archive is a separate tab, with click and keyboard switching');
+  await waitFor("document.querySelector('#open-tasks-tab')?.getAttribute('aria-selected') === 'true' && document.querySelector('.sidebar-workspace-toggle .task-tab-count')?.textContent === '6'", 'keyboard selects Workspaces with its task count');
+  report.checks.push('The folder owns its six-task count; Archive preserves folder grouping, with click and keyboard switching');
   const focusBorders = await evaluate(`(() => {
     const controls = [...document.querySelectorAll('.task-tabs button, .task-tabs select, .new-task, .header-actions button')];
     const borders = [];

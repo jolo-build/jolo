@@ -10,7 +10,10 @@
 // initialize/can_use_tool/control_response forms in the engine's agents README.
 import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
-import { claudeSearchArgs } from '../search/hosted.js';
+import { browserTools } from '../tools/browser.js';
+import { browserPreview } from '../browser/hosted.js';
+import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
 
 export { insideWorkspace };
@@ -45,7 +48,7 @@ export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
 /**
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any }} deps
  */
-export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, searchConfig, providerFactory = null, settings = null }) {
+export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
   return {
     name: "claude-stream",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -58,7 +61,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
       const remembered = recall(session, manifest).claudeSessionId ?? null;
       const searchServer = searchConfig?.(workspace, run);
-      const argv = claudeArgv(binary, [...extraArgs, ...claudeSearchArgs(searchServer)], remembered);
+      const browserServer = browserConfig?.(workspace, run);
+      const mcpServers = { ...(searchServer ? { jolo_search: searchServer } : {}), ...(browserServer ? { jolo_browser: browserServer } : {}) };
+      const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
       const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
       const images = readImages(storage, run);
       const content = images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
@@ -82,6 +87,8 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const decide = async (request) => {
         const toolName = String(request.tool_name ?? "");
         const input = request.input ?? {};
+        // This server validates, authorizes, and records the operation in the engine.
+        if (browserServer && browserTools.some(tool => toolName === `mcp__jolo_browser__${tool.name}`)) return { behavior: 'allow', updatedInput: input };
         const target = input.file_path ?? input.path ?? request.blocked_path;
         const { summary, script } = describeTool(toolName, input);
         const toolClass = searchServer && toolName === 'mcp__jolo_search__search_text' ? 'read' : classify(toolName);
@@ -100,7 +107,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
 
       const onToolResult = (block) => {
         const text = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : JSON.stringify(block.content ?? "");
-        turn.toolFinished(block.tool_use_id, { text, isError: Boolean(block.is_error) });
+        turn.toolFinished(block.tool_use_id, { text: browserPreview(text), isError: Boolean(block.is_error) });
       };
 
       const onMessage = async (message) => {

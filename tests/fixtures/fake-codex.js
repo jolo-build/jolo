@@ -72,7 +72,23 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     return;
   }
   let match;
-  if ((match = prompt.match(/^tool-deadline (reasoning|commentary|foreground|poll)$/))) {
+  if (prompt === 'browser-check') {
+    if (!entry.developerInstructions?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    const settings = Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n'));
+    if (!settings.mcp_servers?.jolo_browser) { say('Browser tools unavailable'); end('completed'); return; }
+    const { browserMcpCheck } = await import('./browser-mcp-client.js');
+    const tool = item('mcpToolCall', { server: 'jolo_browser', tool: 'browser_screenshot', arguments: {}, status: 'inProgress' });
+    started(tool);
+    const approval = { threadId, turnId, serverName: 'jolo_browser', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call' }, message: 'Allow browser_screenshot?', requestedSchema: { type: 'object', properties: {} } };
+    for (const change of [{ serverName: 'external' }, { threadId: 'other' }, { turnId: 'other' }, { mode: 'url' }, { _meta: {} }, { requestedSchema: { type: 'object', properties: { secret: { type: 'string' } } } }]) {
+      const denied = await ask('mcpServer/elicitation/request', { ...approval, ...change });
+      if (denied?.action === 'accept') throw new Error('unrelated approval was accepted');
+    }
+    const accepted = await ask('mcpServer/elicitation/request', approval);
+    if (accepted?.action !== 'accept' || Object.keys(accepted.content ?? {}).length || accepted._meta) throw new Error('Jolo browser approval did not reach its dispatcher');
+    const text = await browserMcpCheck(settings.mcp_servers?.jolo_browser, result => completed({ ...tool, status: 'completed', result }));
+    say(text);
+  } else if ((match = prompt.match(/^tool-deadline (reasoning|commentary|foreground|poll)$/))) {
     const mode = match[1];
     const exec = item("commandExecution", { command: "fixture-dev-server", cwd, processId: "1", status: "inProgress" });
     started(exec);
@@ -155,6 +171,7 @@ async function handle(message) {
     case "thread/start": {
       if (params.approvalPolicy !== "untrusted" || params.sandbox !== "workspace-write" || !params.cwd) return fail(-32602, `unexpected thread/start params ${JSON.stringify(params)}`);
       const thread = makeThread(params.cwd, undefined, false, params.model ?? null);
+      threads.get(thread.id).developerInstructions = params.developerInstructions;
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       notify("thread/started", { thread });
       return;
@@ -163,6 +180,7 @@ async function handle(message) {
       if (typeof params.threadId !== "string" || !params.threadId.startsWith("fake-thread-")) return fail(-32602, "unknown thread");
       if (params.approvalPolicy !== "untrusted" || params.sandbox !== "workspace-write") return fail(-32602, "unexpected thread/resume params");
       const thread = makeThread(params.cwd, params.threadId, true, params.model ?? null);
+      threads.get(thread.id).developerInstructions = params.developerInstructions;
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       return;
     }

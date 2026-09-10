@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import releases from '../../../deploy/cli-releases.json';
 
 function Icon({ name, size = 20, ...props }) {
@@ -79,12 +79,23 @@ const features = [
 function GettingStarted() {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  const [version, setVersion] = useState(releases.latest);
+  const automated = version !== releases.latest;
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/releases/latest.txt', { signal: controller.signal }).then(async response => {
+      if (!response.ok) return;
+      const latest = (await response.text()).trim();
+      if (!controller.signal.aborted && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(latest)) setVersion(latest);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
   const command = `curl -fsSL ${releases.origin}/install.sh | bash`;
   async function copyCommand() {
     try { await navigator.clipboard.writeText(command); setCopied(true); setCopyError(false); }
     catch { setCopyError(true); setCopied(false); }
   }
-  return <section className="getting-started section-width" id="get-jolo"><div><span className="eyebrow">04 / get jolo</span><h2>Start with<br />a prompt.</h2><p>The first CLI release is ready for macOS on Apple Silicon.</p><p className="release-note">Early release · v{releases.latest}<br />Desktop and Linux downloads are still in development.</p></div><div className="source-card"><div className="source-card-top"><Icon name="terminal" size={20} /><span>Install from your terminal.</span></div><p>Includes its own runtime. Installs to <code>~/.local</code> and verifies the download. No sudo needed.</p><div className="install-command"><pre><code>{command}</code></pre><button type="button" aria-label={copied ? 'Install command copied' : 'Copy install command'} onClick={copyCommand}><Icon name={copied ? 'check' : 'copy'} size={18} /></button></div><div className="source-card-bottom"><span>macOS · Apple Silicon</span><span role="status" aria-live="polite">{copyError ? 'Select the command to copy.' : copied ? '[copied]' : 'Run in your terminal'}</span></div><div className="release-links"><a href="/install.sh">Read the script <Icon name="diagonal" size={13} /></a><a href={`/releases/${releases.latest}/jolo-cli-darwin-arm64.tar.gz`} download>Download archive <Icon name="arrow" size={13} /></a><a href={`/releases/${releases.latest}/jolo-cli-darwin-arm64.tar.gz.sha256`}>SHA-256</a></div><p className="release-note">Follow the installer’s PATH instructions, then run <code>jolo</code> from your project. Run the installer again to upgrade.</p></div></section>;
+  return <section className="getting-started section-width" id="get-jolo"><div><span className="eyebrow">04 / get jolo</span><h2>Start with<br />a prompt.</h2><p>{automated ? "The CLI is ready for macOS and Linux, on ARM64 and x64." : "The first CLI release is ready for macOS on Apple Silicon."}</p><p className="release-note">Early release · v{version}<br />{automated ? "Desktop downloads are still in development." : "Desktop and Linux downloads are still in development."}</p></div><div className="source-card"><div className="source-card-top"><Icon name="terminal" size={20} /><span>Install from your terminal.</span></div><p>Includes its own runtime. Installs to <code>~/.local</code> and verifies the download. No sudo needed.</p><div className="install-command"><pre><code>{command}</code></pre><button type="button" aria-label={copied ? 'Install command copied' : 'Copy install command'} onClick={copyCommand}><Icon name={copied ? 'check' : 'copy'} size={18} /></button></div><div className="source-card-bottom"><span>{automated ? "macOS · Linux · ARM64 · x64" : "macOS · Apple Silicon"}</span><span role="status" aria-live="polite">{copyError ? 'Select the command to copy.' : copied ? '[copied]' : 'Run in your terminal'}</span></div><div className="release-links"><a href="/install.sh">Read the script <Icon name="diagonal" size={13} /></a><a href={`/releases/${version}/jolo-cli-darwin-arm64.tar.gz`} download>{automated ? "macOS ARM64 archive" : "Download archive"} <Icon name="arrow" size={13} /></a><a href={`/releases/${version}/jolo-cli-darwin-arm64.tar.gz.sha256`}>SHA-256</a>{automated && <a href={`https://github.com/jolo-build/jolo/releases/tag/v${version}`}>All downloads <Icon name="arrow" size={13} /></a>}</div><p className="release-note">Follow the installer’s PATH instructions, then run <code>jolo</code> from your project. Run the installer again to upgrade.</p></div></section>;
 }
 
 export default function App() {

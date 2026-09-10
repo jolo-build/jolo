@@ -5,12 +5,24 @@ import { SearchTextParams } from '@jolo/protocol';
 import { z } from 'zod';
 
 export async function runSearchMcp(argv = process.argv.slice(3)) {
+  const inputSchema = z.toJSONSchema(SearchTextParams); delete inputSchema.$schema;
+  return runScopedMcp({ argv, name: 'jolo-search', tools: [{ name: 'search_text', description: 'Search this workspace using Jolo’s live tgrep index, with automatic live-search fallback while indexing. Literal by default. Set fresh=true when verifying recent edits. Returns bounded file paths, line numbers, text, and a paging cursor.', inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }],
+    async call(client, workspaceId, params) {
+      if (params?.name !== 'search_text') throw new Error('unknown search tool');
+      const args = SearchTextParams.parse(params.arguments ?? {});
+      const value = await client.call('workspace.search', { ...args, workspaceId });
+      return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false };
+    },
+  });
+}
+
+/** Bounded stdio transport shared by workspace-scoped hosted tool servers. */
+export async function runScopedMcp({ argv, name, tools, call }) {
   const flags = {};
   for (let i = 0; i < argv.length; i += 2) flags[argv[i]] = argv[i + 1];
   const workspaceId = flags['--workspace'];
-  if (!workspaceId || !flags['--socket'] || !flags['--token-file']) throw new Error('search-mcp requires --workspace, --socket, and --token-file');
-  const client = await connect({ socketPath: flags['--socket'], token: readFileSync(flags['--token-file'], 'utf8').trim(), clientKind: 'headless', build: 'jolo-search', requestTimeoutMs: 65_000 });
-  const inputSchema = z.toJSONSchema(SearchTextParams); delete inputSchema.$schema;
+  if (!workspaceId || !flags['--socket'] || !flags['--token-file']) throw new Error(`${name} requires --workspace, --socket, and --token-file`);
+  const client = await connect({ socketPath: flags['--socket'], token: readFileSync(flags['--token-file'], 'utf8').trim(), clientKind: 'headless', build: name, requestTimeoutMs: 65_000 });
   const send = message => process.stdout.write(`${JSON.stringify(message)}\n`);
   const inflight = new Set();
   const versions = ['2024-11-05', '2025-03-26', '2025-06-18'];
@@ -18,17 +30,12 @@ export async function runSearchMcp(argv = process.argv.slice(3)) {
     if (request.id === undefined) return;
     let result;
     switch (request.method) {
-      case 'initialize': result = { protocolVersion: versions.includes(request.params?.protocolVersion) ? request.params.protocolVersion : versions.at(-1), capabilities: { tools: {} }, serverInfo: { name: 'jolo-search', version: '1.0.0' } }; break;
+      case 'initialize': result = { protocolVersion: versions.includes(request.params?.protocolVersion) ? request.params.protocolVersion : versions.at(-1), capabilities: { tools: {} }, serverInfo: { name, version: '1.0.0' } }; break;
       case 'ping': result = {}; break;
-      case 'tools/list': result = { tools: [{ name: 'search_text', description: 'Search this workspace using Jolo’s live tgrep index, with automatic live-search fallback while indexing. Literal by default. Set fresh=true when verifying recent edits. Returns bounded file paths, line numbers, text, and a paging cursor.', inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }] }; break;
+      case 'tools/list': result = { tools }; break;
       case 'tools/call': {
-        try {
-          if (request.params?.name !== 'search_text') throw new Error('unknown search tool');
-          // The agent cannot replace the workspace pinned by the host.
-          const args = SearchTextParams.parse(request.params.arguments ?? {});
-          const value = await client.call('workspace.search', { ...args, workspaceId });
-          result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false };
-        } catch (error) { result = { content: [{ type: 'text', text: error.message }], isError: true }; }
+        try { result = await call(client, workspaceId, request.params); }
+        catch (error) { result = { content: [{ type: 'text', text: error.message }], isError: true }; }
         break;
       }
       default: send({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } }); return;

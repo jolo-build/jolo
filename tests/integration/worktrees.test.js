@@ -70,6 +70,7 @@ describe("worktree workspaces", () => {
     expect(listed.map((w) => [w.mode, w.present, w.sessionCount])).toEqual([["direct", true, 0], ["worktree", true, 0]]);
     expect((await client.call("project.open", { path: repo })).preferredMode).toBe("worktree");
 
+    expect((await client.call('board.list', {})).projects.find(row => row.workspaceId === workspace.id)).toMatchObject({ taskCount: 0, run: null });
     const session = (await client.call("session.create", { projectId: opened.projectId, workspaceId: workspace.id, title: "Rate limit API" })).session;
     const run = await runTo(session, "req_wt", "change the notes", "awaiting_permission");
     await approve(run);
@@ -99,7 +100,8 @@ describe("worktree workspaces", () => {
     expect(git(repo, "branch", "--list", "jolo/rate-limit-api").stdout).toContain("jolo/rate-limit-api"); // the branch stays
     expect(events.some((e) => e.type === "workspace.removed" && e.payload.workspaceId === workspace.id)).toBe(true);
     rows = (await client.call("board.list", {})).projects.filter((row) => row.name === "repo");
-    expect(rows.map((row) => row.workspace.mode)).toEqual(["direct"]);
+    expect(rows.map((row) => row.workspace.id).sort()).toEqual([opened.workspaceId, second.id].sort());
+    expect(rows.find(row => row.workspaceId === second.id).taskCount).toBe(0);
     await expect(client.call("run.start", { sessionId: session.id, requestId: "req_gone", prompt: "again" })).rejects.toMatchObject({ code: "conflict" });
     await expect(client.call("workspace.remove", { workspaceId: workspace.id, force: true })).rejects.toMatchObject({ code: "not_found" });
     await client.call("workspace.remove", { workspaceId: second.id }); // clean: no force needed

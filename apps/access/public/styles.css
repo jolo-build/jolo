@@ -24,6 +24,8 @@
 }
 :root[data-theme=light] { color-scheme:light; }
 :root[data-theme=dark] { color-scheme:dark; }
+/* Keep layout and resource discovery active while preventing fallback-font paint. */
+:root[data-assets-loading] body { visibility:hidden; }
 * { box-sizing:border-box; }
 input { accent-color:var(--fg); }
 input::placeholder,textarea::placeholder { color:var(--muted); opacity:1; }

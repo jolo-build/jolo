@@ -72,7 +72,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
+export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
@@ -241,7 +241,7 @@ export function Composer({ disabled, autoFocusOnType = false, running, queuedRun
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}
-      {(!running || text.trim() || attachments.length) && <button type="submit" className="primary composer-submit" disabled={disabled || sending || readingImages || (!text.trim() && !attachments.length)} aria-label={sending ? 'Sending message' : running ? 'Queue message' : 'Send message'} title={running ? 'Queue message · Enter. Enter twice to interrupt and send now.' : 'Send message · Enter'}><Icon name="arrow" size={15} /></button>}
+      {(!running || text.trim() || attachments.length > 0) && <button type="submit" className="primary composer-submit" disabled={disabled || sending || readingImages || (!text.trim() && !attachments.length)} aria-label={sending ? 'Sending message' : running ? 'Queue message' : 'Send message'} title={running ? 'Queue message · Enter. Enter twice to interrupt and send now.' : 'Send message · Enter'}><Icon name="arrow" size={15} /></button>}
     </div>
   </form></div></div></div>;
 }

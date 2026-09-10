@@ -64,6 +64,12 @@ describe("what a board row speaks for", () => {
     expect(rows[0].reason).toBe("awaiting_permission");
     expect(rows[0].session.id).toBe(first.id); // the row speaks for the task that cannot move
     expect(rows[0].run.id).toBe(waiting.id);
+    expect(rows[0].working).toBe(false); // approval and queued work do not animate the folder
+    // A queued follow-up in the same chat must not hide its active approval.
+    const followup = (await client.call('run.start', { sessionId: first.id, requestId: 'followup', prompt: 'later in this chat' })).run;
+    expect((await client.call('board.tasks', { workspaceId: project.workspaceId })).tasks.find(task => task.sessionId === first.id).run.id).toBe(waiting.id);
+    await client.call('run.cancel', { runId: followup.id });
+    expect((await client.call('board.tasks', { workspaceId: project.workspaceId })).tasks.find(task => task.sessionId === first.id).attention).toBe('needs_you');
   }, 40_000);
 
   test("continuing a paused task records a new attempt", async () => {
@@ -256,3 +262,32 @@ describe("every task, across every project", () => {
     expect((await client.call("board.tasks", {})).tasks.map((task) => task.title).sort()).toEqual(["second", "third"]);
   }, 60_000);
 });
+
+test('workspace task pages include older chats, exclude other folders and archived chats, and count empty folders', async () => {
+  const home = tempHome(); homes.push(home);
+  const { client } = await boot(home);
+  const alpha = await client.call('project.open', { path: fixture(home, 'alpha') });
+  const beta = await client.call('project.open', { path: fixture(home, 'beta') });
+  const made = [];
+  for (let index = 0; index < 205; index++) made.push((await client.call('session.create', { projectId: alpha.projectId, workspaceId: alpha.workspaceId, title: `Chat ${index}` })).session);
+  await client.call('session.archive', { sessionId: made[0].id, expectedRevision: made[0].revision, archived: true });
+  await client.call('session.delete', { sessionId: made[1].id, expectedRevision: made[1].revision });
+  const rows = (await client.call('board.list', {})).projects;
+  expect(rows.find(row => row.workspaceId === alpha.workspaceId).taskCount).toBe(203);
+  expect(rows.find(row => row.workspaceId === beta.workspaceId)).toMatchObject({ taskCount: 0, run: null });
+  const other = (await client.call('session.create', { projectId: beta.projectId, workspaceId: beta.workspaceId, title: 'Other folder' })).session;
+  const tasks = [];
+  let before;
+  for (;;) {
+    const page = await client.call('board.tasks', { workspaceId: alpha.workspaceId, limit: 100, ...(before ? { before } : {}) });
+    tasks.push(...page.tasks);
+    if (!page.hasMore) { expect(page.nextCursor).toBeNull(); break; }
+    before = page.nextCursor;
+  }
+  expect(tasks.map(task => task.sessionId).sort()).toEqual(made.slice(2).map(session => session.id).sort());
+  expect(new Set(tasks.map(task => task.sessionId)).size).toBe(203);
+  expect(tasks.every(task => task.workspaceId === alpha.workspaceId)).toBe(true);
+  expect((await client.call('board.tasks', { workspaceId: beta.workspaceId })).tasks.map(task => task.sessionId)).toEqual([other.id]);
+  expect((await client.call('board.tasks', { workspaceId: alpha.workspaceId, state: 'archived' })).tasks.map(task => task.sessionId)).toEqual([made[0].id]);
+  expect((await client.call('board.tasks', { workspaceId: beta.workspaceId, state: 'archived' })).tasks).toEqual([]);
+}, 30_000);

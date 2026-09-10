@@ -30,7 +30,7 @@ export class ToolDispatcher {
    * Execute one admitted tool call. Never throws for model-caused failures; returns a structured result.
    * @param {{ run: any, workspace: { id: string, root: string }, call: { callId: string, name: string, arguments: unknown }, signal: AbortSignal, deadlineMs?: number, approvedPermissionId?: string | null, onOutput?: (text: string) => void, hooks?: { onChanges?: Function, onCheck?: Function } }} request
    */
-  hasBrowser(workspaceId) { return Boolean(this.browser?.hasHost(workspaceId)); }
+  hasBrowser(workspaceId) { return Boolean(this.browser?.hasBrowser(workspaceId)); }
   executionClass(name) { return this.registry.get(name)?.executionClass; }
   searchContext(workspace, signal) { return { workspace: { id: workspace.id, root: workspace.path }, env: this.env, search: this.search, signal }; }
 

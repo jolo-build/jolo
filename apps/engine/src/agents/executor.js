@@ -16,11 +16,12 @@ export function createExecutorRouter(deps) {
   return {
     name: 'dispatch',
     async execute(ctx) {
-      const guest = ctx.run.execution?.agentId ?? null;
+      const guest = ctx.run.execution?.preset ? SELF_MENTION : ctx.run.execution?.agentId ?? null;
       const agentId = guest === SELF_MENTION ? null : guest ?? storage.getSession(ctx.run.sessionId)?.agentId;
       if (!agentId) {
-        const answerer = { id: 'jolo', displayName: 'Jolo', model: settings.get().provider?.model ?? null };
         const result = await native.execute(ctx);
+        const saved = storage.getRunProviderConfig?.(ctx.run.id);
+        const answerer = { id: 'jolo', displayName: 'Jolo', model: saved?.model ?? saved?.ref?.model ?? settings.get().model?.model ?? null };
         rememberConversation(storage, ctx.run, answerer, result.outcome === 'completed');
         return result;
       }

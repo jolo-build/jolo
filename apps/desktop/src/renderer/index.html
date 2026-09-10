@@ -11,24 +11,24 @@
   <style>
     html { color-scheme: light dark; background: light-dark(#fff, #171717); }
     body { margin: 0; }
-    #root[inert] { visibility: hidden; }
+    /* Lay out and load the interface behind the opaque splash; inert blocks interaction. */
     #startup-screen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: light-dark(#fff, #171717); color: light-dark(#202020, #ededed); }
     #startup-screen[hidden], #startup-screen [hidden] { display: none; }
     .startup-logo { width: 64px; height: 64px; animation: startup-pulse 1.6s ease-in-out infinite; }
     @media (prefers-color-scheme: dark) { .startup-logo { filter: invert(1); } }
     .startup-detail { position: absolute; top: calc(50% + 56px); left: 24px; right: 24px; text-align: center; font: 13px/1.5 system-ui, sans-serif; }
+    .startup-status { color: light-dark(#6b6b6b, #a3a3a3); }
     .startup-detail p { margin: 0 0 12px; }
     .startup-detail button { font: inherit; color: inherit; border: 0; border-radius: 6px; padding: 7px 12px; background: light-dark(#ededed, #292929); cursor: pointer; }
     #startup-screen[data-failed] .startup-logo { animation: none; }
     @keyframes startup-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
     @media (prefers-reduced-motion: reduce) { .startup-logo { animation: none; } }
   </style>
-  <link rel="stylesheet" href="xterm.css">
-  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="startup-screen" role="status" aria-label="Loading Jolo">
     <img class="startup-logo" src="jolo-mark.svg" alt="" aria-hidden="true">
+    <div class="startup-detail startup-status">Loading Jolo…</div>
     <div class="startup-detail" hidden><p>Jolo couldn’t finish loading.</p><button type="button">Try again</button></div>
   </div>
   <div id="root" inert aria-busy="true"></div>

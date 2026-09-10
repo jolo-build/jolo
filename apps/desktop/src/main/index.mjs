@@ -12,6 +12,7 @@ import { parseParams } from "@jolo/protocol";
 import { createRelay } from "./relay.mjs";
 import { installBrowserHost } from "./browser-host.mjs";
 import { createBrowserAgent } from "./browser-agent.mjs";
+import { createBrowserOpener } from './browser-opener.mjs';
 import { createAttention } from "./attention.mjs";
 import { newestSourceTime } from "./staleness.mjs";
 import { createEngineUpdates } from "./engine-updates.mjs";
@@ -38,9 +39,9 @@ const log = {
 /** Methods the renderer may invoke through the bridge; everything else fails closed. */
 const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "session.create", "session.list", "session.page",
-  "session.rename", "session.archive", "session.delete", "session.setAgent",
+  "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
-  "settings.get", "settings.update", "credential.set", "credential.status",
+  "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
   'account.status', 'account.login', 'account.cancel', 'account.logout',
   'task.list', 'task.get',
   "permission.resolve", "run.resume", "workspace.diff", "patch.revert", "board.list", "board.tasks", "board.viewed",
@@ -55,6 +56,7 @@ class EngineBridge {
   constructor({ window }) {
     this.window = window;
     this.agent = null; // browser agent, attached after construction
+    this.browserOpener = null;
     this.attention = null; // notifications and the dock badge, attached after construction
     this.overlayActive = false;
     this.paths = resolvePaths({ home: process.env.JOLO_HOME, profile: process.env.JOLO_PROFILE });
@@ -84,17 +86,20 @@ class EngineBridge {
         // pending batches here loses events already counted by the socket cursor,
         // so reconnect replay cannot recover them (often the final reply).
         this.agent?.onDisconnected();
+        this.browserOpener?.onDisconnected();
         this.notify({ connected: false });
       });
       client.onReconnect(async () => {
         this.notify({ connected: true });
         void this.attention?.refresh();
         await this.agent?.onConnected();
+        await this.browserOpener?.onConnected();
       });
       client.onNotification("terminal.output", (params) => this.relay.push("terminal", params));
       client.onNotification("terminal.state", (params) => this.relay.push("event", { engineBootId: "local", eventSeq: "0", sessionId: null, runId: null, type: "terminal.state", payload: params, at: new Date().toISOString() }));
       client.onNotification("browser.execute", (params) => void this.agent?.handleExecute(params));
-      client.onNotification("browser.cancel", (params) => this.agent?.handleCancel(params));
+      client.onNotification('browser.open', params => this.browserOpener?.handleOpen(params));
+      client.onNotification("browser.cancel", (params) => { this.agent?.handleCancel(params); this.browserOpener?.handleCancel(params); });
       const status = await client.call("engine.status", {});
       const after = this.lastSeq === "0" ? status.cursor : this.lastSeq; // first attach: live only; reconnect: replay from the last seen cursor
       await client.subscribe({ after }, {
@@ -104,6 +109,7 @@ class EngineBridge {
       this.notify({ connected: true, started, status });
       void this.attention?.refresh();
       await this.agent?.onConnected();
+      await this.browserOpener?.onConnected();
       return client;
     })().finally(() => { this.connecting = null; });
     return this.connecting;
@@ -125,6 +131,7 @@ class EngineBridge {
     if (!checked.ok) return { ok: false, error: { code: checked.error.code, message: checked.error.message } };
     try {
       const client = await this.connect();
+      if (method === 'run.start' || method === 'run.resume') await this.browserOpener?.beforeRun();
       const result = await client.call(method, checked.value);
       return { ok: true, result };
     } catch (error) {
@@ -175,13 +182,19 @@ function createWindow() {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch { /* ignore */ }
     return { action: "deny" };
   });
-  window.webContents.on("will-navigate", (event) => event.preventDefault()); // the app renderer never navigates (§5.2)
+  window.webContents.on('will-navigate', (event, url) => {
+    // The startup retry button may reload this exact application document.
+    // All other renderer navigation stays blocked (§5.2).
+    if (url !== window.webContents.getURL()) event.preventDefault();
+  });
   return window;
 }
 
 function registerIpc(window, bridge) {
   // A closing renderer can still deliver IPC after the window is gone; never dereference a destroyed window.
   const trusted = (event) => !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+  ipcMain.on('jolo:browserWorkspaces', (event, params) => { if (trusted(event)) bridge.browserOpener?.setWorkspaces(params); });
+  ipcMain.on('jolo:browserOpened', (event, params) => { if (trusted(event)) bridge.browserOpener?.acknowledge(params); });
   ipcMain.handle("jolo:taskMenu", (event, options) => {
     const opts = typeof options === "boolean" ? { archived: options } : options;
     if (!trusted(event) || !opts || typeof opts.archived !== "boolean") throw new Error("untrusted task menu request");
@@ -253,8 +266,11 @@ app.whenReady().then(async () => {
   window.once("closed", () => nativeTheme.removeListener("updated", updateIcon));
   const bridge = new EngineBridge({ window });
   registerIpc(window, bridge);
-  const agent = createBrowserAgent({ bridge, log, isOverlayActive: () => bridge.overlayActive });
+  const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive: () => bridge.overlayActive });
   bridge.agent = agent;
+  bridge.browserOpener = createBrowserOpener({ bridge, agent, log, isOverlayActive: () => bridge.overlayActive,
+    send: (channel, params) => { if (!window.isDestroyed()) window.webContents.send(channel, params); },
+  });
   bridge.attention = createAttention({ bridge, window, log, smoke: SMOKE });
   if (!PACKAGED_LAYOUT && !SMOKE) {
     const updates = createEngineUpdates({ roots: STALENESS_ROOTS, newestSourceTime, client: () => bridge.client, log,

@@ -33,11 +33,11 @@ async function boot() {
   const allLines = () => Array.from({ length: screen.buffer.active.length }, (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? "");
   const lines = () => allLines().slice(screen.buffer.active.baseY);
   const text = () => lines().join("\n");
-  const selected = () => lines().filter((line) => /^(?:│|▎) › /.test(line)).at(-1) ?? "";
+  const selected = () => lines().filter((line) => /^(?:│ › |▎❯ )/.test(line)).at(-1) ?? "";
   const type = (text) => child.terminal.write(text);
   const seen = (value) => waitFor(() => text().includes(value), { label: value, timeoutMs: 15000 });
   const select = async (label) => {
-    for (let n = 0; n < 12; n++) {
+    for (let n = 0; n < 32; n++) {
       if (selected().startsWith(`│ › ${label}`)) return;
       const before = selected(); type(DOWN);
       await waitFor(() => selected() !== before, { label: `move to ${label}` });
@@ -50,7 +50,7 @@ async function boot() {
     await waitFor(() => selected().includes(`${label}  ${secret ? "••••••••" : value || "agent default"}`), { label: `typed ${label}` });
     type(ENTER); await seen("Enter edit/save");
   };
-  const prompt = async (value) => { type(value); await seen(`› ${value}`); type(ENTER); };
+  const prompt = async (value) => { type(value); await seen(`❯ ${value}`); type(ENTER); };
   const ready = () => seen("· /model · /sessions");
   return { home, repo, engine, client, project, screen, child, text, selected, type, seen, select, edit, prompt, ready, output: () => output, allLines,
     async close() {
@@ -65,7 +65,7 @@ test("/model configures the shared provider and hosted models without sending co
   const t = await boot();
   try {
     await t.ready();
-    await t.prompt("/model openai"); await t.seen("Models / Jolo provider");
+    await t.prompt("/model openai"); await t.seen("Models / OpenAI");
     await t.edit("Model", "test-model");
     await t.edit("Context tokens", "64000");
     await t.edit("Max output tokens", "4000");
@@ -73,7 +73,7 @@ test("/model configures the shared provider and hosted models without sending co
     expect(t.output()).not.toContain("sk-terminal-secret-test");
     await t.select("Save"); t.type(ENTER); await t.seen("Model configuration saved");
     const settings = (await t.client.call("settings.get", {})).settings;
-    expect(settings.provider).toMatchObject({ model: "test-model", contextWindowTokens: 64000, maxOutputTokens: 4000 });
+    expect(settings.model).toMatchObject({ model: "test-model", contextWindowTokens: 64000, maxOutputTokens: 4000 });
     expect(JSON.stringify(settings)).not.toContain("sk-terminal-secret-test");
     expect((await t.client.call("credential.status", { provider: "openai" })).source).toBe("session");
     expect((await t.client.call("session.list", { projectId: t.project.projectId })).sessions).toHaveLength(0);
@@ -81,7 +81,7 @@ test("/model configures the shared provider and hosted models without sending co
     await t.prompt("/model jolo"); await t.seen("Models / Jolo provider");
     await t.edit("Model", "discard-this-model");
     t.type(ESC); await t.seen("Choose the agent for your prompts"); t.type(ESC); await t.ready();
-    expect((await t.client.call("settings.get", {})).settings.provider.model).toBe("test-model");
+    expect((await t.client.call("settings.get", {})).settings.model.model).toBe("test-model");
     t.type(UP); await new Promise((resolve) => setTimeout(resolve, 80));
     expect(t.selected()).not.toContain("/model");
 
@@ -117,7 +117,7 @@ test("/model switches agents and models in place, preserving the chat and carryi
     expect(await savedSessions()).toHaveLength(1);
     expect((await savedSessions())[0]).toMatchObject({ id: original.id, agentId: "claude", title: "before switching" });
     expect(t.allLines().filter((line) => line.includes("done: before switching"))).toHaveLength(1); // No remount or transcript replay.
-    t.type(UP); await t.seen("› before switching"); t.type(DOWN); await t.seen("Ask Jolo anything");
+    t.type(UP); await t.seen("❯ before switching"); t.type(DOWN); await t.seen("Ask Jolo anything");
     await t.prompt("model?"); await t.seen("Running fable at high.");
     const claude = (await savedSessions()).find((session) => session.agentId === "claude");
     expect(claude.id).toBe(original.id);

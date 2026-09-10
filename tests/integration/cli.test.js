@@ -23,6 +23,19 @@ async function jolo(args, { home, env = {} } = {}) {
 }
 
 describe("headless cli", () => {
+  test('model commands list presets, preserve nested IDs, and allow one-run overrides', async () => {
+    const home = tempHome(); homes.push(home);
+    const env = { JOLO_CREDENTIALS: 'session' };
+    const listed = await jolo(['provider', 'list', '--json'], { home, env });
+    expect(listed.code).toBe(0); expect(JSON.parse(listed.stdout).presets.map(p => p.id)).toContain('anthropic');
+    const found = await jolo(['model', 'list', 'fake', '--json'], { home, env });
+    expect(JSON.parse(found.stdout).models[0].id).toBe('fake');
+    const set = await jolo(['model', 'set', 'openrouter/vendor/model', '--effort', 'high', '--json'], { home, env });
+    expect(set.code).toBe(0); expect(JSON.parse(set.stdout).model).toMatchObject({ preset: 'openrouter', model: 'vendor/model', effort: 'high', contextWindowTokens: null });
+    const run = await jolo(['run', '--model', 'fake/fake', 'one run override', '--path', home, '--json'], { home, env });
+    expect(run.code).toBe(0); expect(JSON.parse((await jolo(['provider', 'show', '--json'], { home, env })).stdout).model.model).toBe('vendor/model');
+  });
+
   test("run --json emits JSON Lines only on stdout and exits 0 on completion", async () => {
     const home = tempHome();
     homes.push(home);
@@ -71,8 +84,9 @@ describe("headless cli", () => {
     expect(JSON.parse((await jolo(["provider", "show", "--json"], { home, env })).stdout).provider).toBeNull();
     const set = await jolo(["provider", "set", "openai", "--model", "test-model", "--context-window", "200000", "--max-output", "4000", "--base-url", "http://127.0.0.1:1", "--json"], { home, env });
     expect(set.code).toBe(0);
-    expect(JSON.parse(set.stdout).provider).toMatchObject({ name: "openai", model: "test-model", baseUrl: "http://127.0.0.1:1" });
-    expect((await jolo(["provider", "set", "openai", "--model", "x"], { home, env })).code).toBe(2);
+    expect(JSON.parse(set.stdout).model).toMatchObject({ preset: "openai", model: "test-model" });
+    expect(JSON.parse(set.stdout).providers.openai.baseUrl).toBe('http://127.0.0.1:1');
+    expect((await jolo(["provider", "set", "openai", "--model", "x"], { home, env })).code).toBe(0);
     const status = JSON.parse((await jolo(["auth", "status", "openai", "--json"], { home, env })).stdout);
     expect(status).toMatchObject({ available: true, source: "environment" });
     const proc = Bun.spawn([process.execPath, CLI_ENTRY, "auth", "set", "openai", "--home", home], { env: { ...process.env, ...env, JOLO_IDLE_MS: "1500" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -84,10 +98,10 @@ describe("headless cli", () => {
     expect(JSON.parse((await jolo(["auth", "status", "openai", "--json"], { home, env })).stdout).source).toBe("session");
     const back = await jolo(["provider", "set", "fake"], { home, env });
     expect(back.code).toBe(0);
-    expect(JSON.parse((await jolo(["provider", "show", "--json"], { home, env })).stdout).provider).toBeNull();
+    expect(JSON.parse((await jolo(["provider", "show", "--json"], { home, env })).stdout).model).toBeNull();
     const run = await jolo(["run", "still works", "--path", home], { home, env });
     expect(run.code).toBe(0);
-    expect(run.stderr).toContain("no provider configured");
+    expect(run.stderr).toContain("completed");
   });
 
   test("attach replays committed text for a finished run and usage errors exit 2", async () => {

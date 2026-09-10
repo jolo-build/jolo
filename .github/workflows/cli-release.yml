@@ -1,0 +1,90 @@
+name: CLI builds and releases
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: CLI / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, target: darwin-arm64 }
+          - { runner: macos-15-intel, target: darwin-x64 }
+          - { runner: ubuntu-24.04, target: linux-x64 }
+          - { runner: ubuntu-24.04-arm, target: linux-arm64 }
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - name: Validate version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bun scripts/ci-release.js check-tag
+      - run: bun install --frozen-lockfile
+      - run: bun run setup:tgrep
+      - name: Check installer and release routing
+        run: bun test tests/integration/installer.test.js tests/unit/ci-release.test.js tests/unit/release-assets.test.js tests/unit/release-routing.test.js
+      - name: Build native CLI archive
+        run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          bun run build:cli
+      - name: Install and run the built CLI without development tools on PATH
+        run: bun scripts/smoke-install.js --dist dist
+      - name: Prepare checked release assets
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: bun scripts/ci-release.js prepare dist release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish complete GitHub release
+    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify all platforms, upload to a draft, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bun scripts/ci-release.js publish release-assets

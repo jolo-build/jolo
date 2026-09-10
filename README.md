@@ -28,7 +28,11 @@ bun run jolo
 bun run desktop
 ```
 
-In Jolo, use `/model` to choose an installed coding agent or configure an API provider. Hosted agents must already be installed and authenticated separately. Until a provider or hosted agent is selected, the fake provider produces demo responses.
+In Jolo, use `/model` to choose an installed coding agent or configure an API provider. Hosted agents must already be installed and authenticated separately. The demo provider is available only in development mode; release builds require a configured model provider or an installed coding agent.
+
+In the desktop board and sidebar, each folder is a workspace and each task is a chat. Expand a workspace to list its tasks, click a task to open its conversation, or choose **New task** in that workspace. The board uses the full window; the workspace sidebar returns when you open a chat. Archived tasks stay grouped by folder in the sidebar’s **Archive** tab.
+
+Drag a task from the sidebar or board onto a chat to open it in a split pane. Move toward the left, right, top, or bottom to preview its placement; dropping in the center opens it on the right. Existing chats and drafts stay in place, and the divider resizes the panes.
 
 Open a project or start a headless run:
 
@@ -41,9 +45,13 @@ bun run jolo run --agent claude "Explain this repository" --path /path/to/projec
 For the direct API provider, configure a model and enter its API key interactively:
 
 ```sh
-bun run jolo provider set openai --model <model-name> --context-window <tokens> --max-output <tokens>
+bun run jolo provider list
 bun run jolo auth set openai
+bun run jolo model list openai
+bun run jolo model set openai/<model-id>
 ```
+
+Models can be selected per task in **Settings → Models**, or overridden for one command with `jolo run --model <preset>/<model>`. OpenAI Responses, chat completions, Anthropic Messages, and Gemini are supported without vendor SDKs. Token limits are discovered where reported, with optional overrides.
 
 See the [CLI guide](apps/cli/README.md) for commands, profiles, installation, and removal. The engine starts automatically and may outlive a client; finish active work before stopping it.
 

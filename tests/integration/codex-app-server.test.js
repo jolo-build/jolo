@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
+import { checkHostedBrowser } from './browser-agent-check.js';
 
 const engines = [];
 const homes = [];
@@ -12,6 +13,10 @@ afterEach(async () => {
 
 const FAKE = path.join(ROOT, "tests", "fixtures", "fake-codex.js");
 const TERMINAL = ["completed", "failed", "cancelled", "interrupted"];
+
+test('Codex controls the inline browser on first and resumed turns with Jolo guidance', async () => {
+  await checkHostedBrowser(await boot());
+}, 30_000);
 
 /** A profile whose "codex" is the app-server fixture, so nothing here reaches the real CLI or its account. */
 async function boot({ clientKind = "test" } = {}) {
@@ -44,6 +49,43 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Codex through its app-server", () => {
+  test('Codex omits browser MCP when no desktop can open this workspace', async () => {
+    const { client, events, runTo, messagesOf, text } = await boot();
+    try {
+      const run = await runTo('req_browser_headless', 'browser-check');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
+      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+    } finally { await client.close(); }
+  });
+  test('hosted Codex opens its closed workspace browser through MCP and receives image content', async () => {
+    const { client, engine, project, runTo, messagesOf, text, events } = await boot();
+    const host = await engine.connect({ clientKind: 'desktop' });
+    const received = [];
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    host.onNotification('browser.execute', async params => {
+      received.push(params);
+      await host.call('browser.result', { invocationId: params.invocationId, status: 'ok', result: { snapshotId: 'snapshot', nodes: [{ ref: 'e2', role: 'textbox' }] },
+        ...(params.operation === 'screenshot' ? { screenshot: { base64: png, width: 1, height: 1, mimeType: 'image/png' } } : {}) });
+    });
+    host.onNotification('browser.open', async params => {
+      const { capabilityId } = await host.call('browser.register', { workspaceId: project.workspaceId, tabId: 'hosted-tab', navigationRevision: 0, operations: ['snapshot', 'fill', 'screenshot'] });
+      await host.call('browser.openResult', { invocationId: params.invocationId, capabilityId });
+    });
+    await host.call('browser.setOpener', { workspaceIds: [project.workspaceId] });
+    try {
+      const run = await runTo('req_browser', 'browser-check');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser controlled; screenshot received as an image');
+      const toolText = await text((await messagesOf(run.id)).find(message => message.kind === 'tool'));
+      expect(toolText).toContain('"artifactId"');
+      expect(toolText).not.toContain(png);
+      expect(received.map(call => call.operation)).toEqual(['snapshot', 'fill', 'screenshot']);
+      expect(received[1].arguments).toMatchObject({ ref: 'e2', text: 'hosted browser input', tabId: 'hosted-tab' });
+      expect(events.filter(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_')).map(event => event.payload.status)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok']);
+    } finally { await host.close(); await client.close(); }
+  }, 25_000);
+
   test("yielded commands keep streaming after the deadline; foreground and resumed waits stay bounded", async () => {
     const { client, events, session, messagesOf, text } = await boot();
     await client.call("settings.update", { budgets: { toolDeadlineMs: 1000, maxActiveMs: 30_000 } });

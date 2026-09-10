@@ -31,7 +31,7 @@ export function projectAX(nodes, options) {
     }
     const parent = byId.get(node.parentId);
     if (r === "StaticText" && parent && !parent.ignored && visibleChildren(parent).length === 1 && name(parent) === name(node) && name(node)) return;
-    const ref = `e${snapshot.nodes.length + 1}`;
+    const ref = `e${(options.referenceStart ?? 0) + snapshot.nodes.length + 1}`;
     const output = { ref, ...(parentRef ? { parentRef } : {}), role: r, name: name(node).slice(0, 200) };
     const states = {};
     for (const property of node.properties ?? []) if (STATE_PROPERTIES.has(property.name)) states[property.name] = property.value?.value;

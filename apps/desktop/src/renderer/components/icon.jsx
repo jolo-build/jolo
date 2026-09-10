@@ -1,5 +1,6 @@
 // Small, static icon set. No icon runtime or font is loaded by the renderer.
 const paths = {
+  chat: 'M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z',
   sidebar: 'M3 4h18v16H3ZM9 4v16',
   splitRight: 'M3 4h18v16H3ZM12 4v16', splitBelow: 'M3 4h18v16H3ZM3 12h18',
   maximize: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5', restore: 'M8 3v5H3M16 3v5h5M21 16h-5v5M3 16h5v5',

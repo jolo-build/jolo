@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { app, BrowserWindow, nativeTheme } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { once } from 'node:events';
+import { checkLoading } from './browser-loading.mjs';
 
 app.setPath('userData', process.env.JOLO_ACCESS_TEST_HOME);
 let phase = 'starting Electron';
@@ -13,6 +14,8 @@ async function checkForms() {
   window = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'jolo-access-browser-smoke' } });
   const contents = window.webContents;
   contents.setBackgroundThrottling(false);
+  phase = 'checking initial asset loading';
+  await checkLoading(window, origin);
   const text = () => contents.executeJavaScript('document.body.textContent');
   const settle = () => contents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   const fit = async (label, controls = []) => {

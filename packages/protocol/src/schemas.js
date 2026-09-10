@@ -1,6 +1,8 @@
 // Runtime schemas are the source of truth for the wire contract.
 // Both Bun (engine/CLI) and Electron main validate with these; JSDoc only documents shapes.
 import { z } from "zod";
+import { PresetId, ModelRefSchema, ProviderOverridesSchema, ProviderEntrySchema, ProviderModelsSchema } from './models.js';
+export * from './models.js';
 import { IMAGE_LIMITS, IMAGE_MIME_TYPES } from './attachments.js';
 
 export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 1 });
@@ -53,6 +55,7 @@ export const PauseReasonSchema = z.enum(PAUSE_REASONS);
  */
 export const UsageSchema = z.object({
   inputTokens: z.number().int().nonnegative().default(0),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().default(0),
   attempts: z.number().int().nonnegative().default(0),
   iterations: z.number().int().nonnegative().default(0),
@@ -72,6 +75,7 @@ export const RunNoteSchema = z.object({
  * `agentId` is the catalog id of a guest agent, or "jolo" for Jolo's own loop (§6.5, §6.6).
  */
 export const RunExecutionSchema = z.object({
+  preset: PresetId.nullable().optional(),
   agentId: Id.nullable().default(null),
   model: z.string().max(200).nullable().default(null),
   effort: z.string().max(40).nullable().default(null),
@@ -118,6 +122,7 @@ export const RunSchema = z.object({
 });
 
 export const SessionSchema = z.object({
+  model: ModelRefSchema.nullable().default(null),
   id: Id,
   projectId: Id,
   workspaceId: Id,
@@ -181,7 +186,7 @@ export const ResponseSchema = z.union([
 
 export const NotificationSchema = z.object({
   jsonrpc: z.literal("2.0"),
-  method: z.enum(["event", "preview", "browser.execute", "browser.cancel", "terminal.output", "terminal.state"]),
+  method: z.enum(["event", "preview", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
   params: z.record(z.string(), z.unknown()),
 });
 
@@ -450,7 +455,7 @@ export const EventPayloadSchemas = Object.freeze({
   "run.verification": z.object({ status: z.enum(["passed", "failed", "not_run", "interrupted", "stale"]), checks: z.array(z.object({ invocationId: Id, argv: z.array(z.string()), exitCode: z.number().int().nullable(), signal: z.string().nullable(), at: IsoTimestamp })) }),
   "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative() }),
   "run.usage": UsageSchema,
-  "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
+  "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), preset: PresetId.optional(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
   "tool.started": z.object({ invocationId: Id, callId: z.string(), name: z.string(), argumentDigest: z.string(), preview: z.string().max(200) }),
   "tool.completed": z.object({ invocationId: Id, callId: z.string(), name: z.string(), status: z.enum(["ok", "error", "timeout", "denied", "cancelled"]), durationMs: z.number().int().nonnegative(), resultBytes: z.number().int().nonnegative(), truncated: z.boolean(), resultArtifactId: Id.optional(), errorCode: z.string().optional() }),
   "grant.created": z.object({ grantId: Id, scope: z.string(), workspaceId: Id.optional() }),
@@ -512,7 +517,7 @@ export const MethodSchemas = {
   "engine.reload": { params: z.object({}), result: z.object({ stopping: z.literal(true) }) },
   "project.open": {
     params: z.object({ path: z.string().min(1).max(4096) }),
-    result: z.object({ projectId: Id, workspaceId: Id, rootPath: z.string(), mode: z.enum(["direct", "worktree"]), preferredMode: z.enum(["direct", "worktree"]).default("direct") }),
+    result: z.object({ projectId: Id, workspaceId: Id, rootPath: z.string(), mode: z.enum(["direct", "worktree"]), preferredMode: z.enum(["direct", "worktree"]).default("direct"), standalone: z.boolean().default(false) }),
   },
   "workspace.create": {
     params: z.object({ projectId: Id, mode: z.literal("worktree").default("worktree"), branch: z.string().trim().min(1).max(120).optional(), base: z.string().trim().min(1).max(120).optional(), title: z.string().max(200).default("") }),
@@ -530,6 +535,10 @@ export const MethodSchemas = {
     params: z.object({ workspaceId: Id, force: z.boolean().default(false) }),
     result: z.object({ workspaceId: Id, branch: z.string().nullable(), path: z.string() }),
   },
+  'chat.create': {
+    params: z.object({ title: z.string().max(200).default(''), agentId: Id.optional() }),
+    result: z.object({ session: SessionSchema, rootPath: z.string() }),
+  },
   "session.create": {
     params: z.object({ projectId: Id, workspaceId: Id, title: z.string().max(200).default(""), agentId: Id.optional() }),
     result: z.object({ session: SessionSchema, cursor: DecimalString }),
@@ -540,6 +549,10 @@ export const MethodSchemas = {
   },
   "session.rename": {
     params: z.object({ sessionId: Id, title: z.string().trim().min(1).max(200), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
+  "session.setModel": {
+    params: z.object({ sessionId: Id, model: ModelRefSchema.nullable(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
   "session.setAgent": {
@@ -604,7 +617,7 @@ export const MethodSchemas = {
 
 // ---- Browser host (§5.3, §11.3): the host registers an ephemeral capability; the engine dispatches admitted operations.
 
-export const BROWSER_OPERATIONS = Object.freeze(["navigate", "snapshot", "click", "type", "screenshot", "network"]);
+export const BROWSER_OPERATIONS = Object.freeze(["navigate", "snapshot", "click", "type", "screenshot", "network", "fill", "press", "scroll", "hover", "select", "history"]);
 
 export const BrowserExecuteSchema = z.object({
   invocationId: Id,
@@ -617,8 +630,19 @@ export const BrowserExecuteSchema = z.object({
 });
 
 export const BrowserCancelSchema = z.object({ invocationId: Id, reason: z.string().max(200) });
+export const BrowserOpenSchema = z.object({ invocationId: Id, workspaceId: Id, leaseMs: z.number().int().positive().max(30_000) });
+export const BrowserOpenerSchema = z.object({ workspaceIds: z.array(Id).max(64) });
 
 Object.assign(MethodSchemas, {
+  'browser.call': {
+    params: z.object({ workspaceId: Id, name: z.enum(['browser_open', 'browser_tabs', ...BROWSER_OPERATIONS.map(operation => `browser_${operation}`)]), arguments: z.record(z.string(), z.unknown()).default({}) }),
+    result: z.object({ content: z.array(z.union([z.object({ type: z.literal('text'), text: z.string() }), z.object({ type: z.literal('image'), data: z.string().max(1_400_000), mimeType: z.literal('image/png') })])), structuredContent: z.record(z.string(), z.unknown()).optional(), isError: z.boolean() }),
+  },
+  'browser.setOpener': { params: BrowserOpenerSchema, result: z.object({ registered: z.boolean() }) },
+  'browser.openResult': {
+    params: z.object({ invocationId: Id, capabilityId: Id.optional(), error: z.string().max(1000).optional(), errorCode: z.literal('browser_busy').optional() }),
+    result: z.object({ accepted: z.boolean() }),
+  },
   "browser.register": {
     params: z.object({ workspaceId: Id, tabId: z.string().min(1).max(64), navigationRevision: z.number().int().nonnegative(), url: z.string().max(2048).optional(), title: z.string().max(500).optional(), operations: z.array(z.enum(BROWSER_OPERATIONS)).min(1) }),
     result: z.object({ capabilityId: Id, grantId: Id }),
@@ -643,6 +667,7 @@ Object.assign(MethodSchemas, {
 
 
 export const PROVIDER_NAMES = Object.freeze(["fake", "openai"]);
+export const DEMO_PROVIDER_SETTINGS = Object.freeze({ name: "fake", model: "fake", contextWindowTokens: 128_000, maxOutputTokens: 4_096 });
 
 export const ProviderSettingsSchema = z.object({
   name: z.enum(PROVIDER_NAMES),
@@ -660,13 +685,17 @@ export const BudgetSettingsSchema = z.object({
 });
 
 export const SettingsSchema = z.object({
+  model: ModelRefSchema.nullable().default(null),
+  providers: ProviderOverridesSchema.default({}),
   provider: ProviderSettingsSchema.nullable(),
+  /** Read-only engine capability; older engines do not advertise demo support. */
+  demoProviderEnabled: z.boolean().default(false),
   budgets: BudgetSettingsSchema,
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
 });
 
-const CredentialProvider = z.enum(["openai"]);
+const CredentialProvider = PresetId;
 
 export const AccountIdentitySchema = z.object({ id: Id, name: z.string().min(1).max(500), email: z.string().min(1).max(500) });
 export const AccountDeviceSchema = z.object({ id: Id, name: z.string().min(1).max(500), expiresAt: IsoTimestamp, scopes: z.array(z.enum(['account:read', 'tasks:read'])).default(['account:read']) });
@@ -721,11 +750,15 @@ Object.assign(MethodSchemas, {
     params: z.object({ workspaceId: Id }),
     result: z.object({ files: z.array(z.object({ path: z.string(), newPath: z.string().optional(), op: z.enum(['create', 'replace', 'delete', 'rename']), revision: z.string() })), source: z.enum(['git', 'none']), truncated: z.boolean() }),
   },
+  "provider.presets": { params: z.object({}), result: z.object({ presets: z.array(ProviderEntrySchema).max(100) }) },
+  "provider.models": { params: z.object({ preset: PresetId, refresh: z.boolean().default(false) }), result: ProviderModelsSchema },
   "settings.get": { params: z.object({}), result: z.object({ settings: SettingsSchema }) },
   "settings.update": {
     // agents is a patch: an entry merges into that agent's settings, and null forgets the agent entirely.
     params: z.object({
       provider: ProviderSettingsSchema.nullable().optional(),
+      model: ModelRefSchema.nullable().optional(),
+      providers: ProviderOverridesSchema.optional(),
       budgets: BudgetSettingsSchema.partial().optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
     }),
@@ -756,10 +789,13 @@ const BoardRunSchema = z.object({
 });
 
 export const BoardRowSchema = z.object({
+  standalone: z.boolean().default(false),
   projectId: Id,
   rootPath: z.string(),
   name: z.string(),
   workspaceId: Id,
+  taskCount: z.number().int().nonnegative().optional(),
+  working: z.boolean().optional(),
   workspace: z.object({ id: Id, mode: z.enum(["direct", "worktree"]), branch: z.string().nullable(), path: z.string() }),
   lastViewedAt: IsoTimestamp.nullable(),
   attention: z.enum(BOARD_ATTENTION),
@@ -777,6 +813,7 @@ export const BoardRowSchema = z.object({
 
 /** One open task, wherever it lives: what a task list spanning every project shows for it (§5.1). */
 export const BoardTaskSchema = z.object({
+  standalone: z.boolean().default(false),
   sessionId: Id,
   title: z.string().max(200),
   agentId: Id.nullable(),
@@ -796,8 +833,8 @@ export const BoardTaskSchema = z.object({
 Object.assign(MethodSchemas, {
   "board.list": { params: z.object({}), result: z.object({ projects: z.array(BoardRowSchema), generatedAt: IsoTimestamp }) },
   "board.tasks": {
-    params: z.object({ limit: z.number().int().min(1).max(500).default(200) }),
-    result: z.object({ tasks: z.array(BoardTaskSchema), generatedAt: IsoTimestamp }),
+    params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
+    result: z.object({ tasks: z.array(BoardTaskSchema), generatedAt: IsoTimestamp, hasMore: z.boolean().optional(), nextCursor: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).nullable().optional() }),
   },
   "board.viewed": { params: z.object({ workspaceId: Id }), result: z.object({ projectId: Id, workspaceId: Id, lastViewedAt: IsoTimestamp }) },
   "agent.catalog": { params: z.object({}), result: z.object({ agents: z.array(AgentCatalogEntrySchema) }) },

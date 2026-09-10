@@ -31,8 +31,17 @@ async function scriptedHost(engine, workspaceId, behaviour) {
       default: return reply({ status: "error", error: { code: "unsupported", message: params.operation } });
     }
   });
-  const { capabilityId } = await client.call("browser.register", { workspaceId, tabId: "tab_1", navigationRevision, url: "about:blank", title: "", operations: ["navigate", "snapshot", "click", "type", "screenshot", "network"] });
-  return { client, received, capabilityId };
+  let capabilityId;
+  const register = async () => { ({ capabilityId } = await client.call("browser.register", { workspaceId, tabId: "tab_1", navigationRevision, url: "about:blank", title: "", operations: ["navigate", "snapshot", "click", "type", "screenshot", "network"] })); };
+  if (behaviour === 'closed') {
+    client.onNotification('browser.open', async params => {
+      received.push({ operation: 'open' });
+      await register();
+      await client.call('browser.openResult', { invocationId: params.invocationId, capabilityId });
+    });
+    await client.call('browser.setOpener', { workspaceIds: [workspaceId] });
+  } else await register();
+  return { client, received, get capabilityId() { return capabilityId; } };
 }
 
 async function setup({ script, behaviour = "ok", withHost = true }) {
@@ -53,6 +62,18 @@ async function setup({ script, behaviour = "ok", withHost = true }) {
 }
 
 describe("agent browser control through the engine broker", () => {
+  test('a chat tool opens a closed pane before navigation and inspection', async () => {
+    const { host, run, events } = await setup({ behaviour: 'closed', script: [
+      { toolCalls: [{ name: 'browser_open', arguments: {} }] },
+      { toolCalls: [{ name: 'browser_navigate', arguments: { url: 'https://www.google.com/search?q=iphone+13+pro+max' } }] },
+      { toolCalls: [{ name: 'browser_snapshot', arguments: {} }] },
+      { text: ['Opened the search in the inline browser.'] },
+    ] });
+    expect(run.state).toBe('completed');
+    expect(host.received.map(call => call.operation)).toEqual(['open', 'navigate', 'snapshot']);
+    expect(events.filter(event => event.type === 'tool.completed').map(event => event.payload.status)).toEqual(['ok', 'ok', 'ok']);
+    await host.client.close();
+  });
   test("dispatches admitted operations to the registered host and stores results and screenshots", async () => {
     const script = [
       { toolCalls: [{ name: "browser_navigate", arguments: { url: "http://fixture/" } }, { name: "browser_snapshot", arguments: {} }] },

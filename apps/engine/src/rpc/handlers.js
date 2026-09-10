@@ -1,6 +1,8 @@
 import { requireInteractive } from "./authorization.js";
+import { browserCallHandler } from '../browser/rpc.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
-import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import path from 'node:path';
 import { resolveWorkspacePath, WorkspacePathError } from "../tools/paths.js";
 import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
 import { revertPatchPath } from "../workspaces/revert.js";
@@ -9,7 +11,7 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 
-export function createRpcHandlers({ storage, settingsService, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   const editSession = ({ sessionId, expectedRevision, title, state, deleted = false }) => storage.transaction(() => {
     const session = storage.getSession(sessionId);
     if (!session) throw new ProtocolError("not_found", "task no longer exists");
@@ -23,6 +25,7 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
   let activeSearches = 0;
   let inFlight = 0, reloading = false;
   const handlers = {
+    'browser.call': browserCallHandler({ storage, runs, dispatcher, settingsService }),
     'workspace.search': async ({ workspaceId, ...args }, conn) => {
       const workspace = storage.getWorkspace(workspaceId);
       if (!workspace || workspace.removedAt) throw new ProtocolError('not_found', 'unknown workspace');
@@ -71,7 +74,7 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
         const { grant, created } = permissions.grantInspect(workspace.id); // user selected the project (§10.1)
         if (created) storage.appendEvent({ type: "grant.created", payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
         const preferredMode = storage.getProjectPreferences(project.id).workspaceMode === "worktree" ? "worktree" : "direct";
-        return { projectId: project.id, workspaceId: workspace.id, rootPath: root, mode: "direct", preferredMode };
+        return { projectId: project.id, workspaceId: workspace.id, rootPath: root, mode: "direct", preferredMode, standalone: storage.getProjectPreferences(project.id).standalone === true };
       });
     },
     "settings.get": () => ({ settings: settingsService.get() }),
@@ -82,7 +85,14 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
     'account.cancel': (_params, conn) => { requireInteractive(conn); return account.cancel(); },
     'account.logout': (_params, conn) => { requireInteractive(conn); return account.logout(); },
     "settings.update": (params) => ({ settings: settingsService.update(params) }),
-    "credential.set": async ({ provider, value }) => ({ provider, stored: await credentials.set(provider, value) }),
+    "provider.presets": () => providerFactory.presets(),
+    "provider.models": ({ preset, refresh }) => providerFactory.models(preset, { refresh }),
+    "credential.set": async ({ provider, value }) => {
+      providerFactory?.catalog.get(provider);
+      const stored = await credentials.set(provider, value);
+      providerFactory?.directory.clear();
+      return { provider, stored };
+    },
     "credential.status": async ({ provider }) => credentials.status(provider),
     "workspace.create": async (params) => ({ workspace: await worktrees.create(params) }),
     "workspace.list": ({ projectId }) => {
@@ -92,6 +102,26 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
     "workspace.remove": (params, conn) => {
       requireInteractive(conn, "only an interactive client can remove a worktree");
       return worktrees.remove(params);
+    },
+    // Hosted coding agents still require a cwd. Each standalone chat gets its own
+    // private working directory, never the user's last selected repository.
+    'chat.create': ({ title, agentId }) => {
+      if (agentId && agents.catalog.get(agentId).transport === 'pty') throw new ProtocolError('invalid_params', 'Choose an agent that supports chat');
+      const directory = path.join(paths.dataDir, 'chats');
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const root = realpathSync(mkdtempSync(path.join(directory, 'chat-')));
+      try {
+        return storage.transaction(() => {
+          const project = storage.upsertProject({ identity: root, rootPath: root });
+          storage.setProjectPreferences(project.id, { standalone: true });
+          const workspace = storage.ensureDirectWorkspace(project.id, root);
+          const { grant, created } = permissions.grantInspect(workspace.id);
+          if (created) storage.appendEvent({ type: 'grant.created', payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
+          const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title, agentId: agentId ?? null });
+          storage.appendEvent({ sessionId: session.id, type: 'session.created', payload: { session } });
+          return { session, rootPath: root };
+        });
+      } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
     },
     "session.create": ({ projectId, workspaceId, title, agentId }) => storage.transaction(() => {
       const workspace = storage.getWorkspace(workspaceId);
@@ -108,6 +138,15 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
     }),
     "session.list": (params) => ({ sessions: storage.listSessions(params) }),
     "session.rename": (params) => editSession(params),
+    "session.setModel": ({ sessionId, model, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError('not_found', 'task no longer exists');
+      if (session.revision !== expectedRevision) throw new ProtocolError('conflict', 'task changed; refresh and try again');
+      if (model) providerFactory.catalog.get(model.preset);
+      const updated = storage.setSessionModel(sessionId, model);
+      storage.appendEvent({ sessionId, type: 'session.updated', payload: { session: updated } });
+      return { session: updated };
+    }),
     "session.setAgent": ({ sessionId, agentId, expectedRevision }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", "task no longer exists");
@@ -140,7 +179,7 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
       params = { ...params, taskReferences: resolved.references };
       // "@codex …" at the start of a message calls that agent into this conversation for one turn (§6.5).
       const session = storage.getSession(params.sessionId);
-      const named = params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
+      const named = params.execution?.preset ? { agentId: SELF_MENTION } : params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
       if (!named) return runs.start(params);
       if (named.agentId !== SELF_MENTION) {
         const manifest = agents.catalog.get(named.agentId); // throws when a client names an agent that is gone
@@ -161,9 +200,17 @@ export function createRpcHandlers({ storage, settingsService, agentModels, crede
       const { buffer, eof } = storage.readArtifact(artifact, offset, length, artifact.committedBytes);
       return { artifactId, offset, bytes: buffer.length, text: buffer.toString(encoding === "base64" ? "base64" : "utf8"), committedBytes: artifact.committedBytes, eof, kind: artifact.kind };
     },
+    'browser.setOpener': ({ workspaceIds }, conn) => {
+      requireInteractive(conn);
+      const liveIds = workspaceIds.filter(id => { const workspace = storage.getWorkspace(id); return workspace && !workspace.removedAt; });
+      return browser.setOpener(conn, liveIds);
+    },
+    'browser.openResult': (params, conn) => browser.openResult(conn, params),
     "browser.register": (params, conn) => storage.transaction(() => {
-      if (!storage.getWorkspace(params.workspaceId)) throw new ProtocolError("not_found", "unknown workspace");
-      const { grant, created } = permissions.grantBrowse(params.workspaceId); // the user attached the browser (§5.3)
+      requireInteractive(conn);
+      const workspace = storage.getWorkspace(params.workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      const { grant, created } = permissions.grantBrowse(params.workspaceId); // attached from the Browser button or a chat browser_open request
       if (created) storage.appendEvent({ type: "grant.created", payload: { grantId: grant.id, scope: grant.scope, workspaceId: params.workspaceId } });
       const capability = browser.register(conn, params, grant.id);
       return { capabilityId: capability.capabilityId, grantId: grant.id };

@@ -1,5 +1,6 @@
 // Automated desktop smoke run: real engine, fake provider, scripted renderer, screenshot, exit code.
 import electronPath from "electron";
+import { mockProvider } from "../../../tests/fixtures/mock-providers.js";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,15 @@ const splits = process.argv.includes("--splits");
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
+const workspaceBoard = process.argv.includes('--board');
+if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
+if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
+if (process.argv.includes('--history')) process.env.JOLO_HISTORY_SMOKE = '1';
+const browserChat = process.argv.includes('--browser-chat');
+const realBrowserAgent = process.argv.includes('--real-browser-agent') ? process.argv[process.argv.indexOf('--real-browser-agent') + 1] : null;
+if (realBrowserAgent && !['codex', 'claude', 'grok'].includes(realBrowserAgent)) throw new Error('--real-browser-agent requires codex, claude, or grok');
+if (realBrowserAgent) process.env.JOLO_REAL_BROWSER_AGENT = realBrowserAgent;
+if (browserChat) process.env.JOLO_BROWSER_CHAT_SMOKE = '1';
 if (process.argv.includes('--attachments')) process.env.JOLO_ATTACHMENTS_SMOKE = '1';
 const home = mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "jolo-desktop-smoke-"));
 const project = path.join(home, "repo");
@@ -43,11 +53,27 @@ writeFileSync(path.join(agentsDir, "fixture.json"), JSON.stringify({
   id: "fixture", displayName: "Fixture Agent", description: "smoke double", binary: fixtureAgent, statusModel: "screen", idleMs: 800,
   rules: [{ id: "asks", state: "needs_input", priority: 1000, region: "bottom", regionLines: 6, contains: "(y/n)" }],
 }));
+// Explicit opt-in: use the installed agent and its existing login against a disposable local page.
+if (realBrowserAgent) {
+  const binary = Bun.which(realBrowserAgent);
+  if (!binary) throw new Error(`${realBrowserAgent} is not installed`);
+  writeFileSync(path.join(agentsDir, `${realBrowserAgent}.json`), JSON.stringify({ id: realBrowserAgent, displayName: realBrowserAgent, binary,
+    transport: realBrowserAgent === 'codex' ? 'codex-app-server' : realBrowserAgent === 'claude' ? 'claude-stream' : 'acp',
+    ...(realBrowserAgent === 'grok' ? { args: ['--permission-mode', 'default', 'agent', 'stdio'] } : {}) }));
+}
 
+const modelFixture = mockProvider('openai-responses');
+const providerDir = path.join(home, 'data', 'default', 'providers');
+mkdirSync(providerDir, { recursive: true });
+writeFileSync(path.join(providerDir, 'smoke-model.json'), JSON.stringify({ id: 'smoke-model', displayName: 'Smoke Model', protocol: 'openai-responses', baseUrl: modelFixture.baseUrl, auth: { kind: 'none' }, listing: 'openai', defaults: { contextWindowTokens: 64000, maxOutputTokens: 4096 } }));
 const results = path.join(root, "smoke-results");
 mkdirSync(results, { recursive: true });
+const browserFixture = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response("<!doctype html><title>Jolo smoke page</title><h1>Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>", { headers: { 'content-type': 'text/html' } }) });
+process.env.JOLO_SMOKE_BROWSER_URL = browserFixture.url.href;
 const script = [
   { text: ["step 0\n", "done: smoke test prompt\n\n```md\n# Plan\n\n- **first** step\n```\n\n```mermaid\nflowchart LR\n  A[Read] --> B{Valid?}\n  B -->|yes| C[\"Save\\nto disk\"]\n  B -->|no| D[Reject]\n```\n\n```mermaid\nsequenceDiagram\n  participant U as User\n  participant J as Jolo\n  U->>J: run task\n  J-->>U: needs you\n  loop retry\n    U->>J: again\n  end\n```\n\n```python\n# GitHub search helper\nimport requests\n\nclass GitHubSearcher:\n    def search(self, query):\n        url = \"https://api.github.com\"\n        return requests.get(url, params={\"q\": query})\n```\n"] },
+  { toolCalls: [{ name: 'browser_open', arguments: {} }] },
+  { toolCalls: [{ name: 'browser_navigate', arguments: { url: browserFixture.url.href } }] },
   { toolCalls: [{ name: "browser_snapshot", arguments: {} }] },
   { toolCalls: [{ name: "browser_click", arguments: { ref: "e3" } }, { name: "browser_screenshot", arguments: {} }] },
   { toolCalls: [{ name: "browser_network", arguments: { maxEntries: 20 } }] },
@@ -58,7 +84,7 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const scriptPath = path.join(home, "script.json");
-writeFileSync(scriptPath, JSON.stringify(liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
+writeFileSync(scriptPath, JSON.stringify(workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
 if (appIndex !== -1 && !process.argv[appIndex + 1]) throw new Error("--app requires the packaged desktop executable path");
 const command = appIndex === -1 ? [electronPath, path.join(root, "src/main/index.mjs")] : [path.resolve(process.argv[appIndex + 1])];
@@ -94,6 +120,8 @@ const child = Bun.spawn(command, {
   env: { ...process.env, JOLO_BUN: process.execPath, JOLO_HOME: home, JOLO_DESKTOP_SMOKE: "1", JOLO_TASKS_SMOKE: tasks ? "1" : "", JOLO_LOADING_SMOKE: loading ? "1" : "", JOLO_LIVE_RESULTS_SMOKE: liveResults ? "1" : "", JOLO_SPLIT_SMOKE: splits ? "1" : "", JOLO_SMOKE_PROJECT: project, JOLO_SMOKE_RESULTS: results, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: splits ? "600" : "3", JOLO_FAKE_DELAY_MS: splits ? "1" : "20", JOLO_FAKE_SCRIPT: splits ? "" : scriptPath },
 });
 const code = await child.exited;
+browserFixture.stop(true);
+modelFixture.stop();
 taskServer?.stop(true);
 if (code === 0) console.log(readFileSync(path.join(results, "smoke.json"), "utf8"));
 process.exit(code);

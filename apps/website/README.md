@@ -36,10 +36,10 @@ The preview is at `http://127.0.0.1:4173`. Both servers bind to localhost. The b
 
 ## Content and distribution
 
-The site presents the early macOS Apple Silicon CLI release and identifies desktop and Linux downloads as work in progress. Release origin/version come from [cli-releases.json](../../deploy/cli-releases.json). The public installer is served at `/install.sh` from [scripts/install.sh](../../scripts/install.sh).
+The original macOS Apple Silicon release remains in [cli-releases.json](../../deploy/cli-releases.json). New CLI releases are built for macOS and Linux on ARM64 and x64 by GitHub Actions. The public installer is served at `/install.sh` from [scripts/install.sh](../../scripts/install.sh); the Worker discovers the latest complete stable GitHub release and redirects new versioned downloads to its assets. Vite's local preview serves static assets only; use the Worker tests or Wrangler to exercise dynamic release routing.
 
 The visual direction is black-and-white terminal-inspired minimalism. Keep status colors neutral, controls accessible, and examples clearly illustrative. Font licensing notes are in [assets/fonts](../../assets/fonts/README.md).
 
 ## Deployment
 
-The site uses Cloudflare Static Assets with a Worker entrypoint that streams large archives from ordered parts. It has no user-account backend, database, analytics, or signup form. See [deploy](../../deploy/README.md) for release preparation, dry runs, publishing, and domain configuration.
+The site uses Cloudflare Static Assets with a Worker that handles `/releases/*` before static assets, discovers GitHub releases, and streams original large archives from ordered parts. It has no user-account backend, database, analytics, or signup form. See [deploy](../../deploy/README.md) for GitHub Actions publishing, the Cloudflare secrets needed for automatic website deployment, dry runs, and domain configuration.

@@ -5,6 +5,20 @@ import { Conversation } from './conversation.jsx';
 const reasoning = (overrides = {}) => ({ id: 'thinking', role: 'assistant', kind: 'reasoning', text: '', status: 'complete', renderedBytes: 0, committedBytes: 0, ...overrides });
 const render = (...messages) => renderToStaticMarkup(<Conversation projection={{ ordered: () => messages, runs: new Map() }} hasProject changesCount={0} />);
 
+test('saved history exposes a load action, progress, and retryable errors', () => {
+  const history = { hasOlder: true, loading: false };
+  const markup = () => renderToStaticMarkup(<Conversation history={history} hasProject changesCount={0} />);
+  expect(markup()).toContain('Load earlier messages');
+  history.loading = true;
+  expect(markup()).toContain('Loading earlier messages…');
+  expect(markup()).toContain('disabled');
+  history.loading = false;
+  history.error = 'offline';
+  expect(markup()).toContain('Try again.');
+  history.hasOlder = false;
+  expect(markup()).not.toContain('Load earlier messages');
+});
+
 describe('conversation activity', () => {
   const agents = [
     { id: 'codex', displayName: 'Codex', model: 'codex-model' },

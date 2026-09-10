@@ -1,6 +1,7 @@
 import { subscribePaneEvents } from "./engine-events.js";
 import { requestId as createRequestId, TERMINAL } from "@jolo/client/run-state";
 import { sessionForSend, queuedExecution } from "./session-send.js";
+import { SessionHistory } from './session-history.js';
 import { uploadImages } from './image-attachments.js';
 // Renderer state: everything crosses the narrow bridge; the shared projection keeps text bounded (§4.1, §5.1).
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
@@ -10,7 +11,7 @@ import { PendingPermissions } from "./pending-permissions.js";
 import { useWorkingChanges } from './use-working-changes.js';
 
 const WORKSPACE_EVENTS = new Set(["workspace.created", "workspace.removed"]);
-export function useEngine({ restoreLastProject = false, initialProject = null, visible = true, watchChanges = false } = {}) {
+export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, visible = true, watchChanges = false } = {}) {
   const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog } = useEngineConnection();
   const [agents, setAgents] = useState([]);
   const visibleRef = useRef(visible);
@@ -34,23 +35,30 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
   }, []);
   useEffect(() => () => clearTimeout(paintTimer.current), []);
   const projection = useRef(null);
+  const history = useRef(null);
   const sessionRef = useRef(null);
   const draftSession = useRef({ id: null });
   const projectRef = useRef(null);
+  const workspaceRef = useRef(null);
   const historyRef = useRef("open");
   const listRequest = useRef(0);
   const projectRequest = useRef(0);
   const sessionsRef = useRef([]);
   const setSessions = (list) => { sessionsRef.current = list; setSessionsState(list); };
-  /** The workspace a task runs in: its session's worktree, or the project's main checkout. */
-  const currentWorkspaceId = () => sessionsRef.current.find((item) => item.id === sessionRef.current)?.workspaceId ?? projectRef.current?.workspaceId ?? null;
+  /** Keep the selected folder when a history switch temporarily clears its chat. */
+  const currentWorkspaceId = () => sessionsRef.current.find((item) => item.id === sessionRef.current)?.workspaceId ?? workspaceRef.current ?? projectRef.current?.workspaceId ?? null;
 
   const refreshSessions = useCallback(async (projectId) => {
     const id = projectId ?? projectRef.current?.projectId;
     if (!id) return [];
     const request = ++listRequest.current;
     const { sessions: list } = await call("session.list", { projectId: id, state: historyRef.current });
-    if (request === listRequest.current && id === projectRef.current?.projectId) setSessions(list);
+    if (request === listRequest.current && id === projectRef.current?.projectId) {
+      // A chat opened from a workspace's older pages may be outside this short
+      // sidebar page. Keep its identity and folder while it is selected.
+      const selected = sessionsRef.current.find(session => session.id === sessionRef.current);
+      setSessions(selected && !list.some(session => session.id === selected.id) ? [...list, selected] : list);
+    }
     return list;
   }, []);
 
@@ -105,6 +113,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
     const requests = new PendingPermissions();
     permissions.current = requests;
     setChanges([]);
+    history.current = null;
     if (!id) { projection.current = null; bump(); return; }
     const next = new SessionProjection({
       readArtifact: (artifactId, offset, length) => call("artifact.read", { artifactId, offset, length }),
@@ -112,8 +121,15 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
       onChange: redraw,
     });
     projection.current = next;
+    const older = new SessionHistory({ sessionId: id, projection: next, call, onChange: redraw,
+      isCurrent: () => sessionRef.current === id && projection.current === next });
+    history.current = older;
     const page = await call("session.page", { sessionId: id });
     if (sessionRef.current !== id || projection.current !== next) return;
+    workspaceRef.current = page.session.workspaceId;
+    setSessions(sessionsRef.current.some(session => session.id === id)
+      ? sessionsRef.current.map(session => session.id === id ? page.session : session)
+      : [...sessionsRef.current, page.session]);
     requests.seed(page.pendingPermissions ?? [], page.cursor);
     // An engine already running during a desktop update may predate snapshot permissions.
     if (page.pendingPermissions === undefined) {
@@ -127,6 +143,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
       }).catch(() => {});
     }
     next.seed(page);
+    older.seed(page);
     for (const message of page.messages) if (message.committedBytes > 0) void next.fill(message.id);
   }, [redraw]);
 
@@ -135,6 +152,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
     setError(null);
     const opened = await call("project.open", { path });
     if (request !== projectRequest.current) return opened;
+    workspaceRef.current = opened.workspaceId;
     await selectSession(null);
     projectRef.current = opened;
     historyRef.current = "open";
@@ -147,14 +165,26 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
     return opened;
   }, [refreshSessions, refreshWorkspaces, selectSession]);
 
-  /** New task in the main checkout, or in a fresh worktree when `options.worktree` names a branch and base (§9.1). */
+  const newChat = useCallback(async () => {
+    const { session, rootPath } = await call('chat.create', {});
+    await openProject(rootPath, { sessionId: session.id });
+    await refreshBoard();
+    return session;
+  }, [openProject, refreshBoard]);
+
+  /** New task in the selected folder, or a fresh worktree when requested (§9.1). */
   const newSession = useCallback(async (title = "", options = {}) => {
     const current = projectRef.current;
     if (!current) throw new Error("open a project first");
-    let workspaceId = options.workspaceId ?? current.workspaceId;
+    let workspaceId = options.workspaceId ?? currentWorkspaceId();
     if (options.worktree) {
       const { workspace } = await call("workspace.create", { projectId: current.projectId, ...(options.worktree.branch ? { branch: options.worktree.branch } : {}), ...(options.worktree.base ? { base: options.worktree.base } : {}), title });
       workspaceId = workspace.id;
+    } else if (!options.workspaceId && workspaceId !== current.workspaceId) {
+      // A removed worktree's conversation remains readable. Its New task
+      // action must use a live folder instead of trying to recreate that checkout.
+      const { workspaces } = await call('workspace.list', { projectId: current.projectId });
+      if (!workspaces.some(workspace => workspace.id === workspaceId)) workspaceId = current.workspaceId;
     }
     const { session } = await call("session.create", { projectId: current.projectId, workspaceId, title, ...(options.agentId ? { agentId: options.agentId } : {}) });
     historyRef.current = "open";
@@ -265,10 +295,15 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
   /** Jump from a board row into its project and task; the row's pending request opens as the dialog. */
   const openFromBoard = useCallback(async (row) => {
     const current = projectRef.current;
-    if (!current || current.projectId !== row.projectId) await openProject(row.rootPath);
+    if (!current || current.projectId !== row.projectId) await openProject(row.rootPath, { sessionId: row.session?.id ?? null });
+    if (historyRef.current !== (row.historyState ?? 'open')) await setHistory(row.historyState ?? 'open');
     if (row.session && sessionRef.current !== row.session.id) await selectSession(row.session.id);
     void markViewed(row.workspace?.id ?? row.workspaceId);
-  }, [openProject, selectSession, markViewed]);
+  }, [openProject, selectSession, markViewed, setHistory]);
+  const newFromBoard = useCallback(async (row) => {
+    if (projectRef.current?.projectId !== row.projectId) await openProject(row.rootPath, { sessionId: null });
+    return newSession('', { workspaceId: row.workspaceId });
+  }, [openProject, newSession]);
   const decideFromBoard = useCallback(async (row, decision) => {
     if (!row.pendingPermission) return;
     await call("permission.resolve", { permissionId: row.pendingPermission.permissionId, decision });
@@ -288,9 +323,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
     if (!path && restoreLastProject && !window.jolo.smoke) {
       try { path = localStorage.getItem("jolo.lastProject"); } catch { /* optional */ }
     }
-    if (path) void openProject(path, initialProject ? { sessionId: null } : {}).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
+    if (initialTask || path) void (initialTask ? openFromBoard(initialTask) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
     else setRestoringProject(false);
-  }, [engine.connected, initialProject, restoreLastProject, openProject]);
+  }, [engine.connected, initialProject, initialTask, restoreLastProject, openProject, openFromBoard]);
 
   const wasConnected = useRef(engine.connected);
   useEffect(() => {
@@ -318,6 +353,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
           if (WORKSPACE_EVENTS.has(item.value.type) && item.value.payload.projectId === projectRef.current?.projectId || (item.value.type === "workspace.created" && item.value.payload.workspace?.projectId === projectRef.current?.projectId)) workspacesChanged = true;
           if (item.value.sessionId === sessionRef.current && current) current.applyEvent(item.value);
           if (item.value.sessionId === sessionRef.current) {
+            if (item.value.type === 'session.updated') {
+              const session = item.value.payload.session;
+              setSessions(sessionsRef.current.map(existing => existing.id === session.id ? session : existing));
+            }
             if (item.value.type === "context.compacted") setRelayNote(`context compacted: ${item.value.payload.summarizedItems} earlier items summarized`);
             permissions.current.apply(item.value);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));
@@ -349,13 +388,14 @@ export function useEngine({ restoreLastProject = false, initialProject = null, v
     workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree,
     agents, agentCatalog, refreshAgents, refreshCatalog, startAgent, stopAgent,
     projection: projection.current,
+    history: history.current,
     activeRun: activeRun(),
     queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued') : [],
     usage: usageSummary(),
     pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
-    board, refreshBoard, markViewed, openFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
+    board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
     plans, refreshPlans,
-    openProject, selectSession, newSession, send, sendNow, removeQueued, cancel, refreshSettings, resolvePermission, resumeRun, loadDiff, loadFile, revertChange,
+    openProject, selectSession, newSession, newChat, send, sendNow, removeQueued, cancel, refreshSettings, resolvePermission, resumeRun, loadDiff, loadFile, revertChange,
     call,
   };
 }

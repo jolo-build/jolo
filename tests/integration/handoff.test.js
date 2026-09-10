@@ -68,7 +68,7 @@ describe("handing a conversation to another agent", () => {
     expect(guest.state).toBe("completed");
     expect(guest.execution).toMatchObject({ agentId: "codex" });
     const handed = await handedTo(guest);
-    expect(handed.startsWith("Fresh agent context: Conversation handed from Jolo to Codex.")).toBe(true);
+    expect(handed.startsWith("Fresh agent context: Conversation handed from Jolo (fake) to Codex.")).toBe(true);
     // The work log comes from the notes Jolo wrote when each run stopped: no model, no cost.
     expect(handed).toContain("Work so far, from Jolo's record of each run (oldest first):");
     expect(handed).toMatch(/1\. completed · step 0 step 1 step 2 done: write the parser/);

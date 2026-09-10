@@ -48,9 +48,12 @@ function transcript(items) {
   }).filter(Boolean).join("\n");
 }
 
+/** The summary needs little thought, but a model that runs without reasoning must not be asked for any. */
+export const compactionEffort = (effort) => (effort && !["none", "minimal", "low"].includes(effort) ? "low" : effort ?? undefined);
+
 /**
  * Run one compaction turn. Returns the new checkpoint and the items that remain provider-facing.
- * @param {{ storage: any, provider: any, capabilities: any, session: any, run: any, items: any[], fixedTokens: number, signal: AbortSignal, reason: string, log: any }} input
+ * @param {{ storage: any, provider: any, capabilities: any, session: any, run: any, items: any[], fixedTokens: number, signal: AbortSignal, reason: string, log: any, reasoningEffort?: string | null }} input
  */
 export async function compact(input) {
   const { storage, provider, capabilities, session, run, items, signal, reason, log } = input;
@@ -63,7 +66,7 @@ export async function compact(input) {
     sessionId: session.id, runId: run.id, purpose: "compaction",
     instructions: SUMMARY_INSTRUCTIONS,
     items: [{ kind: "user_message", groupId: "compaction", payload: { text: source } }],
-    tools: [], maxOutputTokens: Math.min(capabilities.maxOutputTokens, 4_096), reasoningEffort: "low",
+    tools: [], maxOutputTokens: Math.min(capabilities.maxOutputTokens, 4_096), reasoningEffort: compactionEffort(input.reasoningEffort),
   };
   const summary = await collectSummary(provider, request, signal, SUMMARY_MAX_BYTES);
 

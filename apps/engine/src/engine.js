@@ -13,6 +13,7 @@ import { AccountService } from './account/service.js';
 import { PermissionService } from "./permissions/service.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { ToolDispatcher, resolveToolEnvironment } from "./tools/dispatcher.js";
+import { createProviderCatalog } from './providers/presets.js';
 import { ProviderFactory } from "./providers/index.js";
 import { BrowserBroker } from "./browser/broker.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
@@ -31,6 +32,7 @@ import { createLifetime } from "./lifetime.js";
 import { createLogger } from "./log.js";
 import { TgrepService } from "./search/tgrep.js";
 import { searchMcpConfig } from "./search/hosted.js";
+import { createBrowserConfig } from './browser/hosted.js';
 
 export { OwnershipError, SchemaError } from "./storage/index.js";
 
@@ -61,7 +63,10 @@ export function createEngine(options) {
   let worktrees = null;
   let plans = null;
   let agents = null;
-  const agentName = () => settingsService?.get().provider?.name ?? "fake";
+  const agentName = () => {
+    const settings = settingsService?.get();
+    return settings?.model?.preset ?? settings?.provider?.name ?? (settings?.demoProviderEnabled ? "fake" : "unconfigured");
+  };
   let server = null;
   let endpoint = null;
   let runs = null;
@@ -75,8 +80,9 @@ export function createEngine(options) {
     storage = new Storage({ databasePath: paths.databasePath, artifactsDir: paths.artifactsDir, migrationsDir: options.migrationsDir ?? null, bootId });
     storage.maintain();
     log.info("database owned", { schema: storage.schema.version, applied: storage.schema.appliedNow });
-    settingsService = new SettingsService(storage);
-    credentials = new CredentialService({ log, env: options.env ?? process.env });
+    const providerCatalog = createProviderCatalog({ dir: path.join(paths.dataDir, 'providers'), log, env: options.env ?? process.env });
+    settingsService = new SettingsService(storage, { env: options.env ?? process.env, catalog: providerCatalog });
+    credentials = new CredentialService({ log, env: options.env ?? process.env, catalog: providerCatalog });
     account = new AccountService({ storage, paths, lifetime, env: options.env ?? process.env, fetchImpl: options.accountFetchImpl, secrets: options.accountSecrets });
     permissions = new PermissionService({ storage });
     const registry = new ToolRegistry();
@@ -93,7 +99,7 @@ export function createEngine(options) {
       const taken = await worktrees.reconcile(); // checkouts made but never handed over, before any client can list them (§14.1)
       if (taken.removed || taken.parked) log.info("reconciled worktrees from a previous boot", taken);
     } catch (error) { log.warn("could not reconcile worktrees from a previous boot", { error: String(error) }); }
-    const providerFactory = new ProviderFactory({ credentials, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
+    const providerFactory = new ProviderFactory({ credentials, catalog: providerCatalog, settings: settingsService, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
     const catalog = createCatalog({ dir: paths.agentsDir, env: toolEnv, shell: (options.env ?? process.env).JOLO_SHELL ?? (options.env ?? process.env).SHELL ?? null, settings: settingsService, log });
     agentModels = createModelDirectory({ catalog, supervisor, build, log });
     agents = new AgentService({ catalog, terminals, storage, log });
@@ -103,9 +109,13 @@ export function createEngine(options) {
       return searchMcpConfig(toolEnv.tgrep ? { ...paths, tokenPath: capabilityTokens.issue(run.id, workspace.id).tokenPath } : paths, workspace.id, Boolean(toolEnv.tgrep));
     };
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      searchConfig, providerFactory, settings: settingsService, native: jolo,
+      searchConfig, browserConfig: createBrowserConfig({ browser, paths, capabilityTokens }),
+      providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
-    runs = new RunService({ storage, executor, lifetime, log, workspaceBusy: id => worktrees.isBusy(id) });
+    runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
+      const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;
+      return !answerer || answerer === SELF_MENTION ? providerFactory.capture(session, execution) : null;
+    }, workspaceBusy: id => worktrees.isBusy(id) });
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
     // Plans are reconciled after runs, so a task whose run has just been called interrupted is seen as such.
@@ -113,7 +123,7 @@ export function createEngine(options) {
     const stopped = plans.reconcile();
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     endpoint.publish({ engineBootId: bootId, pid: process.pid, build, protocol: PROTOCOL_VERSION, schemaVersion: SCHEMA_VERSION, startedAt });
