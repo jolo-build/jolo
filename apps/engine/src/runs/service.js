@@ -84,18 +84,12 @@ export class RunService {
       this.checkWorkspace(session);
       const existing = this.storage.findRunByRequest(sessionId, requestId);
       if (existing) return { run: existing, deduplicated: true };
-      if (!session.title && this.storage.getProject?.(session.projectId)?.preferences?.standalone) {
-        const title = prompt.replace(/\s+/g, ' ').trim().slice(0, 80);
-        if (title) {
-          const updated = this.storage.updateSession(session.id, { title });
-          this.storage.appendEvent({ sessionId: session.id, type: 'session.updated', payload: { session: updated } });
-        }
-      }
       this.checkAdmission();
       if (expectedSessionRevision !== undefined && expectedSessionRevision !== session.revision) {
         throw new ProtocolError("conflict", `session revision is ${session.revision}, expected ${expectedSessionRevision}`, { revision: session.revision });
       }
       const images = validateAttachments(this.storage, sessionId, attachments);
+      this.storage.assignSessionTitle(sessionId, prompt);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });
       const providerConfig = this.captureProvider?.(session, execution);
       if (providerConfig) this.storage.setRunProviderConfig(run.id, providerConfig);

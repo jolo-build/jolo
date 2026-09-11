@@ -46,6 +46,22 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_PANELS_SMOKE === '1') {
+    const { runContextPanelsSmoke } = await import('./context-panels-smoke.js');
+    try {
+      await runContextPanelsSmoke({ window, bridge, fixtureUrl, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_RELOAD_SMOKE === '1') {
+    const { runReloadSmoke } = await import('./reload-smoke.js');
+    try {
+      await runReloadSmoke({ window, bridge, browserHost, project, fixtureUrl, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_REAL_BROWSER_AGENT) {
     const { runRealBrowserAgentSmoke } = await import('./browser-chat-smoke.js');
     try {
@@ -392,17 +408,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor('document.querySelector(".diff-line.add")?.textContent.includes("third")', "diff view returns", 10_000);
     report.checks.push("an edited markdown file previews as rendered markdown in the changes panel and switches back to its diff");
 
+    if (await evaluate("Boolean(document.querySelector('[id$=\"-agents-panel\"]')) || [...document.querySelectorAll('.context-tabs button')].some(button => button.textContent.trim().startsWith('Agents'))")) throw new Error('Removed Agents panel is still present');
     // A hosted third-party agent: Jolo starts it, observes it, and leaves the answering to the user (§4.3).
     const catalog = (await bridge.rawCall("agent.catalog", {})).agents;
     if (!catalog.find((entry) => entry.id === "fixture")?.available) throw new Error(`fixture agent missing from the catalog: ${JSON.stringify(catalog.map((entry) => entry.id))}`);
-    await evaluate("window.__joloSmoke.showAgents()");
-    await waitFor("Boolean(document.querySelector('.agent-chooser .agent-option'))", "agent chooser listed installed agents");
     const hosted = await evaluate("window.__joloSmoke.startAgent('fixture')");
     await waitFor(`window.__joloSmoke.agents().some((agent) => agent.terminalId === ${JSON.stringify(hosted.terminalId)} && agent.status === "needs_input" && agent.statusSource === "screen")`, "hosted agent asks for the user", 20_000);
-    await waitFor("document.querySelector('.agent-bar .chip.needs')?.textContent === 'Needs you'", "hosted agent status shown");
     await bridge.rawCall("terminal.input", { terminalId: hosted.terminalId, data: "y\n" });
     await waitFor(`window.__joloSmoke.agents().some((agent) => agent.terminalId === ${JSON.stringify(hosted.terminalId)} && agent.status === "done" && agent.statusSource === "process")`, "hosted agent finished", 20_000);
-    writeFileSync(path.join(results, "agents.png"), (await window.webContents.capturePage()).toPNG());
     await evaluate(`window.__joloSmoke.stopAgent(${JSON.stringify(hosted.terminalId)})`);
     await waitFor("window.__joloSmoke.agents().length === 0", "hosted agent cleared");
     report.checks.push("a third-party agent CLI ran inside the workspace, its request for the user was observed from its screen, and its exit was reported by the process");

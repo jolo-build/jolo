@@ -42,7 +42,7 @@ export async function runBoardSmoke({ window, bridge, project, results, evaluate
   await evaluate(`document.querySelector(${target}).click()`);
   await waitFor(`window.__joloSmoke.state().view === 'task' && window.__joloSmoke.state().sessionId === ${JSON.stringify(made[0].id)}`, 'clicked task opens the exact chat');
   await waitFor("document.querySelector('.header-task-title')?.textContent === 'Original discussion'", 'older task title survives the sidebar page limit');
-  if (!(await evaluate("Boolean(document.querySelector('.header [aria-label=Changes]')) && !document.querySelector('.status').hidden"))) throw new Error('task controls were not restored after leaving the board');
+  if (!(await evaluate("Boolean(document.querySelector('.header [aria-label=Panels]')) && !document.querySelector('.status').hidden"))) throw new Error('task controls were not restored after leaving the board');
   if ((await evaluate('window.__joloSmoke.state().workspaceId')) !== alpha.workspaceId) throw new Error('opened chat has the wrong folder');
   if (!(await evaluate("document.querySelector('.workspace-sidebar').getBoundingClientRect().width > 0"))) throw new Error('chat sidebar was not restored');
   await evaluate("document.querySelector('#archived-tasks-tab').click()");

@@ -2,6 +2,7 @@
 // direct navigation is called by the test: the scripted agent must do both.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { selectPanel, hidePanel } from './panel-controls.js';
 
 export async function runRealBrowserAgentSmoke({ window, bridge, browserHost, fixtureUrl, evaluate, waitFor, report, results, agentId }) {
   const state = await evaluate('window.__joloSmoke.state()');
@@ -48,6 +49,29 @@ export async function runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, eva
   if (!state.toolText.includes('"artifactId"') || !state.toolText.includes('browser_screenshot')) throw new Error('screenshot tool result missing');
   if (!state.toolText.includes('browser_network') || !state.toolText.includes(`"url":"${fixtureUrl}"`)) throw new Error(`network observation missing: ${state.toolText.slice(-600)}`);
   if (![...bridge.agent.hosts.values()].some(host => host.capabilityId)) throw new Error('browser host did not register');
+  guest.focus();
+  guest.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['control'] });
+  for (const deadline = Date.now() + 3000; guest.getZoomFactor() === 1 && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 30));
+  if (guest.getZoomFactor() <= 1) throw new Error('Keyboard zoom did not reach the browser');
+  guest.setZoomFactor(1);
+  await guest.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: -120, modifiers: 2 });
+  for (const deadline = Date.now() + 3000; guest.getZoomFactor() === 1 && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 30));
+  if (guest.getZoomFactor() <= 1) throw new Error('Wheel zoom did not reach the browser');
+  guest.setZoomFactor(1);
+  report.checks.push('Keyboard and real Ctrl-wheel input zoom the embedded page');
+  // Hiding a panel must not destroy/reload its Electron guest or page state.
+  const guestId = guest.id;
+  await guest.executeJavaScript("window.__preservedPage = 'still-here'");
+  await hidePanel(evaluate, waitFor);
+  await waitFor("document.querySelector('.inspector').hidden && !!document.querySelector('webview')", 'browser hidden without unmounting');
+  await selectPanel(evaluate, waitFor, 'Browser');
+  await waitFor("!document.querySelector('.inspector').hidden", 'browser shown again');
+  await selectPanel(evaluate, waitFor, 'Changes');
+  await waitFor("document.querySelector('.browser-host').hidden", 'browser hidden behind changes');
+  await selectPanel(evaluate, waitFor, 'Browser');
+  await waitFor("!document.querySelector('.browser-host').hidden", 'browser restored from changes');
+  if (guest.isDestroyed() || [...browserHost.guests.values()][0]?.guest.id !== guestId || await guest.executeJavaScript("window.__preservedPage") !== 'still-here') throw new Error('Hiding the browser destroyed or reloaded its page');
+  report.checks.push('Browser toggle and Changes preserve the same guest and in-page state');
   report.checks.push('Chat alone opened the closed inline browser, navigated, snapshotted, clicked a real element, and captured a screenshot through the engine broker');
 }
 

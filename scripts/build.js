@@ -96,6 +96,7 @@ if (!cliOnly) {
   const rendererBuild = Bun.spawnSync([process.execPath, path.join(ROOT, "apps/desktop/scripts/build.js")], { stdio: ["inherit", "inherit", "inherit"] });
   if (rendererBuild.exitCode !== 0) throw new Error("renderer build failed");
   cpSync(path.join(ROOT, "apps/desktop/dist"), path.join(app, "dist"), { recursive: true });
+  cpSync(path.join(ROOT, "apps/desktop/src/main/browser-zoom-preload.cjs"), path.join(app, "browser-zoom-preload.cjs"));
   cpSync(path.join(ROOT, "apps/desktop/src/preload/index.cjs"), path.join(app, "preload", "index.cjs"));
   cpSync(path.join(lib, "engine.js"), path.join(app, "engine", "engine.js"));
   cpSync(path.join(lib, "bun"), path.join(app, "engine", "bun"));

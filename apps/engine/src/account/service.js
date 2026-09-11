@@ -217,6 +217,7 @@ export class AccountService {
     if (response.status === 401) { await this.status({ refresh: true }); throw new ProtocolError('permission_denied', 'Your sign-in expired or was revoked. Sign in again.'); }
     if (response.status === 403) throw new ProtocolError('permission_denied', 'This device cannot read tasks. Approve task access in Settings → Account.');
     if (response.status === 404) throw new ProtocolError('not_found', 'The referenced task is unavailable or you no longer have access.');
+    if (response.status === 409) throw new ProtocolError('conflict', 'That ticket number exists in multiple workspaces. Choose it from the task picker or paste its full Access link.');
     if (response.status !== 200) throw new ProtocolError('unavailable', 'Could not load tasks from the account service. Try again.');
     return { value: response.value, origin, accountId, current: () => credential === this.credential && origin === this.origin && !this.stopped };
   }

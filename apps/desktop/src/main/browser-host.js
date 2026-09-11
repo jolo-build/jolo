@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import { installReloadShortcuts } from './reload-shortcuts.js';
 // Inline browser host: trusted webview attachment, guest policy, white canvas.
 // Agent control is attached by browser-agent.js; this host enforces guest policy.
 
@@ -22,6 +24,7 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
     delete webPreferences.preload;
     delete webPreferences.preloadURL;
     Object.assign(webPreferences, {
+      preload: fileURLToPath(new URL('./browser-zoom-preload.cjs', import.meta.url)),
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
       nodeIntegrationInWorker: false,
@@ -37,6 +40,26 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
   window.webContents.on("did-attach-webview", (_event, guest) => {
     const id = guest.id;
     guests.set(id, { guest });
+    installReloadShortcuts(guest, window.webContents);
+    // Let Chromium handle wheel/pinch input in this guest. Manual mode suppresses
+    // that native path and does not turn keyboard shortcuts into zoom requests.
+    guest.setZoomMode('isolated');
+    guest.setVisualZoomLevelLimits(1, 3).catch(error => {
+      log.warn('could not enable browser pinch zoom', { error: String(error) });
+    });
+    guest.on('ipc-message', (_event, channel, direction) => {
+      if (channel !== 'jolo:browser:wheel-zoom' || !['in', 'out'].includes(direction)) return;
+      const factor = guest.getZoomFactor() * (direction === 'in' ? 1.1 : 1 / 1.1);
+      guest.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
+    });
+    guest.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.alt || !(input.control || input.meta)) return;
+      const key = input.key;
+      if (!['+', '=', '-', '0'].includes(key)) return;
+      event.preventDefault();
+      const factor = key === '0' ? 1 : guest.getZoomFactor() * (key === '-' ? 1 / 1.2 : 1.2);
+      guest.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
+    });
     guest.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     guest.session.setPermissionCheckHandler(() => false);
     guest.setWindowOpenHandler(() => ({ action: "deny" }));

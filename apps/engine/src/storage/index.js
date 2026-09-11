@@ -52,6 +52,7 @@ export class Storage {
       getArtifact: this.db.query("SELECT * FROM artifacts WHERE id = ?1"),
       getMessage: this.db.query("SELECT * FROM messages WHERE id = ?1"),
     };
+    this.repairUntitledSessions();
     } catch (error) { try { this.artifacts?.closeAll(); } catch {} this.db.close(); throw error; }
   }
 
@@ -308,7 +309,8 @@ export class Storage {
   listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null } = {}) {
     const rows = this.db.query(`
       SELECT s.*, p.root_path AS project_root, COALESCE(json_extract(p.preferences, '$.standalone'), 0) AS standalone, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
-             r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note
+             r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note,
+             r.execution AS run_execution, COALESCE(json_extract(r.provider_config, '$.ref.model'), json_extract(r.provider_config, '$.model')) AS run_model
       FROM sessions s
       JOIN projects p ON p.id = s.project_id
       JOIN workspaces w ON w.id = s.workspace_id
@@ -326,7 +328,8 @@ export class Storage {
       projectRootPath: row.project_root,
       standalone: Boolean(row.standalone),
       workspace: { id: row.workspace_id, branch: row.workspace_branch ?? null, mode: row.workspace_mode, lastViewedAt: row.workspace_last_viewed_at ?? null },
-      run: row.run_id ? { id: row.run_id, sessionId: row.id, state: row.run_state, pauseReason: row.run_pause_reason ?? null, createdAt: row.run_created_at, updatedAt: row.run_updated_at, note: row.run_note ? JSON.parse(row.run_note) : null } : null,
+      run: row.run_id ? { id: row.run_id, sessionId: row.id, state: row.run_state, pauseReason: row.run_pause_reason ?? null, createdAt: row.run_created_at, updatedAt: row.run_updated_at, note: row.run_note ? JSON.parse(row.run_note) : null,
+        execution: row.run_execution ? JSON.parse(row.run_execution) : null, model: typeof row.run_model === 'string' ? row.run_model : null } : null,
     }));
   }
 
@@ -335,6 +338,24 @@ export class Storage {
     this.db.query("UPDATE sessions SET title = COALESCE(?2, title), state = COALESCE(?3, state), deleted_at = CASE WHEN ?4 THEN ?5 ELSE deleted_at END, updated_at = ?5, revision = revision + 1 WHERE id = ?1")
       .run(id, title ?? null, state ?? null, deleted ? 1 : 0, now());
     return this.getSession(id);
+  }
+
+  /** Name an empty task from its first prompt without changing its activity order. */
+  assignSessionTitle(id, prompt) {
+    const title = Array.from(prompt.replace(/\s+/g, ' ').trim()).slice(0, 80).join('');
+    if (!title) return;
+    const result = this.db.query("UPDATE sessions SET title = ?2, revision = revision + 1 WHERE id = ?1 AND TRIM(title) = '' AND deleted_at IS NULL").run(id, title);
+    if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
+  }
+
+  /** Older workspace tasks missed automatic naming; recover only genuinely empty names. */
+  repairUntitledSessions() {
+    const rows = this.db.query(`SELECT s.id, r.prompt FROM sessions s JOIN runs r ON r.id = (
+      SELECT id FROM runs WHERE session_id = s.id ORDER BY created_at, rowid LIMIT 1
+    ) WHERE TRIM(s.title) = '' AND s.deleted_at IS NULL`).all();
+    this.transaction(() => {
+      for (const row of rows) this.assignSessionTitle(row.id, row.prompt);
+    });
   }
 
   sessionHasUnfinishedRuns(id) {

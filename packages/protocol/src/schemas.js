@@ -716,8 +716,8 @@ export const TERMINAL_LIMITS = Object.freeze({ maxCols: 240, maxRows: 100, scrol
 const TerminalSchema = z.object({ terminalId: Id, workspaceId: Id, agentId: Id.nullable().optional(), cols: z.number().int(), rows: z.number().int(), state: z.enum(["running", "exited"]), exitCode: z.number().int().nullable(), keepAlive: z.boolean(), createdAt: IsoTimestamp });
 
 Object.assign(MethodSchemas, {
-  'task.list': { params: z.object({q:z.string().max(100).default(''),before:z.number().int().positive().optional()}), result:z.object({tasks:z.array(WebTaskSummarySchema.extend({url:z.string().url()})).max(20),next:z.number().int().positive().nullable()}) },
-  'task.get': { params: z.object({key:z.string().regex(/^JOLO-[1-9][0-9]{0,14}$/i)}), result:z.object({task:WebTaskSchema.extend({url:z.string().url()})}) },
+  'task.list': { params: z.object({team:z.union([z.literal('personal'),z.string().uuid()]).optional(),q:z.string().max(100).default(''),before:z.number().int().positive().optional()}), result:z.object({tasks:z.array(WebTaskSummarySchema.extend({url:z.string().url()})).max(20),next:z.number().int().positive().nullable()}) },
+  'task.get': { params: z.object({team:z.union([z.literal('personal'),z.string().uuid()]).optional(),key:z.string().regex(/^JOLO-[1-9][0-9]{0,14}$/i)}), result:z.object({task:WebTaskSchema.extend({url:z.string().url()})}) },
   'account.status': { params: z.object({ refresh: z.boolean().default(false) }), result: AccountStatusSchema },
   'account.login': { params: z.object({ tasks: z.boolean().optional(), origin: z.string().url().max(2048).optional(), deviceName: z.string().min(1).max(100).optional() }), result: AccountStatusSchema },
   'account.cancel': { params: z.object({}), result: AccountStatusSchema },
@@ -819,6 +819,7 @@ export const BoardTaskSchema = z.object({
   sessionId: Id,
   title: z.string().max(200),
   agentId: Id.nullable(),
+  answerer: z.object({ id: Id, displayName: z.string().nullable(), model: z.string().nullable() }).optional(),
   projectId: Id,
   projectName: z.string(),
   rootPath: z.string(),

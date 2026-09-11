@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ensureFontLoaded, stackFor } from "../fonts.js";
+import { Icon } from './icon.jsx';
 
 const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
@@ -14,9 +15,10 @@ const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0
  *   paneId?: string,
  *   attachTo?: string | null,
  *   onState?: (payload: any) => void,
+ *   onClose?: () => void,
  * }} props `onState` is for callers that track a hosted agent's status; the terminal itself needs no listener.
  */
-export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) {
+export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, onClose }) {
   const host = useRef(null);
   const term = useRef(null);
   const fit = useRef(null);
@@ -36,14 +38,19 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) 
     term.current = instance;
     fit.current = fitter;
     // xterm measures its cell size when it opens; a face that arrives later would leave a wrong grid behind.
-    const observer = new ResizeObserver(() => { try { fitter.fit(); } catch { /* not mounted */ } });
+    const fitVisible = () => {
+      // Switching context tabs hides the host; never resize its live shell to zero.
+      if (!host.current?.clientWidth || !host.current?.clientHeight) return;
+      try { fitter.fit(); } catch { /* not mounted */ }
+    };
+    const observer = new ResizeObserver(fitVisible);
     const opened = ensureFontLoaded("terminal").then(() => {
       if (disposed) return;
       instance.open(host.current);
-      fitter.fit();
+      fitVisible();
       observer.observe(host.current);
     });
-    const onFonts = () => { instance.options.fontFamily = stackFor("terminal"); void ensureFontLoaded("terminal").then(() => { try { fitter.fit(); } catch { /* not mounted */ } }); };
+    const onFonts = () => { instance.options.fontFamily = stackFor("terminal"); void ensureFontLoaded("terminal").then(fitVisible); };
     window.addEventListener("jolo:fonts", onFonts);
 
     const call = async (method, params) => { const r = await window.jolo.call(method, params); if (!r.ok) throw Object.assign(new Error(r.error.message), { code: r.error.code }); return r.result; };
@@ -117,7 +124,7 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) 
 
   return (
     <section className="terminal">
-      <div className="bar"><span>Terminal</span><span className="hint">{status}</span></div>
+      <div className="bar"><span>Terminal</span><span className="hint">{status}</span>{onClose && <button onClick={onClose} aria-label="Close terminal" title="Close terminal and its shell"><Icon name="close" size={13} /></button>}</div>
       <div className="xterm-host" ref={host} />
     </section>
   );

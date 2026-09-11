@@ -34,6 +34,26 @@ test('TypeScript migrations generate the original D1 filenames and SQL checksums
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('workspace numbering migrates existing tickets without changing IDs, comments, or ownership', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const {sql} of migrations.slice(0,6)) db.exec(sql);
+    for (const id of ['alice','bob']) db.query('INSERT INTO accounts(id,provider_key,email,name,created_at,updated_at) VALUES (?,?,?,?,1,1)').run(id,'github:'+id,id+'@example.com',id);
+    for (const id of ['one','two']) db.query('INSERT INTO teams(id,owner_id,name,created_at,updated_at) VALUES (?,\'alice\',?,1,1)').run(id,id);
+    const insert=db.query('INSERT INTO tasks(id,account_id,team_id,title,request_id,mutation_id,created_at,updated_at,archived_at) VALUES (?,?,?,?,?,?,1,1,?)');
+    for (const [id,account,team,archived] of [[1,'alice',null,null],[2,'alice',null,null],[3,'alice',null,null],[4,'bob',null,null],[5,'alice','one',null],[6,'bob','one',null],[7,'alice','two',null],[9,'bob',null,2]]) insert.run(id,account,team,'Task '+id,'req'+id,'mutation'+id,archived);
+    db.exec("INSERT INTO task_comments(task_id,author_id,body,request_id,created_at,updated_at) VALUES (4,'bob','Preserved comment','comment',1,1); INSERT INTO task_audit(account_id,actor_id,action,subject,at) VALUES ('bob','bob','task.created','JOLO-4',1)");
+    db.exec(migrations[6].sql);
+    expect(db.query('SELECT id,number FROM tasks ORDER BY id').all()).toEqual([{id:1,number:1},{id:2,number:2},{id:3,number:3},{id:4,number:1},{id:5,number:1},{id:6,number:2},{id:7,number:1},{id:9,number:2}]);
+    expect(db.query('SELECT task_id,body FROM task_comments').get()).toEqual({task_id:4,body:'Preserved comment'});
+    expect(db.query('SELECT subject FROM task_audit').get().subject).toBe('JOLO-1');
+    insert.run(10,'bob',null,'Next','req10','mutation10',null);
+    expect(db.query('SELECT number FROM tasks WHERE id=10').get().number).toBe(3);
+    expect(db.query('SELECT archived_at,account_id FROM tasks WHERE id=9').get()).toEqual({archived_at:2,account_id:'bob'});
+    expect(db.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { db.close(); }
+});
+
 test('Google migration preserves existing accounts, sessions, devices, teams and tasks', () => {
   const db = new Database(':memory:');
   try {

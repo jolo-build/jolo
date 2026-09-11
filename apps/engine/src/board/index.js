@@ -41,6 +41,16 @@ function attentionFor(run, workspace) {
   return { attention: seen ? "idle" : "done", reason: run.state };
 }
 
+// Prefer the answerer recorded for this run, including one-turn @agent overrides.
+// A later model-picker change must not relabel work that has already happened.
+function taskAnswerer({ session, run }) {
+  const handoff = session.agentState?._jolo;
+  const recorded = run && handoff?.lastRunId === run.id ? handoff.lastAnswerer : null;
+  const id = recorded?.id ?? (run?.execution?.preset || run?.model ? 'jolo' : run?.execution?.agentId ?? session.agentId ?? 'jolo');
+  return { id, displayName: recorded?.displayName ?? null,
+    model: recorded?.model ?? run?.model ?? run?.execution?.model ?? (!run && id === 'jolo' ? session.model?.model : null) ?? null };
+}
+
 /**
  * @param {{ storage: any, env: { git: string | null, path: string }, log: any }} deps
  */
@@ -142,6 +152,7 @@ export function createBoard({ storage, env, log }) {
           standalone: entry.standalone,
           title: entry.session.title,
           agentId: entry.session.agentId,
+          answerer: taskAnswerer(entry),
           projectId: entry.session.projectId,
           projectName: entry.standalone ? 'Chat' : path.basename(entry.projectRootPath) || entry.projectRootPath,
           rootPath: entry.projectRootPath,

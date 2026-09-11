@@ -1,3 +1,4 @@
+import { taskKeyOf, taskPath } from './identity.js';
 import { taskRepository } from './repository.js';
 import { commentRepository } from './comments.js';
 import { taskListPage, taskViewPage, taskFormPage, teamsPage, teamPage, labelsPage, taskErrorPage } from './pages.js';
@@ -18,7 +19,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
   async function selectedTeam(actor,id) { if (!id) return null; if(!uuid(id)) fail(404,'Workspace not found.'); return await repo.team(actor,id)??fail(404,'Workspace not found.'); }
   async function serialize(actor,row,description=true) {
     const labels=await repo.labels(actor,row.team_id), selected=JSON.parse(row.labels);
-    return {key:`JOLO-${row.id}`,title:row.title,...(description?{description:row.description}:{}),project:row.project,state:row.state,priority:row.priority,revision:row.revision,labels:labels.filter(l=>selected.includes(l.id)).map(({id,name,color})=>({id,name,color})),team:row.team_id?{id:row.team_id,name:row.team_name}:null,assigneeId:row.assignee_id,archivedAt:row.archived_at?new Date(row.archived_at).toISOString():null,createdAt:new Date(row.created_at).toISOString(),updatedAt:new Date(row.updated_at).toISOString()};
+    return {key:taskKeyOf(row),url:`${config.origin}${taskPath(row)}`,title:row.title,...(description?{description:row.description}:{}),project:row.project,state:row.state,priority:row.priority,revision:row.revision,labels:labels.filter(l=>selected.includes(l.id)).map(({id,name,color})=>({id,name,color})),team:row.team_id?{id:row.team_id,name:row.team_name}:null,assigneeId:row.assignee_id,archivedAt:row.archived_at?new Date(row.archived_at).toISOString():null,createdAt:new Date(row.created_at).toISOString(),updatedAt:new Date(row.updated_at).toISOString()};
   }
   function filters(url) {
     const p=url.searchParams, result={q:p.get('q')??'',state:p.get('state')??'',team:p.get('team')??'',label:p.get('label')??'',project:p.get('project')??'',archived:p.get('archived')==='1',before:p.has('before')?Number(p.get('before')):null};
@@ -26,11 +27,11 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
     return result;
   }
   async function taskForm(account,task,team,error=null,submitted=null) {
-    return taskFormPage({account,task,teams:await repo.teams(account.id),team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],error,submitted});
+    return taskFormPage({origin:config.origin,account,task,teams:await repo.teams(account.id),team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],error,submitted});
   }
   async function taskView(account,task,team,error=null,{before=null,draft=null}={}) {
     const history=await comments.list(account.id,task.id,before);
-    return taskViewPage({account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],...history,commentsBefore:before,commentDraft:draft,error});
+    return taskViewPage({origin:config.origin,account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],...history,commentsBefore:before,commentDraft:draft,error});
   }
   return async (request,context) => {
     const url=new URL(request.url),path=url.pathname,api=path==='/api/tasks'||path.startsWith('/api/tasks/');
@@ -75,16 +76,32 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           if(!uuid(fields.requestID)) fail(400,'Reopen the new-task form before submitting.');
           const result=await repo.createTask(actor,fields);
           if(!result) fail(403,'The task contains an assignee or label you cannot use, or your permission changed.');
-          return redirect(`/tasks/JOLO-${result.id}`);
+          return redirect(taskPath(result));
         } catch(error) {
           if(!(error instanceof TaskError)) throw error;
           return html(await taskForm(account,null,team,error.message,fields??formDraft(form)),error.status);
         }
       }
-      const commentMatch=/^\/tasks\/(JOLO-[1-9][0-9]{0,14})\/comments(?:\/([1-9][0-9]{0,14})\/(edit|delete))?$/i.exec(path);
+      const scoped=/^\/(?:api\/)?tasks\/(accounts|teams)\/([a-f0-9-]{36})\/(JOLO-[1-9][0-9]{0,14})(?=\/|$)/i.exec(path);
+      const routePath=scoped?path.replace(`/${scoped[1]}/${scoped[2]}/`, '/'):path;
+      const findTask=async key => {
+        const number=Number(key.slice(5));
+        if(scoped) {
+          if(!uuid(scoped[2])) return null;
+          return repo.scopedTask(actor,number,scoped[1].toLowerCase(),scoped[2]);
+        }
+        // Old web links retain their original row identity; new links always carry a workspace.
+        if(!api) return repo.task(actor,number);
+        const team=url.searchParams.get('team')??'';
+        if(team&&team!=='personal') await selectedTeam(actor,team);
+        const matches=await repo.taskNumber(actor,number,team);
+        if(matches.length>1) fail(409,`${key} exists in more than one workspace. Select a workspace or use the task's full link.`);
+        return matches[0]??null;
+      };
+      const commentMatch=/^\/tasks\/(JOLO-[1-9][0-9]{0,14})\/comments(?:\/([1-9][0-9]{0,14})\/(edit|delete))?$/i.exec(routePath);
       if(commentMatch&&request.method==='POST') {
         const key=taskKey(commentMatch[1]),id=commentMatch[2]?Number(commentMatch[2]):null,action=commentMatch[3]?.toLowerCase();
-        const task=key?await repo.task(actor,Number(key.slice(5))):null;
+        const task=key?await findTask(key):null;
         if(!task) fail(404,'Task not found.');
         if(!canCommentTask(task,actor)) fail(403,task.archived_at?'Restore this task before commenting.':'Your role allows reading comments only.');
         if(id) {
@@ -103,7 +120,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
             if(!result.deleted_at&&result.body!==body) fail(409,'This form already posted a different comment. Review the discussion before sending another.');
           }
           const before=action==='edit'?`?comments_before=${id+1}`:'';
-          return redirect(`/tasks/${key}${before}#${result.deleted_at?'comments':`comment-${result.id}`}`);
+          return redirect(`${taskPath(task)}${before}#${result.deleted_at?'comments':`comment-${result.id}`}`);
         } catch(error) {
           if(!(error instanceof TaskError)) throw error;
           const latest=await repo.task(actor,task.id);
@@ -113,15 +130,16 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           return html(await taskView(account,latest,await selectedTeam(actor,latest.team_id),error.message,{before:id?id+1:null,draft}),error.status);
         }
       }
-      const taskMatch=/^\/(?:api\/)?tasks\/(JOLO-[1-9][0-9]{0,14})(?:\/(edit|archive|restore))?$/i.exec(path);
+      const taskMatch=/^\/(?:api\/)?tasks\/(JOLO-[1-9][0-9]{0,14})(?:\/(edit|archive|restore))?$/i.exec(routePath);
       if(taskMatch) {
         const key=taskKey(taskMatch[1]),action=taskMatch[2]?.toLowerCase();
         if(!key) fail(404,'Task not found.');
-        const task=await repo.task(actor,Number(key.slice(5)));
+        const task=await findTask(key);
         if(!task) fail(404,'Task not found.');
         if(api) { if(task.archived_at||action) fail(404,'Task not found.'); return Response.json({task:await serialize(actor,task)}); }
         const team=await selectedTeam(actor,task.team_id);
         if(request.method==='GET') {
+          if(!scoped) return redirect(`${taskPath(task)}${action?'/'+action:''}${url.search}`);
           if(!action) {
             const before=url.searchParams.has('comments_before')?Number(url.searchParams.get('comments_before')):null;
             if(before!==null&&(!Number.isSafeInteger(before)||before<1)) fail(400,'Invalid comment page.');
@@ -129,7 +147,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           }
           if(action==='edit') {
             if(!canWriteTask(task,actor)) fail(403,'Your role does not allow editing this task.');
-            if(task.archived_at) return redirect(`/tasks/${key}`);
+            if(task.archived_at) return redirect(taskPath(task));
             return html(await taskForm(account,task,team));
           }
         }
@@ -144,7 +162,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
               if(fields.team!==task.team_id) fail(403,'A task cannot be moved between workspaces.');
               changed(await repo.updateTask(actor,task.id,fields,revision(form)));
             }
-            return redirect(`/tasks/${key}`);
+            return redirect(taskPath(task));
           } catch(error) {
             if(!(error instanceof TaskError)) throw error;
             const latest=await repo.task(actor,task.id);
