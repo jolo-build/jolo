@@ -405,7 +405,7 @@ export class Storage {
   // ---- artifacts and messages ----------------------------------------------------------------
 
   createArtifact({ sessionId, kind, extension = '' }) {
-    if (extension && !['.png', '.jpg', '.gif', '.webp'].includes(extension)) throw new Error('unsupported artifact extension');
+    if (extension && !['.png', '.jpg', '.gif', '.webp', '.txt'].includes(extension)) throw new Error('unsupported artifact extension');
     const id = newId("art");
     const storageKey = `${sessionId}/${id}${extension}`;
     this.db.query("INSERT INTO artifacts (id, session_id, kind, storage_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").run(id, sessionId, kind, storageKey, now());

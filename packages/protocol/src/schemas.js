@@ -88,7 +88,9 @@ export const ImageAttachmentSchema = z.object({
   mimeType: ImageMimeSchema,
   bytes: z.number().int().min(1).max(LIMITS.imageAttachmentBytes),
 });
-const ImageAttachmentsSchema = z.array(ImageAttachmentSchema).max(LIMITS.imageAttachments);
+export const TextAttachmentSchema = ImageAttachmentSchema.extend({ mimeType: z.literal('text/plain'), bytes: z.number().int().min(1).max(LIMITS.textAttachmentBytes) });
+export const AttachmentSchema = z.union([ImageAttachmentSchema, TextAttachmentSchema]);
+const ImageAttachmentsSchema = z.array(AttachmentSchema).max(LIMITS.imageAttachments + LIMITS.textAttachments);
 
 export const WebTaskSummarySchema = z.object({
   key: z.string().regex(/^JOLO-[1-9][0-9]{0,14}$/), title: z.string().min(1).max(200),
@@ -597,7 +599,7 @@ export const MethodSchemas = {
     result: z.object({ cursor: DecimalString, replayed: z.number().int().nonnegative() }),
   },
   "attachment.create": {
-    params: z.object({ sessionId: Id, mimeType: ImageMimeSchema }),
+    params: z.object({ sessionId: Id, mimeType: z.union([ImageMimeSchema, z.literal('text/plain')]) }),
     result: z.object({ artifactId: Id }),
   },
   "attachment.write": {

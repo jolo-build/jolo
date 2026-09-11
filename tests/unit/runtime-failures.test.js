@@ -5,6 +5,43 @@ import path from 'node:path';
 import { Storage } from '../../apps/engine/src/storage/index.js';
 import { RunService } from '../../apps/engine/src/runs/service.js';
 import { PermissionService } from '../../apps/engine/src/permissions/service.js';
+import { LIMITS } from '@jolo/protocol';
+
+test('large Unicode messages stream in bounded previews without losing bytes', async () => {
+  const f = fixture();
+  const text = 'x'.repeat(LIMITS.previewChunkBytes - 1) + '🙂漢字'.repeat(15000);
+  try {
+    const previews = [];
+    const s = service(f, async ctx => {
+      for (const role of ['user', 'assistant']) {
+        const id = ctx.startMessage(role, 'text');
+        ctx.appendText(id, text); ctx.finishMessage(id, 'complete');
+      }
+      return { outcome: 'completed' };
+    });
+    s.runs.previews.on('preview', preview => previews.push(preview));
+    const run = s.start();
+    const deadline = Date.now() + 2000;
+    while (f.storage.getRun(run.id).state !== 'completed') {
+      if (Date.now() > deadline) throw new Error('Large message did not finish');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    const messages = f.storage.listMessagesForSession(run.sessionId, { limit: 100 }).messages;
+    expect(messages).toHaveLength(2);
+    for (const message of messages) {
+      let offset = 0;
+      const chunks = previews.filter(preview => preview.messageId === message.id);
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.map(chunk => chunk.text).join('')).toBe(text);
+      for (const chunk of chunks) {
+        expect(chunk.byteOffset).toBe(offset);
+        expect(Buffer.byteLength(chunk.text)).toBeLessThanOrEqual(LIMITS.previewChunkBytes);
+        offset += Buffer.byteLength(chunk.text);
+      }
+      expect(f.storage.readArtifact(f.storage.getArtifact(message.artifactId), 0, offset).buffer.toString('utf8')).toBe(text);
+    }
+  } finally { f.close(); }
+});
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), 'jolo-failure-'));

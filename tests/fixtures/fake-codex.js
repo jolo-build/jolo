@@ -71,6 +71,20 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     end('completed');
     return;
   }
+  if (prompt === 'activity-groups') {
+    const first = item('commandExecution', { command: 'fixture-build', cwd, status: 'inProgress' });
+    const second = item('commandExecution', { command: 'fixture-check-results', cwd, status: 'inProgress' });
+    started(first);
+    say('The build is running. Checking the results.', 'commentary');
+    started(second);
+    await Bun.sleep(2500);
+    if (turn.interrupted) return;
+    completed({ ...first, status: 'completed', exitCode: 0 });
+    completed({ ...second, status: 'completed', exitCode: 0 });
+    say('Both checks finished.');
+    end('completed');
+    return;
+  }
   let match;
   if (prompt === 'browser-check') {
     if (!entry.developerInstructions?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');

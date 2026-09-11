@@ -369,15 +369,21 @@ export class RunService {
         const stream = streams.get(messageId);
         if (!stream) throw new Error(`unknown message stream ${messageId}`);
         const bytes = Buffer.from(text, "utf8");
-        if (bytes.length > LIMITS.previewChunkBytes) throw new ProtocolError("limit_exceeded", "preview chunk exceeds limit");
-        previews.emit("preview", { sessionId: run.sessionId, runId: run.id, messageId, byteOffset: stream.offset, text });
-        stream.offset += bytes.length;
-        stream.pending.push(bytes);
-        stream.pendingBytes += bytes.length;
-        if (stream.pendingBytes >= COMMIT_BYTES) flush(messageId);
-        else if (!stream.timer) stream.timer = setTimeout(() => {
-          try { flush(messageId); } catch (error) { streamError = error; rejectFailure(error); }
-        }, COMMIT_INTERVAL_MS);
+        for (let start = 0; start < bytes.length;) {
+          let end = Math.min(start + LIMITS.previewChunkBytes, bytes.length);
+          // Each wire preview must decode independently, including emoji and CJK.
+          while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+          const chunk = bytes.subarray(start, end);
+          previews.emit("preview", { sessionId: run.sessionId, runId: run.id, messageId, byteOffset: stream.offset, text: chunk.toString('utf8') });
+          stream.offset += chunk.length;
+          stream.pending.push(chunk);
+          stream.pendingBytes += chunk.length;
+          if (stream.pendingBytes >= COMMIT_BYTES) flush(messageId);
+          else if (!stream.timer) stream.timer = setTimeout(() => {
+            try { flush(messageId); } catch (error) { streamError = error; rejectFailure(error); }
+          }, COMMIT_INTERVAL_MS);
+          start = end;
+        }
       },
       finishMessage: (messageId, status) => {
         flush(messageId);

@@ -6,6 +6,7 @@ import { DiffLines } from './diff-lines.jsx';
 import { JoloMark } from "./brand.jsx";
 import { runLabel, verificationLabel } from "../presentation.js";
 import { ImageAttachment } from './image-attachment.jsx';
+import { TextAttachment } from './text-attachment.jsx';
 
 const CHUNK = 65535; // divisible by 3 so base64 chunks concatenate cleanly
 
@@ -117,12 +118,17 @@ function ReasoningBlock({ message }) {
   );
 }
 
-function ActivityGroup({ messages, identity }) {
+function ActivityGroup({ messages, identity, hasRunStatus = false }) {
   const working = messages.some((message) => message.status === "streaming");
   const tools = messages.filter((message) => message.kind === "tool").length;
-  if (!tools && !messages.some((message) => message.text.trim())) return <div className="activity-pending" role="status"><ActivityIcon name="spinner" active /><span>{working ? `Thinking… · ${identity}` : "Loading reasoning…"}</span></div>;
-  const label = `${working ? `Working · ${identity}` : 'Task activity'}${tools ? ` · ${tools} ${tools === 1 ? 'action' : 'actions'}` : ' · Reasoning'}`;
-  return <details className="activity-group"><summary><ActivityIcon name={working ? "spinner" : "check"} active={working} /><span className="activity-label" title={label}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
+  if (!tools && !messages.some((message) => message.text.trim())) {
+    if (working && hasRunStatus) return null;
+    return <div className="activity-pending" role="status"><ActivityIcon name="spinner" active /><span>{working ? `Thinking… · ${identity}` : "Loading reasoning…"}</span></div>;
+  }
+  // Background commands may span several replies. Their individual rows stay
+  // live, while the task has one authoritative progress line below the transcript.
+  const label = `Task activity${tools ? ` · ${tools} ${tools === 1 ? 'action' : 'actions'}` : ' · Reasoning'}`;
+  return <details className="activity-group"><summary><ActivityIcon name={working ? tools ? 'tools' : 'think' : 'check'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
 export function Conversation({ projection, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
@@ -159,6 +165,7 @@ export function Conversation({ projection, history, hasProject, standalone = fal
     } else if (follow.current) el.scrollTop = el.scrollHeight;
   });
   const activeRun = runs.find(run => ['preparing', 'model', 'tools', 'awaiting_permission', 'cancelling'].includes(run.state));
+  const thinking = activeRun?.state === 'model' && messages.some(message => message.runId === activeRun.id && message.kind === 'reasoning' && message.status === 'streaming');
   // Queued messages (and ones removed before starting) have no transcript yet.
   // Their status must not replace the turn the conversation is displaying.
   const lastRun = activeRun ?? projection?.runs.get(messages.at(-1)?.runId) ?? runs.filter(run => ['failed', 'interrupted'].includes(run.state)).at(-1);
@@ -186,7 +193,7 @@ export function Conversation({ projection, history, hasProject, standalone = fal
       </div>}
       {!messages.length && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
-        if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} identity={identityFor(projection?.runs.get(group.runId))} />;
+        if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;
         if (message.loadError) return <div key={message.id} className="message" role="alert"><p>Couldn’t load saved {message.kind === "tool" ? "tool output" : message.kind === "reasoning" ? "reasoning" : "message"}.</p><button onClick={() => { void projection.fill(message.id).catch(() => {}); }}>Retry loading</button></div>;
@@ -195,13 +202,13 @@ export function Conversation({ projection, history, hasProject, standalone = fal
         const calledIn = projection?.runs.get(message.runId)?.agentId ?? null;
         const guestName = calledIn === "jolo" ? "Jolo" : calledIn ? agents.find((entry) => entry.id === calledIn)?.displayName ?? calledIn : null;
         return <article key={message.id} data-message-id={message.id} className={`message ${message.role} ${message.kind}${message.status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
-          {message.role === 'user' && projection?.runs.get(message.runId)?.attachments?.length > 0 && <div className="message-attachments">{projection.runs.get(message.runId).attachments.map((attachment, index) => <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
+          {message.role === 'user' && projection?.runs.get(message.runId)?.attachments?.length > 0 && <div className="message-attachments">{projection.runs.get(message.runId).attachments.map((attachment, index) => attachment.mimeType === 'text/plain' ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
           {message.role === 'user' && projection?.runs.get(message.runId)?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{projection.runs.get(message.runId).taskReferences.map(task => <button type="button" key={task.key} title={`${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>r{task.revision} ↗</span></button>)}</div>}
           {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}
           {!message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={message.text} cacheKey={message.id} /> : <div className="message-text">{message.text}</div>}
         </article>;
       })}
-      {lastRun && !["completed", "paused"].includes(lastRun.state) && <div className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>}
+      {lastRun && !["completed", "paused"].includes(lastRun.state) && <div className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>}
       {changesCount > 0 && <div className="change-summary"><div><Icon name="changes" /><strong>Changes ready to inspect</strong><span className="grow" /><span className={verification?.status === "passed" ? "good" : "muted"}>{verificationLabel(verification)}</span></div><div><span className="muted">{changesCount} {changesCount === 1 ? "file changed" : "files changed"}</span><span className="grow" /><button onClick={onReview}>Review changes<Icon name="right" size={14} /></button></div></div>}
     </div>
   </div>;

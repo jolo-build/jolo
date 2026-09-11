@@ -73,4 +73,43 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   await evaluate("document.querySelector('.message-queue [aria-label=\"Remove queued message\"]').click()");
   await bridge.rawCall('run.cancel', { runId: running.id });
   report.checks.push('image paste previews and removal, first-send failure retains the draft, retry delivers pixels to Claude, sent images survive reopening, image-only queueing, and unsupported-format errors');
+
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate("window.__joloSmoke.pickAnswerer('claude')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", 'text attachment answerer');
+  await evaluate(`(() => {
+    window.__pastedLog = 'Crash log 🙂漢字: the full line must survive.\\n'.repeat(1800) + 'PASTED_LOG_END';
+    const input = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Review this log');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  const pasteText = () => evaluate(`(() => {
+    const clipboard = new DataTransfer(); clipboard.setData('text/plain', window.__pastedLog);
+    const paste = new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true });
+    document.querySelector('.composer textarea').dispatchEvent(paste);
+    if (!paste.defaultPrevented) throw new Error('long text was inserted inline');
+  })()`);
+  await pasteText();
+  await waitFor("document.querySelector('.composer-attachment.text-file .text-attachment-card') && !document.querySelector('.attachment-note[role=status]')", 'pasted text card');
+  if (!(await evaluate("document.querySelector('.composer textarea').value === 'Review this log'"))) throw new Error('long paste changed the existing prompt');
+  await evaluate("document.querySelector('.composer-attachment .text-attachment-card').click()");
+  await waitFor("document.querySelector('.text-attachment-preview pre')?.textContent === window.__pastedLog", 'complete draft text preview');
+  await evaluate("document.querySelector('[aria-label=\"Close text preview\"]').click()");
+  await evaluate("document.querySelector('.composer-attachment > button:not(.text-attachment-card)').click()");
+  await waitFor("!document.querySelector('.composer-attachment.text-file')", 'remove pasted text');
+  await pasteText();
+  await waitFor("document.querySelector('.composer-attachment.text-file') && !document.querySelector('.attachment-note[role=status]')", 'paste text again');
+  writeFileSync(path.join(results, 'text-paste-draft.png'), (await window.webContents.capturePage()).toPNG());
+  await evaluate("document.querySelector('.composer button[type=submit]').click()");
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && document.querySelector('.message.user .text-attachment-card')", 'text attachment sent');
+  if (!(await evaluate("document.querySelector('.message.user').textContent.includes('Review this log') && !document.querySelector('.message.user').textContent.includes('PASTED_LOG_END') && !document.querySelector('.composer-attachment')"))) throw new Error('sent text was expanded inline or retained in the draft');
+  const textSessionId = await evaluate('window.__joloSmoke.state().sessionId');
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(textSessionId)})`);
+  await waitFor("document.querySelector('.message.user .text-attachment-card')", 'saved text attachment after reopening');
+  await evaluate("document.querySelector('.message.user .text-attachment-card').click()");
+  await waitFor("document.querySelector('.text-attachment-preview pre')?.textContent === window.__pastedLog", 'full uploaded UTF-8 text preview');
+  writeFileSync(path.join(results, 'text-paste-preview.png'), (await window.webContents.capturePage()).toPNG());
+  await evaluate("document.querySelector('[aria-label=\"Close text preview\"]').click()");
+  report.checks.push('long text paste becomes a removable compact file, preserves the prompt, previews all Unicode text, sends successfully, and survives reopening');
 }

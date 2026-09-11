@@ -5,6 +5,8 @@ import { Icon } from './icon.jsx';
 import { StopIndicator } from './stop-indicator.jsx';
 import { IMAGE_LIMITS as LIMITS } from '@jolo/protocol/attachments';
 import { clipboardImages, readImageAttachment } from '../image-attachments.js';
+import { isLongPaste, readTextAttachment, attachmentSummary } from '../text-attachments.js';
+import { TextAttachment } from './text-attachment.jsx';
 
 const RADIUS = 6;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
@@ -89,11 +91,12 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   const updateAttachments = images => { attachmentsRef.current = images; setAttachments(images); };
   const paste = event => {
     const files = clipboardImages(event.clipboardData);
-    if (!files.length || disabled) return; // ordinary text paste keeps its native selection/undo behavior
+    const pastedText = event.clipboardData.getData('text/plain');
+    const attachText = isLongPaste(pastedText);
+    if ((!files.length && !attachText) || disabled) return; // short text keeps native selection/undo
     event.preventDefault();
     lastQueued.current = null;
-    const pastedText = event.clipboardData.getData('text/plain');
-    if (pastedText) {
+    if (pastedText && !attachText) {
       const start = input.current.selectionStart, end = input.current.selectionEnd;
       setText(current => current.slice(0, start) + pastedText + current.slice(end));
     }
@@ -101,9 +104,16 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     setReadingImages(true);
     setAttachmentError('');
     pasteQueue.current = pasteQueue.current.then(async () => {
+      if (attachText) {
+        if (!mounted.current) return;
+        const count = attachmentsRef.current.filter(item => item.mimeType === 'text/plain').length;
+        if (count >= LIMITS.textAttachments) throw new Error('Attach up to 4 text files per message.');
+        const attachment = await readTextAttachment(pastedText, count ? `Pasted text ${count + 1}.txt` : 'Pasted text.txt');
+        if (mounted.current) updateAttachments([...attachmentsRef.current, attachment]);
+      }
       for (const file of files) {
         if (!mounted.current) return;
-        if (attachmentsRef.current.length >= LIMITS.imageAttachments) throw new Error('Attach up to 4 images per message.');
+        if (attachmentsRef.current.filter(item => item.mimeType !== 'text/plain').length >= LIMITS.imageAttachments) throw new Error('Attach up to 4 images per message.');
         const image = await readImageAttachment(file);
         if (mounted.current) updateAttachments([...attachmentsRef.current, image]);
       }
@@ -173,7 +183,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   }, [autoFocusOnType, disabled]);
   const submit = async () => {
     const images = attachmentsRef.current;
-    const prompt = text.trim() || (images.length ? 'Please inspect the attached images.' : '');
+    const prompt = text.trim() || (images.some(item => item.mimeType === 'text/plain') ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
     if (!prompt || disabled || submitting.current || pendingPastes.current) return;
     submitting.current = true;
     setSending(true);
@@ -191,18 +201,18 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     {queuedRuns.length > 0 && <section className="message-queue" aria-label="Queued messages">
       <div className="message-queue-heading">Queued · {queuedRuns.length}</div>
       <ul>{queuedRuns.map(run => <li key={run.id}>
-        <span title={run.prompt ?? run.promptPreview}>{run.prompt ?? run.promptPreview ?? 'Queued message'}{run.attachments?.length ? ` · ${run.attachments.length} ${run.attachments.length === 1 ? 'image' : 'images'}` : ''}</span>
+        <span title={run.prompt ?? run.promptPreview}>{run.prompt ?? run.promptPreview ?? 'Queued message'}{run.attachments?.length ? ` · ${attachmentSummary(run.attachments)}` : ''}</span>
         <button type="button" disabled={disabled} onClick={() => onSendNow?.(run.id)} title="Interrupt the current turn and send this message">Send now</button>
         <button type="button" disabled={disabled} onClick={() => onRemoveQueued?.(run.id)} aria-label="Remove queued message" title="Remove queued message"><Icon name="close" size={12} /></button>
       </li>)}</ul>
     </section>}
     <form className="composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-    {attachments.length > 0 && <div className="composer-attachments" aria-label="Attached images">{attachments.map(image => <div className="composer-attachment" key={image.id}>
-      <img src={image.dataUrl} alt={image.name} />
+    {attachments.length > 0 && <div className="composer-attachments" aria-label="Attachments">{attachments.map(image => <div className={`composer-attachment${image.mimeType === 'text/plain' ? ' text-file' : ''}`} key={image.id}>
+      {image.mimeType === 'text/plain' ? <TextAttachment attachment={image} /> : <img src={image.dataUrl} alt={image.name} />}
       <button type="button" disabled={sending} onClick={() => { updateAttachments(attachmentsRef.current.filter(entry => entry.id !== image.id)); setAttachmentError(''); lastQueued.current = null; }} aria-label={`Remove ${image.name}`} title={`Remove ${image.name}`}><Icon name="close" size={12} /></button>
-      <span title={image.name}>{image.name}</span>
+      {image.mimeType !== 'text/plain' && <span title={image.name}>{image.name}</span>}
     </div>)}</div>}
-    {readingImages && <p className="attachment-note" role="status">Reading image…</p>}
+    {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
     {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
       {choices.map((option, index) => <li key={option.id}>

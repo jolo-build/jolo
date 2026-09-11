@@ -29,10 +29,10 @@ describe('conversation activity', () => {
     hasProject changesCount={0} assistantName="Codex" assistantAgentId="codex" providerModel="jolo-model" agents={agents} {...props}
   />);
 
-  test('a called-in agent and its model label both thinking and working indicators', () => {
+  test('a called-in agent and its model label one thinking indicator', () => {
     const html = renderWorking({ agentId: 'claude' });
     expect(html).toContain('Thinking… · Claude Code · claude-model');
-    expect(html).toContain('Working · Claude Code · claude-model');
+    expect(html.match(/role="status"/g)).toHaveLength(1);
     expect(html).not.toContain('Working · Codex');
   });
 
@@ -44,19 +44,20 @@ describe('conversation activity', () => {
 
   test('tool activity uses the usual agent when no guest is called in', () => {
     const html = renderWorking({ state: 'tools' }, [{ id: 'tool', runId: 'active', role: 'tool', kind: 'tool', text: 'run_command bun test', status: 'streaming' }]);
-    expect(html).toContain('Working · Codex · codex-model · 1 action');
+    expect(html).toContain('Task activity · 1 action');
     expect(html).toContain('Using tools · Codex · codex-model');
+    expect(html.match(/activity-spin/g)).toHaveLength(1);
   });
 
   test('calling Jolo into a hosted task uses Jolo’s provider model', () => {
     const html = renderWorking({ agentId: 'jolo' });
-    expect(html).toContain('Working · Jolo · jolo-model');
+    expect(html).toContain('Thinking… · Jolo · jolo-model');
     expect(html).not.toContain('codex-model');
   });
 
   test('an unknown model is labeled as the default without borrowing another provider’s model', () => {
     const html = renderWorking({ agentId: 'claude' }, undefined, { agents: [{ id: 'claude', displayName: 'Claude Code', model: null }] });
-    expect(html).toContain('Working · Claude Code · Default model');
+    expect(html).toContain('Thinking… · Claude Code · Default model');
     expect(html).not.toContain('jolo-model');
   });
 
@@ -66,7 +67,23 @@ describe('conversation activity', () => {
       reasoning({ id: 'current', runId: 'active', text: 'Current work.', status: 'streaming' }),
     ]);
     expect(html.match(/class="activity-group"/g)).toHaveLength(2);
-    expect(html).toContain('Working · Claude Code · claude-model · Reasoning');
+    expect(html).toContain('Task activity · Reasoning');
+    expect(html).toContain('Thinking… · Claude Code · claude-model');
+  });
+
+  test('background tools spanning commentary keep separate groups but one task progress indicator', () => {
+    const html = renderWorking({ state: 'tools' }, [
+      { id: 'background', runId: 'active', role: 'tool', kind: 'tool', text: 'command long-build', status: 'streaming' },
+      { id: 'commentary', runId: 'active', role: 'assistant', kind: 'text', text: 'The build is running. Checking the results.', status: 'complete' },
+      { id: 'check', runId: 'active', role: 'tool', kind: 'tool', text: 'command check-results', status: 'streaming' },
+    ]);
+    expect(html.match(/class="activity-group"/g)).toHaveLength(2);
+    expect(html.match(/Task activity · 1 action/g)).toHaveLength(2);
+    expect(html.match(/activity-spin/g)).toHaveLength(1);
+    expect(html.match(/Using tools · Codex · codex-model/g)).toHaveLength(1);
+    expect(html).not.toContain('Working ·');
+    expect(html).toContain('command long-build');
+    expect(html).toContain('command check-results');
   });
 
   test('failed artifact reads show a retry action for answers, reasoning, and tools', () => {
