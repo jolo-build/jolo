@@ -6,7 +6,11 @@ import App from '../src/App.jsx';
 
 // Publish useful HTML before JavaScript loads, including for search engines.
 const path = new URL('../dist/index.html', import.meta.url);
-const html = await readFile(path, 'utf8');
+// Mark the modules and styles emitted by Vite so startup ignores assets injected
+// by extensions. Vite does not preserve custom attributes on the entry script.
+const html = (await readFile(path, 'utf8')).replace(/<(?:script|link)\b[^>]*>/g, tag =>
+  /(?:src|href)="\/assets\//.test(tag) && !tag.includes('data-jolo-asset')
+    ? tag.replace(/>$/, ' data-jolo-asset>') : tag);
 const marker = '<div id="root"></div>';
 if (!html.includes(marker)) throw new Error('Missing prerender mount point');
 await writeFile(path, html.replace(marker, `<div id="root">${renderToString(<App />)}</div>`));

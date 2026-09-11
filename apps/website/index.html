@@ -34,13 +34,23 @@
         const root = document.documentElement;
         root.dataset.assetsLoading = '';
         let loaded = false, hydrated = false, started = false, failed = false;
-        const showError = () => { root.dataset.assetsError = ''; };
+        let errorMessage = 'Jolo is taking longer to load. Try again if loading does not finish.';
+        const showError = message => {
+          if (message) errorMessage = message;
+          root.dataset.assetsError = '';
+          const notice = document.querySelector('#startup p.startup-error');
+          if (notice) notice.textContent = errorMessage;
+        };
         // A stalled download gets a retry action, never a flash of unready content.
         const deadline = setTimeout(showError, 15000);
         window.addEventListener('error', event => {
-          if (event.target?.matches?.('script[src], link[rel="stylesheet"], img')) {
+          // Only Jolo's own build assets can block startup. Extensions and
+          // optional resources must not keep an otherwise ready page hidden.
+          const target = event.target;
+          if (target?.matches?.('[data-jolo-asset], #root img:not([loading="lazy"])')) {
             failed = true;
-            showError();
+            const resource = target.tagName === 'SCRIPT' ? 'app code' : target.tagName === 'LINK' ? 'stylesheet' : 'image';
+            showError(`Jolo’s ${resource} couldn’t load. Try again or check whether your browser is blocking it.`);
           }
         }, true);
         document.addEventListener('click', event => {
@@ -50,12 +60,11 @@
           if (!loaded || !hydrated || started || failed) return;
           started = true;
           try {
-            const styles = [...document.querySelectorAll('link[rel="stylesheet"]')];
-            if (styles.some(link => !link.sheet)) throw new Error('Stylesheet unavailable');
+            const styles = [...document.querySelectorAll('link[rel="stylesheet"][data-jolo-asset]')];
+            if (styles.some(link => !link.sheet)) throw new Error('Jolo’s stylesheet couldn’t load. Try again.');
             const faces = await document.fonts.load('400 16px "JetBrains Mono"');
-            if (!faces.length) throw new Error('Font unavailable');
-            await document.fonts.ready;
-            await Promise.all([...document.images].filter(image => image.loading !== 'lazy').map(image => image.decode()));
+            if (!faces.length) throw new Error('Jolo’s font couldn’t load. Check whether custom fonts are blocked, then try again.');
+            await Promise.all([...document.querySelectorAll('#root img')].filter(image => image.loading !== 'lazy').map(image => image.decode()));
             // Allow font metrics and the hydrated layout to settle before revealing.
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             if (failed) return;
@@ -63,9 +72,17 @@
             delete root.dataset.assetsLoading;
             delete root.dataset.assetsError;
             document.getElementById('startup').remove();
-          } catch { showError(); }
+          } catch (error) {
+            showError(error.message?.startsWith('Jolo’s') ? error.message : 'Jolo’s font or image couldn’t load. Check whether your browser is blocking it, then try again.');
+          }
         };
-        window.addEventListener('load', () => { loaded = true; void ready(); }, { once: true });
+        // DOM readiness plus hydration covers our modules and stylesheets.
+        // The global load event also waits for unrelated injected resources.
+        document.addEventListener('DOMContentLoaded', () => {
+          loaded = true;
+          if (root.hasAttribute('data-assets-error')) showError();
+          void ready();
+        }, { once: true });
         window.addEventListener('jolo:hydrated', () => { hydrated = true; void ready(); }, { once: true });
       })();
     </script>
@@ -75,10 +92,10 @@
     <div id="startup" role="status" aria-live="polite">
       <span class="startup-spinner startup-pending" aria-hidden="true"></span>
       <p class="startup-pending">Loading Jolo…</p>
-      <p class="startup-error">Jolo couldn’t finish loading. Check your connection and try again.</p>
+      <p class="startup-error">Jolo couldn’t finish loading. Try again.</p>
       <button class="startup-error" type="button">Try again</button>
     </div>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.jsx" data-jolo-asset></script>
   </body>
 </html>

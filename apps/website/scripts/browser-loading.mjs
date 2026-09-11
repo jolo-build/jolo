@@ -97,6 +97,37 @@ async function checkLoading() {
         }
       }
     }
+    // Failed extension assets must not poison startup. A pending injected image
+    // must not hold the page behind the browser's global load event either.
+    await command('Page.enable');
+    const injected = await command('Page.addScriptToEvaluateOnNewDocument', { source: `
+      document.addEventListener('DOMContentLoaded', () => {
+        for (const [tag, url] of [['script', 'https://static.cloudflareinsights.com/beacon.min.js'], ['script', '/optional-error.js'], ['link', '/optional-error.css'], ['img', '/optional-error.png'], ['img', '/optional-pending.png']]) {
+          const element = document.createElement(tag);
+          if (tag === 'link') { element.rel = 'stylesheet'; element.href = url; }
+          else element.src = url;
+          document.body.appendChild(element);
+        }
+      }, {once:true});
+    ` });
+    phase = 'unrelated failed and stalled assets';
+    let optionalRequest;
+    const optionalListener = (_event, method, params) => { if (method === 'Fetch.requestPaused') optionalRequest = params.requestId; };
+    debuggerAPI.on('message', optionalListener);
+    await command('Fetch.enable', { patterns: [{ urlPattern: '*/optional-pending.png' }] });
+    const optionalNavigation = window.loadURL(origin + '/?optional-assets');
+    optionalNavigation.catch(() => {});
+    await until(() => optionalRequest, 'Optional request intercepted');
+    await until(async () => (await snapshot()).visible, 'Jolo loads despite unrelated resources');
+    assert.equal((await snapshot()).fontReady, true);
+    assert.equal((await snapshot()).error, false);
+    await command('Fetch.failRequest', { requestId: optionalRequest, errorReason: 'Failed' });
+    await command('Fetch.disable');
+    await optionalNavigation;
+    debuggerAPI.off('message', optionalListener);
+    await command('Page.removeScriptToEvaluateOnNewDocument', { identifier: injected.identifier });
+    console.log('Website startup passed: unrelated failed and stalled assets.');
+
     // The timeout offers recovery without revealing fallback fonts. A late
     // successful download can still finish normally without reloading.
     await window.loadURL('about:blank');

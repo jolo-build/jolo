@@ -23,7 +23,7 @@ bun run website:preview
 
 The preview is at `http://127.0.0.1:4173`. Both servers bind to localhost. The build produces `dist/` and prerenders the page before client hydration. Generated assets, archives, and build output are ignored; dependencies use the root lockfile.
 
-The initial page stays behind a loading indicator until the stylesheet, JetBrains Mono font, eager images, and React hydration are ready. Failed or stalled assets show a retry action without revealing partially styled content. Static HTML remains readable when JavaScript is disabled. The build adds hashes for the exact startup script and critical styles to the production Content Security Policy.
+The initial page stays behind a loading indicator until Jolo's stylesheet, JetBrains Mono font, eager images, and React hydration are ready. Failed or stalled required assets show a specific retry message without revealing partially styled content. Optional resources, including Cloudflare's injected analytics script, cannot block the page if a browser or the security policy rejects them. Static HTML remains readable when JavaScript is disabled. The build marks its required assets and adds hashes for the exact startup script and critical styles to the production Content Security Policy.
 
 Run `bun run --cwd apps/website test:loading` on a machine that can launch Electron to check delayed and failed fonts, stylesheets, and scripts, retry behavior, stalled downloads, cached visits, mobile layout, and the no-JavaScript fallback against the production build and security policy.
 
@@ -46,4 +46,4 @@ The visual direction is black-and-white terminal-inspired minimalism. Keep statu
 
 ## Deployment
 
-The site uses Cloudflare Static Assets with a Worker that handles `/releases/*` before static assets, discovers GitHub releases, and streams original large archives from ordered parts. It has no user-account backend, database, analytics, or signup form. See [deploy](../../deploy/README.md) for GitHub Actions publishing, the Cloudflare secrets needed for automatic website deployment, dry runs, and domain configuration.
+The site uses Cloudflare Static Assets with a Worker that handles `/releases/*` before static assets, discovers GitHub releases, and streams original large archives from ordered parts. It has no user-account backend, database, or signup form. Cloudflare may inject its analytics beacon; the site's security policy does not allow that optional script. See [deploy](../../deploy/README.md) for GitHub Actions publishing, the Cloudflare secrets needed for automatic website deployment, dry runs, and domain configuration.
