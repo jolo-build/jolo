@@ -23,6 +23,10 @@ bun run website:preview
 
 The preview is at `http://127.0.0.1:4173`. Both servers bind to localhost. The build produces `dist/` and prerenders the page before client hydration. Generated assets, archives, and build output are ignored; dependencies use the root lockfile.
 
+The initial page stays behind a loading indicator until the stylesheet, JetBrains Mono font, eager images, and React hydration are ready. Failed or stalled assets show a retry action without revealing partially styled content. Static HTML remains readable when JavaScript is disabled. The build adds hashes for the exact startup script and critical styles to the production Content Security Policy.
+
+Run `bun run --cwd apps/website test:loading` on a machine that can launch Electron to check delayed and failed fonts, stylesheets, and scripts, retry behavior, stalled downloads, cached visits, mobile layout, and the no-JavaScript fallback against the production build and security policy.
+
 ## Structure
 
 | Path | Purpose |
