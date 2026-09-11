@@ -176,3 +176,6 @@ code,pre { font-family:var(--mono); font-variant-ligatures:none; }
 .orchestrator-details { display:grid; grid-template-columns:1fr 1fr; gap:30px; margin-top:20px; }
 .orchestrator-details strong { color:var(--ink); }
 @media(max-width:700px) { .desktop-example-grid,.orchestrator-details { grid-template-columns:1fr; }.desktop-examples,.orchestrator { padding:32px 0; }.example-plan { padding:16px; }.example-plan-heading { flex-wrap:wrap; }.plan-progress { margin-left:30px; }.example-plan-heading h3 { font-size:15px; }.example-plan li { gap:9px; padding:13px 7px; }.plan-step-state { font-size:10px; }.plan-step-state .working-ring { display:none; }.site-header nav a[href='#orchestrator'] { display:none; } }
+
+@media(max-width:700px) { .site-header nav a[href="#orchestrator"] { display:none; } }
+@media(max-width:430px) { .site-header nav a[href="https://access.jolo.build"] { display:none; } }
