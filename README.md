@@ -107,3 +107,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for isolated development profiles and val
 ## License
 
 [MIT](LICENSE). Bundled fonts and optional native search components retain their own licenses in `assets/fonts/` and `vendor/tgrep/`.
+
+### Desktop releases
+
+GitHub Actions builds Apple Silicon and Intel DMG installers alongside the four CLI archives. Pull requests and main-branch builds upload the installers as workflow artifacts. Pushing a version tag matching the root package version (for example `v0.1.1`) verifies all platform checksums and publishes a complete GitHub Release. The download buttons on jolo.build use that release automatically. Desktop installers are currently ad-hoc signed and not notarized.
