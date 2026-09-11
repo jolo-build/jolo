@@ -157,11 +157,41 @@ async function checkLoading() {
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-home.png'), (await window.webContents.capturePage()).toPNG());
     await evaluate("document.querySelector('#workspace').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-board.png'), (await window.webContents.capturePage()).toPNG());
+    assert.equal(await evaluate("document.querySelector('.sidebar-label').textContent"), 'Projects');
+    await evaluate("document.querySelector('.app-bar-end button').click()");
+    await until(() => evaluate("!!document.querySelector('.preview-task')"), 'Board opens');
     await evaluate("document.querySelector('.preview-task').click()");
     await until(() => evaluate("!!document.querySelector('.app-conversation')"), 'Example task opens the chat');
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-chat.png'), (await window.webContents.capturePage()).toPNG());
     await evaluate("document.querySelector('.app-bar-end button').click()");
     await until(() => evaluate("!!document.querySelector('.preview-board')"), 'Example board reopens');
+    // Use actual mouse events: a programmatic click misses popover light-dismiss races.
+    await evaluate("document.querySelector('.preview-task').click()");
+    const click = async selector => {
+      const point = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}; })()`);
+      window.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point });
+      window.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point });
+      await delay(80);
+    };
+    await click('.app-bar-end [popoverTarget]');
+    assert.equal(await evaluate("!!document.querySelector('.preview-panel-menu:popover-open')"), true);
+    await click('.app-bar-end [popoverTarget]');
+    assert.equal(await evaluate("!!document.querySelector('.preview-panel-menu:popover-open')"), false, 'Clicking Panels again dismisses the menu');
+    for (const [index, label] of ['changes','browser','files','terminal','plans','checks'].entries()) {
+      await click('.app-bar-end [popoverTarget]');
+      await click(`.preview-panel-menu button:nth-child(${index + 1})`);
+      assert.equal(await evaluate("document.querySelector('.app-context').getAttribute('aria-label')"), `Example ${label}`);
+      assert.equal(await evaluate("!!document.querySelector('.preview-panel-menu:popover-open')"), false);
+      assert.equal(await evaluate("document.querySelector('.app-conversation').getBoundingClientRect().width > 250"), true);
+      if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, `jolo-website-${label}.png`), (await window.webContents.capturePage()).toPNG());
+      await click('.app-context header button');
+      assert.equal(await evaluate("!!document.querySelector('.app-context')"), false, 'Panel closes without losing the conversation');
+    }
+    await click('.app-bar-end [popoverTarget]');
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    await until(() => evaluate("!document.querySelector('.preview-panel-menu:popover-open')"), 'Escape closes Panels');
+    console.log('Website preview passed: sidebar, all six panels, repeat-click dismissal, and Escape.');
     for (const [index, title] of [[0, 'Add saved searches'], [1, 'Find and fix'], [2, 'Get the next desktop']]) {
       await evaluate(`document.querySelectorAll('.plan-examples button')[${index}].click()`);
       await until(() => evaluate(`document.querySelector('.example-plan h3').textContent.startsWith(${JSON.stringify(title)})`), 'Orchestrator example switches');

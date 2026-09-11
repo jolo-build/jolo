@@ -160,7 +160,7 @@ describe("Codex through its app-server", () => {
     expect((await client.call("session.page", { sessionId: session.id })).session.agentId).toBe("codex");
   }, 40_000);
 
-  test("patches inside the workspace are allowed by the task's grant; outside it, and a declined command, are refused", async () => {
+  test("workspace patches use the task grant; external patches ask and respect the decision", async () => {
     const { client, events, repo, home, runTo, text, messagesOf } = await boot();
     const inside = await runTo("req_patch", `patch ${path.join(repo, "made.txt")} hello from codex`);
     expect(inside.state).toBe("completed");
@@ -168,13 +168,20 @@ describe("Codex through its app-server", () => {
     expect(events.some((e) => e.type === "permission.requested")).toBe(false); // no dialog for an in-workspace patch
     expect(events.find((e) => e.type === "tool.completed" && e.runId === inside.id).payload).toMatchObject({ name: "codex:fileChange", status: "ok" });
 
+    let answer = "deny";
+    client.onEvent((event) => { if (event.type === "permission.requested") client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: answer }); });
     const outside = await runTo("req_escape", `patch ${path.join(home, "escaped.txt")} nope`);
     expect(outside.state).toBe("completed"); // Codex finished its turn; the patch was declined, not the run
     expect(existsSync(path.join(home, "escaped.txt"))).toBe(false);
     expect(await text((await messagesOf(outside.id)).at(-1))).toBe("I could not write it: patch rejected by user");
     expect(events.find((e) => e.type === "tool.completed" && e.runId === outside.id).payload).toMatchObject({ status: "denied", errorCode: "permission_denied" });
 
-    client.onEvent((event) => { if (event.type === "permission.requested") client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: "deny" }); });
+    expect(events.some(e => e.type === 'permission.requested' && e.runId === outside.id)).toBe(true);
+    answer = 'allow_once';
+    const approved = await runTo('req_external_allowed', `patch ${path.join(home, 'approved.txt')} approved edit`);
+    expect(readFileSync(path.join(home, 'approved.txt'), 'utf8')).toBe('approved edit');
+    expect(events.some(e => e.type === 'permission.requested' && e.runId === approved.id)).toBe(true);
+    answer = 'deny';
     const declined = await runTo("req_deny", "run touch should-not-exist");
     expect(declined.state).toBe("completed");
     expect(existsSync(path.join(repo, "should-not-exist"))).toBe(false);

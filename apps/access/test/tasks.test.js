@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixture.js';
+import { taskPath } from '../src/tasks/identity.js';
 import { taskRepository } from '../src/tasks/repository.js';
 import { createRepository } from '../src/storage.js';
 import { randomToken, hashToken } from '../src/security.js';
@@ -67,7 +68,7 @@ test('every team role enforces task writes and assignee restrictions on direct H
   for(const a of [owner,admin,member]) expect((await post(f,a,'/tasks',fields({team:team.id}))).status).toBe(303);
   expect((await post(f,viewer,'/tasks',fields({team:team.id}))).status).toBe(403);
   expect((await post(f,outsider,'/tasks',fields({team:team.id}))).status).toBe(404);
-  const task=f.sqlite.query('SELECT * FROM tasks WHERE account_id=?').get(owner.id),path=`/tasks/JOLO-${task.id}`;
+  const task=f.sqlite.query('SELECT * FROM tasks WHERE account_id=?').get(owner.id),path=taskPath(task);
   for(const a of [owner,admin,member,viewer]) {
     const detail=await (await get(f,a,path)).text();
     expect(detail).not.toContain('id="task-edit"');
@@ -188,7 +189,7 @@ test('demotion and foreign team IDs cannot bypass conditional SQL, and audit rol
   const task=await repo.createTask(owner.id,{team:team.id,assignee:null,title:'Atomic',description:'',project:'',state:'todo',priority:'normal',labels:[],requestID:crypto.randomUUID()});
   await repo.setMember(owner.id,team.id,admin.id,'viewer',1);
   expect(await repo.updateTask(admin.id,task.id,{...task,team:team.id,assignee:null,labels:[]},1)).toBeNull();
-  expect((await repo.audit(owner.id,team.id)).some(a=>a.subject===`JOLO-${task.id}`&&a.action==='task.created')).toBe(true);
+  expect((await repo.audit(owner.id,team.id)).some(a=>a.subject===`JOLO-${task.number}`&&a.action==='task.created')).toBe(true);
   expect((await repo.audit(admin.id,team.id))).toEqual([]);
   const before=f.sqlite.query('SELECT count(*) n FROM teams').get().n;
   f.sqlite.exec("CREATE TRIGGER reject_audit BEFORE INSERT ON task_audit BEGIN SELECT RAISE(ABORT,'fixture audit failure'); END");
@@ -204,4 +205,63 @@ test('task validation preserves rejected drafts and cannot accept oversized or d
     expect(result.status).toBe(400); expect(await result.text()).toContain('Keep this draft');
   }
   expect(f.sqlite.query('SELECT count(*) n FROM tasks').get().n).toBe(0);
+});
+
+test('personal accounts and teams number tickets independently, including concurrent creators and retries',async()=>{
+  const {f,owner,member,viewer,outsider,repo,team}=await setup();
+  const secondTeam=await repo.createTeam(owner.id,'Second team');
+  const create=(a,scope=null,requestID=crypto.randomUUID())=>repo.createTask(a.id,{team:scope,title:'Scoped task',description:'',project:'',state:'todo',priority:'normal',labels:[],requestID});
+  const a=await create(owner),b=await create(outsider),shared=await create(owner,team.id),other=await create(owner,secondTeam.id);
+  expect([a.number,b.number,shared.number,other.number]).toEqual([1,1,1,1]);
+  expect(new Set([a.id,b.id,shared.id,other.id]).size).toBe(4);
+  expect(await create(viewer,team.id)).toBeNull();
+  expect(await create(outsider,team.id)).toBeNull();
+  const requestID=crypto.randomUUID();
+  const repeated=await Promise.all([create(member,team.id,requestID),create(member,team.id,requestID)]);
+  expect(repeated.map(t=>t.number)).toEqual([2,2]); expect(repeated[0].id).toBe(repeated[1].id);
+  const parallel=await Promise.all([create(member,team.id),create(owner,team.id)]);
+  expect(parallel.map(t=>t.number).sort()).toEqual([3,4]);
+  await repo.archiveTask(owner.id,a.id,1,true,null);
+  expect((await create(owner)).number).toBe(2);
+  const before=f.sqlite.query('SELECT * FROM task_sequences ORDER BY scope_key').all();
+  f.sqlite.exec("CREATE TRIGGER reject_task_audit BEFORE INSERT ON task_audit WHEN NEW.action='task.created' BEGIN SELECT RAISE(ABORT,'fixture audit failure'); END");
+  await expect(create(owner,team.id)).rejects.toThrow();
+  expect(f.sqlite.query('SELECT * FROM task_sequences ORDER BY scope_key').all()).toEqual(before);
+  f.sqlite.exec('DROP TRIGGER reject_task_audit');
+  expect((await create(owner,team.id)).number).toBe(5);
+  expect((await repo.audit(owner.id,team.id)).filter(a=>a.action==='task.created').map(a=>a.subject).sort()).toEqual(['JOLO-1','JOLO-2','JOLO-3','JOLO-4','JOLO-5']);
+});
+
+test('duplicate visible keys keep links, comments, edits, search and API reads in the selected workspace',async()=>{
+  const {f,owner,member,outsider,repo,team}=await setup();
+  const personal=(await post(f,owner,'/tasks',fields({title:'Owner personal'}))).headers.get('location');
+  const foreign=(await post(f,outsider,'/tasks',fields({title:'Outsider personal'}))).headers.get('location');
+  const shared=(await post(f,member,'/tasks',fields({title:'Team task',team:team.id}))).headers.get('location');
+  expect([personal,foreign,shared].every(p=>p.endsWith('/JOLO-1'))).toBe(true);
+  expect(new Set([personal,foreign,shared]).size).toBe(3);
+  expect(await (await get(f,owner,personal)).text()).toContain('Owner personal');
+  expect((await get(f,outsider,personal)).status).toBe(404);
+  expect((await get(f,owner,foreign)).status).toBe(404);
+  expect(await (await get(f,owner,shared)).text()).toContain('Team task');
+  expect((await post(f,owner,shared,fields({team:team.id,title:'Edited team',revision:'1'}))).status).toBe(303);
+  expect((await post(f,owner,shared+'/comments',{body:'Shared discussion',request_id:crypto.randomUUID()})).status).toBe(303);
+  expect(await (await get(f,member,shared)).text()).toContain('Shared discussion');
+  expect(await (await get(f,owner,personal)).text()).not.toContain('Shared discussion');
+  expect(await (await get(f,owner,'/tasks?q=JOLO-1&team=personal')).text()).toContain('Owner personal');
+  expect(await (await get(f,owner,`/tasks?q=JOLO-1&team=${team.id}`)).text()).not.toContain('Owner personal');
+  const token=randomToken();
+  await createRepository(f.db,f.now).createDevice(crypto.randomUUID(),await hashToken(token),owner.id,'Task access',f.now()+100_000,'account:read tasks:read');
+  const api=path=>f.send(path,{headers:{cookie:'',authorization:`Bearer ${token}`}});
+  expect((await api('/api/tasks/JOLO-1')).status).toBe(409);
+  expect((await (await api('/api/tasks/JOLO-1?team=personal')).json()).task.title).toBe('Owner personal');
+  expect((await (await api(`/api/tasks/JOLO-1?team=${team.id}`)).json()).task.title).toBe('Edited team');
+  expect((await (await api('/api'+shared)).json()).task.title).toBe('Edited team');
+  expect((await api('/api'+foreign)).status).toBe(404);
+  const list=await (await api('/api/tasks?q=JOLO-1')).json();
+  expect(list.tasks.map(t=>t.key)).toEqual(['JOLO-1','JOLO-1']);
+  expect(new Set(list.tasks.map(t=>t.url)).size).toBe(2);
+  const original=f.sqlite.query("SELECT id FROM tasks WHERE title='Edited team'").get().id;
+  expect((await get(f,owner,`/tasks/JOLO-${original}`)).headers.get('location')).toBe(shared);
+  await repo.removeMember(owner.id,team.id,member.id,1);
+  expect((await get(f,member,shared)).status).toBe(404);
 });

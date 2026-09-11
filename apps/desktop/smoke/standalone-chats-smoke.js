@@ -64,10 +64,22 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
     writeFileSync(path.join(results, `standalone-chat-${theme}.png`), (await window.webContents.capturePage()).toPNG());
   }
   assert(await evaluate('!document.querySelector(".header").textContent.includes("chat-") && !document.querySelector(".sidebar").textContent.includes("/data/")'), 'Internal working directory leaked into chat navigation');
-  window.webContents.reload();
-  await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".board .recent-chat"))', 'Recents survives reload');
-  await evaluate(`document.querySelector('.board .recent-chat[data-session-id="${first.sessionId}"]').click()`);
-  await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'history survives reload');
+  for (const shortcut of [{ keyCode: 'F5' }, { keyCode: 'R', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] }]) {
+    await evaluate('window.__reloadSentinel = true; document.querySelector(".composer textarea").focus()');
+    window.webContents.focus();
+    const loaded = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Desktop did not reload for ${shortcut.keyCode}`)), 10000);
+      window.webContents.once('did-finish-load', () => { clearTimeout(timer); resolve(null); });
+    });
+    window.webContents.sendInputEvent({ type: 'keyDown', ...shortcut });
+    window.webContents.sendInputEvent({ type: 'keyUp', ...shortcut });
+    await loaded;
+    await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".board .recent-chat"))', 'Chats survive keyboard reload');
+    assert(await evaluate('!window.__reloadSentinel'), 'Shortcut refreshed data without reloading the application document');
+    await evaluate(`document.querySelector('.board .recent-chat[data-session-id="${first.sessionId}"]').click()`);
+    await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'history survives keyboard reload');
+  }
+  report.checks.push('F5 and Cmd/Ctrl+R from the composer reload the whole application document and retain chat history');
   report.checks.push('New chat works without a folder, receives replies, gets a title, and reopens from Recents with both turns after reload');
   report.checks.push('workspace folders remain separate from chats; folder task creation and standalone split panes both work');
   writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));

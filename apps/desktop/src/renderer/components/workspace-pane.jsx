@@ -18,13 +18,13 @@ import { TaskHeader } from "./task-header.jsx";
 import { Board } from "./board.jsx";
 import { BoardHeader } from "./board-header.jsx";
 import { WorktreeDialog } from "./worktree-dialog.jsx";
-import { AgentPane } from "./agent-pane.jsx";
 import { basename, runLabel, pauseDescription, uniqueChanges, verificationLabel } from "../presentation.js";
 
 import { createPortal } from "react-dom";
 import { useEngineConnection } from "../engine-context.jsx";
 import { PanePicker } from "./pane-picker.jsx";
 import { finishStartup } from "../startup.js";
+import { CONTEXT_PANELS, PanelMenu } from './panel-menu.jsx';
 
 /**
  * One split of the window: its own engine state, its own task, and the slots it portals its chrome into.
@@ -65,6 +65,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const connection = useEngineConnection();
   const { setOverlay } = connection;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [panelMenuOpen, setPanelMenuOpen] = useState(false);
   const showSettings = settingsOpen;
   const [settingsSection, setSettingsSection] = useState('agents');
   const [taskDialog, setTaskDialog] = useState(null);
@@ -72,18 +73,16 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     if (open) setSettingsSection(typeof open === 'string' ? open : 'agents');
     onSettingsChange(open ? pane.id : null);
   };
-  const [browser, setBrowser] = useState(null); // { url } while the pane is open (one live page by default, §5.4)
+  const [browser, setBrowser] = useState(null); // Retain the live page while its panel is hidden.
   const [browserTitle, setBrowserTitle] = useState("");
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [toolsPanel, setToolsPanel] = useState(null);
+  const [plansOpen, setPlansOpen] = useState(false);
   const [worktreeDialog, setWorktreeDialog] = useState(false);
-  const [agentTerminalId, setAgentTerminalId] = useState(null);
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const { engine, project, sessions, sessionId, settings, error, relayNote, projection, activeRun, usage, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   useLayoutEffect(() => {
     if (pane.id === 'pane-1' && hosts.header && hosts.sidebar && hosts.footer && !connection.initializing && (!state.restoringProject || engine.error)) return finishStartup();
   }, [pane.id, hosts.header, hosts.sidebar, hosts.footer, connection.initializing, state.restoringProject, engine.error]);
-  const agentsNeedingYou = agents.filter((agent) => agent.status === "needs_input").length;
   const hostedAgents = agentCatalog.filter((entry) => entry.transport !== "pty"); // every structured transport answers as a task
   const livePlans = state.plans.filter((plan) => !["done", "cancelled"].includes(plan.state));
   const planCount = livePlans.length;
@@ -96,8 +95,15 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const changedFiles = uniqueChanges(changes);
   const verification = lastRun?.verification;
   const openBrowser = (url = browser?.url ?? "") => { onBrowserOpen(pane.id); setBrowser({ url }); setContext("browser"); };
-  const openTerminal = () => { setTerminalOpen(true); setToolsPanel("terminal"); };
-  const closeContext = () => { setContext(null); setBrowser(null); };
+  const openTerminal = () => { setTerminalOpen(true); setContext("terminal"); };
+  const closeTerminal = () => { setTerminalOpen(false); if (context === "terminal") setContext(null); };
+  const closeContext = () => { setContext(null); if (context === "browser") setBrowser(null); };
+  const selectContext = (id) => {
+    if (id === 'browser') return openBrowser();
+    if (id === 'terminal') return openTerminal();
+    if (id === 'plans') setPlansOpen(true);
+    setContext(id);
+  };
   const needsYou = state.board?.projects.filter((row) => row.attention === "needs_you").length ?? 0;
   const showTask = () => setView("task");
   const openRow = (row) => reportError(async () => { await state.openFromBoard(row); showTask(); });
@@ -107,10 +113,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   }, [pane.id]);
 
   useEffect(() => {
-    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen));
+    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen || panelMenuOpen));
     return () => setOverlay(pane.id, false);
-  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen]);
-  useEffect(() => { setContext(null); setBrowser(null); setTerminalOpen(false); setToolsPanel(null); setAgentTerminalId(null); void state.refreshAgents(); }, [workspaceId]); // panes belong to one checkout
+  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen, panelMenuOpen]);
+  useEffect(() => { setContext(null); setBrowser(null); setTerminalOpen(false); setPlansOpen(false); void state.refreshAgents(); }, [workspaceId]); // panes belong to one checkout
   // Coming back to a task's window means its latest outcome was seen; a notification click lands on its task.
   useEffect(() => {
     const onFocus = () => { if (visible && view === "task" && workspaceId) void state.markViewed(workspaceId); };
@@ -140,7 +146,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       hasBrowser: context === 'browser' && Boolean(browser),
       selectSession: state.selectSession,
       openTarget: (path, sessionId) => state.openProject(path, { sessionId }).then(() => setView("task")),
-      closeBrowser: () => { if (browser) closeContext(); },
+      closeBrowser: () => { setBrowser(null); if (context === 'browser') setContext(null); },
       pickProject: () => setPickerOpen(true),
       openProject: (path) => state.openProject(path).then(() => setView("task")).catch((e) => state.setError(e.message)),
       showBoard: async () => { await state.refreshBoard(); setView("board"); },
@@ -148,12 +154,11 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       newTask: () => (project?.standalone ? state.newChat() : state.newSession("")).then(() => setView("task")),
       newChat: () => state.newChat().then(() => setView('task')),
       board: () => state.board,
-      closeTerminal: () => { setTerminalOpen(false); setToolsPanel(null); },
-      showAgents: () => setToolsPanel("agents"),
-      showPlans: () => setToolsPanel("plans"),
+      closeTerminal,
+      showPlans: () => selectContext("plans"),
       plans: () => state.plans,
-      startAgent: async (agentId) => { const agent = await state.startAgent(agentId); setToolsPanel("agents"); setAgentTerminalId(agent.terminalId); return agent; },
-      stopAgent: (terminalId) => state.stopAgent(terminalId).then(() => setAgentTerminalId(null)),
+      startAgent: async (agentId) => { const agent = await state.startAgent(agentId);  return agent; },
+      stopAgent: (terminalId) => state.stopAgent(terminalId),
       agents: () => state.agents,
       pickAnswerer: (agentId) => setAnswerer(agentId ?? "jolo"),
       hostedAgents: () => hostedAgents,
@@ -237,8 +242,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
             {view === "board" && <button onClick={() => setShowSettings(true)} aria-label="Settings" title="Settings"><Icon name="settings" /></button>}
             <button className={view === "board" ? "active" : ""} onClick={() => setView(view === "board" ? "task" : "board")} aria-label="Board" title="Board" aria-pressed={view === "board"}><Icon name="board" /><span className="header-action-label">Board</span>{needsYou > 0 && <span className="count needs">{needsYou}</span>}</button>
-            <button className={context === "changes" ? "active" : ""} onClick={() => setContext(context === "changes" ? null : "changes")} aria-label="Changes" title="Changes" disabled={!project}><Icon name="changes" /><span className="header-action-label">Changes</span>{changedFiles.length > 0 && <span className="count">{changedFiles.length}</span>}</button>
-            <button className={context === "browser" ? "active" : ""} onClick={() => context === "browser" ? closeContext() : openBrowser()} aria-label="Browser" title="Browser" disabled={!project}><Icon name="browser" /><span className="header-action-label">Browser</span></button>
+            <PanelMenu selected={view === 'board' ? null : context} panels={project?.standalone ? CONTEXT_PANELS.slice(0, 3) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, checks: verificationLabel(verification) }} onSelect={id => { selectContext(id); showTask(); }} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen} />
             {!multi && <span className="header-divider" aria-hidden="true" />}
             {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "x")} aria-label="Split right" title="Split right"><Icon name="splitRight" size={14} /></button>}
             {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "y")} aria-label="Split below" title="Split below"><Icon name="splitBelow" size={14} /></button>}
@@ -273,7 +277,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen} running={Boolean(activeRun)} model={providerLabel} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} onPickAnswerer={pickAnswerer} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
           </>}
         </main>
-        <aside className="inspector" aria-label="Task context" hidden={!context || view === "board"}>
+        <aside id={`${pane.id}-context`} className="inspector" aria-label="Task context" hidden={!context || view === "board"}>
+          <div className="context-bar">
           <div className="context-tabs" role="tablist" aria-label="Workspace view" onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             const tabs = /** @type {HTMLElement[]} */ ([...event.currentTarget.querySelectorAll('[role="tab"]')]);
@@ -283,31 +288,20 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
             tabs[next].focus(); tabs[next].click();
           }}>
-            {[['changes', 'Changes'], ['browser', 'Browser'], ['files', 'Files']].map(([id, label]) => <button key={id} id={`${pane.id}-${id}-tab`} role="tab" aria-selected={context === id} tabIndex={context === id ? 0 : -1} aria-controls={`${pane.id}-context-content`} onClick={() => id === "browser" ? openBrowser() : setContext(id)}>{label}{id === "changes" && changedFiles.length > 0 && <span className="count">{changedFiles.length}</span>}</button>)}
-            <span className="grow" /><button onClick={closeContext} aria-label="Close context panel"><Icon name="close" size={15} /></button>
+            {(project?.standalone ? CONTEXT_PANELS.slice(0, 3) : CONTEXT_PANELS).map(([id, label, icon]) => <button key={id} id={`${pane.id}-${id}-tab`} role="tab" aria-label={label} title={id === 'checks' ? `Checks · ${verificationLabel(verification)}` : label} aria-selected={context === id} tabIndex={context === id ? 0 : -1} aria-controls={`${pane.id}-context-content`} onClick={() => selectContext(id)}><Icon name={icon} size={15} /><span className="context-tab-label">{label}</span>{id === "changes" && changedFiles.length > 0 && <span className="count">{changedFiles.length}</span>}{id === 'plans' && planCount > 0 && <span className={plansNeedingYou ? 'count needs' : 'count'}>{planCount}</span>}</button>)}
+          </div>
+          <button className="context-close" onClick={closeContext} aria-label="Close context panel" title="Close panel"><Icon name="close" size={15} /></button>
           </div>
           <div id={`${pane.id}-context-content`} className="context-content" role="tabpanel" aria-labelledby={`${pane.id}-${context ?? "changes"}-tab`}>
-            <div className="changes-host" hidden={context === "browser"}>
+            <div className="changes-host" hidden={context !== "changes" && context !== "files"}>
               <ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} onSelectFile={() => setContext("changes")} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} />
             </div>
-            {context === "browser" && browser && workspaceId && <BrowserPane key={workspaceId} workspaceId={workspaceId} initialUrl={browser.url} onTitle={setBrowserTitle} onNavigate={(url) => setBrowser({ url })} />}
+            {browser && workspaceId && <div className="browser-host" hidden={context !== "browser"}><BrowserPane key={workspaceId} workspaceId={workspaceId} initialUrl={browser.url} onTitle={setBrowserTitle} onNavigate={(url) => setBrowser({ url })} /></div>}
+            <div className="tool-panel" id={`${pane.id}-checks-panel`} hidden={context !== "checks"}><ChecksPanel verification={verification} /></div>
+            <div className="tool-panel" id={`${pane.id}-terminal-panel`} hidden={context !== "terminal"}>{terminalOpen && workspaceId && <TerminalPane key={workspaceId} workspaceId={workspaceId} paneId={pane.id} onClose={closeTerminal} />}</div>
+            <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); showTask(); }} />}</div>
           </div>
         </aside>
-        <section className="task-tools" aria-label="Task tools" hidden={view === "board" || project?.standalone}>
-          <div className="tools-bar">
-            <button aria-expanded={toolsPanel === "checks"} aria-controls={`${pane.id}-checks-panel`} onClick={() => setToolsPanel(toolsPanel === "checks" ? null : "checks")}><Icon name="circleCheck" />Checks<span className={verification?.status === "passed" ? "good" : "muted"}>{verificationLabel(verification)}</span></button>
-            <button aria-expanded={toolsPanel === "terminal"} aria-controls={`${pane.id}-terminal-panel`} onClick={() => toolsPanel === "terminal" ? setToolsPanel(null) : openTerminal()} disabled={!project}><Icon name="terminal" />Terminal</button>
-            <button aria-expanded={toolsPanel === "plans"} aria-controls={`${pane.id}-plans-panel`} onClick={() => setToolsPanel(toolsPanel === "plans" ? null : "plans")} disabled={!project} title="Split work into tasks across agents"><Icon name="plan" />Plans{planCount > 0 && <span className={plansNeedingYou ? "count needs" : "count"}>{planCount}</span>}</button>
-            <button aria-expanded={toolsPanel === "agents"} aria-controls={`${pane.id}-agents-panel`} onClick={() => setToolsPanel(toolsPanel === "agents" ? null : "agents")} disabled={!workspaceId} title="Run another coding agent in this project"><Icon name="agents" />Agents{agents.length > 0 && <span className={agentsNeedingYou ? "count needs" : "count"}>{agents.length}</span>}</button>
-            <span className="grow" />
-            {terminalOpen && <button onClick={() => { setTerminalOpen(false); if (toolsPanel === "terminal") setToolsPanel(null); }} title="Close terminal and its shell" aria-label="Close terminal"><Icon name="close" size={14} /></button>}
-            <button aria-label={toolsPanel ? "Collapse tools" : "Expand tools"} onClick={() => setToolsPanel(toolsPanel ? null : "checks")}><Icon name="down" className={toolsPanel ? "" : "flipped"} size={14} /></button>
-          </div>
-          <div className="tool-panel" id={`${pane.id}-checks-panel`} hidden={toolsPanel !== "checks"}><ChecksPanel verification={verification} /></div>
-          <div className="tool-panel" id={`${pane.id}-terminal-panel`} hidden={toolsPanel !== "terminal"}>{terminalOpen && workspaceId && <TerminalPane key={workspaceId} workspaceId={workspaceId} paneId={pane.id} />}</div>
-          <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={toolsPanel !== "plans"}>{toolsPanel === "plans" && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setToolsPanel(null); showTask(); }} />}</div>
-          <div className="tool-panel" id={`${pane.id}-agents-panel`} hidden={toolsPanel !== "agents"}>{toolsPanel === "agents" && workspaceId && <AgentPane workspaceId={workspaceId} paneId={pane.id} catalog={agentCatalog} agents={agents} selectedId={agentTerminalId} onSelect={setAgentTerminalId} onStart={state.startAgent} onStop={async (terminalId) => { await state.stopAgent(terminalId); setAgentTerminalId(null); }} onStartSession={async (agentId) => { await state.newSession("", { agentId }); setAnswerer(null); setToolsPanel(null); showTask(); }} />}</div>
-        </section>
       </div>
       {active && hosts.footer && createPortal(<footer className={`status${boardHeader && !engine.error && !relayNote ? ' board-status' : ''}`} hidden={boardHeader && !engine.error && !relayNote}><span><Icon name={project?.standalone ? "chat" : "folder"} size={12} />{project ? projectLabel : "No project"}</span><span title={engine.connected ? `Engine process ${engine.status?.pid ?? ""}` : engine.error}><span className={`state-dot ${engine.connected ? "" : "offline"}`} />{engine.connected ? "Local engine" : "Connecting…"}</span><span className="grow" /><span className={engine.error ? "warn" : ""}>{engine.error || relayNote || (activeRun ? runLabel(activeRun) : runLabel(lastRun))}</span></footer>, hosts.footer)}
       {active && pickerOpen && !pendingPermission && <PanePicker project={project} sessionId={sessionId} board={state.board} onOpen={async (path, sessionId) => { await state.openProject(path, { sessionId }); showTask(); }} onClose={() => setPickerOpen(false)} />}

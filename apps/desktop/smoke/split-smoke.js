@@ -4,6 +4,7 @@ import path from "node:path";
 import { nativeTheme } from "electron";
 import { runPromptFocusSmoke } from './prompt-focus-smoke.js';
 import { runTaskDragSmoke } from './task-drag-smoke.js';
+import { selectPanel } from './panel-controls.js';
 
 export async function runSplitSmoke({ window, bridge, project, results, evaluate, waitFor, report }) {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -123,52 +124,36 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
   assert(await draft(first) === "keep this original draft" && await draft(second) === "keep the second draft" && await draft(third) === "keep the third draft", "resize or maximize lost a draft");
   report.checks.push("drag and keyboard resizing, maximize/restore, and focus preserve mounted composers and drafts");
 
-  // Tool panels must fit the split's height, not the whole window's height.
+  // Context fills this split's height and replaces only its own chat when narrow.
   const toolBounds = async (pane) => evaluate(`(() => {
     const root = document.querySelector(${JSON.stringify(selector(pane))});
     const bounds = (selector) => {
       const el = root.querySelector(selector); const r = el?.getBoundingClientRect();
-      return r ? {top: r.top, bottom: r.bottom, height: r.height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight} : null;
+      return r ? {top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight} : null;
     };
-    return {pane: bounds('.pane-body'), main: bounds('.main'), header: bounds('.task-header'), conversation: bounds('.conversation'), composer: bounds('.compose-dock'), tools: bounds('.task-tools'), bar: bounds('.tools-bar'), content: bounds('.task-tools > div:not([hidden]):not(.tools-bar)'), chooser: bounds('.agent-chooser'), terminal: bounds('.task-tools > div:not([hidden]) .terminal')};
+    return {pane: bounds('.pane-body'), main: bounds('.main'), tools: bounds('.inspector'), bar: bounds('.context-bar'), content: bounds('.inspector .tool-panel:not([hidden])'), terminal: bounds('.inspector .tool-panel:not([hidden]) .terminal')};
   })()`);
   const assertToolBounds = (b, label) => {
-    assert(b.header.bottom <= b.composer.top + 1, `${label}: header overlaps composer: ${JSON.stringify(b)}`);
-    assert(b.composer.bottom <= b.tools.top + 1, `${label}: tools overlap composer: ${JSON.stringify(b)}`);
-    assert(b.conversation.height >= 30, `${label}: tools collapsed the conversation: ${JSON.stringify(b)}`);
-    assert(b.main.bottom <= b.tools.top + 1 && b.tools.bottom <= b.pane.bottom + 1, `${label}: tools escape their pane: ${JSON.stringify(b)}`);
+    assert(b.tools.top >= b.pane.top - 1 && Math.abs(b.tools.bottom - b.pane.bottom) < 2, `${label}: tools do not fit their pane: ${JSON.stringify(b)}`);
+    assert(b.main.width ? b.tools.left >= b.main.right - 1 : Math.abs(b.tools.width - b.pane.width) < 2, `${label}: tools overlap the conversation: ${JSON.stringify(b)}`);
     assert(b.content.top >= b.bar.bottom - 1 && b.content.bottom <= b.tools.bottom + 1, `${label}: tool content escapes its panel: ${JSON.stringify(b)}`);
     if (b.terminal) assert(b.terminal.bottom <= b.tools.bottom + 1, `${label}: terminal escapes its panel`);
   };
   const originalSize = window.getSize();
   await focus(second);
-  await evaluate("window.__joloSmoke.showAgents()");
-  await waitFor(`Boolean(document.querySelector(${JSON.stringify(`${selector(second)} .agent-option`)}))`, "agent chooser loaded");
-  report.toolLayouts = [];
-  for (const theme of /** @type {const} */ (["light", "dark"])) {
+  await selectPanel(evaluate, waitFor, 'Checks');
+  for (const theme of /** @type {const} */ (['light', 'dark'])) {
     nativeTheme.themeSource = theme;
     window.setSize(1180, 860);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise(resolve => setTimeout(resolve, 150));
     const bounds = await toolBounds(second);
-    assertToolBounds(bounds, `${theme} split agent chooser`);
-    assert(bounds.chooser.scrollHeight > bounds.chooser.clientHeight, "agent fixture must exercise internal scrolling");
-    const scrolled = await evaluate(`(() => {const el = document.querySelector(${JSON.stringify(`${selector(second)} .agent-chooser`)}); el.scrollTop = el.scrollHeight; return el.scrollTop > 0;})()`);
-    assert(scrolled, "agent choices are not scrollable in a short split");
-    report.toolLayouts.push({theme, ...bounds});
-    writeFileSync(path.join(results, `split-tools-${theme}.png`), (await window.webContents.capturePage()).toPNG());
+    assertToolBounds(bounds, `${theme} split checks`);
+    (report.toolLayouts ??= []).push({theme, ...bounds});
   }
-  nativeTheme.themeSource = "system";
-  const hosted = await evaluate("window.__joloSmoke.startAgent('fixture')");
-  const agentHook = `window.__joloTerminals?.get(${JSON.stringify(`${second}:${hosted.terminalId}`)})`;
-  await waitFor(`Boolean(${agentHook}?.ready)`, "split hosted agent ready", 20_000);
-  assertToolBounds(await toolBounds(second), "split hosted agent terminal");
-  await evaluate("window.__joloSmoke.stopAgent(" + JSON.stringify(hosted.terminalId) + ")");
-  await click(second, "Collapse tools");
-  await evaluate(`document.querySelector(${JSON.stringify(`${selector(second)} .tools-bar [aria-controls="${second}-checks-panel"]`)}).click()`);
-  assertToolBounds(await toolBounds(second), "split checks");
-  await click(second, "Collapse tools");
+  nativeTheme.themeSource = 'system';
+  await click(second, 'Close context panel');
   window.setSize(...originalSize);
-  report.checks.push("expanded Agents and Checks stay below the composer in short splits; the chooser scrolls in both themes and hosted terminals fit their panel");
+  report.checks.push('Checks fit the right context panel in both themes and stay inside their own narrow split');
 
   // Each pane owns its shell: one terminal must never report another pane's screen.
   const openShell = async (pane, marker) => {

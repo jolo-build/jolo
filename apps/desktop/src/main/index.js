@@ -18,6 +18,7 @@ import { newestSourceTime } from "./staleness.js";
 import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
+import { installReloadShortcuts } from './reload-shortcuts.js';
 
 protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }]);
 
@@ -154,7 +155,7 @@ class EngineBridge {
 
 function createWindow() {
   // Match the renderer's --bg so newly exposed window areas stay in theme during live resize.
-  const backgroundColor = () => nativeTheme.shouldUseDarkColors ? "#171717" : "#ffffff";
+  const backgroundColor = () => nativeTheme.shouldUseDarkColors ? "#191a1c" : "#fcfcfb";
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -187,6 +188,7 @@ function createWindow() {
   };
   nativeTheme.on("updated", updateBackground);
   window.once("closed", () => nativeTheme.removeListener("updated", updateBackground));
+  installReloadShortcuts(window.webContents);
   window.webContents.setWindowOpenHandler(({ url }) => {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch { /* ignore */ }
     return { action: "deny" };

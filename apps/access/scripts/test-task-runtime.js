@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 const require=createRequire(import.meta.url),wranglerRequire=createRequire(require.resolve('wrangler/package.json'));
+const {unstable_splitSqlQuery:splitSQL}=require('wrangler');
 const {Miniflare,convertV4MiniflareOptions}=wranglerRequire('miniflare');
 const root=new URL('../src/tasks/',import.meta.url);
 const runtime=new Miniflare(convertV4MiniflareOptions({
@@ -32,7 +33,16 @@ const runtime=new Miniflare(convertV4MiniflareOptions({
       const deniedComment=await comments.create('member',task.id,'After removal',crypto.randomUUID());
       const denied=await repo.task('member',task.id);
       const stale=await repo.updateTask('member',task.id,{...fields,state:'done'},2);
-      return Response.json({revision:edited.revision,denied,stale,mail,comment,replay,revised,history,ownOnly,removedComment,deletedReplay,deniedComment,audit:await repo.audit('owner',team.id)});
+      const audit=await repo.audit('owner',team.id);
+      const duplicate=crypto.randomUUID();
+      const sequence=await Promise.all([
+        repo.createTask('owner',{...fields,requestID:duplicate}),
+        repo.createTask('owner',{...fields,requestID:duplicate}),
+        repo.createTask('owner',{...fields,requestID:crypto.randomUUID()}),
+      ]);
+      const personalOwner=await repo.createTask('owner',{...fields,team:null,labels:[],requestID:crypto.randomUUID()});
+      const personalMember=await repo.createTask('member',{...fields,team:null,labels:[],requestID:crypto.randomUUID()});
+      return Response.json({sequence,personalOwner,personalMember,revision:edited.revision,denied,stale,mail,comment,replay,revised,history,ownOnly,removedComment,deletedReplay,deniedComment,audit});
     }};`},...['repository.js','permissions.js','comments.js'].map(name=>({type:'ESModule',path:fileURLToPath(new URL(name,root)),contents:readFileSync(new URL(name,root),'utf8')}))],
 }));
 try {
@@ -40,12 +50,14 @@ try {
   const migrations=new URL('../.generated/migrations/',import.meta.url);
   for(const name of readdirSync(migrations).filter(n=>n.endsWith('.sql')).sort()) {
     const sql=readFileSync(new URL(name,migrations),'utf8').replace(/--[^\n]*/g,'');
-    await db.batch(sql.split(';').map(s=>s.trim()).filter(Boolean).map(s=>db.prepare(s)));
+    await db.batch(splitSQL(sql).map(statement=>db.prepare(statement)));
   }
   for(const id of ['owner','member']) await db.prepare('INSERT INTO accounts(id,provider_key,email,name,created_at,updated_at) VALUES (?,?,?,?,1,1)').bind(id,'github:'+id,id+'@example.com',id).run();
   const response=await runtime.dispatchFetch('https://fixture.example/');
   assert.equal(response.status,200,await response.clone().text());
   const result=await response.json(); assert.equal(result.revision,2); assert.equal(result.denied,null);assert.equal(result.stale,null);
+  assert.equal(result.sequence[0].id,result.sequence[1].id); assert.equal(new Set(result.sequence.map(t=>t.number)).size,2); assert(result.sequence.every(t=>t.number>1));
+  assert.equal(result.personalOwner.number,1); assert.equal(result.personalMember.number,1);
   assert.equal(result.mail.state,'pending');assert.equal(JSON.parse(result.mail.payload).to[0],'member@example.com');
   assert.equal(result.audit.length,10); assert(result.audit.some(a=>a.action==='task.created'&&a.subject==='JOLO-1'));
   assert.equal(result.comment.id,result.replay.id);assert.equal(result.revised.revision,2);assert.equal(result.history.comments[0].body,'Edited in D1');

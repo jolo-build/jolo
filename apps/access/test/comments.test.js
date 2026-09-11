@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { fixture } from './fixture.js';
+import { taskPath } from '../src/tasks/identity.js';
 import { taskRepository } from '../src/tasks/repository.js';
 import { commentRepository } from '../src/tasks/comments.js';
 
@@ -22,7 +23,7 @@ async function setup(shared=false) {
     await tasks.accept(a.id,invitation.id,a.email);
   }
   const task=await tasks.createTask(owner.id,{team:team?.id??null,title:'Discuss the fix',description:'Task description',project:'',state:'todo',priority:'normal',labels:[],requestID:crypto.randomUUID()});
-  return {f,owner,other,viewer,outsider,tasks,comments,team,task,path:`/tasks/JOLO-${task.id}`};
+  return {f,owner,other,viewer,outsider,tasks,comments,team,task,path:taskPath(task)};
 }
 const input=(body='A useful update')=>({body,request_id:crypto.randomUUID()});
 
@@ -119,7 +120,7 @@ test('history pages are bounded and chronological, and comment IDs cannot cross 
   expect(older).toContain('Latest comments'); expect(older).toContain('Update 3'); expect(older).not.toContain('Update 4');
   for(const value of ['0','-1','NaN','1.5','9007199254740992']) expect((await get(f,owner,path+'?comments_before='+value)).status).toBe(400);
   const another=await tasks.createTask(owner.id,{team:null,title:'Other task',description:'',project:'',state:'todo',priority:'normal',labels:[],requestID:crypto.randomUUID()});
-  expect((await post(f,owner,`/tasks/JOLO-${another.id}/comments/1/delete`,{revision:'1'})).status).toBe(404);
+  expect((await post(f,owner,`${taskPath(another)}/comments/1/delete`,{revision:'1'})).status).toBe(404);
   expect((await comments.list(other.id,task.id)).comments).toEqual([]);
 });
 

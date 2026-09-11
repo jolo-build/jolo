@@ -1,3 +1,5 @@
+import path from "node:path";
+import { realpathSync } from "node:fs";
 // Codex as a hosted agent, driven through its app-server.
 //
 // `codex app-server` speaks JSON-RPC over stdio. One Jolo run is one Codex turn on a thread that persists
@@ -9,7 +11,7 @@
 //
 // The shapes below were generated from the installed binary (`codex app-server generate-json-schema`) and
 // confirmed in live sessions; see the engine's agents README.
-import { createHostedTurn, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
+import { createHostedTurn, insideWorkspace, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { codexSearchArgs } from '../search/hosted.js';
 import { codexBrowserArgs, browserPreview } from '../browser/hosted.js';
@@ -141,11 +143,26 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         const decision = await turn.decide({ toolClass: "process", toolName: "command", summary: `${manifest.displayName}: ${friendly}`, script: command, cwd, argumentDigest: digestOf({ tool: "command", command, cwd }) });
         return decision === null ? "cancel" : decision === "allow" ? "accept" : "decline";
       };
+      // External edits need an explicit decision scoped to these paths and patch contents.
+      // Keep workspace metadata/symlink policy failures as denials, not approvable edits.
+      const decideFiles = async (targets, changes) => {
+        const local = [], external = [];
+        for (const target of targets) {
+          const relative = path.relative(workspace.path, path.resolve(workspace.path, target));
+          const canonicalRelative = path.relative(realpathSync(workspace.path), path.resolve(workspace.path, target));
+          const outside = value => value === '..' || value.startsWith(`..${path.sep}`);
+          (!insideWorkspace(workspace.path, target) && outside(relative) && outside(canonicalRelative) ? external : local).push(target);
+        }
+        const decision = await turn.decide({ toolClass: "mutation", toolName: "apply_patch", targets: local });
+        if (decision !== "allow" || !external.length) return decision;
+        const script = JSON.stringify({ paths: targets, changes });
+        return turn.decide({ toolClass: "process", toolName: "apply_patch", summary: `${manifest.displayName} wants to edit files outside the workspace: ${external.join(', ')}`, script, cwd: workspace.path, argumentDigest: digestOf({ tool: 'apply_patch', targets, changes }) });
+      };
       /** A patch Codex wants to apply: judged by where its files are, like Jolo's own edits. */
       const decidePatch = async (params) => {
         const item = state.items.get(params.itemId);
         if (!item) { log.warn("codex asked about a patch it never announced", { itemId: params.itemId }); return "decline"; }
-        const decision = await turn.decide({ toolClass: "mutation", toolName: "apply_patch", targets: changePaths(item.changes) });
+        const decision = await decideFiles(changePaths(item.changes), item.changes);
         return decision === null ? "cancel" : decision === "allow" ? "accept" : "decline";
       };
       /** Extra sandbox permissions: paths outside the workspace are refused outright; the rest is the user's call. */
@@ -172,7 +189,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
           }
           case "applyPatchApproval": {
             const paths = Object.keys(params.fileChanges ?? {});
-            const decision = await turn.decide({ toolClass: "mutation", toolName: "apply_patch", targets: paths });
+            const decision = await decideFiles(paths, params.fileChanges);
             return respond(id, { decision: decision === "allow" ? "approved" : decision === null ? "abort" : "denied" });
           }
           case "item/tool/requestUserInput":

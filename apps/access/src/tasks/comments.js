@@ -9,7 +9,7 @@ export function commentRepository(db, now = Date.now) {
     const result = await db.batch([
       statement(sql, values),
       statement(`INSERT INTO task_audit(team_id,account_id,actor_id,action,subject,at)
-        SELECT team_id,?1,?1,?3,'JOLO-'||id,?4 FROM tasks WHERE id=?2 AND changes()>0`, [actor,task,action,now()]),
+        SELECT team_id,?1,?1,?3,'JOLO-'||number,?4 FROM tasks WHERE id=?2 AND changes()>0`, [actor,task,action,now()]),
     ]);
     return result[0].results?.[0] ?? null;
   };

@@ -16,10 +16,10 @@ test('browser attachment rejects unsafe URLs and keeps concurrent workspaces sep
     const preferences = { nodeIntegration: true, preload: '/bad' };
     contents.emit('will-attach-webview', { preventDefault() { throw new Error('valid attachment blocked'); } }, preferences, { src: 'https://example.com', partition: `jolo-browser-${workspace}` });
     expect(preferences).toMatchObject({ nodeIntegration: false, sandbox: true, contextIsolation: true });
-    expect(preferences.preload).toBeUndefined();
+    expect(preferences.preload).toEndWith('/browser-zoom-preload.cjs');
   }
   for (const [id, workspace] of [[1, 'b'], [2, 'a']]) {
-    const guest = Object.assign(new EventEmitter(), { id, session: sessionForPartition(`jolo-browser-${workspace}`), debugger: { attach() {}, sendCommand: async () => {} }, setWindowOpenHandler() {} });
+    const guest = Object.assign(new EventEmitter(), { id, session: sessionForPartition(`jolo-browser-${workspace}`), debugger: { attach() {}, sendCommand: async () => {} }, setWindowOpenHandler() {}, setZoomMode() {}, async setVisualZoomLevelLimits() {} });
     contents.emit('did-attach-webview', {}, guest);
   }
   expect(attached).toEqual([[1, 'b'], [2, 'a']]);
@@ -129,4 +129,57 @@ test('routine task notifications explicitly suppress the OS sound', async () => 
     expect(f.notifications).toHaveLength(1);
     expect(f.notifications[0].options.silent).toBe(true);
   } finally { f.service.dispose(); }
+});
+
+
+test('browser uses native isolated mouse zoom and bounded keyboard shortcuts', () => {
+  const contents = new EventEmitter();
+  const session = Object.assign(new EventEmitter(), { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} });
+  let factor = 1, mode = '', limits = [];
+  const guest = Object.assign(new EventEmitter(), { id: 77, session,
+    debugger: { attach() {}, async sendCommand() {} }, setWindowOpenHandler() {},
+    setZoomMode(value) { mode = value; }, async setVisualZoomLevelLimits(min, max) { limits = [min, max]; },
+    getZoomFactor() { return factor; }, setZoomFactor(value) { factor = value; },
+  });
+  installBrowserHost({ webContents: contents }, { log, sessionForPartition: () => session, onGuest() {} });
+  contents.emit('did-attach-webview', {}, guest);
+  expect(mode).toBe('isolated'); expect(limits).toEqual([1, 3]);
+  guest.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: '+', meta: true }); expect(factor).toBeCloseTo(1.2);
+  guest.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: '-', control: true }); expect(factor).toBeCloseTo(1);
+  for (let i = 0; i < 100; i++) guest.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: '+', meta: true });
+  expect(factor).toBe(3);
+  for (let i = 0; i < 100; i++) guest.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: '-', control: true });
+  expect(factor).toBe(0.5);
+  guest.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: '0', meta: true });
+  expect(factor).toBe(1);
+  guest.emit('ipc-message', {}, 'jolo:browser:wheel-zoom', 'in');
+  expect(factor).toBeCloseTo(1.1);
+  guest.emit('ipc-message', {}, 'jolo:browser:wheel-zoom', 'invalid');
+  expect(factor).toBeCloseTo(1.1);
+});
+
+test('focused browser refresh shortcuts target the desktop, not the embedded page', () => {
+  let reloads = 0, hardReloads = 0, prevented = 0, destroyed = false;
+  const contents = Object.assign(new EventEmitter(), {
+    isDestroyed: () => destroyed,
+    reload: () => { reloads++; }, reloadIgnoringCache: () => { hardReloads++; },
+  });
+  const session = Object.assign(new EventEmitter(), { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} });
+  const guest = Object.assign(new EventEmitter(), { id: 91, session,
+    debugger: { attach() {}, async sendCommand() {} }, setWindowOpenHandler() {},
+    setZoomMode() {}, async setVisualZoomLevelLimits() {},
+    reload() { throw new Error('Refreshed the guest instead of the desktop'); },
+  });
+  installBrowserHost({ webContents: contents }, { log, sessionForPartition: () => session, onGuest() {} });
+  contents.emit('did-attach-webview', {}, guest);
+  const key = input => guest.emit('before-input-event', { preventDefault() { prevented++; } }, { type: 'keyDown', ...input });
+  key({ key: 'F5' });
+  key({ key: 'r', ...(process.platform === 'darwin' ? { meta: true } : { control: true }) });
+  key({ key: 'F5', shift: true });
+  expect([reloads, hardReloads, prevented]).toEqual([2, 1, 3]);
+  for (const input of [{ key: 'r' }, { key: 'F5', type: 'keyUp' }, { key: 'F5', isAutoRepeat: true }, { key: 'F5', alt: true }]) key(input);
+  expect([reloads, hardReloads, prevented]).toEqual([2, 1, 3]);
+  destroyed = true;
+  key({ key: 'F5' });
+  expect(reloads).toBe(2);
 });

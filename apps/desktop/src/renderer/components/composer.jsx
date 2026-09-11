@@ -139,7 +139,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [taskQuery]);
-  const choices = taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
+  const choices = taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
   const picking = choices.length > 0;
   // The compose area hides what overflows it, so the list is placed against the window instead of the form.
   useEffect(() => {
@@ -151,7 +151,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     if (!option) return;
     if (option.task) {
       const start = caret - taskQuery.length - 1;
-      const insert = `#${option.id} `;
+      const insert = `${option.id} `;
       setText(text.slice(0, start) + insert + text.slice(caret));
       setCaret(0);
       requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + insert.length, start + insert.length); });
@@ -217,7 +217,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
       {choices.map((option, index) => <li key={option.id}>
         <button type="button" role="option" aria-selected={index === highlight} className={index === highlight ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-          <span className="mention-name">{option.task ? "#" : "@"}{option.id}</span><span className="mention-detail">{option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
+          <span className="mention-name">{option.task ? "#" : "@"}{option.task ? option.key : option.id}</span><span className="mention-detail">{option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
         </button>
       </li>)}
       <li className="mention-hint">{taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>

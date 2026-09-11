@@ -29,12 +29,13 @@ export async function runTasksSmoke({window,bridge,evaluate,waitFor,results,repo
     await evaluate(`(() => {const input=document.querySelector('.composer textarea');input.focus();Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'@codex #JOLO-');input.setSelectionRange(13,13);input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await waitFor("document.querySelector('[aria-label=\"Reference a web task\"]')?.textContent.includes('Repair task form')",'task suggestions');
     await evaluate("document.querySelector('.composer textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))");
-    await waitFor("document.querySelector('.composer textarea')?.value === '@codex #JOLO-1 '",'task selected without submitting');
+    const {tasks}=await bridge.rawCall('task.list',{});
+    await waitFor(`document.querySelector('.composer textarea')?.value === ${JSON.stringify('@codex '+tasks[0].url+' ')}`,'scoped task selected without submitting');
     await evaluate("document.querySelector('.composer textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))");
     await waitFor("window.__joloSmoke.state().runState === 'completed'",'task run completed');
     await waitFor("document.querySelector('.message-task-references')?.textContent.includes('Repair task form')",'attached task chip');
     assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/TASK_DESKTOP_CONTEXT/);
-    assert.match(await evaluate("document.querySelector('.message.user .message-text').textContent"),/^@codex #JOLO-1/);
+    assert.equal(await evaluate("document.querySelector('.message.user .message-text').textContent"),'@codex '+tasks[0].url);
     writeFileSync(path.join(results,'tasks-desktop.png'),(await window.webContents.capturePage()).toPNG());
     report.checks.push('Desktop sign-in, explicit task reapproval, keyboard task selection, agent context, and sent task links pass through the real engine and fixture Access service');
   } finally {shell.openExternal=open;}

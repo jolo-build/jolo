@@ -79,3 +79,42 @@ test('send now and cancellation affect only their own chat, even in a shared fol
     expect(f.state(other)).toBe('model');
   } finally { await f.close(); }
 });
+
+test('first workspace prompt assigns a title, retries and later turns preserve it', async () => {
+  const f = fixture();
+  try {
+    const session = f.storage.createSession({ projectId: f.project.id, workspaceId: f.workspace.id, title: '' });
+    const request = { sessionId: session.id, requestId: 'title-first', prompt: '  Fix\n the browser tabs  ', expectedSessionRevision: session.revision };
+    f.runs.start(request);
+    expect(f.storage.getSession(session.id).title).toBe('Fix the browser tabs');
+    expect(f.runs.start(request).deduplicated).toBe(true);
+    f.start(session);
+    expect(f.storage.getSession(session.id).title).toBe('Fix the browser tabs');
+    const named = f.session(); f.start(named);
+    expect(f.storage.getSession(named.id).title).toBe('chat');
+    const stale = f.storage.createSession({ projectId: f.project.id, workspaceId: f.workspace.id, title: '' });
+    expect(() => f.runs.start({ ...request, sessionId: stale.id, expectedSessionRevision: 999 })).toThrow('revision');
+    expect(f.storage.getSession(stale.id).title).toBe('');
+  } finally { await f.close(); }
+});
+
+test('startup recovers old unnamed tasks from their first prompt without reordering activity', async () => {
+  const f = fixture();
+  try {
+    const session = f.storage.createSession({ projectId: f.project.id, workspaceId: f.workspace.id, title: '' });
+    f.storage.insertRun({ sessionId: session.id, requestId: 'old-first', prompt: 'Original task' });
+    f.storage.insertRun({ sessionId: session.id, requestId: 'old-next', prompt: 'Follow up' });
+    const before = f.storage.getSession(session.id);
+    f.storage.close();
+    // Release cached SQLite statements before opening a second connection in-process.
+    Bun.gc(true);
+    const reopened = new Storage({ databasePath: path.join(f.root, 'db'), artifactsDir: path.join(f.root, 'artifacts'), bootId: 'restart' });
+    try {
+      expect(reopened.getSession(session.id).title).toBe('Original task');
+      expect(reopened.getSession(session.id).updatedAt).toBe(before.updatedAt);
+      const revision = reopened.getSession(session.id).revision;
+      reopened.repairUntitledSessions();
+      expect(reopened.getSession(session.id).revision).toBe(revision);
+    } finally { reopened.close(); }
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});

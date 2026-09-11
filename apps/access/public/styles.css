@@ -41,7 +41,7 @@ input::placeholder,textarea::placeholder { color:var(--muted); opacity:1; }
 .theme-switch { display:flex; align-items:center; gap:8px; margin-left:auto; color:var(--muted); font-size:.6875rem; }
 .theme-switch[hidden] { display:none; }
 .theme-switch select { font:inherit; color:var(--fg); background:var(--field); border:1px solid transparent; border-radius:6px; min-height:36px; padding:6px 8px; cursor:pointer; }
-.theme-switch select:focus-visible { outline:2px solid var(--highlight); outline-offset:2px; }
+.theme-switch select:focus-visible { outline:none; background:var(--tint); }
 html { height:100%; }
 body {
   margin:0;
@@ -55,7 +55,7 @@ body {
 a { color:inherit; text-underline-offset:4px; }
 button { font:inherit; cursor:pointer; }
 a,button { -webkit-tap-highlight-color:transparent; }
-a:focus-visible,button:focus-visible,summary:focus-visible { outline:2px solid var(--highlight); outline-offset:3px; }
+a:focus-visible,button:focus-visible,summary:focus-visible { outline:none; background-color:var(--tint); color:var(--fg); }
 ::selection { background:var(--tint); color:var(--fg); }
 header,main,footer { width:100%; min-width:0; padding-inline:var(--gutter); }
 header { display:flex; align-items:center; gap:20px; border-bottom:1px solid var(--strong-line); }
@@ -108,8 +108,8 @@ footer a { display:flex; align-items:center; height:100%; }
 .task-app label { display:flex; flex-direction:column; gap:6px; min-width:0; font-size:.75rem; line-height:1.5; }
 .task-app input:not([type=hidden]):not([type=checkbox]),.task-app select,.task-app textarea { width:100%; min-width:0; padding:8px 10px; background:var(--field); border:1px solid transparent; border-radius:6px; color:var(--fg); font:inherit; font-size:.8125rem; }
 .task-app textarea { line-height:1.7; }
-/* Keep focus inside the control so scroll panels cannot clip it into a second border. */
-.task-app input:focus-visible,.task-app select:focus-visible,.task-app textarea:focus-visible { border-color:var(--strong-line); outline:2px solid var(--highlight); outline-offset:-2px; }
+/* Focus uses a surface change throughout Access, including device sign-in. */
+.task-app input:focus-visible,.task-app select:focus-visible,.task-app textarea:focus-visible { border-color:transparent; outline:none; background-color:var(--tint); }
 .task-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:0 0 16px; }
 .task-filters label { flex:1 1 120px; }
 .task-filters .button { margin:0; }
@@ -120,7 +120,7 @@ footer a { display:flex; align-items:center; height:100%; }
 .task-filter-options { border-radius:8px; position:absolute; right:0; top:calc(100% + 8px); z-index:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; width:min(560px,100%); max-height:55dvh; overflow:auto; padding:20px; border:1px solid var(--strong-line); background:var(--bg); box-shadow:0 6px 18px light-dark(#00000014,#00000050); }
 .task-filter-options .button { grid-column:1/-1; justify-self:end; }
 .task-scroll { min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
-.task-scroll:focus-visible { outline:2px solid var(--highlight); outline-offset:-2px; }
+.task-scroll:focus-visible { outline:none; background-color:var(--surface); }
 .task-list-page { overflow:hidden; }
 .task-list { border-top:1px solid var(--strong-line); }
 .task-list-page > .task-list { flex:1; }
@@ -376,7 +376,7 @@ footer { background:var(--bg); }
 .task-state[data-state=in_progress]::before { border:0; background:var(--highlight); box-shadow:0 0 0 3px var(--tint); }
 .task-state[data-state=done]::before { background:currentColor; }
 .task-state[data-state=cancelled]::before { border-radius:2px; }
-.task-comment-compose textarea { background:var(--surface); border-color:var(--line); border-radius:7px; }
+.task-comment-compose textarea { background:var(--surface); border-color:transparent; border-radius:7px; }
 .task-discussion .task-view-body { background:transparent; }
 .task-summary { background:var(--surface); }
 .task-chat-hint { border-radius:6px; }
@@ -440,3 +440,24 @@ footer { background:var(--bg); }
 .task-compose-page .task-properties .task-fields { gap:10px; }
 .task-compose-page .task-actions a { order:0; }
 @media(max-width:700px) { .task-compose-page .task-properties .task-fields > label { display:flex; align-items:stretch; } }
+
+/* Shared by sign-in, device approval, settings and task forms. Keep dimensions
+   stable with transparent borders, and suppress native mouse-focus outlines too. */
+body input,body select,body textarea,body button,body .button,body summary {
+  border-color:transparent;
+  outline:none;
+  box-shadow:none;
+}
+body input:focus,body select:focus,body textarea:focus {
+  border-color:transparent;
+  outline:none;
+  box-shadow:none;
+  background-color:var(--tint);
+}
+body .button:focus-visible { background:var(--button-hover); color:var(--bg); }
+body .button.secondary:focus-visible { background:var(--tint); color:var(--fg); }
+.signin-providers .button:hover { border-color:transparent; }
+.task-more-filters[open] summary { border-color:transparent; background:var(--field); }
+@media(forced-colors:active) {
+  body :is(input,select,textarea,button,a,summary):focus-visible { outline:2px solid Highlight; outline-offset:2px; }
+}

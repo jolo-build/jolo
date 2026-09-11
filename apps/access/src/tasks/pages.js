@@ -1,3 +1,4 @@
+import { taskKeyOf, taskPath } from './identity.js';
 import { appPage, escapeHTML as e } from '../pages.js';
 import { TASK_STATES, TASK_PRIORITIES, LABEL_COLORS } from '../../../../packages/protocol/src/tasks.js';
 import { canManage, canManageMember, canWriteTask, canCommentTask } from './permissions.js';
@@ -14,7 +15,7 @@ const scopeOptions = teams => [['', 'Personal'], ...teams.map(t => [t.id, t.name
 export const page = (title, body, kind = '') => appPage(title, body, { kind, active: kind.startsWith('team') ? 'teams' : kind.startsWith('label') ? 'labels' : kind.startsWith('task') ? 'tasks' : '' });
 export const labelBadge = label => `<span class="task-label color-${e(label.color)}">${e(label.name)}</span>`;
 export const taskErrorPage = (message, status = 400) => page('Unable to continue', `<h1>Unable to continue.</h1>${note(message)}<p><a href="/tasks">Return to tasks</a> · <a href="/teams">Teams</a></p><p class="fine">${status}</p>`);
-const taskHint = task => `<p class="task-chat-hint">Reference in chat: <code>@codex #JOLO-${task.id} fix this problem</code><span class="fine">Revision ${task.revision} · Open the correct local project before sending.</span></p>`;
+const taskHint = (task, origin) => `<p class="task-chat-hint">Reference in chat: <code>@codex fix ${e(origin)}${taskPath(task)}</code><span class="fine">Revision ${task.revision} · Open the correct local project before sending.</span></p>`;
 
 function commentTime(at) {
   const date = new Date(at), iso = date.toISOString();
@@ -32,15 +33,15 @@ function commentCard(comment, account, path, editable, draft) {
     </div>`:''}</div></article>`;
 }
 
-export function taskViewPage({ account, task, labels, members = [], team = null, error = null, comments = [], older = null, commentsBefore = null, commentDraft = null }) {
-  const writable = canWriteTask(task, account.id), path = `/tasks/JOLO-${task.id}`;
+export function taskViewPage({ origin, account, task, labels, members = [], team = null, error = null, comments = [], older = null, commentsBefore = null, commentDraft = null }) {
+  const writable = canWriteTask(task, account.id), path = taskPath(task);
   const commentable = canCommentTask(task, account.id);
   const selected = JSON.parse(task.labels ?? '[]');
   const assignee = task.assignee_id ? (task.assignee_id === account.id ? account.name : members.find(m => m.id === task.assignee_id)?.name ?? 'Previously assigned member') : 'Unassigned';
   const property = (name, value) => `<div><dt>${e(name)}</dt><dd>${e(value)}</dd></div>`;
-  const properties = `<dl>${property('State', TASK_STATES[task.state])}${property('Priority', task.priority)}${property('Project label', task.project || 'None')}${property('Assignee', assignee)}<div><dt>Labels</dt><dd>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ') || 'None'}</dd></div></dl>${taskHint(task)}`;
+  const properties = `<dl>${property('State', TASK_STATES[task.state])}${property('Priority', task.priority)}${property('Project label', task.project || 'None')}${property('Assignee', assignee)}<div><dt>Labels</dt><dd>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ') || 'None'}</dd></div></dl>${taskHint(task, origin)}`;
   const draft = commentDraft?.id ? null : commentDraft;
-  return page(`JOLO-${task.id}`, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>JOLO-${task.id}</h1></div><div class="task-heading-actions"><a href="/tasks${team ? '?team=' + e(team.id) : ''}">Back to tasks</a>${writable && !task.archived_at ? `<a class="button" href="${path}/edit">Edit task</a>` : ''}</div></div>${note(error)}
+  return page(`${taskKeyOf(task)}`, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${taskKeyOf(task)}</h1></div><div class="task-heading-actions"><a href="/tasks${team ? '?team=' + e(team.id) : ''}">Back to tasks</a>${writable && !task.archived_at ? `<a class="button" href="${path}/edit">Edit task</a>` : ''}</div></div>${note(error)}
     ${task.archived_at ? '<p class="notice">This task is archived.</p>' : ''}
     <details class="task-mobile-details"><summary>Details <span>${e(TASK_STATES[task.state])} · ${e(task.priority)}</span></summary><div class="task-scroll">${properties}</div></details>
     <div class="task-view-layout">
@@ -75,20 +76,20 @@ export function taskListPage({ tasks, teams, labels, filters, next }) {
         ${button('Apply filters')}
       </div></details>${button('Search', true)}
     </form>
-    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="/tasks/${e(task.key)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state" data-state="${e(task.state)}">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
+    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="${e(task.url)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state" data-state="${e(task.state)}">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
     ${next ? `<p class="task-pagination"><a href="/tasks?${e(query)}">Next page →</a></p>` : ''}`, 'task-list-page');
 }
 
-export function taskFormPage({ account, task = null, teams, labels, members = [], team = null, error = null, submitted = null }) {
+export function taskFormPage({ origin, account, task = null, teams, labels, members = [], team = null, error = null, submitted = null }) {
   const writable = !task ? !team || ['owner', 'admin', 'member'].includes(team.role) : canWriteTask(task, account.id);
   const editable = writable && !task?.archived_at;
-  if (task && !editable) return taskViewPage({ account, task, labels, members, team, error });
+  if (task && !editable) return taskViewPage({ origin, account, task, labels, members, team, error });
   const values = submitted ?? task ?? { title: '', description: '', project: '', state: 'todo', priority: 'normal', labels: [], assignee_id: null };
   const selected = Array.isArray(values.labels) ? values.labels : JSON.parse(values.labels ?? '[]');
   const canAssign = !team || canManage(team.role);
   const assignees = [['', 'Unassigned'], ...(team ? members : [{ id: account.id, name: account.name }]).filter(m => canAssign || !task && m.id === account.id).map(m => [m.id, m.name])];
   if (task?.assignee_id && !assignees.some(([id]) => id === task.assignee_id)) assignees.push([task.assignee_id, members.find(m => m.id === task.assignee_id)?.name ?? 'Previously assigned member']);
-  const title = task ? `Edit JOLO-${task.id}` : 'New task';
+  const title = task ? `Edit ${taskKeyOf(task)}` : 'New task';
   const fields = `${hidden('team', team?.id ?? '')}${hidden('request_id', values.requestID ?? crypto.randomUUID())}${task ? hidden('revision', task.revision) : ''}
     <div class="task-main-fields">
       <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="Give this task a clear title"')}</label>
@@ -103,10 +104,10 @@ export function taskFormPage({ account, task = null, teams, labels, members = []
       </div>
       <fieldset><legend>Labels</legend>${labels.length ? labels.map(l => `<label class="task-checkbox"><input type="checkbox" name="label" value="${e(l.id)}"${selected.includes(l.id) ? ' checked' : ''}>${labelBadge(l)}</label>`).join('') : '<p class="fine">No labels in this workspace.</p>'}<a href="/labels${team ? '?team=' + e(team.id) : ''}">Manage labels</a></fieldset>
     </div>`;
-  return page(title, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${e(title)}</h1></div><a href="${task ? `/tasks/JOLO-${task.id}` : '/tasks' + (team ? '?team=' + e(team.id) : '')}">${task ? 'Back to task' : 'Back to tasks'}</a></div>${note(error)}
-    ${!task ? `<form class="task-filters workspace-picker" method="get" action="/tasks/new"><label>Workspace${select('team', scopeOptions(teams), team?.id)}</label>${button('Choose workspace', true)}</form>` : taskHint(task)}
-    ${editable ? post(task ? `/tasks/JOLO-${task.id}` : '/tasks', account, `<div class="task-editor">${fields}</div>`, 'id="task-edit" class="task-form"') : `<div class="task-read-view"><h2>${e(values.title)}</h2><p>${e(TASK_STATES[values.state])} · ${e(values.priority)}</p><pre class="task-description task-scroll" tabindex="0">${e(values.description)}</pre><p>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ')}</p><p class="fine">${task?.archived_at ? 'This task is archived.' : 'Your role allows viewing this task.'}</p></div>`}
-    <div class="task-actions">${editable ? button(task ? 'Save task' : 'Create task', false, 'form="task-edit"') : ''}<a class="button secondary" href="${task ? `/tasks/JOLO-${task.id}` : '/tasks' + (team ? '?team=' + e(team.id) : '')}">Cancel</a></div>`, 'task-detail-page task-compose-page');
+  return page(title, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${e(title)}</h1></div><a href="${task ? taskPath(task) : '/tasks' + (team ? '?team=' + e(team.id) : '')}">${task ? 'Back to task' : 'Back to tasks'}</a></div>${note(error)}
+    ${!task ? `<form class="task-filters workspace-picker" method="get" action="/tasks/new"><label>Workspace${select('team', scopeOptions(teams), team?.id)}</label>${button('Choose workspace', true)}</form>` : taskHint(task, origin)}
+    ${editable ? post(task ? taskPath(task) : '/tasks', account, `<div class="task-editor">${fields}</div>`, 'id="task-edit" class="task-form"') : `<div class="task-read-view"><h2>${e(values.title)}</h2><p>${e(TASK_STATES[values.state])} · ${e(values.priority)}</p><pre class="task-description task-scroll" tabindex="0">${e(values.description)}</pre><p>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ')}</p><p class="fine">${task?.archived_at ? 'This task is archived.' : 'Your role allows viewing this task.'}</p></div>`}
+    <div class="task-actions">${editable ? button(task ? 'Save task' : 'Create task', false, 'form="task-edit"') : ''}<a class="button secondary" href="${task ? taskPath(task) : '/tasks' + (team ? '?team=' + e(team.id) : '')}">Cancel</a></div>`, 'task-detail-page task-compose-page');
 }
 
 export function teamsPage(account, teams, invitations, error = null) {
