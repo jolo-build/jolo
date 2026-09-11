@@ -11,7 +11,7 @@ test('oversized unterminated vendor output fails within a bounded buffer', async
 });
 
 test('vendor grandchildren are terminated even when the engine is killed abruptly', async () => {
-  const modulePath = new URL('../../apps/engine/src/processes/line-child.js', import.meta.url).pathname;
+  const modulePath = new URL('../src/processes/line-child.js', import.meta.url).pathname;
   const grandchild = 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000);';
   const vendor = `process.on('SIGTERM',()=>{}); const child=Bun.spawn([process.execPath,'--eval',${JSON.stringify(grandchild)}],{stdout:'ignore',stderr:'ignore'}); console.log(JSON.stringify({pid:process.pid,grandchild:child.pid})); setInterval(()=>{},1000);`;
   const parentCode = `import {spawnLineChild} from ${JSON.stringify(modulePath)}; const link=spawnLineChild({argv:[process.execPath,'--eval',${JSON.stringify(vendor)}],cwd:process.cwd(),env:{PATH:process.env.PATH},signal:new AbortController().signal,log:{warn(){}},agentId:'test'}); for await(const message of link.messages()) console.log(JSON.stringify(message));`;

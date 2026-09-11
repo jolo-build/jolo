@@ -14,7 +14,7 @@ export async function runSidebarSmoke({ window, results, project, evaluate, wait
   const checkHeader = async () => {
     const bounds = await evaluate(`(() => {
       const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, right: r.right }; };
-      return { brand: rect('.header-brand'), logo: rect('.header-brand .jolo-mark'), toggle: rect('.sidebar-toggle'), workspace: rect('.header-workspace') };
+      return { brand: rect('.header-brand'), logo: rect('.header-brand .jolo-wordmark'), toggle: rect('.sidebar-toggle'), workspace: rect('.header-workspace') };
     })()`);
     assert(bounds.logo.left >= bounds.brand.left && bounds.logo.right <= bounds.toggle.left && bounds.toggle.right < bounds.brand.right && bounds.brand.right <= bounds.workspace.left,
       'header controls overlap the divider or each other: ' + JSON.stringify(bounds));

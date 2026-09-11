@@ -14,7 +14,10 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   });
   await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
   const fixtureUrl = process.env.JOLO_SMOKE_BROWSER_URL || `http://127.0.0.1:${fixture.address().port}/`;
-  const evaluate = (code) => window.webContents.executeJavaScript(code, true);
+  const evaluate = async (code) => {
+    try { return await window.webContents.executeJavaScript(code, true); }
+    catch (error) { throw new Error(`Renderer smoke expression failed: ${code}`, { cause: error }); }
+  };
   // Exercise the dialog's Enter handler even when another app owns OS keyboard focus.
   const permissionEnter = async () => {
     const handled = await evaluate("(() => { const dialog = document.querySelector('.permission-modal[open]'); if (!dialog?.contains(document.activeElement)) return false; return !document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true})); })()");

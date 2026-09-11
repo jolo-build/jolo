@@ -39,7 +39,7 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - run: bun test tests/unit/release-routing.test.js tests/unit/release-assets.test.js
+      - run: bun test tests/release/release-routing.test.js tests/release/release-assets.test.js
       - name: Restore the original immutable website release
         run: bun run release:restore
       - run: bun run website:build

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError } from "../src/index.js";
 
-const fixtures = JSON.parse(readFileSync(new URL("./fixtures/wire.json", import.meta.url), "utf8"));
+const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
 describe("framing", () => {
   test("round-trips split and coalesced reads", () => {

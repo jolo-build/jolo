@@ -44,7 +44,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run setup:tgrep
       - name: Check installer, updates and release routing
-        run: bun test tests/integration/installer.test.js tests/integration/cli-update.test.js tests/unit/ci-release.test.js tests/unit/release-assets.test.js tests/unit/release-routing.test.js tests/unit/updates.test.js tests/unit/cli-update.test.js tests/unit/release-updates.test.js
+        run: bun test tests/integration/installer.test.js tests/integration/cli-update.test.js tests/release/ci-release.test.js tests/release/release-assets.test.js tests/release/release-routing.test.js packages/updates/test/updates.test.js apps/cli/test/cli-update.test.js apps/desktop/test/release-updates.test.js
       - name: Build native CLI archive
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"

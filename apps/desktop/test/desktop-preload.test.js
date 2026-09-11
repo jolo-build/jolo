@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-const source = readFileSync(new URL('../../apps/desktop/src/preload/index.cjs', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../src/preload/index.cjs', import.meta.url), 'utf8');
 function preload(argv) {
   let api;
   const calls = [];

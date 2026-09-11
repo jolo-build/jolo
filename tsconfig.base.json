@@ -23,5 +23,8 @@
     "erasableSyntaxOnly": true,
     // Product code is JavaScript with JSDoc types; strictness is raised per program as code converts.
     "strict": false
-  }
+  },
+  // Generated output is never checked: bundles, prerendered pages, and Wrangler's inputs are build
+  // products, and their paths are relative to this file, so every program inherits the same list.
+  "exclude": ["**/node_modules", "**/dist", "**/dist-test", "**/.generated", "**/.wrangler", "**/smoke-results", "**/out"]
 }
