@@ -70,7 +70,7 @@ Configure your Cloudflare account and D1 database in `deploy/access.wrangler.jso
 
 Deployment credentials live in the private R2 bucket/object named in `deploy/access-secrets.json`. Keep r2.dev disabled, attach no custom domains, and do not bind this bucket to a public Worker. Authenticate the deployer with `wrangler login` or a separate `CLOUDFLARE_API_TOKEN` authorized for R2, D1, and Worker deployment; this bootstrap authentication must be available before reading R2.
 
-The Access GitHub Actions workflow runs unit and Worker runtime checks, then uses this same deployment command on changes merged to `main` or manual dispatch. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in repository secrets; the token needs the R2, D1, and Worker permissions described above. OAuth and email credentials remain in the private R2 object.
+The Access GitHub Actions workflow runs unit and Worker runtime checks, applies pending D1 migrations, and deploys the Worker and assets when manually dispatched. Enable automated releases only after the repository token has the required production permissions. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in repository secrets; routine releases need D1 and Worker deployment permissions. Wrangler retains the service’s existing OAuth and email secret bindings, and `--keep-vars` retains any additional variables configured in the dashboard. The workflow does not read or synchronize the R2 credential backup. Bootstrap the service or rotate its credentials with the full `bun run access:deploy` command below before relying on routine releases.
 
 Store an OAuth file containing `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...`, `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`, or both pairs (one per line), and a separate file containing the bare Resend key. Include all providers you want enabled: the import replaces the stored credential set. Existing GitHub-only credential files remain valid. Import or rotate them with:
 
@@ -79,7 +79,7 @@ bun run --cwd apps/access secrets:store /tmp/jolo_oauth_key.txt /tmp/jolo_key.tx
 bun run access:deploy
 ```
 
-The import checks bucket privacy, uploads the configured credentials, and verifies the stored values without printing them. Deployment reads them from R2, validates them, applies the generated D1 migrations, and publishes them atomically with the Worker as secret bindings. Temporary credential files have mode 0600 and are removed on completion or failure. Credentials never enter tracked configuration or website assets. Updating R2 takes effect on the next deployment.
+The import checks bucket privacy, uploads the configured credentials, and verifies the stored values without printing them. Deployment reads them from R2, validates them, applies the generated D1 migrations, and publishes them atomically with the Worker as secret bindings. Temporary credential files have mode 0600 and are removed on completion or failure. Credentials never enter tracked configuration or website assets. Updating R2 takes effect on the next full `bun run access:deploy`; routine GitHub Actions releases preserve the already configured credentials.
 
 `bun run access:build` only performs a deployment dry run and needs no production credentials. Invitations remain usable locally without email configuration. Unit and runtime checks mock external services and send no real emails.
 
