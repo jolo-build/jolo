@@ -35,7 +35,8 @@ async function turn(prompt, images = []) {
   out({ type: "system", subtype: "init", session_id: sessionId, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
   const say = (text) => {
     out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
-    for (const piece of text.match(/.{1,12}/gs) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
+    // Keep large fixture replies bounded without flooding thousands of unpaced events.
+    for (const piece of text.match(text.length > 32768 ? /.{1,4096}/gsu : /.{1,12}/gsu) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
     out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
@@ -108,6 +109,9 @@ for await (const chunk of Bun.stdin.stream()) {
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS } } });
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
-    else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image")).then(() => process.exit(0), (error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); });
+    else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image")).then(() => {
+      // Large echoed attachments can fill the pipe; flush the result before exiting.
+      process.stdout.write('', () => process.exit(0));
+    }, (error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); });
   }
 }

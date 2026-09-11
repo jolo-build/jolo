@@ -20,6 +20,14 @@ test('R2 storage fails closed if public access is enabled or privacy cannot be v
   }
 });
 
+test('deployment accepts Google alongside GitHub or alone, and rejects partial credentials', () => {
+  const google = { GOOGLE_CLIENT_ID: 'fixture.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'google-fixture-secret' };
+  expect(validateSecrets({ ...secrets, ...google })).toEqual({ ...secrets, ...google });
+  expect(validateSecrets({ ...google, RESEND_API_KEY: 're_fixture' })).toEqual({ ...google, RESEND_API_KEY: 're_fixture' });
+  expect(parseOAuthFile('GOOGLE_CLIENT_ID=fixture.apps.googleusercontent.com\nGOOGLE_CLIENT_SECRET=google-fixture-secret')).toEqual(google);
+  for (const value of [{ ...secrets, GOOGLE_CLIENT_ID: 'only-id' }, { ...secrets, GOOGLE_CLIENT_SECRET: 'only-secret' }, { RESEND_API_KEY: 're_fixture' }]) expect(() => validateSecrets(value)).toThrow();
+});
+
 test('deployment secrets are private temporary files and removed even when deploy fails',async()=>{
   let target;
   await expect(withSecretsFile(secrets,async path=>{

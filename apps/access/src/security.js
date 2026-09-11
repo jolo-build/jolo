@@ -30,7 +30,11 @@ export function configuration(env) {
   if (origin.origin !== env.ACCESS_ORIGIN || origin.username || origin.password || (origin.protocol !== 'https:' && !(local && origin.protocol === 'http:'))) {
     throw new Error('Invalid access service origin');
   }
-  return { origin: origin.origin, secure: origin.protocol === 'https:', configured: Boolean(env.ACCESS_DB && env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) };
+  const providers = {
+    github: Boolean(env.ACCESS_DB && env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
+    google: Boolean(env.ACCESS_DB && env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+  };
+  return { origin: origin.origin, secure: origin.protocol === 'https:', configured: providers.github || providers.google, providers };
 }
 
 export function randomToken() {

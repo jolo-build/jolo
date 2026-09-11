@@ -334,7 +334,16 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .composer-attachments { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 10px; }
 .composer-attachment { position: relative; flex: 0 0 88px; min-width: 0; }
 .composer-attachment img { display: block; width: 88px; height: 68px; object-fit: cover; border: 1px solid var(--border); border-radius: 7px; background: var(--subtle); }
-.composer-attachment button { position: absolute; top: 3px; right: 3px; padding: 3px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 4px #0003; }
+.composer-attachment > button:not(.text-attachment-card) { position: absolute; top: 3px; right: 3px; padding: 3px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 4px #0003; }
+.composer-attachment.text-file { flex-basis: 210px; }
+.text-attachment-card { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 12px 28px 12px 12px; min-height: 68px; max-width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--subtle); text-align: left; }
+.text-attachment-card span { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.text-attachment-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.text-attachment-card small { color: var(--muted); font-size: 10px; }
+.composer-attachment .text-attachment-card { width: 100%; }
+.modal.text-attachment-preview { width: min(760px, calc(100vw - 48px)); max-height: 80vh; }
+.text-attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.text-attachment-preview pre { max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); user-select: text; }
 .composer-attachment > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--muted); margin-top: 3px; }
 .attachment-note { font-size: 11px; color: var(--muted); padding-bottom: 7px; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }

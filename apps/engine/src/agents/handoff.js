@@ -191,7 +191,7 @@ export function createSummarizer({ providerFactory, settings, log, sessionId, ru
  * bounded handoff once because it has no reliable delivery position yet.
  */
 export async function handoffPrompt({ storage, run, session, resumed, from = null, to = null, summarize = null }) {
-  const asked = askedOf(run);
+  const asked = askedOf(run, storage);
   const seen = session?.agentState?._jolo?.seen?.[to?.id];
   const afterOrdinal = resumed && Number.isInteger(seen) ? seen : -1;
   const recent = recentHistory(storage, run.sessionId, { excludeRunId: run.id, afterOrdinal });
@@ -229,6 +229,6 @@ export function joloHandoff(storage, run, session, { from = null } = {}) {
 
 export function joloPrompt(storage, run, session, options) {
   const handoff = joloHandoff(storage, run, session, options);
-  const asked = askedOf(run);
+  const asked = askedOf(run, storage);
   return handoff ? `${handoff}\n\nCurrent request:\n${asked}` : asked;
 }

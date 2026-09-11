@@ -240,7 +240,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       const drive = async () => {
         const init = await request("initialize", { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "jolo", title: "Jolo", version: build } });
         if (init?.protocolVersion !== PROTOCOL_VERSION) throw new Error(`speaks ACP version ${init?.protocolVersion ?? "?"}; Jolo speaks ${PROTOCOL_VERSION}`);
-        if (run.attachments?.length && !init.agentCapabilities?.promptCapabilities?.image) throw new Error(`${manifest.displayName} does not support image attachments. Choose an agent with image support.`);
+        if (run.attachments?.some(item => item.mimeType !== 'text/plain') && !init.agentCapabilities?.promptCapabilities?.image) throw new Error(`${manifest.displayName} does not support image attachments. Choose an agent with image support.`);
         const remembered = recall(session, manifest).acpSessionId ?? null;
         let loaded = null;
         let resumed = false;

@@ -1,7 +1,8 @@
 import { taskRepository } from './repository.js';
+import { commentRepository } from './comments.js';
 import { taskListPage, taskViewPage, taskFormPage, teamsPage, teamPage, labelsPage, taskErrorPage } from './pages.js';
-import { canManage, canWriteTask } from './permissions.js';
-import { TaskError, value, optional, choice, revision, taskFields, labelFields, inviteFields, uuid } from './validation.js';
+import { canManage, canWriteTask, canCommentTask } from './permissions.js';
+import { TaskError, value, optional, choice, revision, taskFields, commentBody, labelFields, inviteFields, uuid } from './validation.js';
 import { formValue, readForm, hashToken } from '../security.js';
 import { taskKey, TASK_STATES } from '../../../../packages/protocol/src/tasks.js';
 import { deliverMail, invitationEmail, mailConfigured } from '../mail.js';
@@ -13,6 +14,7 @@ const changed = result => result ?? fail(409,'This record changed or your permis
 
 export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
   const repo=env.ACCESS_DB?taskRepository(env.ACCESS_DB,now):null;
+  const comments=env.ACCESS_DB?commentRepository(env.ACCESS_DB,now):null;
   async function selectedTeam(actor,id) { if (!id) return null; if(!uuid(id)) fail(404,'Workspace not found.'); return await repo.team(actor,id)??fail(404,'Workspace not found.'); }
   async function serialize(actor,row,description=true) {
     const labels=await repo.labels(actor,row.team_id), selected=JSON.parse(row.labels);
@@ -26,8 +28,9 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
   async function taskForm(account,task,team,error=null,submitted=null) {
     return taskFormPage({account,task,teams:await repo.teams(account.id),team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],error,submitted});
   }
-  async function taskView(account,task,team,error=null) {
-    return taskViewPage({account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],error});
+  async function taskView(account,task,team,error=null,{before=null,draft=null}={}) {
+    const history=await comments.list(account.id,task.id,before);
+    return taskViewPage({account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],...history,commentsBefore:before,commentDraft:draft,error});
   }
   return async (request,context) => {
     const url=new URL(request.url),path=url.pathname,api=path==='/api/tasks'||path.startsWith('/api/tasks/');
@@ -78,6 +81,38 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           return html(await taskForm(account,null,team,error.message,fields??formDraft(form)),error.status);
         }
       }
+      const commentMatch=/^\/tasks\/(JOLO-[1-9][0-9]{0,14})\/comments(?:\/([1-9][0-9]{0,14})\/(edit|delete))?$/i.exec(path);
+      if(commentMatch&&request.method==='POST') {
+        const key=taskKey(commentMatch[1]),id=commentMatch[2]?Number(commentMatch[2]):null,action=commentMatch[3]?.toLowerCase();
+        const task=key?await repo.task(actor,Number(key.slice(5))):null;
+        if(!task) fail(404,'Task not found.');
+        if(!canCommentTask(task,actor)) fail(403,task.archived_at?'Restore this task before commenting.':'Your role allows reading comments only.');
+        if(id) {
+          const comment=await comments.get(actor,task.id,id);
+          if(!comment) fail(404,'Comment not found.');
+          if(comment.author_id!==actor) fail(403,'You can only change your own comments.');
+        }
+        try {
+          let result;
+          if(action==='delete') result=changed(await comments.remove(actor,task.id,id,revision(form)));
+          else if(action==='edit') result=changed(await comments.edit(actor,task.id,id,commentBody(form),revision(form)));
+          else {
+            const body=commentBody(form),requestID=optional(form,'request_id');
+            if(!uuid(requestID)) fail(400,'Reopen the comment form before submitting.');
+            result=changed(await comments.create(actor,task.id,body,requestID));
+            if(!result.deleted_at&&result.body!==body) fail(409,'This form already posted a different comment. Review the discussion before sending another.');
+          }
+          const before=action==='edit'?`?comments_before=${id+1}`:'';
+          return redirect(`/tasks/${key}${before}#${result.deleted_at?'comments':`comment-${result.id}`}`);
+        } catch(error) {
+          if(!(error instanceof TaskError)) throw error;
+          const latest=await repo.task(actor,task.id);
+          if(!latest) fail(404,'Task not found.');
+          const requestID=formValue(form,'request_id');
+          const draft=action==='delete'?null:{id,body:formValue(form,'body')??'',requestID:error.status!==409&&uuid(requestID)?requestID:crypto.randomUUID()};
+          return html(await taskView(account,latest,await selectedTeam(actor,latest.team_id),error.message,{before:id?id+1:null,draft}),error.status);
+        }
+      }
       const taskMatch=/^\/(?:api\/)?tasks\/(JOLO-[1-9][0-9]{0,14})(?:\/(edit|archive|restore))?$/i.exec(path);
       if(taskMatch) {
         const key=taskKey(taskMatch[1]),action=taskMatch[2]?.toLowerCase();
@@ -87,7 +122,11 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
         if(api) { if(task.archived_at||action) fail(404,'Task not found.'); return Response.json({task:await serialize(actor,task)}); }
         const team=await selectedTeam(actor,task.team_id);
         if(request.method==='GET') {
-          if(!action) return html(await taskView(account,task,team));
+          if(!action) {
+            const before=url.searchParams.has('comments_before')?Number(url.searchParams.get('comments_before')):null;
+            if(before!==null&&(!Number.isSafeInteger(before)||before<1)) fail(400,'Invalid comment page.');
+            return html(await taskView(account,task,team,null,{before}));
+          }
           if(action==='edit') {
             if(!canWriteTask(task,actor)) fail(403,'Your role does not allow editing this task.');
             if(task.archived_at) return redirect(`/tasks/${key}`);

@@ -55,7 +55,7 @@ export function deviceRoutes({ env, config, repository, session, now }) {
       const code = deviceUserCode(url.searchParams.get('user_code'));
       const account = await session(request);
       if (!code) return html(deviceEntryPage(url.searchParams.has('user_code'), Boolean(account)));
-      if (!account) return redirect(`/login?user_code=${code}`);
+      if (!account) return redirect(`/?user_code=${code}`);
       const flow = await repository.getDeviceFlow(code);
       return flow ? html(deviceApprovalPage(account, flow)) : html(deviceEntryPage(true, true));
     }

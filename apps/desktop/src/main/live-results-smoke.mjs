@@ -82,5 +82,22 @@ export async function runLiveResultsSmoke({ window, bridge, results, evaluate, w
   })()`);
   if (focusBorders.length) throw new Error(`lingering control focus borders: ${focusBorders.join(', ')}`);
   report.checks.push('focused task tabs, dropdown, new-task and header buttons have no outline borders');
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate("window.__joloSmoke.pickAnswerer('codex')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Codex'", 'progress answerer');
+  await evaluate("window.__joloSmoke.send('activity-groups')");
+  await waitFor("document.querySelectorAll('.activity-group').length === 2 && window.__joloSmoke.state().runState === 'tools'", 'background tools span two activity groups');
+  const progress = await evaluate(`(() => {
+    const chat = document.querySelector('.conversation');
+    return { headers: [...chat.querySelectorAll('.activity-group > summary')].map(el => el.textContent),
+      headerSpinners: chat.querySelectorAll('.activity-group > summary .activity-spin').length,
+      status: [...chat.querySelectorAll('.run-note')].map(el => el.textContent) };
+  })()`);
+  if (progress.headerSpinners || progress.headers.some(label => !label.startsWith('Task activity')) || progress.status.length !== 1 || !progress.status[0].startsWith('Using tools · Codex')) throw new Error(`duplicate task progress: ${JSON.stringify(progress)}`);
+  await evaluate("document.querySelector('.activity-group').open = true");
+  writeFileSync(path.join(results, 'single-task-progress.png'), (await window.webContents.capturePage()).toPNG());
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && !document.querySelector('.run-note')", 'progress disappears after task completion');
+  if (!(await evaluate("document.querySelector('.activity-group').open && document.querySelectorAll('.activity-group').length === 2 && !document.querySelector('.conversation .activity-spin, .conversation .activity-pulse')"))) throw new Error('completed activity lost expansion or kept animating');
+  report.checks.push('background tools spanning commentary retain their activity groups with one live task status; completion removes progress and keeps expansion');
   writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
 }

@@ -14,7 +14,7 @@ export const estimateTokens = (text) => Math.ceil(Buffer.byteLength(String(text 
 function itemTokens(item) {
   // Image encoding is hydrated later. Reserve a conservative vision allowance
   // per image rather than treating its base64 as millions of text tokens.
-  return estimateTokens(JSON.stringify(item.payload)) + 8 + (item.payload.attachments?.length ?? 0) * 4096;
+  return estimateTokens(JSON.stringify(item.payload)) + 8 + (item.payload.attachments?.filter(item => item.mimeType !== 'text/plain').length ?? 0) * 4096;
 }
 
 /**

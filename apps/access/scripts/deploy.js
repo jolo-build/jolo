@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const wrangler = fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js', import.meta.url));
-const fields = ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'RESEND_API_KEY'];
+const fields = ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'RESEND_API_KEY'];
 
 export function parseSecretJSON(text) {
   try { return JSON.parse(text); }
@@ -16,14 +16,19 @@ export function parseSecretJSON(text) {
 export function validateSecrets(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).some(key => !fields.includes(key))) throw new Error('Invalid deployment secret fields.');
-  for (const key of fields) {
+  const present = fields.filter(key => Object.hasOwn(value, key));
+  for (const key of present) {
     if (typeof value[key] !== 'string' || !value[key].trim() || value[key].length > 4096 || /\s/.test(value[key]))
       throw new Error(`Missing or invalid ${key}.`);
   }
+  for (const provider of ['GITHUB', 'GOOGLE']) {
+    if (present.includes(`${provider}_CLIENT_ID`) !== present.includes(`${provider}_CLIENT_SECRET`)) throw new Error(`Configure both ${provider}_CLIENT_ID and ${provider}_CLIENT_SECRET.`);
+  }
+  if (!value.GITHUB_CLIENT_ID && !value.GOOGLE_CLIENT_ID) throw new Error('Configure at least one OAuth provider.');
   if (/^(gh[pousr]_|github_pat_)/.test(value.GITHUB_CLIENT_SECRET))
     throw new Error('Use the GitHub OAuth app Client Secret, not a personal access token.');
-  if (!value.RESEND_API_KEY.startsWith('re_')) throw new Error('Invalid RESEND_API_KEY.');
-  return Object.fromEntries(fields.map(key => [key, value[key]]));
+  if (!value.RESEND_API_KEY?.startsWith('re_')) throw new Error('Invalid RESEND_API_KEY.');
+  return Object.fromEntries(present.map(key => [key, value[key]]));
 }
 
 export function parseOAuthFile(text) {
@@ -32,8 +37,8 @@ export function parseOAuthFile(text) {
   }
   const result = {};
   for (const line of text.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('#'))) {
-    const match = /^\s*(GITHUB_CLIENT_ID|GITHUB_CLIENT_SECRET)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!match || Object.hasOwn(result, match[1])) throw new Error('OAuth file needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, one NAME=value per line.');
+    const match = /^\s*((?:GITHUB|GOOGLE)_CLIENT_(?:ID|SECRET))\s*=\s*(.*?)\s*$/.exec(line);
+    if (!match || Object.hasOwn(result, match[1])) throw new Error('OAuth file needs provider CLIENT_ID and CLIENT_SECRET fields, one NAME=value per line.');
     result[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2');
   }
   return result;
@@ -98,7 +103,7 @@ async function main() {
     await request(object, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, body: JSON.stringify(local) });
     const stored = validateSecrets(parseSecretJSON(await (await request(object)).text()));
     if (fields.some(key => stored[key] !== local[key])) throw new Error('R2 credential verification failed.');
-    console.log(`Stored and verified ${fields.join(', ')} in private R2 storage.`);
+    console.log(`Stored and verified ${Object.keys(local).join(', ')} in private R2 storage.`);
     return;
   }
   const secrets = validateSecrets(parseSecretJSON(await (await request(object)).text()));

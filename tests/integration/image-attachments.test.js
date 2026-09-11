@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { startEngine, tempHome, removeHome, ROOT, waitFor, TERMINAL } from './helpers.js';
@@ -25,14 +26,41 @@ async function boot() {
   return { client, engine, session, home };
 }
 
-async function upload(client, sessionId, buffer = PNG) {
-  const { artifactId } = await client.call('attachment.create', { sessionId, mimeType: 'image/png' });
+async function upload(client, sessionId, buffer = PNG, mimeType = 'image/png') {
+  const { artifactId } = await client.call('attachment.create', { sessionId, mimeType });
   for (let offset = 0; offset < buffer.length; offset += 65535) {
     const chunk = buffer.subarray(offset, offset + 65535);
     await client.call('attachment.write', { sessionId, artifactId, offset, data: chunk.toString('base64'), final: offset + chunk.length === buffer.length });
   }
-  return { artifactId, name: 'Screenshot.png', mimeType: 'image/png', bytes: buffer.length };
+  return { artifactId, name: mimeType === 'text/plain' ? 'Pasted text.txt' : 'Screenshot.png', mimeType, bytes: buffer.length };
 }
+
+test('pasted text is delivered to native and hosted agents including ACP without image support', async () => {
+  const { client, session, engine } = await boot();
+  let nativeSessionId;
+  for (const agent of [null, 'codex', 'claude', 'no-images']) {
+    const chat = await session(agent);
+    const content = 'Unicode text 🙂漢字\n'.repeat(2300) + '\nATTACHED_TEXT_END';
+    const file = await upload(client, chat.id, Buffer.from(content), 'text/plain');
+    const { run } = await client.call('run.start', { sessionId: chat.id, requestId: 'text', prompt: 'Read the attached text', attachments: [file] });
+    const result = await finish(client, run.id);
+    expect(result.run.state).toBe('completed');
+    const user = result.messages.find(message => message.role === 'user');
+    expect((await client.call('artifact.read', { artifactId: user.artifactId })).text).toBe('Read the attached text');
+    expect((await client.call('session.page', { sessionId: chat.id })).runs[0].attachments).toEqual([file]);
+    // Fixture agents echo the prompt; inspect the tail rather than a limited preview.
+    const reply = result.messages.find(message => message.role === 'assistant' && message.kind === 'text');
+    const tail = await client.call('artifact.read', { artifactId: reply.artifactId, offset: Math.max(0, reply.committedBytes - 1000), length: 1000 });
+    if (agent) expect(tail.text).toContain('ATTACHED_TEXT_END');
+    else nativeSessionId = chat.id;
+    const another = await session();
+    await expect(client.call('run.start', { sessionId: another.id, requestId: 'foreign', prompt: 'read', attachments: [file] })).rejects.toMatchObject({ code: 'invalid_params' });
+  }
+  await engine.stop();
+  const db = new Database(engine.paths.databasePath, { readonly: true });
+  try { expect(JSON.parse(db.query("SELECT payload FROM conversation_items WHERE session_id = ? AND kind = 'user_message'").get(nativeSessionId).payload).text).toContain('Unicode text 🙂漢字\n'.repeat(2300) + '\nATTACHED_TEXT_END'); }
+  finally { db.close(); }
+}, 20000);
 
 async function finish(client, runId) {
   let snapshot;
@@ -40,6 +68,17 @@ async function finish(client, runId) {
   const texts = await Promise.all(snapshot.messages.filter(message => message.role === 'assistant' && message.kind === 'text').map(message => client.call('artifact.read', { artifactId: message.artifactId })));
   return { ...snapshot, text: texts.map(result => result.text).join('') };
 }
+
+test('text uploads enforce UTF-8, size and count limits without finalizing invalid content', async () => {
+  const { client, session } = await boot();
+  const chat = await session();
+  const { artifactId } = await client.call('attachment.create', { sessionId: chat.id, mimeType: 'text/plain' });
+  await expect(client.call('attachment.write', { sessionId: chat.id, artifactId, offset: 0, data: Buffer.from([0xff]).toString('base64'), final: true })).rejects.toMatchObject({ code: 'invalid_params' });
+  await expect(client.call('run.start', { sessionId: chat.id, requestId: 'bad-utf8', prompt: 'read', attachments: [{ artifactId, name: 'Bad.txt', mimeType: 'text/plain', bytes: 1 }] })).rejects.toMatchObject({ code: 'invalid_params' });
+  await expect(upload(client, chat.id, Buffer.alloc(256 * 1024 + 1, 97), 'text/plain')).rejects.toMatchObject({ code: 'limit_exceeded' });
+  const file = await upload(client, chat.id, Buffer.from('Valid UTF-8 🙂'), 'text/plain');
+  await expect(client.call('run.start', { sessionId: chat.id, requestId: 'too-many', prompt: 'read', attachments: Array(5).fill(file) })).rejects.toMatchObject({ code: 'limit_exceeded' });
+});
 
 test('uploads larger than a frame reach queued agents and remain readable after engine restart', async () => {
   const { client, engine, session, home } = await boot();

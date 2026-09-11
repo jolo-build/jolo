@@ -38,7 +38,7 @@ test('device approval connects a bearer credential with no access to browser ses
 test('device intent survives GitHub login without an arbitrary redirect', async () => {
   const f = fixture(), flow = await begin(f);
   const page = await f.send(`/device?user_code=${flow.user_code}`);
-  expect(page.headers.get('location')).toBe(`/login?user_code=${flow.user_code}`);
+  expect(page.headers.get('location')).toBe(`/?user_code=${flow.user_code}`);
   await f.begin(`/login?user_code=${flow.user_code}`);
   expect((await f.send(f.callback())).headers.get('location')).toBe(`/device?user_code=${flow.user_code}`);
   await f.send('/login?user_code='+flow.user_code+'&return_to=https://evil.example');
