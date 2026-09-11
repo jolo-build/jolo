@@ -1,0 +1,148 @@
+name: Update tgrep vendor
+
+on:
+  schedule:
+    - cron: '41 7 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/update-tgrep.yml'
+      - '.bun-version'
+      - 'vendor/tgrep/**'
+      - 'scripts/setup-tgrep.js'
+      - 'scripts/update-tgrep.js'
+      - 'tests/unit/tgrep-update.test.js'
+      - 'tests/unit/search-hosted.test.js'
+      - 'tests/integration/tgrep.test.js'
+      - 'tests/integration/packaging.test.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tgrep-update-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Verify release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      version: ${{ steps.update.outputs.version }}
+      source: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Test the updater
+        run: bun test tests/unit/tgrep-update.test.js
+      - name: Check for a new stable release
+        id: update
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/update-tgrep.js
+      - name: Verify the proposed pin
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/update-tgrep.js --verify
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'pull_request' || steps.update.outputs.changed == 'true'
+        with:
+          name: tgrep-candidate
+          path: vendor/tgrep/release.json
+          if-no-files-found: error
+          retention-days: 7
+
+  validate:
+    name: Native search (${{ matrix.platform }})
+    needs: check
+    if: github.event_name == 'pull_request' || needs.check.outputs.changed == 'true'
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64, runner: ubuntu-24.04 }
+          - { platform: linux-arm64, runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64, runner: macos-15-intel }
+          - { platform: darwin-arm64, runner: macos-15 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.check.outputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tgrep-candidate
+          path: vendor/tgrep
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install the live-search test dependency
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          if ! command -v rg >/dev/null; then
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              brew install ripgrep
+            else
+              sudo apt-get update
+              sudo apt-get install --yes ripgrep
+            fi
+          fi
+          rg --version
+      - name: Install the verified native release
+        run: bun run setup:tgrep
+      - name: Verify native search and release packaging
+        env:
+          JOLO_TGREP: ${{ github.workspace }}/vendor/tgrep/${{ matrix.platform }}/tgrep
+        run: |
+          "$JOLO_TGREP" --version
+          bun test tests/integration/tgrep.test.js tests/unit/search-hosted.test.js tests/integration/packaging.test.js
+
+  pull-request:
+    name: Propose the verified update
+    needs: [check, validate]
+    if: github.event_name != 'pull_request' && needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # No downloaded vendor executable or project script runs in this write-enabled job.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.check.outputs.source }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tgrep-candidate
+          path: vendor/tgrep
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          token: ${{ github.token }}
+          base: ${{ github.event.repository.default_branch }}
+          branch: codex/update-tgrep
+          add-paths: vendor/tgrep/release.json
+          commit-message: 'Update tgrep to v${{ needs.check.outputs.version }}'
+          title: 'Update tgrep to v${{ needs.check.outputs.version }}'
+          body: |
+            Update the pinned native search release to [tgrep v${{ needs.check.outputs.version }}](https://github.com/microsoft/tgrep/releases/tag/v${{ needs.check.outputs.version }}).
+
+            All four supported archives were downloaded and matched against both the upstream checksum file and GitHub asset digests. Native search and packaging checks passed on macOS and Linux, on ARM64 and x64.
+
+            [Validation run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            This PR requires review; updates are never merged automatically. Checks run before PR creation because PRs created with GITHUB_TOKEN do not trigger another workflow run.
