@@ -25,7 +25,7 @@ code,pre { font-family:var(--mono); font-variant-ligatures:none; }
 .site-header nav { display:flex; align-items:center; gap:28px; font-size:13px; }
 .site-header nav a { display:inline-flex; align-items:center; gap:6px; color:var(--muted); }
 .site-header nav a:hover { color:var(--ink); }
-.site-header .nav-cta { padding:8px 12px; background:var(--ink); color:#fff; border-radius:7px; }
+.site-header .nav-cta,.site-header .nav-cta:hover { padding:8px 12px; background:var(--ink); color:#fff; border-radius:7px; }
 .hero { padding:76px 0 52px; text-align:center; }
 .hero-meta { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:9px; color:var(--muted); font-size:12px; }
 .activity-dot { display:inline-block; flex:none; width:6px; height:6px; border-radius:50%; background:var(--highlight); }
