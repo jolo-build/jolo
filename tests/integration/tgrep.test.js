@@ -37,7 +37,8 @@ async function ready(service, root) {
 
 nativeTest('real index: warm-up fallback, scopes, ignore rules, regex, paging and live edits', async () => {
   const { root, service, search } = fixture();
-  expect((await search({ pattern: 'needle' })).freshness).toBe('live');
+  // Force an unavailable lease: a real index may finish warming before the first query.
+  expect((await search({ pattern: 'needle' }, AbortSignal.timeout(10_000), { acquire: async () => null })).freshness).toBe('live');
   await ready(service, root);
   const indexed = await search({ pattern: 'needle' });
   expect(indexed.engine).toBe('tgrep');
