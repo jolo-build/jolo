@@ -37,9 +37,14 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run access:test
       - name: Deploy access.jolo.build
+        working-directory: apps/access
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Set the CLOUDFLARE_API_TOKEN repository secret.' >&2; exit 1; }
-          bun run access:deploy
+          bun run db:remote
+          bun scripts/assets.js
+          # Routine releases retain the existing OAuth/email secret bindings.
+          # Use access:deploy separately when bootstrapping or rotating credentials.
+          node node_modules/wrangler/bin/wrangler.js deploy --config ../../deploy/access.wrangler.jsonc --env '' --keep-vars
