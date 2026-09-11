@@ -30,6 +30,7 @@ const PROGRAMS = [
   "apps/access/test",
   "apps/website/src",
   "apps/website/scripts",
+  "apps/guide",
   "tests",
   "scripts",
   "deploy",

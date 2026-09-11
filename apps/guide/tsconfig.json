@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // The guide is one flat directory holding two runtimes: `build.js` and `serve.js` render the pages
+  // under Bun, while `interactive.js` ships to the browser. Until those are separated into their own
+  // directories this program has to see both sets of globals, which is why it is the one place in the
+  // repository where a Bun API and a DOM API are in scope at once.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["bun"]
+  },
+  "include": ["."]
+}
