@@ -6,8 +6,9 @@
 // The signature here is ad-hoc unless an identity is named, which is enough for a local install; shipping to
 // other machines still needs a Developer ID signature and notarization.
 import { packager } from "@electron/packager";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..", "..", "..");
 const app = path.join(root, "dist", "desktop-app");
@@ -44,6 +45,41 @@ function sign(target) {
 let signed = null;
 if (platform === "darwin" && bundle) signed = sign(bundle);
 
+/**
+ * Produce a drag-to-Applications disk image, with the checksum and build manifest
+ * used by the release pipeline and desktop update notices.
+ */
+function archive(target) {
+  if (platform !== "darwin" || process.platform !== "darwin") throw new Error("DMG creation requires macOS");
+  const name = `jolo-desktop-${platform}-${arch}.dmg`;
+  const file = path.join(root, "dist", "desktop", name);
+  rmSync(file, { force: true });
+  const staging = mkdtempSync(path.join(tmpdir(), 'jolo-dmg-'));
+  const run = argv => {
+    const result = Bun.spawnSync(argv, { stdout: 'pipe', stderr: 'pipe' });
+    if (result.exitCode !== 0) throw new Error(`${argv[0]} failed: ${result.stderr.toString().trim().slice(0, 300)}`);
+  };
+  try {
+    run(['ditto', target, path.join(staging, 'Jolo.app')]);
+    symlinkSync('/Applications', path.join(staging, 'Applications'));
+    run(['hdiutil', 'create', '-volname', 'Jolo', '-srcfolder', staging, '-format', 'UDZO', '-fs', 'HFS+', '-ov', file]);
+    run(['hdiutil', 'verify', file]);
+  } finally { rmSync(staging, { recursive: true, force: true }); }
+  const bytes = readFileSync(file);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  writeFileSync(`${file}.sha256`, `${sha256}  ${name}\n`);
+  const version = JSON.parse(readFileSync(path.join(app, "package.json"), "utf8")).version;
+  writeFileSync(path.join(root, "dist", "desktop", "manifest.json"),
+    `${JSON.stringify({ version, build: version, platform, arch, electron: electronVersion, archive: { name, sha256, size: bytes.length } }, null, 2)}\n`);
+  return { name, file, sha256, size: bytes.length };
+}
+
+let packaged = null;
+if (process.argv.includes("--dmg") || process.argv.includes("--archive")) {
+  if (!bundle) throw new Error("--dmg is for macOS bundles");
+  packaged = archive(bundle);
+}
+
 let installed = null;
 if (process.argv.includes("--install")) {
   if (!bundle) throw new Error("--install is for macOS bundles");
@@ -56,5 +92,6 @@ if (process.argv.includes("--install")) {
 }
 
 console.log(`[package] ${out.join(", ")} (electron ${electronVersion}, ${signed ? `signed ${signed}` : "unsigned"})`);
+if (packaged) console.log(`[package] ${packaged.name} (${(packaged.size / 1048576).toFixed(1)} MiB, sha256 ${packaged.sha256.slice(0, 12)}…)`);
 if (installed) console.log(`[package] installed ${installed} — open it once and allow notifications when asked`);
 else if (bundle) console.log("[package] pass --install to copy it into ~/Applications, where the system will let it raise notifications");

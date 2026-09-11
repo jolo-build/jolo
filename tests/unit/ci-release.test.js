@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { TARGETS, validateTag, verifyRelease, publishRelease } from '../../scripts/ci-release.js';
+import { DESKTOP_TARGETS, TARGETS, validateTag, verifyRelease, publishRelease } from '../../scripts/ci-release.js';
 
 function fixture(version = '1.2.3') {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'jolo-ci-release-'));
@@ -13,6 +13,16 @@ function fixture(version = '1.2.3') {
     writeFileSync(path.join(directory, name), bytes);
     writeFileSync(path.join(directory, `${name}.sha256`), `${sha256}  ${name}\n`);
     writeFileSync(path.join(directory, `manifest-${target}.json`), JSON.stringify({ version, build: version, platform, arch, archive: { name, size: bytes.length, sha256 } }));
+  }
+  return directory;
+}
+function desktop(directory, version = '1.2.3') {
+  for (const target of DESKTOP_TARGETS) {
+    const [platform, arch] = target.split('-'), name = `jolo-desktop-${target}.dmg`, bytes = Buffer.from(`desktop ${target}`);
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(path.join(directory, name), bytes);
+    writeFileSync(path.join(directory, `${name}.sha256`), `${sha256}  ${name}\n`);
+    writeFileSync(path.join(directory, `manifest-desktop-${target}.json`), JSON.stringify({ version, build: version, platform, arch, archive: { name, size: bytes.length, sha256 } }));
   }
   return directory;
 }
@@ -39,7 +49,22 @@ test('missing platform artifacts or extra files prevent publishing', () => {
   });
   clean(fixture(), directory => {
     writeFileSync(path.join(directory, 'unverified.zip'), 'extra');
-    expect(() => verifyRelease(directory, '1.2.3')).toThrow('exactly the four');
+    expect(() => verifyRelease(directory, '1.2.3')).toThrow('exactly the verified packages');
+  });
+});
+
+test('desktop bundles publish as a complete set alongside the CLI, or not at all', () => {
+  clean(desktop(fixture()), directory => {
+    // Four CLI platforms plus both macOS desktop bundles, each with a checksum and a manifest.
+    expect(verifyRelease(directory, '1.2.3')).toHaveLength(18);
+    writeFileSync(path.join(directory, 'jolo-desktop-darwin-x64.dmg'), 'tampered');
+    expect(() => verifyRelease(directory, '1.2.3')).toThrow('checksum/size mismatch');
+  });
+  clean(desktop(fixture()), directory => {
+    // One architecture missing must fail: an updater would otherwise see a release
+    // that has a build for some Macs and not others.
+    for (const name of ['jolo-desktop-darwin-x64.dmg', 'jolo-desktop-darwin-x64.dmg.sha256', 'manifest-desktop-darwin-x64.json']) rmSync(path.join(directory, name));
+    expect(() => verifyRelease(directory, '1.2.3')).toThrow();
   });
 });
 
