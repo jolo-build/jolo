@@ -1,16 +1,6 @@
 name: Deploy Access
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/access-deploy.yml'
-      - '.bun-version'
-      - 'bun.lock'
-      - 'apps/access/**'
-      - 'assets/fonts/**'
-      - 'packages/protocol/src/tasks.js'
-      - 'deploy/access*'
   workflow_dispatch:
 
 permissions:
