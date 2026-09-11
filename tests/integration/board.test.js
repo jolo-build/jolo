@@ -45,17 +45,16 @@ async function boot(home, { clientKind = "test" } = {}) {
 const rowFor = (board, name) => board.projects.find((row) => row.name === name);
 
 describe("what a board row speaks for", () => {
-  test("a task still waiting on the user is not hidden by a newer one behind it", async () => {
+  test("a task still waiting on the user is not hidden by its queued follow-up", async () => {
     const home = tempHome(); homes.push(home);
     const repo = fixture(home, "repo");
     const { client, events } = await boot(home);
     const project = await client.call("project.open", { path: repo });
     const first = (await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "waiting task" })).session;
-    const second = (await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "task behind it" })).session;
 
     const { run: waiting } = await client.call("run.start", { sessionId: first.id, requestId: "r1", prompt: "edit then run" });
     await waitFor(() => events.some((e) => e.type === "permission.requested" && e.runId === waiting.id), { label: "the first task asked" });
-    const { run: behind } = await client.call("run.start", { sessionId: second.id, requestId: "r2", prompt: "queued behind it" });
+    const { run: behind } = await client.call("run.start", { sessionId: first.id, requestId: "r2", prompt: "queued behind it" });
     expect((await client.call("run.snapshot", { runId: behind.id })).run.state).toBe("queued"); // newer, and going nowhere
 
     const rows = (await client.call("board.list", {})).projects.filter((row) => row.workspaceId === project.workspaceId);

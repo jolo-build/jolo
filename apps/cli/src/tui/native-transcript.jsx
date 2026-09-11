@@ -92,8 +92,8 @@ export function useNativeTranscript({ projection, revision, opened, width, showT
   return { batch, live };
 }
 
-export function NativeTranscript({ batch, project, columns, restored = false, sessionTitle }) {
+export function NativeTranscript({ batch, project, columns, restored = false, sessionTitle, update = null }) {
   return <Static key={batch.id} items={batch.items}>{(item) => <Box key={item.id} flexDirection="column">
-    {item.welcome ? <><Text bold>Jolo <Text dimColor>{clean(project)}</Text></Text>{restored ? <Text bold>{sessionTitle ? `Restored: ${clean(sessionTitle)}` : "New session"}</Text> : <Welcome height={12} columns={columns} />}<Text> </Text></> : <TranscriptLines lines={item.lines} />}
+    {item.welcome ? <><Text bold>Jolo <Text dimColor>{clean(project)}</Text></Text>{restored ? <Text bold>{sessionTitle ? `Restored: ${clean(sessionTitle)}` : "New session"}</Text> : <Welcome height={12} columns={columns} update={update} />}<Text> </Text></> : <TranscriptLines lines={item.lines} />}
   </Box>}</Static>;
 }

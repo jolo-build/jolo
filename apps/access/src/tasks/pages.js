@@ -75,7 +75,7 @@ export function taskListPage({ tasks, teams, labels, filters, next }) {
         ${button('Apply filters')}
       </div></details>${button('Search', true)}
     </form>
-    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="/tasks/${e(task.key)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
+    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="/tasks/${e(task.key)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state" data-state="${e(task.state)}">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
     ${next ? `<p class="task-pagination"><a href="/tasks?${e(query)}">Next page →</a></p>` : ''}`, 'task-list-page');
 }
 
@@ -91,11 +91,11 @@ export function taskFormPage({ account, task = null, teams, labels, members = []
   const title = task ? `Edit JOLO-${task.id}` : 'New task';
   const fields = `${hidden('team', team?.id ?? '')}${hidden('request_id', values.requestID ?? crypto.randomUUID())}${task ? hidden('revision', task.revision) : ''}
     <div class="task-main-fields">
-      <label>Title${input('title', values.title, 'text', 'required maxlength="200"')}</label>
+      <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="Give this task a clear title"')}</label>
       <label class="task-description-field">Description<textarea name="description" rows="6" maxlength="8192" placeholder="Describe the problem, expected behavior, and how to verify the fix.">${e(values.description)}</textarea></label>
     </div>
     <div class="task-properties">
-      <div class="task-fields">
+      <h2 class="task-properties-heading">Details</h2><div class="task-fields">
         <label>State${select('state', Object.entries(TASK_STATES), values.state)}</label>
         <label>Priority${select('priority', TASK_PRIORITIES.map(s => [s, s]), values.priority)}</label>
         <label>Project label${input('project', values.project, 'text', 'maxlength="100"')}</label>
@@ -106,7 +106,7 @@ export function taskFormPage({ account, task = null, teams, labels, members = []
   return page(title, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${e(title)}</h1></div><a href="${task ? `/tasks/JOLO-${task.id}` : '/tasks' + (team ? '?team=' + e(team.id) : '')}">${task ? 'Back to task' : 'Back to tasks'}</a></div>${note(error)}
     ${!task ? `<form class="task-filters workspace-picker" method="get" action="/tasks/new"><label>Workspace${select('team', scopeOptions(teams), team?.id)}</label>${button('Choose workspace', true)}</form>` : taskHint(task)}
     ${editable ? post(task ? `/tasks/JOLO-${task.id}` : '/tasks', account, `<div class="task-editor">${fields}</div>`, 'id="task-edit" class="task-form"') : `<div class="task-read-view"><h2>${e(values.title)}</h2><p>${e(TASK_STATES[values.state])} · ${e(values.priority)}</p><pre class="task-description task-scroll" tabindex="0">${e(values.description)}</pre><p>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ')}</p><p class="fine">${task?.archived_at ? 'This task is archived.' : 'Your role allows viewing this task.'}</p></div>`}
-    <div class="task-actions">${editable ? button(task ? 'Save task' : 'Create task', false, 'form="task-edit"') : ''}<a class="button secondary" href="${task ? `/tasks/JOLO-${task.id}` : '/tasks' + (team ? '?team=' + e(team.id) : '')}">Cancel</a></div>`, 'task-detail-page');
+    <div class="task-actions">${editable ? button(task ? 'Save task' : 'Create task', false, 'form="task-edit"') : ''}<a class="button secondary" href="${task ? `/tasks/JOLO-${task.id}` : '/tasks' + (team ? '?team=' + e(team.id) : '')}">Cancel</a></div>`, 'task-detail-page task-compose-page');
 }
 
 export function teamsPage(account, teams, invitations, error = null) {

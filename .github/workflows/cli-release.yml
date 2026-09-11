@@ -1,4 +1,4 @@
-name: CLI builds and releases
+name: CLI and desktop releases
 
 on:
   pull_request:
@@ -43,8 +43,8 @@ jobs:
         run: bun scripts/ci-release.js check-tag
       - run: bun install --frozen-lockfile
       - run: bun run setup:tgrep
-      - name: Check installer and release routing
-        run: bun test tests/integration/installer.test.js tests/unit/ci-release.test.js tests/unit/release-assets.test.js tests/unit/release-routing.test.js
+      - name: Check installer, updates and release routing
+        run: bun test tests/integration/installer.test.js tests/integration/cli-update.test.js tests/unit/ci-release.test.js tests/unit/release-assets.test.js tests/unit/release-routing.test.js tests/unit/updates.test.js tests/unit/cli-update.test.js tests/unit/release-updates.test.js
       - name: Build native CLI archive
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
@@ -63,10 +63,50 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  desktop:
+    name: Desktop / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, target: darwin-arm64 }
+          - { runner: macos-15-intel, target: darwin-x64 }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run setup:tgrep
+      # The bundle is ad-hoc signed. Shipping it to other machines still needs a Developer ID
+      # signature and notarization, which is why the application reports updates rather than
+      # installing them: macOS will not hand an update to a signature it cannot attribute.
+      - name: Build the desktop DMG installer
+        run: |
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          bun scripts/build.js
+          bun apps/desktop/scripts/package.js --dmg
+      - name: Prepare checked release assets
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+          RELEASE_PRODUCT: desktop
+        run: bun scripts/ci-release.js prepare dist/desktop release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   publish:
     name: Publish complete GitHub release
     if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -81,6 +121,11 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: desktop-*
           path: release-assets
           merge-multiple: true
       - name: Verify all platforms, upload to a draft, then publish

@@ -1,5 +1,7 @@
 // Narrow renderer bridge: explicit operations only, no raw ipcRenderer.
 const { contextBridge, ipcRenderer } = require("electron");
+// Only invoke new handlers when the running main process advertises them.
+const desktopApi = process.argv.includes('--jolo-desktop-api=1');
 
 const eventListeners = new Set();
 const engineListeners = new Set();
@@ -34,6 +36,9 @@ ipcRenderer.on('jolo:browserOpen', (_event, payload) => {
 
 contextBridge.exposeInMainWorld("jolo", {
   platform: process.platform,
+  homeDirectory: () => desktopApi ? ipcRenderer.invoke("jolo:homeDirectory") : Promise.resolve(null),
+  prepareVisualization: desktopApi ? params => ipcRenderer.invoke('jolo:visualization:prepare', { sessionId: params.sessionId, path: params.path }) : undefined,
+  releaseVisualization: url => ipcRenderer.send('jolo:visualization:release', url),
   call: (method, params) => ipcRenderer.invoke("jolo:call", { method, params: params ?? {} }),
   onEvents: (listener) => { eventListeners.add(listener); return () => eventListeners.delete(listener); },
   onEngine: (listener) => { engineListeners.add(listener); return () => engineListeners.delete(listener); },
@@ -45,6 +50,7 @@ contextBridge.exposeInMainWorld("jolo", {
   answererMenu: (options) => ipcRenderer.invoke("jolo:answererMenu", { items: (options?.items ?? []).map((item) => ({ id: String(item.id), label: String(item.label), checked: Boolean(item.checked), enabled: item.enabled !== false })) }),
   taskMenu: (options) => ipcRenderer.invoke("jolo:taskMenu", typeof options === "boolean" ? { archived: options } : { archived: Boolean(options?.archived), worktree: Boolean(options?.worktree) }),
   openExternal: (url) => ipcRenderer.invoke("jolo:openExternal", url),
+  checkForUpdate: desktopApi ? (options) => ipcRenderer.invoke("jolo:update:check", { force: Boolean(options?.force) }) : undefined,
   resync: () => ipcRenderer.invoke("jolo:resync"),
   setOverlay: (active) => ipcRenderer.send("jolo:overlay", Boolean(active)),
   smoke: process.env.JOLO_DESKTOP_SMOKE === "1",

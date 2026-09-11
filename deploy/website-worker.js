@@ -1,12 +1,13 @@
-import { githubAssetRedirect, latestRelease } from './github-releases.js';
+import { githubAssetRedirect, latestRelease, latestDesktopRelease } from './github-releases.js';
 // Preserve the original static releases; route new versions to verified CI builds.
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const redirect = githubAssetRedirect(url.pathname);
-    if (!redirect && url.pathname !== '/releases/latest.txt') return env.ASSETS.fetch(request);
+    if (!redirect && !['/releases/latest.txt', '/releases/desktop.json'].includes(url.pathname)) return env.ASSETS.fetch(request);
     if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method not allowed', { status: 405 });
     if (url.pathname === '/releases/latest.txt') return latestRelease(request, env);
+    if (url.pathname === '/releases/desktop.json') return latestDesktopRelease(request);
     const direct = await env.ASSETS.fetch(request);
     if (direct.status !== 404) return direct;
     if (url.pathname.endsWith('.sha256')) return redirect;

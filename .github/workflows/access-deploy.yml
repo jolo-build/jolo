@@ -1,0 +1,40 @@
+name: Deploy Access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: access-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'jolo-build/jolo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run access:test
+      - name: Deploy access.jolo.build
+        working-directory: apps/access
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Set the CLOUDFLARE_API_TOKEN repository secret.' >&2; exit 1; }
+          bun run db:remote
+          bun scripts/assets.js
+          # Routine releases retain the existing OAuth/email secret bindings.
+          # Use access:deploy separately when bootstrapping or rotating credentials.
+          node node_modules/wrangler/bin/wrangler.js deploy --config ../../deploy/access.wrangler.jsonc --env '' --keep-vars

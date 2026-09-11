@@ -49,6 +49,41 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Claude Code through its structured stream", () => {
+  test('multiple Claude chats in one folder keep independent turns, permissions, and history', async () => {
+    const { client, events, project, session, messagesOf, text } = await boot({ clientKind: 'desktop' });
+    try {
+      const chats = [session];
+      for (let index = 1; index < 4; index++) chats.push((await client.call('session.create', {
+        projectId: project.projectId, workspaceId: project.workspaceId, agentId: 'claude', title: `Chat ${index}`,
+      })).session);
+      const waiting = [];
+      for (const [index, chat] of chats.slice(0, 3).entries()) {
+        const { run } = await client.call('run.start', { sessionId: chat.id, requestId: `parallel-${index}`, prompt: `run echo chat-${index}` });
+        waiting.push(run);
+        await waitFor(() => events.some(event => event.type === 'permission.requested' && event.runId === run.id));
+      }
+      expect((await client.call('engine.status', {})).activeRuns).toBe(3);
+      const followup = (await client.call('run.start', { sessionId: chats[0].id, requestId: 'followup', prompt: 'continue here' })).run;
+      expect((await client.call('run.snapshot', { runId: followup.id })).run.state).toBe('queued');
+      const quick = (await client.call('run.start', { sessionId: chats[3].id, requestId: 'independent', prompt: 'Explain TCP/IP' })).run;
+      await waitFor(async () => (await client.call('run.snapshot', { runId: quick.id })).run.state === 'completed');
+      expect(await text((await messagesOf(quick.id)).at(-1))).toBe('You said: Explain TCP/IP');
+      for (const run of waiting) expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('awaiting_permission');
+      // Resolving one chat's permission must not resume the others or consume their requests.
+      const approval = events.find(event => event.type === 'permission.requested' && event.runId === waiting[0].id).payload;
+      await client.call('permission.resolve', { permissionId: approval.permissionId, decision: 'allow_once' });
+      await waitFor(async () => (await client.call('run.snapshot', { runId: followup.id })).run.state === 'completed');
+      expect(await text((await messagesOf(followup.id)).at(-1))).toMatch(/^Continuing session fake-\w+: continue here$/);
+      for (const run of waiting.slice(1)) expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('awaiting_permission');
+      for (const [index, chat] of chats.entries()) {
+        const page = await client.call('session.page', { sessionId: chat.id });
+        expect(page.runs.every(run => run.sessionId === chat.id)).toBe(true);
+        expect(page.messages.every(message => message.sessionId === chat.id)).toBe(true);
+        expect(page.runs).toHaveLength(index === 0 ? 2 : 1);
+      }
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('Claude gets browser tools only while its own workspace is displayed in desktop', async () => {
     const { client, engine, project, events, runTo, messagesOf, text } = await boot();
     const host = await engine.connect({ clientKind: 'desktop' });

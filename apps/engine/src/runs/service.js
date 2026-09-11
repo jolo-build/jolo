@@ -19,7 +19,7 @@ export class RunService {
     this.captureProvider = options.captureProvider;
     this.lifetime = options.lifetime;
     this.log = options.log;
-    this.maxActive = options.maxActive ?? 2;
+    this.maxActive = options.maxActive ?? Infinity;
     this.maxQueued = options.maxQueued ?? 100;
     this.shutdownMs = options.shutdownMs ?? 5000;
     this.workspaceBusy = options.workspaceBusy ?? (() => false);
@@ -192,15 +192,12 @@ export class RunService {
 
   pump() {
     while (!this.stopping && this.active.size < this.maxActive && this.queue.length > 0) {
-      const workspacePath = runId => {
-        const run = this.storage.getRun(runId);
-        const session = run && this.storage.getSession(run.sessionId);
-        return session && this.storage.getWorkspace(session.workspaceId)?.path;
-      };
-      const occupied = [...this.active.keys()].map(workspacePath).filter(Boolean);
+      // Conversations own their turn queues. Sharing a folder or model does not
+      // make another chat wait, but a follow-up must wait for its own turn to settle.
+      const occupied = new Set([...this.active.keys()].map(id => this.storage.getRun(id)?.sessionId).filter(Boolean));
       const index = this.queue.findIndex(id => {
-        const candidate = workspacePath(id);
-        return !candidate || !occupied.some(root => candidate === root || candidate.startsWith(root + "/") || root.startsWith(candidate + "/"));
+        const candidate = this.storage.getRun(id);
+        return !candidate || !occupied.has(candidate.sessionId);
       });
       if (index < 0) break;
       const [runId] = this.queue.splice(index, 1);

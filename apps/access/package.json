@@ -15,6 +15,9 @@
     "db:remote": "bun scripts/check-deploy.js && bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --remote --config ../../deploy/access.wrangler.jsonc --env ''"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "@types/node": "^22.20.2",
+    "electron": "44.2.0",
     "wrangler": "4.130.0"
   },
   "dependencies": {

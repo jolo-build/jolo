@@ -52,7 +52,7 @@ try {
   app = createAccessApp({ ACCESS_ORIGIN: origin, ENVIRONMENT: 'development', ACCESS_DB: db, GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture', GOOGLE_CLIENT_ID: 'fixture', GOOGLE_CLIENT_SECRET: 'fixture', RESEND_API_KEY: 're_fixture', MAIL_FROM: 'Jolo <noreply@notifications.jolo.build>' }, { now: () => time, fetch: () => { throw new Error('Browser smoke must not contact identity providers'); }, mailFetch: async () => Response.json({id:'browser-mail-fixture'}) });
   const start = async (scope = 'account:read') => (await app.fetch(new Request(origin + '/device/code', { method: 'POST', body: new URLSearchParams({ client_id: 'jolo', device_name: 'Browser smoke device', scope }) }))).json();
   approved = await start('account:read tasks:read'); declined = await start();
-  child = Bun.spawn([electron, fileURLToPath(new URL('browser-forms.mjs', import.meta.url))], { env: { ...process.env, JOLO_ACCESS_TEST_ORIGIN: origin, JOLO_ACCESS_TEST_HOME: home }, stdout: 'pipe', stderr: 'pipe' });
+  child = Bun.spawn([electron, fileURLToPath(new URL('browser-forms.js', import.meta.url))], { env: { ...process.env, JOLO_ACCESS_TEST_ORIGIN: origin, JOLO_ACCESS_TEST_HOME: home }, stdout: 'pipe', stderr: 'pipe' });
   const diagnostics = new Response(child.stderr).text();
   const code = await child.exited;
   const errors = await diagnostics;

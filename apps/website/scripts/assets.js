@@ -2,8 +2,9 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { prepareReleaseAssets } from '../../../scripts/releases.js';
 
-// Copy licensed fonts; generated copies stay local.
+// Copy shared brand assets and licensed fonts; generated copies stay local.
 for (const [folder, names] of Object.entries({
+  brand: ['favicon.svg', 'favicon.png'],
   fonts: ['Inter-latin.woff2', 'JetBrainsMono-latin.woff2', 'LICENSE-Inter.txt', 'LICENSE-JetBrainsMono.txt'],
 })) {
   const output = new URL(`../public/${folder}/`, import.meta.url);

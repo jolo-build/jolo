@@ -3,7 +3,7 @@ import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
-import { JoloMark } from "./brand.jsx";
+import { JoloLogo, JoloMark } from "./brand.jsx";
 import { runLabel, verificationLabel } from "../presentation.js";
 import { ImageAttachment } from './image-attachment.jsx';
 import { TextAttachment } from './text-attachment.jsx';
@@ -131,7 +131,7 @@ function ActivityGroup({ messages, identity, hasRunStatus = false }) {
   return <details className="activity-group"><summary><ActivityIcon name={working ? tools ? 'tools' : 'think' : 'check'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
-export function Conversation({ projection, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
   const historyAnchor = useRef(null);
@@ -191,7 +191,7 @@ export function Conversation({ projection, history, hasProject, standalone = fal
         <button type="button" onClick={loadOlder} disabled={history.loading}>{history.loading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
         {history.error && <p role="alert">Couldn’t load earlier messages. Try again.</p>}
       </div>}
-      {!messages.length && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
+      {!messages.length && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
@@ -205,7 +205,7 @@ export function Conversation({ projection, history, hasProject, standalone = fal
           {message.role === 'user' && projection?.runs.get(message.runId)?.attachments?.length > 0 && <div className="message-attachments">{projection.runs.get(message.runId).attachments.map((attachment, index) => attachment.mimeType === 'text/plain' ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
           {message.role === 'user' && projection?.runs.get(message.runId)?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{projection.runs.get(message.runId).taskReferences.map(task => <button type="button" key={task.key} title={`${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>r{task.revision} ↗</span></button>)}</div>}
           {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}
-          {!message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={message.text} cacheKey={message.id} /> : <div className="message-text">{message.text}</div>}
+          {!message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={message.text} cacheKey={message.id} sessionId={projection?.runs.get(message.runId)?.sessionId ?? sessionId} streaming={message.status === "streaming"} /> : <div className="message-text">{message.text}</div>}
         </article>;
       })}
       {lastRun && !["completed", "paused"].includes(lastRun.state) && <div className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>}

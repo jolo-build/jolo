@@ -4,6 +4,9 @@
 
 const MAX_BLOCK_CHARS = 64 * 1024;
 const LIST_ITEM = /^\s*([-*+]|\d{1,9}[.)])\s+/;
+const VISUALIZE_START = 'visualize';
+const VISUALIZE_END = '';
+const startsVisualization = line => line.trimStart().startsWith(VISUALIZE_START) || (line.trim().startsWith('') && VISUALIZE_START.startsWith(line.trim()));
 
 /** Split text into block segments at blank lines, keeping fenced code intact. */
 export function segment(text) {
@@ -11,13 +14,25 @@ export function segment(text) {
   const segments = [];
   let current = [];
   let inFence = null;
+  let inVisualization = false;
   const flush = () => { if (current.length) { segments.push(current.join("\n")); current = []; } };
   for (const line of lines) {
+    if (inVisualization) {
+      current.push(line);
+      if (line.includes(VISUALIZE_END)) { inVisualization = false; flush(); }
+      continue;
+    }
     const fence = line.match(/^\s{0,3}(`{3,}|~{3,})/);
     if (inFence) {
       current.push(line);
       // A closing fence carries no info string, so a nested "```js" inside a "```md" block stays inside it.
       if (fence && fence[1][0] === inFence[0] && fence[1].length >= inFence.length && /^\s{0,3}(`{3,}|~{3,})\s*$/.test(line)) { inFence = null; flush(); }
+      continue;
+    }
+    if (startsVisualization(line)) {
+      flush(); current.push(line);
+      if (line.includes(VISUALIZE_END)) flush();
+      else inVisualization = true;
       continue;
     }
     // A fence indented under a list item belongs to that item only when the item opened a code span mid-line
@@ -32,7 +47,7 @@ export function segment(text) {
     current.push(line);
   }
   flush();
-  return { segments, openFence: Boolean(inFence) };
+  return { segments, openFence: Boolean(inFence), openVisualization: inVisualization };
 }
 
 export function parseInline(text) {
@@ -125,6 +140,16 @@ function parseList(lines) {
 
 /** Parse one segment into a block. */
 export function parseBlock(text) {
+  if (startsVisualization(text.split('\n', 1)[0])) {
+    if (!text.includes(VISUALIZE_END) && text.length <= MAX_BLOCK_CHARS) return { type: 'visualization', status: 'pending' };
+    try {
+      const source = text.trim();
+      if (source.length > MAX_BLOCK_CHARS || !source.startsWith(VISUALIZE_START) || !source.endsWith(VISUALIZE_END)) throw new Error();
+      const value = JSON.parse(source.slice(VISUALIZE_START.length, -VISUALIZE_END.length));
+      if (!value || typeof value.path !== 'string' || !value.path.trim() || value.path.length > 4096 || /[\x00-\x1f\x7f]/.test(value.path) || !/\.html?$/i.test(value.path)) throw new Error();
+      return { type: 'visualization', status: 'ready', path: value.path, mode: value.mode === 'wide' ? 'wide' : 'inline', title: typeof value.title === 'string' ? value.title.slice(0, 250) : null };
+    } catch { return { type: 'visualization', status: 'invalid' }; }
+  }
   if (text.length > MAX_BLOCK_CHARS) text = `${text.slice(0, MAX_BLOCK_CHARS)}\n[block truncated]`;
   const lines = text.split("\n");
   const first = lines[0];
@@ -155,7 +180,7 @@ export function parseBlock(text) {
  * `cache` (a Map) lets streaming callers reuse parsed blocks for unchanged segments.
  */
 export function parseDocument(text, { cache } = {}) {
-  const { segments, openFence } = segment(text);
+  const { segments, openFence, openVisualization } = segment(text);
   const blocks = segments.map((seg, index) => {
     const last = index === segments.length - 1;
     if (cache && !last && cache.has(seg)) return cache.get(seg);
@@ -163,7 +188,7 @@ export function parseDocument(text, { cache } = {}) {
     if (cache && !last) cache.set(seg, block);
     return block;
   });
-  return { blocks, open: openFence || (segments.length > 0 && !text.endsWith("\n\n")) };
+  return { blocks, open: openFence || openVisualization || (segments.length > 0 && !text.endsWith("\n\n")) };
 }
 
 /** Plain-text projection for terminals and previews: no ANSI, no HTML. */
@@ -174,6 +199,7 @@ export function renderPlain(blocks, { width = 80 } = {}) {
     switch (block.type) {
       case "heading": lines.push(`${"#".repeat(block.level)} ${inline(block.children)}`, ""); break;
       case "paragraph": lines.push(...wrap(inline(block.children), width), ""); break;
+      case 'visualization': lines.push(...wrap(block.status === 'ready' ? `Visualization: ${block.title ? `${block.title} — ` : ''}${block.path}` : block.status === 'pending' ? 'Preparing visualization…' : 'Visualization reference is invalid.', width), ''); break;
       case "code": lines.push(...block.text.split("\n").map((l) => `    ${l}`), ""); break;
       case "quote": lines.push(...wrap(inline(block.children), width - 2).map((l) => `> ${l}`), ""); break;
       case "rule": lines.push("-".repeat(Math.min(width, 40)), ""); break;

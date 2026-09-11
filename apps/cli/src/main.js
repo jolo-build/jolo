@@ -8,6 +8,7 @@ import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema } 
 import { findProject, renderBoardDetail, renderBoardTable } from "./board.js";
 import { deleteSession, listSessions, restoreSession } from "./sessions.js";
 import { runAccountCommand } from './account.js';
+import { backgroundCheck, commandUpdate, pendingUpdate } from './update.js';
 
 import { engineCommand as resolveEngineCommand } from "@jolo/launcher/executable";
 import path from "node:path";
@@ -64,6 +65,7 @@ const USAGE = `usage:
   jolo logout [--json]                  sign out of your Jolo account on this profile
   jolo whoami [--json]                  show your Jolo account
   jolo engine serve | stop [--cancel]
+  jolo update [<version>] [--check] [--json]   install the newest published release
 `;
 
 import { parseArgs } from "./args.js";
@@ -611,6 +613,10 @@ async function commandInteractive({ positional, flags }) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { err("interactive mode needs a terminal; use `jolo run` for headless use"); err(USAGE); return EXIT.usage; }
   const dir = positional[0] ?? flags.path ?? process.cwd();
   const paths = resolvePaths({ home: flags.home, profile: flags.profile });
+  // Advisory only: show what the last check found and refresh it in the background, so opening
+  // the client never waits on the network and never installs anything by itself.
+  const update = pendingUpdate({ paths, build: BUILD });
+  void backgroundCheck({ paths, build: BUILD });
   let started = false;
   const client = await connectResumable({
     open: async () => {
@@ -636,7 +642,7 @@ async function commandInteractive({ positional, flags }) {
     const status = await client.call("engine.status", {});
     await client.subscribe({ after: status.cursor });
     const { startTui } = await import("./tui/index.jsx");
-    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session) });
+    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update });
   } finally {
     await client.close();
   }
@@ -671,7 +677,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, engine: commandEngine };
+  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

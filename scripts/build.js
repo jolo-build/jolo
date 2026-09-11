@@ -68,6 +68,11 @@ mkdirSync(path.join(DIST, "cli", "bin"), { recursive: true });
 cpSync(path.join(ROOT, "scripts/cli-launcher.sh"), path.join(DIST, "cli", "bin", "jolo"));
 chmodSync(path.join(DIST, "cli", "bin", "jolo"), 0o755);
 writeFileSync(path.join(DIST, "cli", "VERSION"), `${version}\n`);
+// `jolo update` re-runs this exact installer rather than repeating its download, verification and
+// symlink swap in a second place. Shipping it inside the archive also means an update applies the
+// installer the user already has, not one fetched over the network at update time.
+cpSync(path.join(ROOT, "scripts/install.sh"), path.join(lib, "install.sh"));
+chmodSync(path.join(lib, "install.sh"), 0o755);
 // Installed documentation must work without the source tree or its relative links.
 cpSync(path.join(ROOT, "apps/cli/README.md"), path.join(DIST, "cli", "README.md"));
 // Native search is optional in development; setup:tgrep pins and verifies the release before bundling.
@@ -87,7 +92,7 @@ if (!cliOnly) {
   const app = path.join(DIST, "desktop-app");
   mkdirSync(path.join(app, "preload"), { recursive: true });
   mkdirSync(path.join(app, "engine"), { recursive: true });
-  await bundle([path.join(ROOT, "apps/desktop/src/main/index.mjs")], app, { target: "node", external: ["electron"], naming: "main.mjs" });
+  await bundle([path.join(ROOT, "apps/desktop/src/main/index.js")], app, { target: "node", external: ["electron"], naming: "main.js" });
   const rendererBuild = Bun.spawnSync([process.execPath, path.join(ROOT, "apps/desktop/scripts/build.js")], { stdio: ["inherit", "inherit", "inherit"] });
   if (rendererBuild.exitCode !== 0) throw new Error("renderer build failed");
   cpSync(path.join(ROOT, "apps/desktop/dist"), path.join(app, "dist"), { recursive: true });
@@ -96,7 +101,7 @@ if (!cliOnly) {
   cpSync(path.join(lib, "bun"), path.join(app, "engine", "bun"));
   chmodSync(path.join(app, "engine", "bun"), 0o755);
   bundleSearch(path.join(app, 'engine'));
-  writeFileSync(path.join(app, "package.json"), JSON.stringify({ name: "jolo", productName: "Jolo", version, main: "main.mjs", type: "module", private: true }, null, 2));
+  writeFileSync(path.join(app, "package.json"), JSON.stringify({ name: "jolo", productName: "Jolo", version, main: "main.js", type: "module", private: true }, null, 2));
   log("desktop app directory prepared (dist/desktop-app)");
 }
 

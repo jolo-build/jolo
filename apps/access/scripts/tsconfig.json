@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Deployment, migration generation, and browser checks run locally under Bun or Node.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["."]
+}

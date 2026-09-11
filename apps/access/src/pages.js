@@ -2,8 +2,8 @@ export const escapeHTML = value => String(value).replace(/[&<>"']/g, char => ({ 
 const e = escapeHTML;
 
 export function layout(title, content) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · Jolo</title><link rel="preload" href="/assets/mono.woff2" as="font" type="font/woff2" crossorigin><script src="/theme.js"></script><link rel="stylesheet" href="/styles.css"></head><body>
-  <header><a class="brand" href="https://jolo.build" aria-label="Jolo home"><span>jolo</span></a><span class="service">/ access</span><label class="theme-switch" hidden>Theme<select id="color-theme" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></header>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><meta name="color-scheme" content="light dark"><title>${e(title)} · Jolo</title><link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="icon" type="image/svg+xml" href="/assets/favicon.svg"><link rel="preload" href="/assets/inter.woff2" as="font" type="font/woff2" crossorigin><script src="/theme.js"></script><link rel="stylesheet" href="/styles.css"></head><body>
+  <header><a class="brand" href="https://jolo.build" aria-label="Jolo home"><span>jolo</span></a><span class="service">/ &nbsp; Access</span><label class="theme-switch" hidden>Theme<select id="color-theme" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></header>
   <main id="main">${content}</main><footer><span>Your agents. Your workspace.</span><a href="https://jolo.build">Back to Jolo</a></footer></body></html>`;
 }
 
@@ -29,7 +29,7 @@ export function signInPage({ providers = {}, error = false, userCode = null }) {
         <p class="fine">We request only your profile and verified email. Use the same sign-in provider each time to access your tasks and teams.</p>
       </div></section>
       <section class="access-panel" aria-labelledby="workspace-title"><div class="access-panel-body"><h2 id="workspace-title">Your account, across Jolo</h2><p>Manage tasks and teams here. Connect your desktop app or CLI to use your account in Jolo.</p><p class="fine">The Jolo desktop and CLI can still be used without an account.</p></div><div class="access-panel-actions"><a class="button secondary" href="/device">Connect a device</a></div></section>
-    </div>`, { kind: 'access-page', active: 'signin', publicPage: true });
+    </div>`, { kind: 'access-page signin-page', active: 'signin', publicPage: true });
 }
 
 export function accountPage(account) {

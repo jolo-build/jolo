@@ -22,7 +22,9 @@ Accounts are keyed by provider and immutable subject, never merged automatically
 
 The header's **Theme** selector offers System, Light, and Dark. System follows the browser's color preference, including when JavaScript is disabled. Explicit choices are saved in this browser and applied before rendering subsequent pages. The small same-origin theme script does not change account data; account and task forms remain server-rendered.
 
-Pages preload the bundled font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
+Access shares the desktop palette, compact Inter typography, rounded controls, blue activity accents, and quiet scrollbars in both light and dark themes. Code and task references use JetBrains Mono.
+
+Pages preload the bundled Inter font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
 
 ## Validate
 
@@ -68,6 +70,8 @@ Configure your Cloudflare account and D1 database in `deploy/access.wrangler.jso
 
 Deployment credentials live in the private R2 bucket/object named in `deploy/access-secrets.json`. Keep r2.dev disabled, attach no custom domains, and do not bind this bucket to a public Worker. Authenticate the deployer with `wrangler login` or a separate `CLOUDFLARE_API_TOKEN` authorized for R2, D1, and Worker deployment; this bootstrap authentication must be available before reading R2.
 
+The Access GitHub Actions workflow runs unit and Worker runtime checks, applies pending D1 migrations, and deploys the Worker and assets when manually dispatched. Enable automated releases only after the repository token has the required production permissions. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in repository secrets; routine releases need D1 and Worker deployment permissions. Wrangler retains the service’s existing OAuth and email secret bindings, and `--keep-vars` retains any additional variables configured in the dashboard. The workflow does not read or synchronize the R2 credential backup. Bootstrap the service or rotate its credentials with the full `bun run access:deploy` command below before relying on routine releases.
+
 Store an OAuth file containing `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...`, `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`, or both pairs (one per line), and a separate file containing the bare Resend key. Include all providers you want enabled: the import replaces the stored credential set. Existing GitHub-only credential files remain valid. Import or rotate them with:
 
 ```sh
@@ -75,7 +79,7 @@ bun run --cwd apps/access secrets:store /tmp/jolo_oauth_key.txt /tmp/jolo_key.tx
 bun run access:deploy
 ```
 
-The import checks bucket privacy, uploads the configured credentials, and verifies the stored values without printing them. Deployment reads them from R2, validates them, applies the generated D1 migrations, and publishes them atomically with the Worker as secret bindings. Temporary credential files have mode 0600 and are removed on completion or failure. Credentials never enter tracked configuration or website assets. Updating R2 takes effect on the next deployment.
+The import checks bucket privacy, uploads the configured credentials, and verifies the stored values without printing them. Deployment reads them from R2, validates them, applies the generated D1 migrations, and publishes them atomically with the Worker as secret bindings. Temporary credential files have mode 0600 and are removed on completion or failure. Credentials never enter tracked configuration or website assets. Updating R2 takes effect on the next full `bun run access:deploy`; routine GitHub Actions releases preserve the already configured credentials.
 
 `bun run access:build` only performs a deployment dry run and needs no production credentials. Invitations remain usable locally without email configuration. Unit and runtime checks mock external services and send no real emails.
 

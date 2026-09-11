@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // Renderers on every runtime import this package, so it stays free of runtime-specific globals.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["src", "test", "types"]
+}

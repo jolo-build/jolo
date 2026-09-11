@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // The account service runs on Cloudflare Workers: no Node or Bun APIs are available at runtime.
+  "compilerOptions": { "types": ["@cloudflare/workers-types"] },
+  "include": ["."]
+}

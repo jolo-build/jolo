@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  // The release router is a Cloudflare Worker; its helpers are shared with the website worker.
+  "compilerOptions": { "types": ["@cloudflare/workers-types"] },
+  "include": ["."]
+}

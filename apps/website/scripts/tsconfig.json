@@ -1,0 +1,10 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Asset preparation and prerendering run under Bun; prerendering imports the browser components.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["bun", "react", "react-dom"],
+    "jsx": "react-jsx"
+  },
+  "include": ["."]
+}

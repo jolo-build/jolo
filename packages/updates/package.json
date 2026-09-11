@@ -1,0 +1,10 @@
+{
+  "name": "@jolo/updates",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./cache": "./src/cache.js"
+  }
+}

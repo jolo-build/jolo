@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Build, start, and smoke runners are Bun scripts that spawn Electron.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["."]
+}

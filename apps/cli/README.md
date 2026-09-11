@@ -45,6 +45,20 @@ The engine starts automatically and can outlive a client. Finish work before `jo
 
 ## Updates and removal
 
-The [Jolo website](https://jolo.build) provides the installer. Rerunning it switches the launcher to a new versioned directory. Previous installations remain under `PREFIX/share/jolo/releases/` until removed after their processes stop.
+Run `jolo update` to install the newest published release:
+
+```sh
+jolo update --check        # report what is available, install nothing
+jolo update                # install it
+jolo update 0.2.0-rc.1     # install a named release, including a prerelease
+```
+
+Updates come from the project's [GitHub releases](https://github.com/jolo-build/jolo/releases). `jolo update` runs the installer that shipped inside your current release, so it verifies the download's SHA-256 and switches the launcher only after the new build starts successfully; a failed update leaves your installation untouched. Add `--json` for a machine-readable result.
+
+The interactive client mentions a new release on its welcome panel. Nothing installs on its own, and the background check runs at most once a day.
+
+A running engine keeps serving the build it started with, which is why previous installations remain under `PREFIX/share/jolo/releases/` until their processes stop. Finish active tasks, then `jolo engine stop` to move the engine to the new build as well.
+
+The [Jolo website](https://jolo.build) provides the installer for a first install, and rerunning it also upgrades.
 
 To uninstall, stop the engine and remove the managed `PREFIX/bin/jolo` symlink and `PREFIX/share/jolo/` directory. Conversations/settings are stored separately: macOS uses `~/Library/Application Support/jolo/<profile>`; Linux uses `$XDG_DATA_HOME/jolo/<profile>` or `~/.local/share/jolo/<profile>`. A custom home stores them under `<home>/data/<profile>`.

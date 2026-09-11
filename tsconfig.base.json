@@ -1,0 +1,27 @@
+{
+  // Shared type-checking rules. Nothing in this repository emits: Bun and Electron's Node run the
+  // source directly, so the compiler only ever reports. Each program (a directory with its own
+  // runtime) extends this and declares the globals that runtime provides, because the engine, the
+  // Electron main process, the browser renderer, and the Cloudflare Workers see different APIs.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    // Imports carry their real extension so the same specifier resolves in Bun, Node, and the bundler.
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    // Keep TypeScript source erasable: no enums, namespaces, or parameter properties, and type-only
+    // imports marked as such. Node's type stripping and Bun both run such files without a build step.
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    // Product code is JavaScript with JSDoc types; strictness is raised per program as code converts.
+    "strict": false
+  }
+}

@@ -42,7 +42,7 @@ The engine owns application state and side effects. Desktop and CLI clients shar
 | Product code | `bun run test` |
 | Desktop | `bun run desktop:smoke` in a graphical macOS session |
 | Terminal input/rendering | `bun test tests/integration/tui-screen.test.js tests/integration/tui.test.js` |
-| Build/installer | `bun test tests/integration/packaging.test.js tests/integration/installer.test.js` |
+| Build/installer/updates | `bun test tests/integration/packaging.test.js tests/integration/installer.test.js tests/integration/cli-update.test.js` |
 | Website | `bun run website:build`, then inspect `bun run website:preview` |
 | Access service | `bun run access:test`, `bun run access:build`, and `bun run access:test:browser` for browser changes |
 

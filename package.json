@@ -42,13 +42,17 @@
     "bun": ">=1.3.12"
   },
   "devDependencies": {
-    "@jolo/protocol": "workspace:*",
-    "@jolo/client": "workspace:*",
-    "@jolo/launcher": "workspace:*",
-    "@jolo/engine": "workspace:*",
+    "@cloudflare/workers-types": "^5.20260911.1",
     "@jolo/cli": "workspace:*",
+    "@jolo/client": "workspace:*",
     "@jolo/desktop": "workspace:*",
-    "@jolo/markdown": "workspace:*"
+    "@jolo/engine": "workspace:*",
+    "@jolo/launcher": "workspace:*",
+    "@jolo/markdown": "workspace:*",
+    "@jolo/protocol": "workspace:*",
+    "@jolo/updates": "workspace:*",
+    "@types/bun": "^1.4.2",
+    "typescript": "5.9.3"
   },
   "trustedDependencies": [
     "electron"

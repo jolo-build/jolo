@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "main": "src/main/index.mjs",
+  "main": "src/main/index.js",
   "scripts": {
     "build": "bun scripts/build.js",
     "start": "bun scripts/build.js && bun scripts/start.js",
@@ -15,13 +15,17 @@
     "@jolo/launcher": "workspace:*",
     "@jolo/markdown": "workspace:*",
     "@jolo/protocol": "workspace:*",
+    "@jolo/updates": "workspace:*",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "electron": "44.2.0",
-    "@electron/packager": "20.3.0"
+    "@electron/packager": "20.3.0",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "electron": "44.2.0"
   }
 }
