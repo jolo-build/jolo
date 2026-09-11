@@ -12,9 +12,72 @@
     <meta property="og:title" content="Jolo — Your agents. One workspace." />
     <meta property="og:description" content="A workspace for your coding agents, browser, and terminal. Built for focus, with every task and change in view." />
     <meta name="twitter:card" content="summary" />
+    <style id="startup-style">
+      #startup { display: none; }
+      html[data-assets-loading] { background: #fff; }
+      html[data-assets-loading] body { overflow: hidden; }
+      html[data-assets-loading] #root { visibility: hidden !important; }
+      html[data-assets-loading] #startup { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; justify-items: center; gap: 16px; padding: 24px; color: #606060; background: #fff; font: 14px/1.5 system-ui, sans-serif; text-align: center; }
+      #startup p { margin: 0; }
+      #startup .startup-spinner { width: 22px; height: 22px; border: 2px solid #ddd; border-top-color: #111; border-radius: 50%; animation: startup-spin .8s linear infinite; }
+      #startup .startup-error { display: none; }
+      html[data-assets-error] #startup .startup-pending { display: none; }
+      html[data-assets-error] #startup .startup-error { display: block; }
+      #startup button { padding: 8px 16px; border: 1px solid #aaa; border-radius: 0; color: #111; background: #fff; font: inherit; cursor: pointer; }
+      @keyframes startup-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { #startup .startup-spinner { animation: none; } }
+    </style>
+    <script id="startup-script">
+      // Hide the prerendered content before its first paint, even if CSS is slow.
+      // With JavaScript disabled, the static HTML remains available.
+      (() => {
+        const root = document.documentElement;
+        root.dataset.assetsLoading = '';
+        let loaded = false, hydrated = false, started = false, failed = false;
+        const showError = () => { root.dataset.assetsError = ''; };
+        // A stalled download gets a retry action, never a flash of unready content.
+        const deadline = setTimeout(showError, 15000);
+        window.addEventListener('error', event => {
+          if (event.target?.matches?.('script[src], link[rel="stylesheet"], img')) {
+            failed = true;
+            showError();
+          }
+        }, true);
+        document.addEventListener('click', event => {
+          if (event.target.closest?.('#startup button')) window.location.reload();
+        });
+        const ready = async () => {
+          if (!loaded || !hydrated || started || failed) return;
+          started = true;
+          try {
+            const styles = [...document.querySelectorAll('link[rel="stylesheet"]')];
+            if (styles.some(link => !link.sheet)) throw new Error('Stylesheet unavailable');
+            const faces = await document.fonts.load('400 16px "JetBrains Mono"');
+            if (!faces.length) throw new Error('Font unavailable');
+            await document.fonts.ready;
+            await Promise.all([...document.images].filter(image => image.loading !== 'lazy').map(image => image.decode()));
+            // Allow font metrics and the hydrated layout to settle before revealing.
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            if (failed) return;
+            clearTimeout(deadline);
+            delete root.dataset.assetsLoading;
+            delete root.dataset.assetsError;
+            document.getElementById('startup').remove();
+          } catch { showError(); }
+        };
+        window.addEventListener('load', () => { loaded = true; void ready(); }, { once: true });
+        window.addEventListener('jolo:hydrated', () => { hydrated = true; void ready(); }, { once: true });
+      })();
+    </script>
     <link rel="preload" href="/fonts/JetBrainsMono-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
+    <div id="startup" role="status" aria-live="polite">
+      <span class="startup-spinner startup-pending" aria-hidden="true"></span>
+      <p class="startup-pending">Loading Jolo…</p>
+      <p class="startup-error">Jolo couldn’t finish loading. Check your connection and try again.</p>
+      <button class="startup-error" type="button">Try again</button>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -7,6 +7,7 @@
     "dev": "bun scripts/assets.js && vite --host 127.0.0.1",
     "build": "bun scripts/assets.js && vite build && bun scripts/prerender.jsx",
     "preview": "vite preview --host 127.0.0.1",
+    "test:loading": "bun run build && bun scripts/test-loading.js",
     "deploy": "bun run build && wrangler deploy --config ../../deploy/website.wrangler.jsonc",
     "deploy:check": "bun run build && wrangler deploy --dry-run --config ../../deploy/website.wrangler.jsonc",
     "cloudflare:login": "wrangler login",
