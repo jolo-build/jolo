@@ -409,3 +409,34 @@ footer { background:var(--bg); }
 }
 @media(max-height:600px) { .signin-page { padding-top:16px; }.signin-page .task-heading { margin-bottom:16px; } }
 @media(forced-colors:active) { * { scrollbar-color:auto; } .task-nav a[aria-current=page] { outline:1px solid Highlight; } }
+
+/* Task composition: an open writing surface with a quiet properties rail. */
+.task-compose-page .task-heading { margin-bottom:12px; }
+.task-compose-page .workspace-picker { max-width:280px; margin-bottom:18px; }
+.task-compose-page .workspace-picker label { flex-direction:row; align-items:center; gap:12px; color:var(--muted); }
+.task-compose-page .workspace-picker select { width:auto; flex:1; }
+.task-compose-page .task-form > .task-editor { border:0; border-radius:12px; padding:28px; grid-template-columns:minmax(0,1fr) 280px; gap:36px; }
+.task-compose-page .task-main-fields { gap:22px; }
+.task-compose-page .task-title-field { font-size:0; gap:0; }
+.task-app .task-compose-page .task-title-field input { font-size:24px; font-weight:500; letter-spacing:-.035em; padding:4px 0 12px; background:transparent; border:0; border-radius:0; }
+.task-compose-page .task-description-field { color:var(--muted); }
+.task-compose-page .task-description-field textarea { background:transparent; border:0; padding:8px 0; font-size:14px; }
+.task-compose-page .task-properties { background:var(--surface); border-radius:10px; padding:18px; }
+.task-compose-page .task-properties-heading { margin:0 0 20px; font-size:12px; font-weight:500; color:var(--muted); }
+.task-compose-page .task-fields { grid-template-columns:minmax(0,1fr); gap:14px; }
+.task-compose-page .task-properties fieldset { border:0; }
+.task-compose-page input:focus-visible,.task-compose-page select:focus-visible,.task-compose-page textarea:focus-visible { outline:none; border-color:transparent; background-color:var(--hover); }
+.task-compose-page .button { border:0; }
+.task-compose-page .task-actions { justify-content:flex-end; padding-top:14px; }
+.task-compose-page .task-actions .button { order:1; }
+@media(max-width:1000px) { .task-compose-page .task-form > .task-editor { grid-template-columns:minmax(0,1fr) 240px; padding:20px; gap:24px; } }
+@media(max-width:700px) { .task-compose-page .task-form > .task-editor { display:block; padding:18px; } .task-compose-page .task-properties { margin-top:20px; } .task-compose-page .task-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } .task-app .task-compose-page .task-title-field input { font-size:21px; } }
+
+.workspace-picker button[hidden] { display:none; }
+.task-compose-page .workspace-picker { width:100%; }
+.task-compose-page .task-properties .task-fields > label { display:grid; grid-template-columns:82px minmax(0,1fr); align-items:center; gap:8px; }
+.task-compose-page .task-properties { padding:16px 12px; }
+.task-compose-page .task-properties-heading { margin-bottom:14px; }
+.task-compose-page .task-properties .task-fields { gap:10px; }
+.task-compose-page .task-actions a { order:0; }
+@media(max-width:700px) { .task-compose-page .task-properties .task-fields > label { display:flex; align-items:stretch; } }

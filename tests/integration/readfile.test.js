@@ -28,6 +28,17 @@ test("workspace.readFile previews files under the path policy with bounds, and o
     const clipped = await client.call("workspace.readFile", { workspaceId, path: "big.md", maxBytes: 1024 });
     expect(clipped).toMatchObject({ bytes: 1024, truncated: true, binary: false });
     expect(clipped.text).toHaveLength(1024);
+    const unicode = Buffer.from('x'.repeat(49151) + '🌍' + 'y'.repeat(100000));
+    writeFileSync(path.join(repo, 'preview.html'), unicode);
+    const chunks = [];
+    let offset = 0;
+    for (;;) {
+      const part = await client.call('workspace.readFile', { workspaceId, path: 'preview.html', offset, maxBytes: 49152, encoding: 'base64' });
+      chunks.push(Buffer.from(part.text, 'base64')); offset += part.bytes;
+      if (!part.truncated) break;
+    }
+    expect(Buffer.concat(chunks)).toEqual(unicode);
+    expect(await client.call('workspace.readFile', { workspaceId, path: 'preview.html', offset: unicode.length + 1, encoding: 'base64' })).toMatchObject({ text: '', bytes: 0, truncated: false });
     expect(await client.call("workspace.readFile", { workspaceId, path: "blob.bin" })).toMatchObject({ binary: true, text: "", bytes: 6 });
     await expect(client.call("workspace.readFile", { workspaceId, path: "missing.md" })).rejects.toMatchObject({ code: "not_found" });
     await expect(client.call("workspace.readFile", { workspaceId, path: "../secret.md" })).rejects.toMatchObject({ code: "permission_denied" });

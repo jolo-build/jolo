@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Bun runs these tests against the Worker modules, so both sets of globals are in scope here.
+  "compilerOptions": { "types": ["bun", "@cloudflare/workers-types"] },
+  "include": [".", "../migrations"]
+}

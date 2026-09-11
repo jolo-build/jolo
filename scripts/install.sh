@@ -65,6 +65,23 @@ USAGE
   else
     fail 'The download origin must use HTTPS (or localhost HTTP for tests).'
   fi
+  # A GitHub release lays its assets out by tag; any other origin serves them under
+  # /releases/VERSION/. Both resolve to the same published files and checksums. `jolo update`
+  # states the layout it resolved, so the installer and the updater cannot disagree about it.
+  github_pattern='^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+  layout=${JOLO_INSTALL_LAYOUT:-}
+  if [ -z "$layout" ]; then
+    if [[ $base_url =~ $github_pattern ]]; then layout=github; else layout=origin; fi
+  fi
+  case "$layout" in
+    github)
+      latest_url=$base_url/releases/latest/download/latest.txt
+      release_directory() { printf '%s/releases/download/v%s' "$base_url" "$1"; } ;;
+    origin)
+      latest_url=$base_url/releases/latest.txt
+      release_directory() { printf '%s/releases/%s' "$base_url" "$1"; } ;;
+    *) fail 'JOLO_INSTALL_LAYOUT must be github or origin.' ;;
+  esac
 
   work_dir=$(mktemp -d "${TMPDIR:-/tmp}/jolo-download.XXXXXX")
   stage_dir=''
@@ -81,12 +98,12 @@ USAGE
   trap 'exit 143' TERM
 
   if [ -z "$version" ]; then
-    download "$base_url/releases/latest.txt" "$work_dir/latest.txt" 1024 || fail 'Could not find the latest Jolo release.'
+    download "$latest_url" "$work_dir/latest.txt" 1024 || fail 'Could not find the latest Jolo release.'
     version=$(cat "$work_dir/latest.txt")
     [[ $version =~ $version_pattern ]] || fail 'The server returned an invalid release version.'
   fi
   archive=jolo-cli-$target.tar.gz
-  release_url=$base_url/releases/$version
+  release_url=$(release_directory "$version")
   say "Installing Jolo $version for $target..."
   download "$release_url/$archive.sha256" "$work_dir/checksum" 1024 || fail "No downloadable Jolo $version build is available for $target."
   checksum_pattern='^[0-9a-f]{64}$'

@@ -43,8 +43,8 @@ jobs:
         run: bun scripts/ci-release.js check-tag
       - run: bun install --frozen-lockfile
       - run: bun run setup:tgrep
-      - name: Check installer and release routing
-        run: bun test tests/integration/installer.test.js tests/unit/ci-release.test.js tests/unit/release-assets.test.js tests/unit/release-routing.test.js
+      - name: Check installer, updates and release routing
+        run: bun test tests/integration/installer.test.js tests/integration/cli-update.test.js tests/release/ci-release.test.js tests/release/release-assets.test.js tests/release/release-routing.test.js packages/updates/test/updates.test.js apps/cli/test/cli-update.test.js apps/desktop/test/release-updates.test.js
       - name: Build native CLI archive
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
@@ -82,7 +82,9 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun run setup:tgrep
-      # Developer ID signing and notarization are not configured yet.
+      # The bundle is ad-hoc signed. Shipping it to other machines still needs a Developer ID
+      # signature and notarization, which is why the application reports updates rather than
+      # installing them: macOS will not hand an update to a signature it cannot attribute.
       - name: Build the desktop DMG installer
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"

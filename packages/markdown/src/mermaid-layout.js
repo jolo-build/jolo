@@ -239,12 +239,22 @@ export function layoutFlowchart(model, metrics) {
     });
   }
 
+  // Edge labels can extend beyond the boxes, especially on vertical branches.
+  // Include their full span and translate left-facing labels into the canvas.
+  let left = 0, right = width;
+  for (const { label } of links) {
+    if (!label) continue;
+    const span = labelSpan(label.text);
+    left = Math.min(left, label.align === "end" ? label.x - span : label.x);
+    right = Math.max(right, label.align === "end" ? label.x : label.x + span);
+  }
+  const shift = (point) => point ? { ...point, x: point.x - left } : point;
   return {
-    width,
+    width: right - left,
     height,
-    nodes: nodes.map((node) => ({ ...node, ...place(node) })),
-    links,
-    loops,
+    nodes: nodes.map((node) => ({ ...node, ...shift(place(node)) })),
+    links: links.map((link) => ({ ...link, points: link.points.map(shift), head: shift(link.head), label: shift(link.label), through: shift(link.through) })),
+    loops: loops.map(shift),
     groups: model.groups ?? [],
   };
 }

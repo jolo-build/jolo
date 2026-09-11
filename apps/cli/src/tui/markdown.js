@@ -169,6 +169,7 @@ export function renderMarkdown(text, { width = 80, depth = 0 } = {}) {
         break;
       }
       case "paragraph": lines.push(...wrapSegments(segments(block.children), w), blank()); break;
+      case 'visualization': lines.push(...wrapSegments([{ text: block.status === 'ready' ? `Visualization: ${block.title ? `${block.title} — ` : ''}${block.path}` : block.status === 'pending' ? 'Preparing visualization…' : 'Visualization reference is invalid.', dim: true }], w), blank()); break;
       case "code": {
         // A diagram Jolo can draw is drawn; one it cannot read stays the code it was written as.
         const diagram = block.language && MERMAID_LANGUAGES.has(block.language.toLowerCase()) ? mermaidLines(block.text, w - 2) : null;

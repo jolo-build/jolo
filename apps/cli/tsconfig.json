@@ -1,1 +1,6 @@
-{ "compilerOptions": { "jsx": "react-jsx", "allowJs": true, "checkJs": false, "noEmit": true, "module": "ESNext", "moduleResolution": "bundler", "target": "ES2023" }, "include": ["src/**/*"] }
+{
+  "extends": "../../tsconfig.base.json",
+  // Bun runs the CLI; the interactive client renders React through Ink rather than a DOM.
+  "compilerOptions": { "types": ["bun"], "jsx": "react-jsx" },
+  "include": ["src", "test"]
+}

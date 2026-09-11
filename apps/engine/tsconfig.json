@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // The engine is a Bun process: SQLite, sockets, and subprocesses come from Bun's globals.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["src", "test", "migrations"]
+}

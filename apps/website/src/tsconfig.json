@@ -1,0 +1,10 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // The marketing site is a browser bundle built by Vite and prerendered at build time.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["react", "react-dom"],
+    "jsx": "react-jsx"
+  },
+  "include": ["."]
+}

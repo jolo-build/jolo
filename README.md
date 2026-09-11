@@ -15,6 +15,18 @@ Jolo is a coding workspace with a terminal CLI and a desktop app. Work with codi
 
 Jolo is in early development. macOS Apple Silicon is the current release target. Desktop signing, notarization, Linux desktop validation, and automatic updates are not complete.
 
+## Installation
+
+For a desktop release, download the macOS `.dmg` from [GitHub Releases](https://github.com/jolo-build/jolo/releases), open it, and drag **Jolo** to **Applications**. Apple Silicon and Intel Macs have separate installers. Desktop DMGs are built by the release workflow; the first public desktop release has not been published yet.
+
+Install the **CLI only** with:
+
+```sh
+curl -fsSL https://jolo.build/install.sh | bash
+```
+
+The script installs the CLI and its runtime under `~/.local`; it does not install the desktop app. The original `0.1.0` release supports macOS Apple Silicon. New version-tag releases build CLI packages for macOS and Linux on ARM64 and x64.
+
 ## Run from source
 
 Install the Bun version in [.bun-version](.bun-version), then:
@@ -32,9 +44,13 @@ In Jolo, use `/model` to choose an installed coding agent or configure an API pr
 
 In the desktop board and sidebar, each folder is a workspace and each task is a chat. Expand a workspace to list its tasks, click a task to open its conversation, or choose **New task** in that workspace. The board uses the full window; the workspace sidebar returns when you open a chat. Archived tasks stay grouped by folder in the sidebar’s **Archive** tab.
 
+Separate chats run concurrently, including chats using the same folder, agent, or model. Follow-up messages queue within their own chat; **Send now** interrupts only that chat’s current turn. Tasks in the same folder share its files, and separate Git worktrees remain available when you want isolated changes.
+
 Choose **New chat** to start a conversation without selecting a folder. These chats appear under **Recents**, below your workspace folders, and support the same model and agent choices, saved history, archive, and split views. Chats receive a title from their first message. Each chat has private working storage for agents and generated files, separate from your projects.
 
 Drag a task from the sidebar or board onto a chat to open it in a split pane. Move toward the left, right, top, or bottom to preview its placement; dropping in the center opens it on the right. Existing chats and drafts stay in place, and the divider resizes the panes.
+
+Agent replies can display HTML visualizations using the `visualize` reference format. Desktop previews load HTML files up to 1 MB from the chat’s own workspace, including saved conversations, and offer an expanded view. They run in a sandbox without access to Jolo, local files, browser storage, or network APIs; static libraries and fonts may load from the supported visualization CDNs. The CLI shows a readable file reference instead.
 
 Open a project or start a headless run:
 

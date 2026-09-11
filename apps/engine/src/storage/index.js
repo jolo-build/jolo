@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { acquireDatabase, migrate, migrationBackup } from "./db.js";
-import { migrations as embeddedMigrations } from "../../../../migrations/index.ts";
+import { migrations as embeddedMigrations } from "../../migrations/index.ts";
 import { EventRepository } from "./events.js";
 import { ArtifactStore } from "./artifacts.js";
 

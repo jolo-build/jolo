@@ -12,7 +12,7 @@ if (!asset) throw new Error(`No bundled tgrep release for ${platform}; install t
 const name = `tgrep-v${release.version}-${asset.target}.tar.gz`;
 const archiveArg = process.argv.indexOf('--archive');
 const archive = archiveArg >= 0 ? await Bun.file(process.argv[archiveArg + 1]).arrayBuffer() : await (async () => {
-  const response = await fetch(`${release.repository}/releases/download/v${release.version}/${name}`);
+  const response = await fetch(`${release.repository}/releases/download/v${release.version}/${name}`, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`tgrep download failed: HTTP ${response.status}`);
   return response.arrayBuffer();
 })();

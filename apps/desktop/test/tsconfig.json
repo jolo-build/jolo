@@ -1,0 +1,11 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Bun runs these tests, but they import both renderer modules (DOM) and main-process modules,
+  // so this program sees the union rather than either runtime on its own.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["bun", "react", "react-dom"],
+    "jsx": "react-jsx"
+  },
+  "include": ["."]
+}

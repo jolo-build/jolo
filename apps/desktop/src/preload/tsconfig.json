@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  // The preload bridge is CommonJS: Electron loads it before the renderer's module system exists.
+  "compilerOptions": { "types": ["node"], "module": "CommonJS", "moduleResolution": "Node10", "allowImportingTsExtensions": false, "verbatimModuleSyntax": false },
+  "include": ["."]
+}

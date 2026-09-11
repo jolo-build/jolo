@@ -35,6 +35,34 @@
   };
   apply(preference);
   document.addEventListener('DOMContentLoaded', () => {
+    const workspace = document.querySelector('.workspace-picker');
+    if (workspace) {
+      const field = workspace.querySelector('select');
+      const editor = document.querySelector('#task-edit');
+      const draftKey = 'jolo-workspace-switch-draft';
+      const names = ['title', 'description', 'state', 'priority', 'project'];
+      let storageAvailable = true;
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(draftKey) || 'null');
+        sessionStorage.removeItem(draftKey);
+        if (editor && saved?.team === field.value && saved?.path === location.pathname) {
+          for (const name of names) if (typeof saved.values?.[name] === 'string') editor.elements[name].value = saved.values[name];
+        }
+      } catch { storageAvailable = false; }
+      // Keep the submit fallback when a draft cannot be preserved across navigation.
+      if (!editor || storageAvailable) {
+        workspace.querySelector('button').hidden = true;
+        field.addEventListener('change', () => {
+          if (editor) {
+            try {
+              sessionStorage.setItem(draftKey, JSON.stringify({ path: location.pathname, team: field.value,
+                values: Object.fromEntries(names.map(name => [name, editor.elements[name].value])) }));
+            } catch { workspace.querySelector('button').hidden = false; return; }
+          }
+          workspace.requestSubmit();
+        });
+      }
+    }
     const picker = document.getElementById('color-theme');
     if (!picker) return;
     picker.value = preference;

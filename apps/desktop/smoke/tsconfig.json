@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // Smoke checks are loaded by the Electron main process and drive the window from there.
+  "compilerOptions": { "types": ["node"] },
+  "include": ["."]
+}

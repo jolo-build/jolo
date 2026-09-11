@@ -278,7 +278,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       if (!viewed) throw new ProtocolError("not_found", "unknown workspace");
       return viewed;
     },
-    "workspace.readFile": ({ workspaceId, path: relative, maxBytes }, conn) => {
+    "workspace.readFile": ({ workspaceId, path: relative, maxBytes, offset = 0, encoding = 'utf8' }, conn) => {
       requireInteractive(conn, "file previews are for interactive clients");
       const workspace = storage.getWorkspace(workspaceId);
       if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
@@ -288,11 +288,11 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       if (!resolved.stat.isFile()) throw new ProtocolError("invalid_params", "path is not a file");
       const fd = openSync(resolved.absolute, "r");
       try {
-        const buffer = Buffer.alloc(Math.min(resolved.stat.size, maxBytes));
-        const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+        const buffer = Buffer.alloc(Math.min(Math.max(0, resolved.stat.size - offset), maxBytes));
+        const bytes = readSync(fd, buffer, 0, buffer.length, offset);
         const view = buffer.subarray(0, bytes);
         const binary = view.subarray(0, 8192).includes(0);
-        return { path: resolved.relative, text: binary ? "" : view.toString("utf8"), bytes, truncated: resolved.stat.size > bytes, binary };
+        return { path: resolved.relative, text: encoding === 'base64' ? view.toString('base64') : binary ? "" : view.toString("utf8"), bytes, truncated: resolved.stat.size > offset + bytes, binary };
       } finally {
         closeSync(fd);
       }

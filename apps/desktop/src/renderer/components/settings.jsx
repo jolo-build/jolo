@@ -12,8 +12,39 @@ const sections = [
   { id: 'agents', label: 'Coding agents', icon: 'agents', description: 'Choose how each installed agent answers your tasks.' },
   { id: 'provider', label: 'Models', icon: 'settings', description: 'Connect the model Jolo uses to answer your prompts.' },
   { id: 'appearance', label: 'Appearance', icon: 'board', description: 'Make your workspace comfortable to read.' },
+  { id: 'about', label: 'About', icon: 'circleCheck', description: 'Which Jolo this is, and whether a newer one has been released.' },
 ];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// Jolo never replaces itself: a release is announced here and downloaded by the user. Opening
+// this tab reads the last recorded check, so it costs nothing; the button asks the network.
+function AboutSettings() {
+  const [state, setState] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const check = useCallback(async (force) => {
+    setChecking(true);
+    try { setState(await window.jolo.checkForUpdate?.({ force }) ?? { managed: false }); }
+    catch (error) { setState({ error: String(error?.message ?? error) }); }
+    finally { setChecking(false); }
+  }, []);
+  useEffect(() => { void check(false); }, [check]);
+
+  const version = state?.current;
+  return <section className="settings-card">
+    <div className="settings-card-heading"><div><h2>Jolo{version ? ` ${version}` : ''}</h2><p className="hint">
+      {state === null ? 'Checking this installation…'
+        : state.managed === false ? 'This build runs from a source checkout, so there is nothing to update.'
+        : state.error ? `Could not reach the release server: ${state.error}`
+        : state.available ? `Jolo ${state.latest} has been released.`
+        : 'This is the newest published release.'}
+    </p></div></div>
+    {/* A build with nothing to check gets the note above and no dead control. */}
+    {state && state.managed !== false && <div className="settings-card-actions">
+      <button type="button" onClick={() => void check(true)} disabled={checking}>{checking ? 'Checking…' : 'Check for updates'}</button>
+      {state.available && state.releaseUrl && <button type="button" className="primary" onClick={() => window.jolo.openExternal(state.releaseUrl)}>Download {state.latest}</button>}
+    </div>}
+  </section>;
+}
 
 function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
   const [found, setFound] = useState({});
@@ -129,10 +160,11 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
               </section>
               <div className="settings-font-preview"><span className="settings-nav-label">Preview</span><p style={{ fontFamily: `${JSON.stringify(fonts.sans)}, var(--sans)` }}>A little help. A lot of possibility.</p><code style={{ fontFamily: `${JSON.stringify(fonts.mono)}, var(--mono)` }}>const answer = 42;</code><span className="terminal-sample" style={{ fontFamily: `${JSON.stringify(fonts.terminal)}, var(--terminal-font)` }}>~/project $ bun run dev</span></div>
             </div>
+            <div role="tabpanel" id={`${id}-about`} aria-labelledby={`${id}-about-tab`} hidden={section !== 'about'}>{section === 'about' && <AboutSettings />}</div>
           </fieldset>
         </div>
       </div>
-      <footer className="settings-savebar">{section === "provider" ? <span className="hint">Model choices apply to future runs.</span> : <><span role={note?.error ? 'alert' : 'status'} className={note?.error ? 'settings-save-error' : 'hint'}>{note?.text || (dirty ? 'Unsaved changes' : 'All changes saved')}</span><div>{dirty && <button type="button" disabled={busy} onClick={discard}>Discard changes</button>}<button type="submit" className="primary" disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button></div></>}</footer>
+      <footer className="settings-savebar">{section === "provider" ? <span className="hint">Model choices apply to future runs.</span> : section === "about" ? <span className="hint">Jolo installs an update only when you ask it to.</span> : <><span role={note?.error ? 'alert' : 'status'} className={note?.error ? 'settings-save-error' : 'hint'}>{note?.text || (dirty ? 'Unsaved changes' : 'All changes saved')}</span><div>{dirty && <button type="button" disabled={busy} onClick={discard}>Discard changes</button>}<button type="submit" className="primary" disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button></div></>}</footer>
     </form>
   </section>;
 }

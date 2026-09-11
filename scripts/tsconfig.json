@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  // Build, packaging, release, and benchmark tooling, all run with Bun.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["."]
+}

@@ -530,7 +530,7 @@ export const MethodSchemas = {
     result: z.object({ workspaces: z.array(WorkspaceSchema.extend({ present: z.boolean(), sessionCount: z.number().int().nonnegative() })) }),
   },
   "workspace.readFile": {
-    params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), maxBytes: z.number().int().min(1).max(1024 * 1024).default(256 * 1024) }),
+    params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), maxBytes: z.number().int().min(1).max(1024 * 1024).default(256 * 1024), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0), encoding: z.enum(['utf8', 'base64']).default('utf8') }),
     result: z.object({ path: z.string(), text: z.string(), bytes: z.number().int().nonnegative(), truncated: z.boolean(), binary: z.boolean() }),
   },
   "workspace.remove": {

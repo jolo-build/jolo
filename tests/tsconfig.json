@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.base.json",
+  // Cross-process suites: they spawn real engines and CLIs under Bun and reach into those workspaces.
+  "compilerOptions": { "types": ["bun"] },
+  "include": ["."]
+}

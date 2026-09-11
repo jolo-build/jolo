@@ -11,8 +11,8 @@ on:
       - 'vendor/tgrep/**'
       - 'scripts/setup-tgrep.js'
       - 'scripts/update-tgrep.js'
-      - 'tests/unit/tgrep-update.test.js'
-      - 'tests/unit/search-hosted.test.js'
+      - 'tests/release/tgrep-update.test.js'
+      - 'apps/engine/test/search-hosted.test.js'
       - 'tests/integration/tgrep.test.js'
       - 'tests/integration/packaging.test.js'
 
@@ -42,7 +42,7 @@ jobs:
       - id: source
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Test the updater
-        run: bun test tests/unit/tgrep-update.test.js
+        run: bun test tests/release/tgrep-update.test.js
       - name: Check for a new stable release
         id: update
         if: github.event_name != 'pull_request'
@@ -109,7 +109,7 @@ jobs:
           JOLO_TGREP: ${{ github.workspace }}/vendor/tgrep/${{ matrix.platform }}/tgrep
         run: |
           "$JOLO_TGREP" --version
-          bun test tests/integration/tgrep.test.js tests/unit/search-hosted.test.js tests/integration/packaging.test.js
+          bun test tests/integration/tgrep.test.js apps/engine/test/search-hosted.test.js tests/integration/packaging.test.js
 
   pull-request:
     name: Propose the verified update

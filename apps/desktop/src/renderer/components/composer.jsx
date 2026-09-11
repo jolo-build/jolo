@@ -247,7 +247,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton usage={usage} answererName={answerer ?? answererName} />
-      <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} title={answerer ? `Answering: ${answerer}. Click to choose who answers.` : "Configure provider and model"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button><span className="grow" />
+      <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button><span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}

@@ -1,7 +1,7 @@
 // Automated desktop smoke run: real engine, fake provider, scripted renderer, screenshot, exit code.
 import electronPath from "electron";
 import { mockProvider } from "../../../tests/fixtures/mock-providers.js";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
@@ -11,6 +11,8 @@ if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
+const visualization = process.argv.includes('--visualization');
+if (visualization) process.env.JOLO_VISUALIZATION_SMOKE = '1';
 const workspaceBoard = process.argv.includes('--board');
 if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
@@ -85,11 +87,14 @@ const script = [
   { toolCalls: [{ name: "replace_exact", arguments: { path: "NOTES.md", expectedHash: notesHash, oldText: "- second item", newText: "- second item\n- **third** item" } }] },
   { text: ["Notes updated.\n"] },
 ];
+const visualizationPath = path.join(realpathSync(project), 'preview.html');
+if (visualization) writeFileSync(visualizationPath, `<div style="padding:20px"><h2>Interactive preview</h2><p>Local visualization fixture.</p><button id="increment" onclick="document.querySelector('#count').textContent=String(++window.count)">Increment</button><output id="count">0</output></div><script>window.count=0;</script>`);
+const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({path:visualizationPath,mode:'wide',title:'Interactive preview'})}\n\nAnd a missing file:\n\nvisualize${JSON.stringify({path:path.join(realpathSync(project),'missing-preview.html')})}`;
 const scriptPath = path.join(home, "script.json");
-writeFileSync(scriptPath, JSON.stringify(workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
+writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
 if (appIndex !== -1 && !process.argv[appIndex + 1]) throw new Error("--app requires the packaged desktop executable path");
-const command = appIndex === -1 ? [electronPath, path.join(root, "src/main/index.mjs")] : [path.resolve(process.argv[appIndex + 1])];
+const command = appIndex === -1 ? [electronPath, path.join(root, "src/main/index.js")] : [path.resolve(process.argv[appIndex + 1])];
 let taskServer;
 if(tasks) {
   const { testDatabase }=await import('../../access/test/database.js');

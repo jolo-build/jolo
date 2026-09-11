@@ -22,7 +22,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) 
 } });
 let child;
 try {
-  child = Bun.spawn([electron, fileURLToPath(new URL('browser-loading.mjs', import.meta.url))], {
+  child = Bun.spawn([electron, fileURLToPath(new URL('browser-loading.js', import.meta.url))], {
     env: { ...process.env, JOLO_WEBSITE_TEST_ORIGIN: `http://127.0.0.1:${server.port}`, JOLO_WEBSITE_TEST_HOME: home },
     stdout: 'inherit', stderr: 'pipe',
   });

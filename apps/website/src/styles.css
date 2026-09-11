@@ -30,7 +30,8 @@ code,pre { font-family:var(--mono); font-variant-ligatures:none; }
 .hero-meta { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:9px; color:var(--muted); font-size:12px; }
 .activity-dot { display:inline-block; flex:none; width:6px; height:6px; border-radius:50%; background:var(--highlight); }
 .development-label { border-left:1px solid var(--line); margin-left:3px; padding-left:12px; font-size:11px; }
-.hero h1 { margin-top:25px; font-size:clamp(38px,5.4vw,64px); line-height:1.08; letter-spacing:-.055em; }
+/* Leave room for descenders so selection on the next line cannot paint over them. */
+.hero h1 { margin-top:25px; font-size:clamp(38px,5.4vw,64px); line-height:1.25; letter-spacing:-.055em; }
 .hero h1 span { color:var(--muted); }
 .hero-description { margin:24px auto 0; font-size:16px; line-height:1.75; color:var(--muted); }
 .hero-actions { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:10px; margin-top:26px; }

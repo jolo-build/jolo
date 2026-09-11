@@ -3,12 +3,15 @@ import { cpSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
 const dist = path.join(root, "dist");
-// The renderer bundle cannot catch syntax errors in Electron's unbundled main process.
-const mainDir = path.join(root, "src/main");
+// The renderer bundle cannot catch syntax errors in Electron's unbundled main process, and the smoke
+// checks it loads at runtime are never bundled either, so both directories are parsed here.
 const parser = new Bun.Transpiler({ loader: "js", target: "node" });
-for (const file of readdirSync(mainDir).filter(file => file.endsWith('.mjs'))) {
-  try { parser.transformSync(readFileSync(path.join(mainDir, file), 'utf8')); }
-  catch (error) { console.error(`Invalid desktop main module: ${file}`, error); process.exit(1); }
+for (const directory of ["src/main", "smoke"]) {
+  const absolute = path.join(root, directory);
+  for (const file of readdirSync(absolute).filter(file => file.endsWith('.js'))) {
+    try { parser.transformSync(readFileSync(path.join(absolute, file), 'utf8')); }
+    catch (error) { console.error(`Invalid desktop module: ${directory}/${file}`, error); process.exit(1); }
+  }
 }
 mkdirSync(dist, { recursive: true });
 const result = await Bun.build({

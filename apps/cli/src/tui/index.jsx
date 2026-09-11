@@ -25,7 +25,7 @@ function useTick(intervalMs) {
   return { revision, redraw };
 }
 
-function App({ client, project, initialSession, cursor, onExit, restored = false, onRestore, draftAgentId = null, initialStatus = "connected", onChooseAgent }) {
+function App({ client, project, initialSession, cursor, onExit, restored = false, onRestore, draftAgentId = null, initialStatus = "connected", onChooseAgent, update = null }) {
   const { exit } = useApp();
   const size = useWindowSize();
   const { revision, redraw } = useTick(50); // batch incoming model updates; direct input stays responsive
@@ -207,7 +207,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
 
   return (
     <>
-      <NativeTranscript batch={batch} project={project.rootPath} columns={columns} restored={restored} sessionTitle={initialSession?.title} />
+      <NativeTranscript batch={batch} project={project.rootPath} columns={columns} restored={restored} sessionTitle={initialSession?.title} update={update} />
       {sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
@@ -227,7 +227,7 @@ function SessionWorkspace({ session, restored, project, ...props }) {
     onChooseAgent={(agentId) => setSelected((previous) => ({ ...previous, agentId }))} />;
 }
 
-export async function startTui({ client, project, session, cursor, restored = false }) {
+export async function startTui({ client, project, session, cursor, restored = false, update = null }) {
   let terminalRestored = false;
   let instance = null;
   const wasRaw = Boolean(process.stdin.isRaw);
@@ -252,7 +252,7 @@ export async function startTui({ client, project, session, cursor, restored = fa
   try {
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     const kitty = await supportsKittyKeyboard();
-    instance = render(<SessionWorkspace client={client} project={project} session={session} restored={restored} cursor={cursor} onExit={restore} />, { exitOnCtrlC: false, alternateScreen: false, nativeScrollback: true, maxFps: 60, incrementalRendering: true, kittyKeyboard: { mode: kitty ? "enabled" : "disabled" } });
+    instance = render(<SessionWorkspace client={client} project={project} session={session} restored={restored} cursor={cursor} onExit={restore} update={update} />, { exitOnCtrlC: false, alternateScreen: false, nativeScrollback: true, maxFps: 60, incrementalRendering: true, kittyKeyboard: { mode: kitty ? "enabled" : "disabled" } });
     await instance.waitUntilExit();
   } finally {
     restore();

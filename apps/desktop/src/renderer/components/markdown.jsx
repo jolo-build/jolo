@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import { parseDocument } from "@jolo/markdown";
 import { MermaidDiagram } from "./mermaid.jsx";
+import { Visualization } from './visualization.jsx';
 
 const SyntaxCode = lazy(() => import("./syntax-code.jsx").catch(() => ({ default: ({ text }) => <code>{text}</code> })));
 
@@ -39,10 +40,11 @@ function MarkdownEmbed({ block, depth }) {
   </div>;
 }
 
-function Block({ block, depth }) {
+function Block({ block, depth, sessionId, streaming }) {
   switch (block.type) {
     case "heading": { const Tag = `h${Math.min(6, block.level + 2)}`; return <Tag><Inline nodes={block.children} /></Tag>; }
     case "paragraph": return <p><Inline nodes={block.children} /></p>;
+    case 'visualization': return depth > 0 ? <p>Visualization: {block.path || 'incomplete reference'}</p> : <Visualization key={`${sessionId}:${block.path}`} block={block} sessionId={sessionId} streaming={streaming} />;
     case "code":
       if (block.language && MARKDOWN_LANGUAGES.has(block.language.toLowerCase()) && depth < MAX_EMBED_DEPTH) return <MarkdownEmbed block={block} depth={depth} />;
       // A diagram Jolo can draw is drawn; one it cannot read stays the code it was written as.
@@ -65,8 +67,8 @@ function Block({ block, depth }) {
   }
 }
 
-export function Markdown({ text, cacheKey, depth = 0 }) {
+export function Markdown({ text, cacheKey, depth = 0, sessionId, streaming = false }) {
   const cache = useMemo(() => new Map(), [cacheKey]); // completed blocks are parsed once per message
   const { blocks } = useMemo(() => parseDocument(text, { cache }), [text, cache]);
-  return <div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} />)}</div>;
+  return <div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div>;
 }

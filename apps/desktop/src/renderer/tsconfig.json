@@ -1,0 +1,10 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  // Chromium renderer: DOM globals and React, with no Node or Bun APIs in reach.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["react", "react-dom"],
+    "jsx": "react-jsx"
+  },
+  "include": ["."]
+}

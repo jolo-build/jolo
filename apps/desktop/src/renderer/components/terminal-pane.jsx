@@ -18,7 +18,7 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) 
   useEffect(() => {
     let disposed = false;
     const appearance = matchMedia("(prefers-color-scheme: dark)");
-    const theme = () => appearance.matches ? { background: "#171717", foreground: "#ededed", cursor: "#f5f5f5", selectionBackground: "#404040" } : { background: "#ffffff", foreground: "#202020", cursor: "#111111", selectionBackground: "#dedede" };
+    const theme = () => appearance.matches ? { background: "#191a1c", foreground: "#ededee", cursor: "#ededee", selectionBackground: "#282f47" } : { background: "#fcfcfb", foreground: "#242629", cursor: "#292c30", selectionBackground: "#edf1ff" };
     const instance = new Terminal({ cursorBlink: true, fontSize: 12.5, fontFamily: stackFor("terminal"), scrollback: 2000, theme: theme() });
     const updateTheme = () => { instance.options.theme = theme(); };
     appearance.addEventListener("change", updateTheme);

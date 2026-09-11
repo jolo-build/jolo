@@ -1,0 +1,6 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  // Electron runs the main process in Node, not Bun, and not a browser. Electron ships its own types.
+  "compilerOptions": { "types": ["node"] },
+  "include": ["."]
+}
