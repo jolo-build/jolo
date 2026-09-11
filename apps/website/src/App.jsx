@@ -53,6 +53,32 @@ function Terminal() {
   return <div className="terminal-example"><div className="terminal-bar"><Icon name="terminal" size={17} /><span>Jolo / Terminal</span><span>~/studio</span></div><div className="terminal-content"><p><span className="terminal-muted">~/studio</span> <span className="terminal-prompt">❯</span> jolo</p><p className="terminal-welcome">Jolo<span>Your workspace, from the command line.</span></p><p><span className="terminal-prompt">❯</span> Explain how this project is organized.</p><p className="terminal-muted">Read package.json · listed apps/ · searched packages/</p><p>The project has three main parts:</p><div className="terminal-tree"><div><span>apps/</span> <span>Application entry points</span></div><div><span>packages/</span> <span>Shared components and tools</span></div><div><span>tests/</span> <span>Checks for expected behavior</span></div></div><p className="terminal-muted">No files changed.</p><div className="terminal-input"><span>❯</span><span>Ask Jolo to build, fix, or explore…</span><span className="terminal-cursor" /></div><div className="terminal-hint">Enter to send <span>Esc to stop</span> <span>/sessions to pick up a task</span></div></div></div>;
 }
 
+const planExamples = [
+  { title: 'Build a feature', goal: 'Add saved searches to the dashboard.', steps: [['Implement saved searches', 'Codex', 'Done'], ['Review the changes', 'Claude Code', 'Working'], ['Run the regression checks', 'Codex', 'Pending']] },
+  { title: 'Fix a bug', goal: 'Find and fix a sign-in redirect loop.', steps: [['Reproduce the redirect loop', 'Claude Code', 'Done'], ['Fix the callback handling', 'Codex', 'Working'], ['Check the sign-in flow', 'Claude Code', 'Pending']] },
+  { title: 'Prepare a release', goal: 'Get the next desktop release ready.', steps: [['Review the release changes', 'Claude Code', 'Done'], ['Run packaging checks', 'Codex', 'Working'], ['Draft the release notes', 'Claude Code', 'Pending']] },
+];
+function OrchestratorExamples() {
+  const [selected, setSelected] = useState(0);
+  const example = planExamples[selected];
+  return <section className="orchestrator section-width" id="orchestrator" aria-labelledby="orchestrator-title">
+    <div className="section-intro"><span className="eyebrow">Built-in orchestrator</span><h2 id="orchestrator-title">Different agents. One plan.</h2><p>Break work into ordered tasks and choose the agent for each step. Jolo runs them one at a time in the same workspace, so the next task starts with the files left by the previous one.</p></div>
+    <div className="orchestrator-example">
+      <div className="plan-examples" role="group" aria-label="Orchestrator examples">{planExamples.map((item, index) => <button type="button" key={item.title} aria-pressed={selected === index} onClick={() => setSelected(index)}>{item.title}</button>)}</div>
+      <div className="example-plan" aria-live="polite"><div className="example-plan-heading"><Icon name="branch" /><div><small>Example plan</small><h3>{example.goal}</h3></div><span className="plan-progress">1 of 3 done</span></div><ol>{example.steps.map(([title, agent, status], index) => <li key={`${selected}-${title}`} className={status === 'Working' ? 'plan-step-active' : ''}><span className="plan-step-number">{status === 'Done' ? <Icon name="check" size={15} /> : index + 1}</span><div><strong>{title}</strong><small>{agent}</small></div><span className="plan-step-state">{status === 'Working' && <span className="working-ring" />}{status}</span></li>)}</ol></div>
+      <p className="example-disclaimer">Illustrative plans · select an example to explore</p>
+    </div>
+    <div className="orchestrator-details"><p><strong>You set the direction.</strong> Review the tasks, assign agents, and start the plan when you’re ready.</p><p><strong>You stay in control.</strong> Plans pause for approvals. Retry a stopped task or assign a different agent.</p></div>
+  </section>;
+}
+function DesktopExamples() {
+  return <section className="desktop-examples section-width" aria-labelledby="desktop-examples-title"><div className="section-intro"><span className="eyebrow">Jolo Desktop in practice</span><h2 id="desktop-examples-title">Start with a real task.</h2><p>Open a folder, start a conversation, and keep the work in view.</p></div><div className="desktop-example-grid">{[
+    ['compose', 'Build a feature', 'Add a saved-search filter to this dashboard. Follow the existing components and add tests.', 'Follow the conversation, inspect changed files, and ask for the next revision.'],
+    ['browser', 'Check the browser flow', 'Open the app in the inline browser and check the sign-in form at desktop and mobile sizes.', 'Keep the browser beside your chat while the agent navigates and checks the page.'],
+    ['code', 'Review a change', 'Review my uncommitted changes. Explain any bugs and suggest focused fixes.', 'Read the review alongside the diff, then continue in the same task.'],
+  ].map(([icon, title, prompt, detail]) => <article className="desktop-example-card" key={title}><Icon name={icon} size={20} /><h3>{title}</h3><blockquote>{prompt}</blockquote><p>{detail}</p></article>)}</div></section>;
+}
+
 function GettingStarted() {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -105,9 +131,11 @@ function GettingStarted() {
 
 export default function App() {
   return <><a href="#main" className="skip-link">Skip to content</a><div id="top" />
-    <header className="site-header section-width"><Brand /><nav aria-label="Main navigation"><a href="#workspace">Product</a><a href="#workflow">Workflow</a><a href="https://access.jolo.build">Access <Icon name="diagonal" size={13} /></a><a className="nav-cta" href="#get-jolo">Get Jolo <Icon name="arrow" size={14} /></a></nav></header>
+    <header className="site-header section-width"><Brand /><nav aria-label="Main navigation"><a href="#workspace">Product</a><a href="#orchestrator">Orchestrator</a><a href="https://access.jolo.build">Access <Icon name="diagonal" size={13} /></a><a className="nav-cta" href="#get-jolo">Get Jolo <Icon name="arrow" size={14} /></a></nav></header>
     <main id="main"><section className="hero section-width"><div className="hero-meta"><span className="activity-dot" /><span>Your workspace for coding agents</span><span className="development-label">In development</span></div><h1>Your agents.<br /><span>One workspace.</span></h1><p className="hero-description">Conversations, code, and the browser. Together.<br />Stay with the task, from the first prompt to the final diff.</p><div className="hero-actions"><a className="button button-dark" href="#get-jolo">Get Jolo <Icon name="arrow" size={16} /></a><a className="button button-outline" href="https://access.jolo.build">Open Access <Icon name="diagonal" size={15} /></a></div><p className="hero-note">On your desktop. In your terminal. Connected through Access.</p></section>
     <ProductPreview />
+    <DesktopExamples />
+    <OrchestratorExamples />
     <section className="workflow section-width" id="workflow"><div className="section-intro"><span className="eyebrow">Made for the way you work</span><h2>Less switching. More doing.</h2><p>Everything you need stays close to the conversation.</p></div><div className="feature-grid">{[
       ['folder','A place for every task','Keep folders, tasks, and standalone chats organized. Open two conversations side by side when you need them.'],
       ['browser','A browser beside your code','Let your agent navigate, interact, and check its work in the inline browser. Stay in the same workspace.'],

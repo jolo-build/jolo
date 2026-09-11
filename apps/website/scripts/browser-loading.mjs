@@ -162,6 +162,14 @@ async function checkLoading() {
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-chat.png'), (await window.webContents.capturePage()).toPNG());
     await evaluate("document.querySelector('.app-bar-end button').click()");
     await until(() => evaluate("!!document.querySelector('.preview-board')"), 'Example board reopens');
+    for (const [index, title] of [[0, 'Add saved searches'], [1, 'Find and fix'], [2, 'Get the next desktop']]) {
+      await evaluate(`document.querySelectorAll('.plan-examples button')[${index}].click()`);
+      await until(() => evaluate(`document.querySelector('.example-plan h3').textContent.startsWith(${JSON.stringify(title)})`), 'Orchestrator example switches');
+      assert.equal(await evaluate("document.querySelectorAll('.example-plan li').length"), 3);
+    }
+    await evaluate("document.querySelector('#orchestrator').scrollIntoView({behavior:'instant'}); new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))");
+    if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-orchestrator.png'), (await window.webContents.capturePage()).toPNG());
+
     await evaluate("document.getElementById('tab-terminal').click()");
     await until(() => evaluate("!document.getElementById('panel-terminal').hidden"), 'Terminal example opens');
     await evaluate("document.getElementById('tab-terminal').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))");
