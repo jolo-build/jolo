@@ -19,13 +19,13 @@ async function checkLoading() {
   const debuggerAPI = window.webContents.debugger;
   debuggerAPI.attach('1.3');
   const command = (method, params = {}) => debuggerAPI.sendCommand(method, params);
-  const evaluate = async expression => (await command('Runtime.evaluate', { expression, returnByValue: true })).result.value;
+  const evaluate = async expression => (await command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result.value;
   const snapshot = () => evaluate(`(() => ({
     parsed: !!document.getElementById('root')?.children.length,
     loading: document.documentElement.hasAttribute('data-assets-loading'),
     error: document.documentElement.hasAttribute('data-assets-error'),
     visible: document.getElementById('root') && getComputedStyle(document.getElementById('root')).visibility === 'visible',
-    fontReady: document.fonts.check('400 16px "JetBrains Mono"'),
+    fontReady: document.fonts.check('400 16px "Inter"'),
     stylesReady: [...document.querySelectorAll('link[rel="stylesheet"]')].every(link => !!link.sheet),
     loader: !!document.getElementById('startup')
   }))()`);
@@ -41,7 +41,7 @@ async function checkLoading() {
   try {
     await command('Network.enable');
     await command('Network.setCacheDisabled', { cacheDisabled: true });
-    for (const [resource, pattern] of [['font', '*.woff2'], ['stylesheet', '*.css'], ['script', '*/assets/*.js']]) {
+    for (const [resource, pattern] of [['font', '*Inter-latin.woff2'], ['stylesheet', '*.css'], ['script', '*/assets/*.js']]) {
       for (const mode of ['delayed', 'failed']) {
         phase = `${mode} ${resource}`;
         await window.loadURL('about:blank');
@@ -135,7 +135,7 @@ async function checkLoading() {
     let stalled;
     const listener = (_event, method, params) => { if (method === 'Fetch.requestPaused') stalled = params.requestId; };
     debuggerAPI.on('message', listener);
-    await command('Fetch.enable', { patterns: [{ urlPattern: '*.woff2' }] });
+    await command('Fetch.enable', { patterns: [{ urlPattern: '*Inter-latin.woff2' }] });
     const navigation = window.loadURL(origin + '/?stalled');
     navigation.catch(() => {});
     await until(() => stalled, 'Stalled font intercepted');
@@ -153,12 +153,35 @@ async function checkLoading() {
     phase = 'cached and mobile visits';
     await window.loadURL(origin);
     await until(async () => (await snapshot()).visible, 'Cached visit');
+    assert.equal(await evaluate("document.getElementById('panel-desktop').hidden"), false);
+    if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-home.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("document.querySelector('#workspace').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-board.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("document.querySelector('.preview-task').click()");
+    await until(() => evaluate("!!document.querySelector('.app-conversation')"), 'Example task opens the chat');
+    if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-chat.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("document.querySelector('.app-bar-end button').click()");
+    await until(() => evaluate("!!document.querySelector('.preview-board')"), 'Example board reopens');
+    await evaluate("document.getElementById('tab-terminal').click()");
+    await until(() => evaluate("!document.getElementById('panel-terminal').hidden"), 'Terminal example opens');
+    await evaluate("document.getElementById('tab-terminal').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))");
+    await until(() => evaluate("!document.getElementById('panel-desktop').hidden"), 'Preview keyboard navigation');
+    await until(() => evaluate("document.querySelectorAll('.desktop-download').length === 2"), 'published desktop installers');
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.desktop-download')].map(link => new URL(link.href).pathname)"), ['/releases/1.2.3/jolo-desktop-darwin-arm64.dmg', '/releases/1.2.3/jolo-desktop-darwin-x64.dmg']);
+    assert.equal(await evaluate("document.querySelector('.cli-install .install-command code').textContent"), 'curl -fsSL https://jolo.build/install.sh | bash');
+    await evaluate("document.querySelector('#get-jolo').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    assert.equal(await evaluate("document.querySelector('#get-jolo').getBoundingClientRect().top < window.innerHeight"), true);
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-ready.png'), (await window.webContents.capturePage()).toPNG());
     window.setSize(390, 844);
     await window.loadURL(origin);
     await until(async () => (await snapshot()).visible, 'Mobile visit');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true);
+    await until(() => evaluate("document.querySelectorAll('.desktop-download').length === 2"), 'mobile desktop installers');
+    await evaluate("document.querySelector('#get-jolo').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-ready-mobile.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("document.querySelector('.cli-install').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    assert.equal(await evaluate("document.querySelector('.install-command pre').scrollWidth <= document.querySelector('.install-command pre').clientWidth"), true);
+    if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-cli-mobile.png'), (await window.webContents.capturePage()).toPNG());
     await command('Emulation.setScriptExecutionDisabled', { value: true });
     phase = 'no JavaScript';
     await window.loadURL(origin);

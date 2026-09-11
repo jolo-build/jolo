@@ -14,16 +14,16 @@
     <meta name="twitter:card" content="summary" />
     <style id="startup-style">
       #startup { display: none; }
-      html[data-assets-loading] { background: #fff; }
+      html[data-assets-loading] { background: #fcfcfb; }
       html[data-assets-loading] body { overflow: hidden; }
       html[data-assets-loading] #root { visibility: hidden !important; }
-      html[data-assets-loading] #startup { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; justify-items: center; gap: 16px; padding: 24px; color: #606060; background: #fff; font: 14px/1.5 system-ui, sans-serif; text-align: center; }
+      html[data-assets-loading] #startup { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; justify-items: center; gap: 16px; padding: 24px; color: #606060; background: #fcfcfb; font: 14px/1.5 system-ui, sans-serif; text-align: center; }
       #startup p { margin: 0; }
       #startup .startup-spinner { width: 22px; height: 22px; border: 2px solid #ddd; border-top-color: #111; border-radius: 50%; animation: startup-spin .8s linear infinite; }
       #startup .startup-error { display: none; }
       html[data-assets-error] #startup .startup-pending { display: none; }
       html[data-assets-error] #startup .startup-error { display: block; }
-      #startup button { padding: 8px 16px; border: 1px solid #aaa; border-radius: 0; color: #111; background: #fff; font: inherit; cursor: pointer; }
+      #startup button { padding: 8px 16px; border: 1px solid #aaa; border-radius: 0; color: #111; background: #fcfcfb; font: inherit; cursor: pointer; }
       @keyframes startup-spin { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { #startup .startup-spinner { animation: none; } }
     </style>
@@ -62,8 +62,8 @@
           try {
             const styles = [...document.querySelectorAll('link[rel="stylesheet"][data-jolo-asset]')];
             if (styles.some(link => !link.sheet)) throw new Error('Jolo’s stylesheet couldn’t load. Try again.');
-            const faces = await document.fonts.load('400 16px "JetBrains Mono"');
-            if (!faces.length) throw new Error('Jolo’s font couldn’t load. Check whether custom fonts are blocked, then try again.');
+            const faces = (await Promise.all(['Inter', 'JetBrains Mono'].map(family => document.fonts.load(`400 16px "${family}"`)))).flat();
+            if (faces.length < 2) throw new Error('Jolo’s font couldn’t load. Check whether custom fonts are blocked, then try again.');
             await Promise.all([...document.querySelectorAll('#root img')].filter(image => image.loading !== 'lazy').map(image => image.decode()));
             // Allow font metrics and the hydrated layout to settle before revealing.
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -86,6 +86,7 @@
         window.addEventListener('jolo:hydrated', () => { hydrated = true; void ready(); }, { once: true });
       })();
     </script>
+    <link rel="preload" href="/fonts/Inter-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/JetBrainsMono-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>

@@ -22,7 +22,9 @@ Accounts are keyed by provider and immutable subject, never merged automatically
 
 The header's **Theme** selector offers System, Light, and Dark. System follows the browser's color preference, including when JavaScript is disabled. Explicit choices are saved in this browser and applied before rendering subsequent pages. The small same-origin theme script does not change account data; account and task forms remain server-rendered.
 
-Pages preload the bundled font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
+Access shares the desktop palette, compact Inter typography, rounded controls, blue activity accents, and quiet scrollbars in both light and dark themes. Code and task references use JetBrains Mono.
+
+Pages preload the bundled Inter font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
 
 ## Validate
 
@@ -67,6 +69,8 @@ For task references in desktop or CLI chat, connect with `jolo login --tasks` or
 Configure your Cloudflare account and D1 database in `deploy/access.wrangler.jsonc`, plus your domain, `ACCESS_ORIGIN`, and verified Resend `MAIL_FROM` address. Register a GitHub OAuth application with callback `<ACCESS_ORIGIN>/callback` (Jolo uses `https://access.jolo.build/callback`), a Google **Web application** OAuth client with authorized redirect URI `<ACCESS_ORIGIN>/callback/google` (`https://access.jolo.build/callback/google`), or both. Google also needs a configured consent screen and production publishing when ready for users beyond the test list. Sign-in requires each app's Client ID and Client Secret, not a personal access token.
 
 Deployment credentials live in the private R2 bucket/object named in `deploy/access-secrets.json`. Keep r2.dev disabled, attach no custom domains, and do not bind this bucket to a public Worker. Authenticate the deployer with `wrangler login` or a separate `CLOUDFLARE_API_TOKEN` authorized for R2, D1, and Worker deployment; this bootstrap authentication must be available before reading R2.
+
+The Access GitHub Actions workflow runs unit and Worker runtime checks, then uses this same deployment command on changes merged to `main` or manual dispatch. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in repository secrets; the token needs the R2, D1, and Worker permissions described above. OAuth and email credentials remain in the private R2 object.
 
 Store an OAuth file containing `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...`, `GOOGLE_CLIENT_ID=...` and `GOOGLE_CLIENT_SECRET=...`, or both pairs (one per line), and a separate file containing the bare Resend key. Include all providers you want enabled: the import replaces the stored credential set. Existing GitHub-only credential files remain valid. Import or rotate them with:
 

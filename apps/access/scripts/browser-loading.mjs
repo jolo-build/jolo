@@ -15,7 +15,7 @@ export async function checkLoading(window, origin) {
     const { result } = await command('Runtime.evaluate', { returnByValue: true, expression: `(() => ({
       body: Boolean(document.body), loading: document.documentElement.hasAttribute('data-assets-loading'),
       visibility: document.body && getComputedStyle(document.body).visibility,
-      fontReady: document.fonts.check('400 16px "Jolo Mono"'),
+      fontReady: document.fonts.check('400 16px "Inter"'),
       fontStatus: document.fonts.status
     }))()` });
     return result.value;
@@ -36,7 +36,7 @@ export async function checkLoading(window, origin) {
       };
       debuggerAPI.on('message', listener);
       try {
-        await command('Fetch.enable', { patterns: [{ urlPattern: mode === 'missing-script' ? '*/theme.js' : '*/assets/mono.woff2' }] });
+        await command('Fetch.enable', { patterns: [{ urlPattern: mode === 'missing-script' ? '*/theme.js' : '*/assets/inter.woff2' }] });
         const navigation = window.loadURL(origin + '/?loading-check=' + mode);
         // Attach rejection handling immediately while inspecting a pending navigation.
         navigation.catch(() => {});

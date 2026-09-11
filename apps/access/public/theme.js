@@ -14,10 +14,10 @@
       if (document.fonts) {
         // Stylesheets are ready at window.load. Explicitly request the variable
         // face as well as waiting for every font used by the actual page layout.
-        await document.fonts.load('400 16px "Jolo Mono"');
+        await document.fonts.load('400 16px "Inter"');
         await document.fonts.ready;
       }
-    } catch { /* A failed font uses the existing monospace fallback. */ }
+    } catch { /* A failed font uses the system font fallback. */ }
     reveal();
   };
   if (document.readyState === 'complete') void ready();

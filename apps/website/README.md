@@ -23,7 +23,7 @@ bun run website:preview
 
 The preview is at `http://127.0.0.1:4173`. Both servers bind to localhost. The build produces `dist/` and prerenders the page before client hydration. Generated assets, archives, and build output are ignored; dependencies use the root lockfile.
 
-The initial page stays behind a loading indicator until Jolo's stylesheet, JetBrains Mono font, eager images, and React hydration are ready. Failed or stalled required assets show a specific retry message without revealing partially styled content. Optional resources, including Cloudflare's injected analytics script, cannot block the page if a browser or the security policy rejects them. Static HTML remains readable when JavaScript is disabled. The build marks its required assets and adds hashes for the exact startup script and critical styles to the production Content Security Policy.
+The initial page stays behind a loading indicator until Jolo's stylesheet, Inter and JetBrains Mono fonts, eager images, and React hydration are ready. Failed or stalled required assets show a specific retry message without revealing partially styled content. Optional resources, including Cloudflare's injected analytics script, cannot block the page if a browser or the security policy rejects them. Static HTML remains readable when JavaScript is disabled. The build marks its required assets and adds hashes for the exact startup script and critical styles to the production Content Security Policy.
 
 Run `bun run --cwd apps/website test:loading` on a machine that can launch Electron to check delayed and failed fonts, stylesheets, and scripts, retry behavior, stalled downloads, cached visits, mobile layout, and the no-JavaScript fallback against the production build and security policy.
 
@@ -42,7 +42,7 @@ Run `bun run --cwd apps/website test:loading` on a machine that can launch Elect
 
 The original macOS Apple Silicon release remains in [cli-releases.json](../../deploy/cli-releases.json). New CLI releases are built for macOS and Linux on ARM64 and x64 by GitHub Actions. The public installer is served at `/install.sh` from [scripts/install.sh](../../scripts/install.sh); the Worker discovers the latest complete stable GitHub release and redirects new versioned downloads to its assets. Vite's local preview serves static assets only; use the Worker tests or Wrangler to exercise dynamic release routing.
 
-The visual direction is black-and-white terminal-inspired minimalism. Keep status colors neutral, controls accessible, and examples clearly illustrative. Font licensing notes are in [assets/fonts](../../assets/fonts/README.md).
+The website follows the desktop design: Inter for interface text, JetBrains Mono for code, warm white surfaces, soft gray borders, charcoal actions, and restrained blue activity highlights. The interactive Desktop example opens folders and tasks and switches between the board and chat views; all displayed work is illustrative. Font licensing notes are in [assets/fonts](../../assets/fonts/README.md).
 
 ## Deployment
 

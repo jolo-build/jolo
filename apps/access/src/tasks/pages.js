@@ -75,7 +75,7 @@ export function taskListPage({ tasks, teams, labels, filters, next }) {
         ${button('Apply filters')}
       </div></details>${button('Search', true)}
     </form>
-    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="/tasks/${e(task.key)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
+    <div class="task-list task-scroll" tabindex="0" aria-label="Task list">${tasks.length ? tasks.map(task => `<a class="task-row" href="/tasks/${e(task.key)}"><span class="task-key">${e(task.key)}</span><span class="task-row-main"><strong>${e(task.title)}</strong><span class="task-row-meta">${e(task.team?.name ?? 'Personal')}${task.project ? ' · ' + e(task.project) : ''} · ${e(task.priority)}</span><span>${task.labels.map(labelBadge).join(' ')}</span></span><span class="task-state" data-state="${e(task.state)}">${e(TASK_STATES[task.state])}</span></a>`).join('') : '<p class="task-empty">No tasks match this view. Create a task to give it a permanent ID and reference it in chat.</p>'}</div>
     ${next ? `<p class="task-pagination"><a href="/tasks?${e(query)}">Next page →</a></p>` : ''}`, 'task-list-page');
 }
 

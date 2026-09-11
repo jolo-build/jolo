@@ -16,6 +16,7 @@ assert(csp, 'The production security policy must be present');
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
   const pathname = new URL(request.url).pathname;
   if (pathname === '/releases/latest.txt') return new Response('0.1.0');
+  if (pathname === '/releases/desktop.json') return Response.json({ version: '1.2.3', downloads: ['arm64', 'x64'].map(arch => ({ arch, url: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg`, checksum: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg.sha256` })) });
   const file = Bun.file(new URL(pathname === '/' ? 'index.html' : pathname.slice(1), dist));
   return await file.exists() ? new Response(file, { headers: { 'Content-Security-Policy': csp } }) : new Response('Not found', { status: 404 });
 } });
