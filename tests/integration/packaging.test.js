@@ -24,6 +24,11 @@ afterAll(async () => {
   modelServer?.stop();
 });
 
+/**
+ * Run one packaged binary to completion and report its exit code and decoded output.
+ * @param {string[]} command
+ * @param {{ home?: string, env?: Record<string, string>, cwd?: string }} [options]
+ */
 function run(command, { home, env = {}, cwd } = {}) {
   const proc = Bun.spawnSync(command, { cwd: cwd ?? ROOT, env: { ...process.env, JOLO_IDLE_MS: "1500", OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: "session", ...env }, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };

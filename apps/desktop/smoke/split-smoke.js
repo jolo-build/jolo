@@ -145,7 +145,7 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
   await evaluate("window.__joloSmoke.showAgents()");
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(`${selector(second)} .agent-option`)}))`, "agent chooser loaded");
   report.toolLayouts = [];
-  for (const theme of ["light", "dark"]) {
+  for (const theme of /** @type {const} */ (["light", "dark"])) {
     nativeTheme.themeSource = theme;
     window.setSize(1180, 860);
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -195,7 +195,7 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
 
   window.setSize(1440, 940);
   await new Promise((resolve) => setTimeout(resolve, 150));
-  for (const theme of ["light", "dark"]) {
+  for (const theme of /** @type {const} */ (["light", "dark"])) {
     nativeTheme.themeSource = theme;
     await new Promise((resolve) => setTimeout(resolve, 150));
     writeFileSync(path.join(results, `splits-${theme}.png`), (await window.webContents.capturePage()).toPNG());

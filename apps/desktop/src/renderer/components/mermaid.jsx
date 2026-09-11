@@ -14,8 +14,13 @@ const LANE = 14;
 const MAX_LABEL = 220; // px before a label wraps
 const MAX_LINES = 4;
 
-/** Text measured in the font it will actually be drawn in, so boxes fit their words. */
 let context; // undefined until tried, null when this environment has no canvas
+/**
+ * Text measured in the font it will actually be drawn in, so boxes fit their words.
+ *
+ * @param {string} text
+ * @returns {number} width in pixels, estimated from the character count where there is no canvas
+ */
 function textWidth(text) {
   if (context === undefined) {
     try {
@@ -54,6 +59,10 @@ const measureNode = (lines, node) => (DIAMONDS.has(node?.shape)
   ? { w: widest(lines) + PAD_X * 4, h: lines.length * LINE + PAD_Y * 4 }
   : { w: widest(lines) + PAD_X * 2, h: lines.length * LINE + PAD_Y * 2 });
 
+// `kind` is what tells the two layouts apart downstream, so it is stated as the literal it is rather
+// than being widened to a string the drawing code would have to re-check.
+/** @typedef {ReturnType<typeof layoutFlowchart> & { kind: "flow" }} FlowLayout */
+/** @returns {FlowLayout} */
 function buildFlow(model) {
   const laid = layoutFlowchart(model, {
     vertical: model.direction === "TD" || model.direction === "TB" || model.direction === "BT",
@@ -68,6 +77,7 @@ function buildFlow(model) {
   return { ...laid, kind: "flow" };
 }
 
+/** @returns {ReturnType<typeof layoutSequence> & { kind: "sequence" }} */
 function buildSequence(model) {
   const laid = layoutSequence(model, {
     wrap: (text, room) => wrapLabel(text, room),
@@ -212,7 +222,8 @@ export function MermaidDiagram({ block, fallback }) {
             <Markers id={id} />
             {laid.kind === "sequence" ? <SequenceDrawing laid={laid} id={id} /> : <FlowDrawing laid={laid} id={id} />}
           </svg>
-          {groups.map((group, index) => <div key={index} className="mermaid-group">{group.label || "group"}: {group.nodeIds.map((nodeId) => laid.nodes.find((node) => node.id === nodeId)).filter((node) => node && !node.dummy).map((node) => node.lines.join(" ")).join(", ")}</div>)}
+          {/* Only a flowchart has groups, so this list is empty for a sequence diagram and the layout is that one. */}
+          {groups.map((group, index) => <div key={index} className="mermaid-group">{group.label || "group"}: {group.nodeIds.map((nodeId) => /** @type {FlowLayout} */ (laid).nodes.find((node) => node.id === nodeId)).filter((node) => node && !node.dummy).map((node) => node.lines.join(" ")).join(", ")}</div>)}
         </div>}
   </div>;
 }

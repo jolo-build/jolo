@@ -11,7 +11,10 @@ const COMMIT_BYTES = 32 * 1024;
 
 export class RunService {
   /**
-   * @param {{ storage: import("../storage/index.js").Storage, executor: { name: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number }} options
+   * `captureProvider` records which model a native run was dispatched against, and `workspaceBusy`
+   * reports a worktree another operation already holds; an engine that has neither still schedules
+   * runs, so both are optional.
+   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, workspaceBusy?: (workspaceId: string) => boolean }} options
    */
   constructor(options) {
     this.storage = options.storage;
@@ -27,7 +30,11 @@ export class RunService {
     /** Runs that have just stopped, for services that started them: emits the durable run record. */
     this.settled = new EventEmitter();
     this.settled.setMaxListeners(20);
-    /** @type {Map<string, { controller: AbortController, promise: Promise<void> }>} */
+    /**
+     * One entry per run being executed. The context is attached once the run leaves the queue and
+     * the executor is about to be called, so an entry that was only just admitted has none yet.
+     * @type {Map<string, { controller: AbortController, promise: Promise<void>, context?: any }>}
+     */
     this.active = new Map();
     /** @type {string[]} */
     this.queue = [];
@@ -64,6 +71,11 @@ export class RunService {
     return nonTerminal.length;
   }
 
+  /**
+   * Queue one message. A caller that is holding a revision passes it as `expectedSessionRevision`
+   * so a stale client loses the race rather than appending to a session it has not seen.
+   * @param {{ sessionId: string, requestId: string, prompt: string, expectedSessionRevision?: number, execution?: any, attachments?: any[], taskReferences?: any[] }} request
+   */
   start({ sessionId, requestId, prompt, expectedSessionRevision, execution = null, attachments = [], taskReferences = [] }) {
     const result = this.storage.transaction(() => {
       const session = this.storage.getSession(sessionId);
@@ -97,6 +109,7 @@ export class RunService {
     return result;
   }
 
+  /** @param {{ runId: string, expectedRevision?: number }} request the revision is checked only when given */
   cancel({ runId, expectedRevision }) {
     const outcome = this.storage.transaction(() => {
       const run = this.storage.getRun(runId);
@@ -349,6 +362,7 @@ export class RunService {
       },
       startMessage: (role, kind = "text") => {
         assertOpen();
+        /** @type {ReturnType<typeof storage.openArtifactWriter>} */
         let writer;
         let message;
         try { message = storage.transaction(() => {

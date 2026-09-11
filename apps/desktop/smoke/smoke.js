@@ -12,8 +12,9 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     response.setHeader("content-type", "text/html");
     response.end("<!doctype html><title>Jolo smoke page</title><h1 id=\"h\">Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>");
   });
-  await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
-  const fixtureUrl = process.env.JOLO_SMOKE_BROWSER_URL || `http://127.0.0.1:${fixture.address().port}/`;
+  // Node's `listen` callback takes no arguments, and a fixture on port 0 is always given a TCP address.
+  await new Promise((resolve) => fixture.listen(0, "127.0.0.1", /** @type {() => void} */ (resolve)));
+  const fixtureUrl = process.env.JOLO_SMOKE_BROWSER_URL || `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fixture.address()).port}/`;
   const evaluate = async (code) => {
     try { return await window.webContents.executeJavaScript(code, true); }
     catch (error) { throw new Error(`Renderer smoke expression failed: ${code}`, { cause: error }); }
@@ -252,7 +253,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     if (await evaluate('document.querySelector(".md-code code").textContent') !== source) throw new Error("syntax highlighting changed the source text");
     const previousTheme = nativeTheme.themeSource;
     try {
-      for (const theme of ["light", "dark"]) {
+      for (const theme of /** @type {const} */ (["light", "dark"])) {
         nativeTheme.themeSource = theme;
         await waitFor(`matchMedia('(prefers-color-scheme: dark)').matches === ${theme === "dark"}`, `${theme} code theme`);
         const colors = await evaluate('Object.fromEntries(["keyword", "string", "comment", "function"].map(kind => [kind, getComputedStyle(document.querySelector(".md-code .syntax-token." + kind)).color]))');
@@ -318,7 +319,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     const boardTheme = nativeTheme.themeSource;
     const boardWindowSize = window.getSize();
     try {
-      for (const theme of ["light", "dark"]) {
+      for (const theme of /** @type {const} */ (["light", "dark"])) {
         nativeTheme.themeSource = theme;
         await waitFor(`matchMedia('(prefers-color-scheme: dark)').matches === ${theme === "dark"}`, `${theme} board theme`);
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -421,7 +422,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor("!document.querySelector('.permission-modal[open]') && Boolean(document.querySelector('.composer .stop-progress'))", 'Enter approved the fixture command without manual input');
     const progressTheme = nativeTheme.themeSource;
     try {
-      for (const theme of ['light', 'dark']) {
+      for (const theme of /** @type {const} */ (['light', 'dark'])) {
         nativeTheme.themeSource = theme;
         await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
         const progress = await evaluate(`(async () => {
@@ -508,7 +509,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
         await waitFor("document.querySelector('.changes .diff-line.add .syntax-token.number')?.textContent === '43' && document.querySelector('.changes .diff-line.remove .syntax-token.number')?.textContent === '42'", 'diff highlights syntax on both sides of the edit');
         const previousTheme = nativeTheme.themeSource;
         try {
-          for (const theme of ['light', 'dark']) {
+          for (const theme of /** @type {const} */ (['light', 'dark'])) {
             nativeTheme.themeSource = theme;
             await waitFor(`matchMedia('(prefers-color-scheme: ${theme})').matches`, `diff uses ${theme} theme`);
             const style = await evaluate(`(() => {
@@ -543,7 +544,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     if (!offered.includes("fake-large")) throw new Error(`the agent's own model list did not reach settings: ${JSON.stringify(offered)}`);
     const settingsTheme = nativeTheme.themeSource;
     try {
-      for (const theme of ['light', 'dark']) {
+      for (const theme of /** @type {const} */ (['light', 'dark'])) {
         nativeTheme.themeSource = theme;
         await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
         writeFileSync(path.join(results, `settings-model-options-${theme}.png`), (await window.webContents.capturePage()).toPNG());

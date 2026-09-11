@@ -1,6 +1,12 @@
 import { GUARDIAN_SOURCE } from "./guardian.js";
 // Bounded NDJSON transport. Drain independently of slow consumers and kill the
 // process group on cancellation, malformed oversized output, or queue overflow.
+/**
+ * Spawn a child that speaks newline-delimited JSON on its stdio. Cancelling the run first gives the
+ * adapter a chance to say so politely (`onCancel`, which returns true when it did), then the child
+ * is terminated after a grace period.
+ * @param {{ argv: string[], cwd: string, env: Record<string, string>, signal: AbortSignal, onCancel?: () => boolean | void, log: any, agentId: string, maxLineBytes?: number, maxQueueBytes?: number }} options
+ */
 export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId, maxLineBytes = 8 * 1024 * 1024, maxQueueBytes = 16 * 1024 * 1024 }) {
   const child = Bun.spawn([process.execPath, "--eval", GUARDIAN_SOURCE, "--", ...argv], { cwd, env, detached: process.platform !== 'win32', stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
   const graceMs = 2000;

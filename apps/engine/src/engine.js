@@ -38,7 +38,9 @@ export { OwnershipError, SchemaError } from "./storage/index.js";
 
 
 /**
- * @param {{ paths: any, build?: string, idleMs?: number, migrationsDir?: string, env?: Record<string, string | undefined>, fetchImpl?: typeof fetch, log?: any }} options
+ * The account options are separate from `fetchImpl` because tests and the desktop stub the account
+ * server without touching model traffic.
+ * @param {{ paths: any, build?: string, idleMs?: number, migrationsDir?: string, env?: Record<string, string | undefined>, fetchImpl?: import('./providers/transport.js').FetchLike, accountFetchImpl?: import('./providers/transport.js').FetchLike, accountSecrets?: any, log?: any }} options
  */
 export function createEngine(options) {
   const { paths } = options;

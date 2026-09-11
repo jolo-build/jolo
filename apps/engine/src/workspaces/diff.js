@@ -86,6 +86,7 @@ function hunks(ops) {
   return groups.map(([first, last]) => ({ from: Math.max(0, first - CONTEXT), to: Math.min(ops.length - 1, last + CONTEXT) }));
 }
 
+/** @param {{ op: string, path: string, newPath?: string | null }} file only a rename carries a new path */
 const header = ({ op, path, newPath }) => {
   const target = newPath ?? path;
   return [

@@ -10,6 +10,7 @@
   "scripts": {
     "setup:tgrep": "bun scripts/setup-tgrep.js",
     "test": "bun test tests packages apps",
+    "typecheck": "bun scripts/typecheck.js",
     "security:audit": "bun audit",
     "engine": "bun apps/engine/src/main.js serve",
     "jolo": "bun apps/cli/src/main.js",
@@ -25,6 +26,7 @@
     "install:desktop": "bun scripts/build.js && bun apps/desktop/scripts/package.js --install",
     "benchmark": "bun scripts/benchmark.js",
     "website": "bun run --cwd apps/website dev",
+    "guide:build": "bun apps/guide/build.js",
     "website:build": "bun run --cwd apps/website build",
     "website:preview": "bun run --cwd apps/website preview",
     "website:deploy": "bun run --cwd apps/website deploy",

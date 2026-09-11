@@ -7,11 +7,12 @@ import { writeFileSync } from "node:fs";
 import { ENGINE_ENTRY, startEngine, tempHome, removeHome, openSession, waitFor } from "./helpers.js";
 
 test("the provider factory refuses implicit and explicit demos in production", async () => {
-  const factory = new ProviderFactory({ env: { NODE_ENV: "production" } });
+  // Demo refusal is decided before any credential is read, so the factory is built without a store.
+  const factory = new ProviderFactory(/** @type {any} */ ({ env: { NODE_ENV: "production" } }));
   await expect(factory.create(null)).rejects.toThrow("no model provider is configured");
   await expect(factory.create(DEMO_PROVIDER_SETTINGS)).rejects.toThrow("only available in development mode");
   await expect(factory.create({ preset: "fake", model: "fake" }, { resolved: { protocol: "fake" } })).rejects.toThrow("only available in development mode");
-  const development = new ProviderFactory({ env: { NODE_ENV: "development" } });
+  const development = new ProviderFactory(/** @type {any} */ ({ env: { NODE_ENV: "development" } }));
   expect((await development.create(null)).settings.name).toBe("fake");
 });
 

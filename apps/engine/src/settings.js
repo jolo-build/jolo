@@ -9,6 +9,11 @@ const AGENTS_KEY = "agents";
 const EMPTY_AGENT = Object.freeze({ model: null, effort: null });
 
 export class SettingsService {
+  /**
+   * @param {any} storage
+   * @param {{ env?: Record<string, string | undefined>, catalog?: any }} [options] the provider
+   * catalog validates any preset a settings update names
+   */
   constructor(storage, { env = process.env, catalog } = {}) {
     this.catalog = catalog;
     this.storage = storage;
@@ -45,6 +50,11 @@ export class SettingsService {
     if (provider?.name === 'openai') this.storage.setPreference('providers', { ...(this.storage.getPreference('providers') ?? {}), openai: { baseUrl: provider.baseUrl ?? null } });
   }
 
+  /**
+   * Apply a patch. Every field is optional: an absent one leaves its setting alone, where an
+   * explicit null clears it.
+   * @param {{ provider?: any, model?: any, providers?: Record<string, any>, budgets?: any, agents?: Record<string, any> }} patch
+   */
   update({ provider, model, providers, budgets, agents }) {
     this.get(); // Migrate before applying a new-format patch, including an explicit null.
     return this.storage.transaction(() => {

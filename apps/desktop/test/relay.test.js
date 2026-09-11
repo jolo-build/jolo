@@ -7,7 +7,10 @@ const event = (seq) => ({ engineBootId: "b", eventSeq: String(seq), sessionId: "
 describe("desktop relay credits", () => {
   test("stops sending after eight unacknowledged batches and resumes on ack", async () => {
     const sent = [];
-    const relay = createRelay({ send: (batch) => sent.push(batch) });
+    // `createRelay` destructures its options without a JSDoc type, so the checker reads `log` as
+    // required even though the relay only ever calls `log?.warn`. This test leaves it out on
+    // purpose: a relay with nowhere to log must still hold its credits.
+    const relay = createRelay(/** @type {{ send: any, log: any }} */ ({ send: (batch) => sent.push(batch) }));
     for (let i = 1; i <= 12; i += 1) { relay.push("event", event(i)); await sleep(20); }
     expect(sent.length).toBe(8);
     expect(relay.stats.queued).toBe(4);
@@ -33,7 +36,8 @@ describe("desktop relay credits", () => {
 
   test("a resync with no queued events is delivered when the renderer returns credit", async () => {
     const sent = [];
-    const relay = createRelay({ send: batch => sent.push(batch) });
+    // Again without a logger; see the first test for why the option bag is asserted.
+    const relay = createRelay(/** @type {{ send: any, log: any }} */ ({ send: batch => sent.push(batch) }));
     for (let i = 1; i <= 8; i++) { relay.push("event", event(i)); await sleep(20); }
     relay.resync();
     await sleep(30);

@@ -160,6 +160,13 @@ const HAS_LINK = /[-=.]{2,}[>ox]?/;
 const foldInlineLabels = (text, groups) => text.replace(/(?<=^|\s)([-=.]{2,})\s+([^\n|]+?)\s+([-=.]{2,}[>ox]?)(?=\s|$)/g,
   (_all, _lead, label, tail) => `${tail}\x00${groups.push(`|${label.trim()}|`) - 1}\x00`);
 
+/**
+ * A diagram Jolo knows how to draw. The rest of the shape differs per kind and is read by the
+ * layout pass, so only the discriminant is pinned here.
+ * @typedef {{ type: "flow" | "sequence" } & Record<string, any>} MermaidDiagram
+ */
+
+/** @returns {MermaidDiagram | null} */
 function parseFlow(lines, { direction, stateSyntax }) {
   const nodes = new Map();
   const edges = [];
@@ -266,6 +273,7 @@ const SEQUENCE_ARROW = /^(.+?)\s*(<<-->>|<<->>|--?>>|--?[>x)])\s*([^:]+?)\s*:\s*
 const SEQUENCE_BLOCK = /^(loop|alt|opt|par|critical|break|rect|box)\b\s*(.*)$/i;
 const SEQUENCE_BRANCH = /^(else|and|option)\b\s*(.*)$/i;
 
+/** @returns {MermaidDiagram | null} */
 function parseSequence(lines) {
   const participants = new Map();
   const events = [];
@@ -327,7 +335,7 @@ function parseSequence(lines) {
 
 /**
  * @param {string} source the body of a ```mermaid fence
- * @returns {{ type: "flow" | "sequence" } & Record<string, any> | null} null when this is not a diagram Jolo draws
+ * @returns {MermaidDiagram | null} null when this is not a diagram Jolo draws
  */
 export function parseMermaid(source) {
   const text = String(source ?? "").slice(0, MAX_SOURCE_CHARS);

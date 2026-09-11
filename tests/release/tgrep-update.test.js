@@ -21,6 +21,10 @@ function fixture(version='1.0.6') {
   const url=`${repository}/releases/download/v${version}/checksums.txt`;
   bodies.set(url,checksums);assets.push({name:'checksums.txt',size:checksums.length,digest:`sha256:${digest(checksums)}`,browser_download_url:url});
   const release={tag_name:`v${version}`,draft:false,prerelease:false,assets};
+  // `checkRelease` defaults its fetch argument to the global `fetch`, so the compiler asks the stub
+  // for that whole surface (Bun's even carries `preconnect`). This double answers the API call and
+  // the archive downloads and nothing else, so it crosses into the updater as `any` from here.
+  /** @type {any} */
   const fetchImpl=async(url,init)=>{calls.push({url,init});return url.startsWith('https://api.github.com/')?Response.json(release):new Response(bodies.get(url));};
   return {release,bodies,calls,fetchImpl};
 }

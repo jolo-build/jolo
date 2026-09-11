@@ -17,7 +17,9 @@ import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInv
 
 export class Storage {
   /**
-   * @param {{ databasePath: string, artifactsDir: string, migrationsDir: string, bootId: string }} options
+   * Without a migrations directory the schema comes from the list embedded in this build, which is
+   * what a packaged engine and most tests run on.
+   * @param {{ databasePath: string, artifactsDir: string, migrationsDir?: string | null, bootId: string }} options
    */
   constructor(options) {
     this.bootId = options.bootId;
@@ -123,6 +125,7 @@ export class Storage {
     return String(this.statements.minSeq.get().seq);
   }
 
+  /** @param {{ after?: string, sessionId?: string, limit?: number }} query without a session this reads the whole stream */
   listEvents({ after = "0", sessionId, limit = 100 }) {
     const rows = sessionId
       ? this.db.query("SELECT * FROM events WHERE seq > ?1 AND session_id = ?2 ORDER BY seq LIMIT ?3").all(Number(after), sessionId, limit)
@@ -327,6 +330,7 @@ export class Storage {
     }));
   }
 
+  /** @param {string} id @param {{ title?: string, state?: string, deleted?: boolean }} patch an absent field keeps its stored value */
   updateSession(id, { title, state, deleted = false }) {
     this.db.query("UPDATE sessions SET title = COALESCE(?2, title), state = COALESCE(?3, state), deleted_at = CASE WHEN ?4 THEN ?5 ELSE deleted_at END, updated_at = ?5, revision = revision + 1 WHERE id = ?1")
       .run(id, title ?? null, state ?? null, deleted ? 1 : 0, now());
@@ -459,6 +463,7 @@ export class Storage {
     return mapItem(this.db.query("SELECT * FROM conversation_items WHERE id = ?1").get(id));
   }
 
+  /** @param {string} sessionId @param {{ afterOrdinal?: number }} [options] */
   listItems(sessionId, { afterOrdinal } = {}) {
     if (afterOrdinal === undefined) return this.db.query("SELECT * FROM conversation_items WHERE session_id = ?1 ORDER BY ordinal").all(sessionId).map(mapItem);
     return this.db.query("SELECT * FROM conversation_items WHERE session_id = ?1 AND ordinal > ?2 ORDER BY ordinal").all(sessionId, afterOrdinal).map(mapItem);
@@ -534,6 +539,7 @@ export class Storage {
 
   updatePlanTask(...args) { return this.plans.updatePlanTask(...args); }
 
+  /** @param {Parameters<import("./plans.js").PlanRepository["updatePlanTaskState"]>} args */
   updatePlanTaskState(...args) { return this.plans.updatePlanTaskState(...args); }
 
   deletePlanTask(...args) { return this.plans.deletePlanTask(...args); }

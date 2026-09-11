@@ -12,6 +12,13 @@ const MARKDOWN_LANGUAGES = new Set(["md", "markdown", "mdx"]);
 const MERMAID_LANGUAGES = new Set(["mermaid", "mmd"]);
 const MAX_EMBED_DEPTH = 2;
 
+/**
+ * How a run of text is drawn. Ink takes these straight as `<Text>` props, so every member is
+ * optional and leaving one out means "inherit from the surrounding text".
+ * @typedef {{ color?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean, code?: boolean }} SpanStyle
+ */
+
+/** @type {Array<[string[], SpanStyle]>} */
 const TOKEN_STYLES = [
   [["comment", "prolog", "doctype", "cdata"], { dim: true }],
   [["keyword", "atrule", "important"], { color: "magenta" }],
@@ -153,7 +160,8 @@ function tableLines(block, width) {
 
 /**
  * @param {string} text markdown from the model
- * @param {{ width?: number }} [options]
+ * @param {{ width?: number, depth?: number }} [options] `depth` counts the markdown fences this
+ *   render is already nested inside; only the recursive call below passes it.
  * @returns {{ lines: Array<{ spans: Array<{ text: string, color?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean }> }>, truncated: boolean }}
  */
 export function renderMarkdown(text, { width = 80, depth = 0 } = {}) {

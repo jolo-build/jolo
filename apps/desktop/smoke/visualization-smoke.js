@@ -3,6 +3,19 @@ import path from 'node:path';
 import os from 'node:os';
 import { ipcMain, nativeTheme } from 'electron';
 
+/**
+ * The runner hands every check the same bag. This one drives the renderer alone, so the engine bridge
+ * arrives and goes unread.
+ * @param {{
+ *   window: import("electron").BrowserWindow,
+ *   bridge?: unknown,
+ *   project: string,
+ *   results: string,
+ *   evaluate: (code: string) => Promise<any>,
+ *   waitFor: (code: string, label: string, timeoutMs?: number) => Promise<void>,
+ *   report: { checks: string[] },
+ * }} options
+ */
 export async function runVisualizationSmoke({ window, project, results, evaluate, waitFor, report }) {
   if (await evaluate('window.jolo.homeDirectory()') !== os.homedir()) throw new Error('desktop home directory handler is unavailable');
   await evaluate("window.__joloSmoke.send('Show a visualization')");
@@ -19,13 +32,14 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   }
   await frame().executeJavaScript("document.querySelector('#increment').click()");
   if (await frame().executeJavaScript("document.querySelector('#count').textContent") !== '1') throw new Error('visualization scripts did not work');
-  const isolation = await frame().executeJavaScript(`(async()=>{
+  // What the preview reports about itself; the assertions below are the point of the check.
+  const isolation = /** @type {{ parentReadable: boolean, storageReadable: boolean, network: boolean, bridge: string, node: string }} */ (await frame().executeJavaScript(`(async()=>{
     let parentReadable=false,storageReadable=false;
     try { parentReadable=Boolean(parent.document.body); } catch {}
     try { localStorage.setItem('preview-test','yes'); storageReadable=true; } catch {}
     let network=false;try { await fetch('https://example.invalid/preview-test');network=true; }catch{}
     return {parentReadable,storageReadable,network,bridge:typeof window.jolo,node:typeof require};
-  })()`);
+  })()`));
   if (isolation.parentReadable || isolation.storageReadable || isolation.network || isolation.bridge !== 'undefined' || isolation.node !== 'undefined') throw new Error(`preview escaped isolation: ${JSON.stringify(isolation)}`);
   const originalUrl = window.webContents.getURL();
   await frame().executeJavaScript("try{top.location='https://example.invalid/preview-top'}catch{};try{window.open('https://example.invalid/preview-popup')}catch{}");

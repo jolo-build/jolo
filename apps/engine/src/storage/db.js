@@ -47,15 +47,23 @@ export function acquireDatabase(databasePath, { bootId, now = () => new Date().t
 
 const checksum = (sql) => createHash("sha256").update(sql).digest("hex");
 
-/** Apply migrations in order; refuse databases newer than this build understands. `source` is a directory or an embedded list. */
+/**
+ * Apply migrations in order; refuse databases newer than this build understands.
+ * @param {any} db
+ * @param {string | readonly any[]} source a migrations directory, or the list embedded in the build
+ * @param {{ now?: () => string, beforeMigrate?: (range: { from: number, to: number }) => void }} [options]
+ * `beforeMigrate` is called once before the first pending migration, so a caller can take a backup.
+ */
 export function migrate(db, source, { now = () => new Date().toISOString(), beforeMigrate = () => {} } = {}) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)");
   const known = Array.isArray(source)
     ? [...source].sort((a, b) => a.version - b.version)
-    : readdirSync(source)
+    // `Array.isArray` does not tell the compiler that a frozen embedded list is gone from the
+    // union, so the directory branch says what it already knows `source` to be.
+    : readdirSync(/** @type {string} */ (source))
       .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name))
       .sort()
-      .map((name) => ({ version: Number.parseInt(name.slice(0, 4), 10), name, sql: readFileSync(path.join(source, name), "utf8") }));
+      .map((name) => ({ version: Number.parseInt(name.slice(0, 4), 10), name, sql: readFileSync(path.join(/** @type {string} */ (source), name), "utf8") }));
   const applied = db.query("SELECT version, name, checksum FROM schema_migrations ORDER BY version").all();
   const maxKnown = known.at(-1)?.version ?? 0;
   let verifyCompatibility = false;

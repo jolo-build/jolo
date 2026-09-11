@@ -70,7 +70,10 @@ export async function connect(options) {
         const code = message.error.data?.code ?? "internal";
         p.reject(new ProtocolError(code, message.error.message, message.error.data?.details));
       } else {
-        const checked = parseResult(p.method, message.result);
+        // A frame that carries neither `error` nor a pending-request method is a response by
+        // elimination: it matched an id this client is waiting on.
+        const response = /** @type {{ result: unknown }} */ (/** @type {unknown} */ (message));
+        const checked = parseResult(p.method, response.result);
         if (!checked.ok) p.reject(checked.error);
         else p.resolve(checked.value);
       }
@@ -79,7 +82,9 @@ export async function connect(options) {
   });
 
   socket.on("data", decode);
-  socket.on("error", (error) => finish(Object.assign(error, { code: error.code ?? "unavailable" })));
+  // Socket failures arrive as Node errors carrying an errno code; anything without one is reported
+  // as unavailable so callers see a single vocabulary.
+  socket.on("error", (/** @type {Error & { code?: string }} */ error) => finish(Object.assign(error, { code: error.code ?? "unavailable" })));
   socket.on("close", () => finish(null));
   socket.on("end", () => { finish(null); socket.destroy(); });
 

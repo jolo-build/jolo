@@ -37,6 +37,7 @@ export function parseModels(kind, body) {
   return result;
 }
 
+/** @param {{ credentials: any, fetchImpl?: import('./transport.js').FetchLike, now?: () => number }} options */
 export function createProviderDirectory({ credentials, fetchImpl = fetch, now = Date.now }) {
   const cache = new Map(), pending = new Map();
   const keyFor = (p, key) => createHash('sha256').update(JSON.stringify([p, key ?? null])).digest('hex');

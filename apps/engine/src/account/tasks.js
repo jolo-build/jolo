@@ -3,6 +3,7 @@ import { taskKey, taskReferences, taskContext, TASK_LIMITS } from '@jolo/protoco
 
 export class TaskService {
   constructor(account) { this.account=account; }
+  /** @param {{q?:string,before?:number}} [options] `before` is the cursor the previous page returned */
   async list({q='',before}={}) {
     const query=new URLSearchParams({q}); if(before) query.set('before',String(before));
     const result=await this.account.taskRequest('/api/tasks?'+query);

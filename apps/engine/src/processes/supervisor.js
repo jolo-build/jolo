@@ -33,7 +33,9 @@ export class ProcessSupervisor {
     return env;
   }
 
+  /** @param {Record<string, string>} [extra] */
   environment(extra = {}) {
+    /** @type {Record<string, string>} */
     const env = {};
     for (const key of ENV_ALLOWLIST) if (this.baseEnv[key] !== undefined) env[key] = this.baseEnv[key];
     env.PATH = this.toolPath;
@@ -51,6 +53,7 @@ export class ProcessSupervisor {
     const artifact = this.storage.createArtifact({ sessionId: request.sessionId, kind: "command-output" });
     const writer = this.storage.openArtifactWriter(artifact);
     const [command, ...args] = request.command;
+    /** @type {import("node:child_process").ChildProcess} */
     let child;
     try { child = spawn(command, args, { cwd: request.cwd, env: this.environment(), stdio: ["ignore", "pipe", "pipe"], detached: true }); }
     catch (error) { try { writer.close(); } catch {} throw error; }

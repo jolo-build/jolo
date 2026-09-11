@@ -22,7 +22,7 @@ export function PermissionDialog({ request, onDecide }) {
     if (event.repeat || deciding.current) { event.preventDefault(); return; }
     if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
     // Handle the primary action directly; other controls retain their native behavior.
-    const control = event.target.closest('button, select, input, textarea, [contenteditable="true"]');
+    const control = /** @type {Element} */ (event.target).closest('button, select, input, textarea, [contenteditable="true"]');
     if (control && control !== allowButton.current) return;
     event.preventDefault();
     void decide(scope);

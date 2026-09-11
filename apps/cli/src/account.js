@@ -8,6 +8,24 @@ export async function openAccountBrowser(url, { platform = process.platform, env
   } catch { return false; }
 }
 
+/**
+ * Run `jolo login`, `jolo logout` or `jolo whoami` against a connected engine.
+ *
+ * Everything after `client` exists so the tests can watch the command without a terminal, a
+ * browser or a real clock. Nothing here reads what those collaborators return, so the types
+ * promise only that something comes back.
+ *
+ * @param {{
+ *   command: string,
+ *   flags: Record<string, any>,
+ *   client: { call: (method: string, params?: any) => Promise<any> },
+ *   write?: (line: string) => unknown,
+ *   openBrowser?: (url: string) => Promise<unknown>,
+ *   sleep?: (ms: number) => Promise<unknown>,
+ *   signals?: { on: (signal: string, handler: () => void) => unknown, off: (signal: string, handler: () => void) => unknown },
+ * }} options
+ * @returns {Promise<number>} exit code
+ */
 export async function runAccountCommand({ command, flags, client, write = line => process.stdout.write(line + '\n'), openBrowser = openAccountBrowser, sleep = ms => Bun.sleep(ms), signals = process }) {
   if (command === 'whoami') {
     const status = await client.call('account.status', { refresh: true });

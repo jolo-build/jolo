@@ -4,6 +4,14 @@ import { Modal } from './modal.jsx';
 
 const RESTART_MESSAGE = 'Restart Jolo to enable visualization previews. Reloading the page is not enough.';
 
+/**
+ * @param {{
+ *   preview: { id: string, url: string, height?: number },
+ *   title: string,
+ *   onHeight?: (height: number) => void,
+ *   expanded?: boolean,
+ * }} props an expanded frame fills its dialog, so it neither measures nor reports its content height.
+ */
 function PreviewFrame({ preview, title, onHeight, expanded = false }) {
   const frame = useRef(null);
   useEffect(() => {

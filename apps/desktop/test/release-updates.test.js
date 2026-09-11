@@ -94,6 +94,7 @@ test('a relaunch is reminded from the cache without asking the network again', a
 });
 
 test('a check asked for while one is in flight receives that answer, not an older one', async () => {
+  /** @type {(value?: any) => void} the gate's resolve, captured below so the test can release both checks */
   let open;
   const gate = new Promise(resolve => { open = resolve; });
   let requests = 0;

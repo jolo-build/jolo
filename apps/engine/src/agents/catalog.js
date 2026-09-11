@@ -67,6 +67,7 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
   /** What this agent was configured to run with, ignoring anything its transport cannot carry. */
   // An override belongs to one run and never touches what the agent is configured with (§6.6): a named value
   // wins, an explicit null means "no option at all" (how models are probed), and undefined keeps the setting.
+  /** @param {any} manifest @param {{ model?: string | null, effort?: string | null }} [override] */
   const configFor = (manifest, { model, effort } = {}) => {
     const chosen = settings?.agent(manifest.id) ?? NO_CONFIG;
     const support = modelSupport(manifest);
@@ -100,6 +101,8 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
      * The argv to spawn. Model and effort options come first, because most of these CLIs want their own
      * options before a subcommand; the manifest's own args follow, then the opening prompt if there is one.
      * A transport that carries the model itself (Codex) contributes no flags here.
+     * @param {any} manifest
+     * @param {{ prompt?: string | null, model?: string | null, effort?: string | null }} [override]
      */
     command(manifest, { prompt = null, model, effort } = {}) {
       const binary = binaryFor(manifest);

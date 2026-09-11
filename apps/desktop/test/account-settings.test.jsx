@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AccountPanel } from '../src/renderer/components/account-settings.jsx';
 
 const initial = { state: 'signed_out', origin: 'https://access.jolo.build', account: null, device: null, pending: null, source: 'none', note: null };
-const render = account => renderToStaticMarkup(<AccountPanel account={account} connected server={initial.origin} />);
+// These cases read the panel's markup for one account state at a time, so each render passes the
+// account, the connection and the server and asserts the props rather than stubbing the sign-in,
+// sign-out and refresh handlers that only a click would reach.
+const render = account => renderToStaticMarkup(<AccountPanel {...(/** @type {import('react').ComponentProps<typeof AccountPanel>} */ ({ account, connected: true, server: initial.origin }))} />);
 
 test('desktop account section keeps local use available and shows pending approval code', () => {
   expect(render(initial)).toContain('works locally without signing in');

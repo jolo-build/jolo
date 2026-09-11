@@ -23,7 +23,12 @@ function fixtureRepo(home) {
   return repo;
 }
 
-/** Start an engine, open the fixture, run a scripted fake conversation; `approver` decides permissions. */
+/**
+ * Start an engine, open the fixture, run a scripted fake conversation; `approver` decides permissions.
+ * @param {{ home: string, script: import("./helpers.js").FakeScriptTurn[], clientKind?: string, approver?: (request: any, index: number) => string | null, env?: Record<string, string> }} options
+ *   `approver` receives each permission request and the number already answered, and returning
+ *   `null` leaves that request outstanding.
+ */
 async function runScript({ home, script, clientKind = "test", approver, env = {} }) {
   const scriptPath = path.join(home, "script.json");
   writeFileSync(scriptPath, JSON.stringify(script));

@@ -29,18 +29,34 @@ export function resolveCapabilities(ref, reported, preset, learned) {
   if (maxOutputTokens >= contextWindowTokens) throw new ProtocolError('invalid_params', 'Max output tokens must be smaller than the context window');
   return { contextWindowTokens, maxOutputTokens, supportsTools: reported?.supportsTools ?? true, supportsReasoning: reported?.supportsReasoning ?? true, thinkingMode: reported?.thinkingMode ?? preset.thinkingMode };
 }
+/**
+ * The collaborators the factory is constructed with. Only the credential store is always needed;
+ * a test or a CLI without a profile directory leaves the rest out and takes the defaults.
+ * @typedef {{ credentials: any, env?: Record<string, string | undefined>, log?: any, fetchImpl?: import('./transport.js').FetchLike, catalog?: any, settings?: any }} ProviderFactoryDeps
+ */
+/**
+ * The instance as its own methods see it. One `Object.assign` copies the dependencies across, which
+ * TypeScript cannot follow into the class, so every method that reads one names this shape with
+ * `@this`. The dependencies stay optional here so that a plain `ProviderFactory`, which is all a
+ * caller ever holds, still satisfies it. A parameter default is outside what `@this` covers, so the
+ * two defaults that read the settings name this type again.
+ * @typedef {ProviderFactory & Partial<ProviderFactoryDeps>} ConstructedFactory
+ */
 export class ProviderFactory {
+  /** @param {ProviderFactoryDeps} options */
   constructor({ credentials, env = process.env, log, fetchImpl, catalog = createProviderCatalog({ env }), settings }) {
     Object.assign(this, { credentials, env, log, fetchImpl, catalog, settings });
     this.directory = createProviderDirectory({ credentials, fetchImpl });
     this.learned = new Map();
   }
-  preset(id, config = this.settings?.get() ?? {}) {
+  /** @this {ConstructedFactory} */
+  preset(id, config = /** @type {ConstructedFactory} */ (this).settings?.get() ?? {}) {
     if (id === 'fake' && !demoProviderEnabled(this.env)) throw new ProtocolError('unavailable', 'the demo provider is only available in development mode');
     const p = this.catalog.get(id);
     if (p.protocol === 'fake' && !demoProviderEnabled(this.env)) throw new ProtocolError('unavailable', 'the demo provider is only available in development mode');
     return { ...p, baseUrl: config.providers?.[id]?.baseUrl ?? p.baseUrl };
   }
+  /** @this {ConstructedFactory} */
   async presets() {
     return { presets: await Promise.all(this.catalog.list().filter(p => demoProviderEnabled(this.env) || (p.id !== 'fake' && p.protocol !== 'fake')).map(async p => {
       const status = p.auth.kind === 'none' ? { available: true, source: 'none' } : await this.credentials.status(p.id);
@@ -49,6 +65,7 @@ export class ProviderFactory {
   }
   models(id, options) { return this.directory.list(this.preset(id), options); }
   learn(settings, value) { this.learned.set(`${settings.preset}:${settings.baseUrl}:${settings.model}`, value); }
+  /** @this {ConstructedFactory} */
   capture(session, execution) {
     const config = this.settings.get();
     try {
@@ -60,7 +77,8 @@ export class ProviderFactory {
       throw error;
     }
   }
-  async resolve(ref, config = this.settings?.get() ?? {}, endpoint = null) {
+  /** @this {ConstructedFactory} */
+  async resolve(ref, config = /** @type {ConstructedFactory} */ (this).settings?.get() ?? {}, endpoint = null) {
     const preset = endpoint ?? this.preset(ref.preset, config);
     const { models } = await this.directory.list(preset);
     const reported = models.find(m => m.id === ref.model);
@@ -76,6 +94,12 @@ export class ProviderFactory {
     }
     return { ...preset, ...capabilities, name: preset.id, preset: preset.id, model: ref.model, reasoningEffort: ref.effort, ref };
   }
+  /**
+   * @this {ConstructedFactory}
+   * @param {any} selection
+   * @param {{ resolved?: any, config?: any }} [options] `resolved` is what the run recorded when it
+   * started, so a resumed run reuses the endpoint it was dispatched against
+   */
   async create(selection, { resolved = null, config } = {}) {
     if (!selection && !resolved && !demoProviderEnabled(this.env)) throw new ProtocolError('unavailable', 'no model provider is configured; configure a model provider or select an installed coding agent');
     // The old entry point is retained for existing callers during migration.

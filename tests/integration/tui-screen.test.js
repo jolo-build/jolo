@@ -68,6 +68,9 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
   const screen = new Terminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
   let output = "";
   let replied = false;
+  // The colour case swaps entries in and out below, so this is a plain environment, not the
+  // narrow shape TypeScript infers from the variables this fixture happens to set.
+  /** @type {Record<string, string | undefined>} */
   const env = { ...process.env, JOLO_FAKE_SCRIPT: scriptPath, JOLO_FAKE_DELAY_MS: "500", JOLO_IDLE_MS: "2000", CI: "0" };
   if (color) { delete env.NO_COLOR; env.FORCE_COLOR = "3"; env.COLORTERM = "truecolor"; }
   else { delete env.FORCE_COLOR; env.NO_COLOR = "1"; }
@@ -170,7 +173,7 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
   }
 }, 60_000);
 
-for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) test(`${signal} clears the CLI and an open model menu before returning to the shell`, async () => {
+for (const [signal, code] of /** @type {[NodeJS.Signals, number][]} */ ([["SIGTERM", 143], ["SIGINT", 130]])) test(`${signal} clears the CLI and an open model menu before returning to the shell`, async () => {
   const home = tempHome(); homes.push(home);
   const screen = new Terminal({ cols: 100, rows: 30, allowProposedApi: true });
   let output = "";
@@ -186,7 +189,7 @@ for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) test(`${signal
     child.kill(signal);
     await waitFor(() => child.exitCode !== null);
     expect(await child.exited).toBe(code);
-    await new Promise((resolve) => screen.write("", resolve));
+    await new Promise((resolve) => screen.write("", /** @type {() => void} */ (resolve)));
     expect(visible().trim()).toBe("");
     expect(screen.buffer.active.cursorX).toBe(0);
     expect(screen.buffer.active.cursorY).toBe(0);

@@ -11,6 +11,28 @@ export const ENGINE_ENTRY = path.join(ROOT, "apps", "engine", "src", "main.js");
 export const CLI_ENTRY = path.join(ROOT, "apps", "cli", "src", "main.js");
 export const TERMINAL = ["completed", "failed", "cancelled", "interrupted"];
 
+/**
+ * One turn of the fake provider's script, the way a `JOLO_FAKE_SCRIPT` file records it. A turn
+ * carries only the parts its case needs: `text` streams a fragment at a time, `rawArguments` lets a
+ * case send arguments the tool parser should reject, and `error.once` fires on the first attempt
+ * only so the retry replays the same entry.
+ * @typedef {{
+ *   text?: string[],
+ *   reasoning?: string,
+ *   toolCalls?: { name: string, arguments?: any, rawArguments?: any }[],
+ *   error?: { category?: string, retryable?: boolean, once?: boolean, partialText?: string, message?: string },
+ *   usage?: { inputTokens?: number, outputTokens?: number },
+ * }} FakeScriptTurn
+ */
+
+/**
+ * What `run.snapshot` answers with, as the suites read it. The engine hands back a decoded wire
+ * object, so the run and its messages stay open here; the point of naming the shape is that suites
+ * declare `let snapshot` and fill it inside a `waitFor` callback, and without a declared type the
+ * compiler only ever sees the unassigned declaration.
+ * @typedef {{ run: any, messages: any[] }} RunSnapshot
+ */
+
 export function tempHome() {
   return mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "jolo-t-"));
 }

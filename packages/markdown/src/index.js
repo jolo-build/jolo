@@ -178,6 +178,8 @@ export function parseBlock(text) {
 /**
  * Parse a full document. Returns blocks plus whether the last block is still open (streaming).
  * `cache` (a Map) lets streaming callers reuse parsed blocks for unchanged segments.
+ * @param {string} text
+ * @param {{ cache?: Map<string, any> }} [options]
  */
 export function parseDocument(text, { cache } = {}) {
   const { segments, openFence, openVisualization } = segment(text);

@@ -46,7 +46,11 @@ export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
 ];
 
 /**
- * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any }} deps
+ * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
+ * provider factory and settings only matter to a handoff that summarizes with a model.
+ * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any,
+ *   searchConfig?: (workspace: any, run: any) => any, browserConfig?: (workspace: any, run: any) => any,
+ *   providerFactory?: any, settings?: any }} deps
  */
 export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
   return {

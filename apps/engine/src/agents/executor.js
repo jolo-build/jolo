@@ -39,6 +39,12 @@ export function createExecutorRouter(deps) {
   };
 }
 
+/**
+ * Run one hosted turn under Jolo's budgets: active time, iterations, and tool deadlines.
+ * @param {{ ctx: any, manifest: any, adapter: any, storage: any, budget: any, interactiveClients: () => number,
+ *   revoke?: (runId: string) => void, tickMs?: number }} options `revoke` withdraws the guest credentials the
+ * run was issued; an engine that hands out none passes nothing
+ */
 export async function executeHosted({ ctx, manifest, adapter, storage, budget, interactiveClients, revoke = () => {}, tickMs = 250 }) {
   const controller = new AbortController();
   const abort = () => controller.abort(ctx.signal.reason);

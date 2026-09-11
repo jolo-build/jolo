@@ -140,6 +140,9 @@ test('admins cannot promote themselves, manage other admins, or remove the owner
 
 test('all web mutations require origin and CSRF, including forged invitation and membership actions',async()=>{
   const {f,owner,member,repo,team}=await setup();
+  // Each entry is a path and the form fields to post to it, so keep the pair a tuple rather than a
+  // mixed array; the loop below spreads the fields to forge a CSRF token.
+  /** @type {[string, Record<string, string>][]} */
   const requests=[['/tasks',fields()],['/teams',{name:'Injected'}],['/labels',{name:'Injected',color:'red'}],[`/teams/${team.id}/invite`,{email:'a@example.com',role:'admin'}],[`/teams/${team.id}/members/${member.id}/remove`,{revision:'1'}],[`/invitations/${crypto.randomUUID()}/accept`,{}]];
   for(const [path,data] of requests) {
     expect((await post(f,owner,path,data,'https://evil.example')).status).toBe(403);

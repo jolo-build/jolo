@@ -7,8 +7,13 @@ function PlainDiff({ text, context = true }) {
     return context || kind !== 'context' ? <div className={`diff-line ${kind}`} key={index}><code>{line}</code></div> : null;
   });
 }
+// Both halves of this pair take the same props, so name them once: the highlighter and the plain
+// fallback are interchangeable from the caller's side.
+/** @typedef {{ text: string, path?: string, context?: boolean }} DiffLinesProps */
+/** @type {import('react').LazyExoticComponent<import('react').ComponentType<DiffLinesProps>>} */
 const HighlightedDiff = lazy(() => import('./syntax-diff.jsx').catch(() => ({ default: PlainDiff })));
 
-export const DiffLines = memo(function DiffLines(props) {
+// `path` only chooses the grammar; a diff without one is still shown.
+export const DiffLines = memo(function DiffLines(/** @type {DiffLinesProps} */ props) {
   return <Suspense fallback={<PlainDiff {...props} />}><HighlightedDiff {...props} /></Suspense>;
 });

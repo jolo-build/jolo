@@ -63,7 +63,7 @@ test('pasted text is delivered to native and hosted agents including ACP without
 }, 20000);
 
 async function finish(client, runId) {
-  let snapshot;
+  /** @type {import('./helpers.js').RunSnapshot} */ let snapshot;
   await waitFor(async () => { snapshot = await client.call('run.snapshot', { runId }); return TERMINAL.includes(snapshot.run.state); }, { timeoutMs: 15000, label: 'image run completed' });
   const texts = await Promise.all(snapshot.messages.filter(message => message.role === 'assistant' && message.kind === 'text').map(message => client.call('artifact.read', { artifactId: message.artifactId })));
   return { ...snapshot, text: texts.map(result => result.text).join('') };

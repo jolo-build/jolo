@@ -17,7 +17,7 @@ Jolo is in early development. macOS Apple Silicon is the current release target.
 
 ## Installation
 
-For a desktop release, download the macOS `.dmg` from [GitHub Releases](https://github.com/jolo-build/jolo/releases), open it, and drag **Jolo** to **Applications**. Apple Silicon and Intel Macs have separate installers. Desktop DMGs are built by the release workflow; the first public desktop release has not been published yet.
+For a desktop release, download the macOS `.dmg` from [GitHub Releases](https://github.com/jolo-build/jolo/releases), open it, and drag **Jolo** to **Applications**. Apple Silicon and Intel Macs have separate installers. Desktop DMGs are built by the release workflow; published installers are available on GitHub Releases.
 
 Install the **CLI only** with:
 
@@ -111,3 +111,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for isolated development profiles and val
 ### Desktop releases
 
 GitHub Actions builds Apple Silicon and Intel DMG installers alongside the four CLI archives. Pull requests and main-branch builds upload the installers as workflow artifacts. Pushing a version tag matching the root package version (for example `v0.1.1`) verifies all platform checksums and publishes a complete GitHub Release. The download buttons on jolo.build use that release automatically. Desktop installers are currently ad-hoc signed and not notarized.
+
+## User guide
+
+Read the [Jolo documentation](https://docs.jolo.build) for installation, split view, orchestration, agents, inline browser control, changes, Access, and CLI workflows. Animated desktop walkthroughs autoplay with pause controls and respect reduced motion.
+
+The static guide lives in `apps/guide` (run `bun run guide:build`). `bun apps/guide/serve.js` previews the built pages on port 8792. GitHub Actions deploys it through `deploy/guide.wrangler.jsonc` when guide changes reach main.

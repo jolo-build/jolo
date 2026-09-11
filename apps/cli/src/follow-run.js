@@ -4,17 +4,56 @@ import { EXIT } from "./exit-codes.js";
 const err = line => process.stderr.write(`${line}\n`);
 const emit = (json, record) => { if (json) process.stdout.write(`${JSON.stringify(record)}\n`); };
 
+/**
+ * What a paused run tells the caller. `run.state` events and `run.snapshot` rows both carry
+ * these, and both leave the reason out when the pause was the user's own doing.
+ * @typedef {{ pauseReason?: string, permissionId?: string, revision?: number }} PauseDetails
+ */
+
+/**
+ * The part of an engine connection this command uses. `onReconnect` belongs to the resumable
+ * wrapper only, which is why the code tests for it before calling it.
+ * @typedef {{
+ *   call: (method: string, params?: any) => Promise<any>,
+ *   subscribe: (params?: any, handlers?: any) => Promise<any>,
+ *   onEvent: (handler: (event: any) => void) => any,
+ *   onPreview: (handler: (preview: any) => void) => any,
+ *   onClose: (handler: () => void) => any,
+ *   onReconnect?: (handler: () => any) => any,
+ * }} EngineClient
+ */
+
+/**
+ * Print a run as it happens and return the exit code it earned.
+ *
+ * `jolo run` starts the run itself and so passes `startRun`; `jolo attach` and `jolo resume`
+ * join one that already exists and pass `run` instead. Exactly one of the two is given.
+ *
+ * @param {EngineClient} client
+ * @param {{
+ *   session: { id: string, [key: string]: any },
+ *   cursor?: string,
+ *   json?: boolean,
+ *   startRun?: () => Promise<any>,
+ *   run?: any,
+ * }} options
+ * @returns {Promise<number>} exit code
+ */
 export async function followRun(client, { session, cursor, json, startRun, run: existingRun }) {
   let run = existingRun ?? null;
   let finalState = null;
+  /** @type {PauseDetails | null} */
   let pause = null;
   let cancelRequested = false;
+  // Writers hand back whatever they hand back (`process.stdout.write` returns a boolean); the
+  // chain exists only to keep the order, so the resolved value is never looked at.
+  /** @type {Promise<unknown>} */
   let output = Promise.resolve();
   const print = fn => { output = output.then(fn).catch(error => err(`output error: ${error.message}`)); };
   const projection = new SessionProjection({
     retainText: false,
     readArtifact: (artifactId, offset, length) => client.call("artifact.read", { artifactId, offset, length }),
-    onError: error => err(`output error: ${error.message}`),
+    onError: (/** @type {Error} */ error) => err(`output error: ${error.message}`),
     onText: ({ message, byteOffset, text }) => {
       if (!json && !(message.role === "assistant" && message.kind === "text")) return;
       print(() => json ? emit(json, { type: "preview", role: message.role, kind: message.kind, sessionId: session.id, runId: message.runId, messageId: message.id, byteOffset, text }) : process.stdout.write(text));

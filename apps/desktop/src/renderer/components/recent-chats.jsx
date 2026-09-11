@@ -3,6 +3,22 @@ import { useWorkspaceTasks } from '../use-workspace-tasks.js';
 import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
 
+/**
+ * The chats that belong to no folder. Board rows arrive from the engine as validated JSON, so a task
+ * is passed on as it came rather than restated here.
+ *
+ * @param {{
+ *   call: (method: string, params?: any) => Promise<any>,
+ *   revision?: string,
+ *   state?: string,
+ *   sessionId?: string | null,
+ *   selectedTask?: any,
+ *   onOpen: (target: any) => void,
+ *   onMenu?: (task: any) => void,
+ *   variant?: 'board',
+ *   now?: number,
+ * }} props the board variant names the section and dates each row; the sidebar shows neither.
+ */
 export function RecentChats({ call, revision, state = 'open', sessionId, selectedTask, onOpen, onMenu, variant, now }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, revision, state, standalone: true });
   const drag = useTaskDrag();

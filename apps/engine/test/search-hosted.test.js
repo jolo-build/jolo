@@ -7,7 +7,7 @@ test('all hosted transports preserve quoted paths and pin the same workspace wit
   // Called from a test or CLI entry, this must still launch the engine's MCP entry.
   expect(config.args[0]).toBe(ENGINE_ENTRY);
   const codex = codexSearchArgs(config);
-  const parsed = Bun.TOML.parse([codex[1], codex[3]].join('\n'));
+  const parsed = /** @type {{ mcp_servers: Record<string, any> }} */ (Bun.TOML.parse([codex[1], codex[3]].join('\n')));
   expect(parsed.mcp_servers.jolo_search).toEqual(config);
   expect(JSON.parse(claudeSearchArgs(config)[1]).mcpServers.jolo_search).toEqual(config);
   expect(acpSearchServers(config)).toEqual([{ name: 'jolo_search', ...config, env: [] }]);

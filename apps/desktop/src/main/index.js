@@ -215,13 +215,15 @@ function registerIpc(window, bridge, visualizations, releases) {
     if (!trusted(event) || !opts || typeof opts.archived !== "boolean") throw new Error("untrusted task menu request");
     return new Promise((resolve) => {
       let action = null;
-      Menu.buildFromTemplate([
+      // An array literal widens "separator" to string, which Electron's item kinds do not accept, so the
+      // template says what it is rather than every separator carrying its own annotation.
+      Menu.buildFromTemplate(/** @type {import("electron").MenuItemConstructorOptions[]} */ ([
         { label: "Rename…", click: () => { action = "rename"; } },
         { label: opts.archived ? "Restore task" : "Archive task", click: () => { action = "archive"; } },
         ...(opts.worktree === true ? [{ type: "separator" }, { label: "Remove worktree…", click: () => { action = "remove-worktree"; } }] : []),
         { type: "separator" },
         { label: "Delete…", click: () => { action = "delete"; } },
-      ]).popup({ window, callback: () => resolve(action) });
+      ])).popup({ window, callback: () => resolve(action) });
     });
   });
   // The composer's "who answers" picker: Jolo with its model, or a hosted agent that speaks a structured protocol.
@@ -230,11 +232,11 @@ function registerIpc(window, bridge, visualizations, releases) {
     const items = options.items.filter((item) => item && typeof item.id === "string" && typeof item.label === "string");
     return new Promise((resolve) => {
       let choice = null;
-      Menu.buildFromTemplate([
+      Menu.buildFromTemplate(/** @type {import("electron").MenuItemConstructorOptions[]} */ ([
         ...items.map((item) => ({ label: item.label.slice(0, 80), type: "radio", checked: Boolean(item.checked), enabled: item.enabled !== false, click: () => { choice = item.id; } })),
         { type: "separator" },
         { label: "Model settings…", click: () => { choice = "settings"; } },
-      ]).popup({ window, callback: () => resolve(choice) });
+      ])).popup({ window, callback: () => resolve(choice) });
     });
   });
   ipcMain.handle("jolo:call", (event, request) => {

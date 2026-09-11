@@ -117,7 +117,7 @@ export function createWorktreeService({ storage, permissions, paths, env, termin
     /**
      * Take back checkouts the engine made but never handed over, and say so for the ones it must not touch.
      * Runs once at startup, before any client can ask for a workspace list (§14.1).
-     * @returns {{ removed: number, parked: number }}
+     * @returns {Promise<{ removed: number, parked: number }>}
      */
     async reconcile() {
       let removed = 0;

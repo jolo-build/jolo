@@ -220,8 +220,20 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   );
 }
 
+/**
+ * The chat the client is showing. Restoring a saved session bumps `revision`, which remounts
+ * `App` under a new key, so everything `App` reads at mount comes from here. Nothing assigns
+ * `status`; it is listed because the render below reads it, and `App` then falls back to its
+ * own default.
+ * @typedef {{ session: any, revision: number, restored: boolean, agentId: string | null, workspaceId: string | null, status?: string }} WorkspaceSelection
+ */
+
+/**
+ * Owns the selection so a restore can swap the whole chat out; the rest is handed to `App`.
+ * @param {{ session: any, restored?: boolean, project: any, client: import("../follow-run.js").EngineClient, cursor: string, onExit: () => void, update?: { latest?: string } | null }} props
+ */
 function SessionWorkspace({ session, restored, project, ...props }) {
-  const [selected, setSelected] = useState({ session, revision: 0, restored, agentId: session?.agentId ?? null, workspaceId: session?.workspaceId ?? project.workspaceId });
+  const [selected, setSelected] = useState(/** @type {WorkspaceSelection} */ ({ session, revision: 0, restored, agentId: session?.agentId ?? null, workspaceId: session?.workspaceId ?? project.workspaceId }));
   return <App key={selected.revision} {...props} project={{ ...project, workspaceId: selected.workspaceId }} initialSession={selected.session} draftAgentId={selected.agentId} initialStatus={selected.status} restored={selected.restored}
     onRestore={(session) => setSelected((previous) => ({ session, revision: previous.revision + 1, restored: true, agentId: session ? session.agentId ?? null : previous.agentId, workspaceId: session?.workspaceId ?? previous.workspaceId }))}
     onChooseAgent={(agentId) => setSelected((previous) => ({ ...previous, agentId }))} />;

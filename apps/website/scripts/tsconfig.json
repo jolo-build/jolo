@@ -6,5 +6,6 @@
     "types": ["bun", "react", "react-dom"],
     "jsx": "react-jsx"
   },
-  "include": ["."]
+  // The Vite config sits at the workspace root but is build tooling like everything else here.
+  "include": [".", "../vite.config.js"]
 }

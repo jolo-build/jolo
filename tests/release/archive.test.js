@@ -8,7 +8,8 @@ test('archives ignore source mtimes and creation order and remain readable by ta
   const root = mkdtempSync(path.join(tmpdir(), 'jolo-archive-'));
   try {
     for (const name of ['a', 'b']) mkdirSync(path.join(root, name));
-    for (const [folder, files] of [['a', ['one', 'two']], ['b', ['two', 'one']]]) {
+    // The pairs mix a string with an array, so spell out the tuple shape the destructuring expects.
+    for (const [folder, files] of /** @type {[string, string[]][]} */ ([['a', ['one', 'two']], ['b', ['two', 'one']]])) {
       for (const name of files) writeFileSync(path.join(root, folder, name), name.repeat(200));
     }
     utimesSync(path.join(root, 'b', 'one'), 100, 200);

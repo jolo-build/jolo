@@ -1,10 +1,22 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.7",
   "repository": "https://github.com/microsoft/tgrep",
   "assets": {
-    "darwin-arm64": { "target": "aarch64-apple-darwin", "sha256": "aa7644819d3a6e0202013e6c7c2be2623d5a2bef710249c0b31cc00aa80e19ad" },
-    "darwin-x64": { "target": "x86_64-apple-darwin", "sha256": "a0352e5648ae4c744e344cead5d3b87e7ab3a12c060928db87c379c12036a210" },
-    "linux-arm64": { "target": "aarch64-unknown-linux-musl", "sha256": "4d8d6c3cd6c2ca9055f5ab62473e7d772c6383e091a2065d4c5d0fd6d1540639" },
-    "linux-x64": { "target": "x86_64-unknown-linux-musl", "sha256": "072b8b5db49bd76d19d2466c1494e579baf4d8a7c74397c9e54c11018f79d333" }
+    "darwin-arm64": {
+      "target": "aarch64-apple-darwin",
+      "sha256": "ecdccd5a9633fe03dd65a271a1a967e1fc2c7833693ab8c32d2567eef2c8f77e"
+    },
+    "darwin-x64": {
+      "target": "x86_64-apple-darwin",
+      "sha256": "b862f5c7bde34d14999ee956c73afdb6f2fbab1343b0c2123deb00aa189bf481"
+    },
+    "linux-arm64": {
+      "target": "aarch64-unknown-linux-musl",
+      "sha256": "5696d19ba384905dafc2f7638a6ab010ea3845342e0462e3ca3b317dfee4b98d"
+    },
+    "linux-x64": {
+      "target": "x86_64-unknown-linux-musl",
+      "sha256": "7204df8b02ee6bf47754da8766dad07879bb5ee720db6ec85fd053a397f54346"
+    }
   }
 }

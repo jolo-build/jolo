@@ -184,6 +184,10 @@ export const fileTools = [
   },
 ];
 
+/**
+ * @param {{ ctx: any, args: any, scopes: any[], skip: number, binary: string, indexPath?: string }} input
+ * an `indexPath` turns this into an indexed search; without one it reads the working tree live
+ */
 async function searchWithGrep({ ctx, args, scopes, skip, binary, indexPath }) {
   const rgArgs = ["--json", "--line-number", "--no-messages", "--glob", "!.git", "--max-filesize", `${SEARCH_FILE_MAX_BYTES}`];
   rgArgs.push('--sort', 'path'); // stable paging across repeated calls

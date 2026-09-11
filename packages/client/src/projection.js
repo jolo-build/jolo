@@ -26,9 +26,57 @@ function pumpReads() {
 }
 const RETRYABLE_READ_ERRORS = new Set(["unavailable", "limit_exceeded", "ECONNRESET", "EPIPE", "ETIMEDOUT"]);
 
+/**
+ * A file the run wrote, as reported by `files.changed` (§11.2).
+ * @typedef {{ path: string, op: "create" | "replace" | "delete" | "rename", newPath?: string, beforeHash: string | null, afterHash: string | null }} ProjectedChange
+ */
+
+/**
+ * One message as the projection holds it. Everything after `status` is filled in later by a
+ * subsequent event, a fill, or eviction, so those fields are absent on a freshly started message.
+ * @typedef {{
+ *   id: string,
+ *   runId: string,
+ *   role: string,
+ *   kind: string,
+ *   artifactId: string,
+ *   ordinal: number,
+ *   text: string,
+ *   renderedBytes: number,
+ *   committedBytes: number,
+ *   status: string,
+ *   changes?: ProjectedChange[],
+ *   diffArtifactId?: string | null,
+ *   loadError?: string | null,
+ *   evicted?: boolean,
+ * }} ProjectedMessage
+ */
+
+/**
+ * One tool invocation. The outcome fields arrive with `tool.completed`.
+ * @typedef {{
+ *   invocationId: string,
+ *   runId: string,
+ *   callId: string,
+ *   name: string,
+ *   preview: string,
+ *   status?: string,
+ *   durationMs?: number,
+ *   errorCode?: string | null,
+ *   resultArtifactId?: string | null,
+ * }} ProjectedTool
+ */
+
 export class SessionProjection {
   /**
-   * @param {{ readArtifact: (artifactId: string, offset: number, length: number) => Promise<{ text: string, bytes: number, eof: boolean }>, maxTextBytes?: number, onChange?: () => void }} options
+   * @param {{
+   *   readArtifact: (artifactId: string, offset: number, length: number) => Promise<{ text: string, bytes: number, eof: boolean }>,
+   *   maxTextBytes?: number,
+   *   onChange?: () => void,
+   *   onText?: (chunk: { message: ProjectedMessage, byteOffset: number, text: string }) => void,
+   *   onError?: (error: unknown) => void,
+   *   retainText?: boolean,
+   * }} options
    */
   constructor(options) {
     this.readArtifact = options.readArtifact;
@@ -37,11 +85,11 @@ export class SessionProjection {
     this.onText = options.onText ?? (() => {});
     this.onError = options.onError ?? (() => {});
     this.retainText = options.retainText ?? true;
-    /** @type {Map<string, { id, runId, role, kind, artifactId, ordinal, text, renderedBytes, committedBytes, status }>} */
+    /** @type {Map<string, ProjectedMessage>} */
     this.messages = new Map();
     /** @type {Map<string, any>} */
     this.runs = new Map();
-    /** @type {Map<string, { invocationId, callId, name, preview, status, durationMs, errorCode }>} */
+    /** @type {Map<string, ProjectedTool>} */
     this.tools = new Map();
     this.textBytes = 0;
     this.pendingFills = new Map();
@@ -50,7 +98,11 @@ export class SessionProjection {
     this.lastSeq = "0";
   }
 
-  /** Seed from a snapshot or page; committed text is fetched lazily by the caller via fill(). */
+  /**
+   * Seed from a snapshot or page; committed text is fetched lazily by the caller via fill().
+   * Without a cursor the rows are taken as current, which is what a fresh snapshot means.
+   * @param {{ messages?: any[], runs?: any[], cursor?: string, advanceCursor?: boolean }} page
+   */
   seed({ messages = [], runs = [], cursor, advanceCursor = true }) {
     for (const message of messages) {
       if (cursor && BigInt(this.messageSeq.get(message.id) ?? "0") > BigInt(cursor)) continue;

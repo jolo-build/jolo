@@ -6,7 +6,16 @@ import { ensureFontLoaded, stackFor } from "../fonts.js";
 const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
 /** Disposable xterm.js projection of an engine-owned terminal (§16.1). The engine keeps the authoritative screen. */
-/** `attachTo` views a terminal the engine already owns; closing the view then leaves the process running. */
+/**
+ * `attachTo` views a terminal the engine already owns; closing the view then leaves the process running.
+ *
+ * @param {{
+ *   workspaceId: string,
+ *   paneId?: string,
+ *   attachTo?: string | null,
+ *   onState?: (payload: any) => void,
+ * }} props `onState` is for callers that track a hosted agent's status; the terminal itself needs no listener.
+ */
 export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) {
   const host = useRef(null);
   const term = useRef(null);

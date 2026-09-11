@@ -18,6 +18,11 @@ const environment = { ...process.env, PATH: '/usr/bin:/bin', JOLO_IDLE_MS: '1500
 let server;
 const modelServer = startSmokeModel();
 
+/**
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} [env] the child's whole environment, not additions to
+ *   it: the installer runs with development tooling off PATH, and some steps add a variable or two.
+ */
 async function run(args, env = environment) {
   const child = Bun.spawn(args, { cwd: temporary, env, stdout: 'pipe', stderr: 'pipe' });
   const timer = setTimeout(() => child.kill(), 120_000);

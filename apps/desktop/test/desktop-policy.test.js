@@ -28,7 +28,10 @@ test('browser attachment rejects unsafe URLs and keeps concurrent workspaces sep
 test('a pending permission produces one notice when the run also pauses', async () => {
   const notices = [], badges = [];
   const row = { projectId: 'p', workspaceId: 'w', rootPath: '/repo', name: 'repo', attention: 'needs_you', run: { id: 'r' }, session: { id: 's' }, pendingPermission: { permissionId: 'approval', summary: 'run command' } };
-  const service = createAttentionService({ bridge: { rawCall: async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: [{ permissionId: 'approval', runId: 'r', summary: 'run command' }] } }, window: { isDestroyed: () => false, isFocused: () => true, webContents: { send: (channel, notice) => notices.push(notice) } }, app: { dock: { setBadge: value => badges.push(value) }, setBadgeCount: value => badges.push(value) }, Notification: {}, log });
+  // The window, the app and the Notification class are partial doubles: the service only ever
+  // reaches for the handful of members named here, so they are asserted rather than filled in with
+  // the rest of Electron's surface. An empty Notification stands for a system that never shows one.
+  const service = createAttentionService({ bridge: { rawCall: async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: [{ permissionId: 'approval', runId: 'r', summary: 'run command' }] } }, window: /** @type {any} */ ({ isDestroyed: () => false, isFocused: () => true, webContents: { send: (channel, notice) => notices.push(notice) } }), app: /** @type {any} */ ({ dock: { setBadge: value => badges.push(value) }, setBadgeCount: value => badges.push(value) }), Notification: /** @type {any} */ ({}), log });
   try {
     service.onEvent({ type: 'permission.requested', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', summary: 'run command' } });
     service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'paused', pauseReason: 'permission' } });
@@ -43,6 +46,10 @@ test('browser accessibility projection bounds traversal and preserves action ref
   expect(result.snapshot.truncated).toBe(true); expect(result.snapshot.nodes).toHaveLength(2); expect(result.references.get('e2')).toBe(42);
 });
 
+/**
+ * One attention service over doubles, with the two things the tests vary.
+ * @param {{ focused?: boolean, read?: (method: string, params?: any) => Promise<any> }} [options]
+ */
 function attentionFixture({ focused = true, read } = {}) {
   const notices = [], notifications = [];
   const row = { projectId: 'p', workspaceId: 'w', rootPath: '/repo', name: 'repo', run: { id: 'r' }, session: { id: 's' } };
@@ -53,15 +60,18 @@ function attentionFixture({ focused = true, read } = {}) {
     close() { this.closed = true; }
   }
   const pending = [{ permissionId: 'approval', runId: 'r', summary: 'run command' }];
+  // Partial doubles again, including the Notification class above, which implements only the three
+  // members the service uses and records what it was asked to show.
   const service = createAttentionService({ bridge: { rawCall: read ?? (async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: pending }) },
-    window: { isDestroyed: () => false, isFocused: () => focused, webContents: { send: (_channel, notice) => notices.push(notice) } },
-    app: { dock: { setBadge() {} }, setBadgeCount() {}, getName: () => 'Jolo' }, Notification, log });
+    window: /** @type {any} */ ({ isDestroyed: () => false, isFocused: () => focused, webContents: { send: (_channel, notice) => notices.push(notice) } }),
+    app: /** @type {any} */ ({ dock: { setBadge() {} }, setBadgeCount() {}, getName: () => 'Jolo' }), Notification: /** @type {any} */ (Notification), log });
   const requested = { type: 'permission.requested', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', summary: 'run command' } };
   const resolved = { type: 'permission.resolved', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', decision: 'allow_run' } };
   return { service, notices, notifications, pending, row, requested, resolved };
 }
 
 test('a decision cancels a notice still waiting on a board read', async () => {
+  /** @type {(value: any) => void} the board read's resolve, captured by the promise below */
   let release;
   const f = attentionFixture({ read: () => new Promise(resolve => { release = resolve; }) });
   try {

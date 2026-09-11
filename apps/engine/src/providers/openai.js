@@ -24,7 +24,9 @@ function toInput(items) {
 }
 
 /**
- * @param {{ apiKey: string, model: string, baseUrl?: string, contextWindowTokens: number, maxOutputTokens: number, reasoningEffort?: string, fetchImpl?: typeof fetch }} options
+ * The token limits are the resolved capabilities this adapter reports back, and the key belongs to
+ * endpoints that authenticate, so an adapter can be built without either.
+ * @param {{ apiKey?: string, model: string, baseUrl?: string, contextWindowTokens?: number, maxOutputTokens?: number, reasoningEffort?: string, fetchImpl?: import('./transport.js').FetchLike }} options
  */
 export function createOpenAIProvider(options) {
   const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");

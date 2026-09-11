@@ -1,0 +1,13 @@
+{
+  "$schema": "../apps/website/node_modules/wrangler/config-schema.json",
+  "name": "jolo-guide",
+  "compatibility_date": "2026-09-09",
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [{ "pattern": "docs.jolo.build", "custom_domain": true }],
+  "assets": {
+    "directory": "../apps/guide/dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  }
+}

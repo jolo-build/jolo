@@ -59,7 +59,11 @@ export function modelSelector(configOptions) {
 }
 
 /**
- * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any }} deps
+ * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
+ * provider factory and settings only matter to a handoff that summarizes with a model.
+ * @param {{ storage: any, dispatcher: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any,
+ *   searchConfig?: (workspace: any, run: any) => any, browserConfig?: (workspace: any, run: any) => any,
+ *   providerFactory?: any, settings?: any }} deps
  */
 export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
   return {

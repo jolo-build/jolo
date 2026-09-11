@@ -22,6 +22,8 @@ export function browserCallHandler({ storage, runs, dispatcher, settingsService 
       const result = await dispatcher.invoke({ run, workspace: { id: workspace.id, root: workspace.path }, call: { callId: newId('browser'), name, arguments: args }, signal: controller.signal,
         deadlineMs: Math.min(dispatcher.registry.get(name).deadlineMs, settingsService.get().budgets.toolDeadlineMs) });
       const value = JSON.parse(result.output);
+      // One MCP content list: the tool's own JSON as text, and for a screenshot the image beside it.
+      /** @type {Array<{ type: string, text?: string, mimeType?: string, data?: string }>} */
       const content = [{ type: 'text', text: result.output }];
       if (name === 'browser_screenshot' && result.status === 'ok' && value.artifactId) {
         const artifact = storage.getArtifact(value.artifactId);

@@ -79,11 +79,8 @@ export function handoffParties({ catalog, session, manifest, model = null, stora
 /** A path as the permission dialog shows it: relative to the workspace when it is inside, as given otherwise. */
 export const displayPath = (root, candidate) => (typeof candidate === "string" && insideWorkspace(root, candidate) ? path.relative(root, path.resolve(root, candidate)) || "." : candidate);
 
-/**
- * Spawn a child that speaks newline-delimited JSON on its stdio. Cancelling the run first gives the adapter a
- * chance to say so politely (`onCancel`), then the child is terminated after a grace period.
- * @param {{ argv: string[], cwd: string, env: Record<string, string>, signal: AbortSignal, onCancel?: () => void, log: any, agentId: string }} options
- */
+// Re-exported so an adapter reaches its transport and its turn helpers through one import. The
+// options are documented where the function is defined.
 export { spawnLineChild } from "../processes/line-child.js";
 
 /**
@@ -126,6 +123,9 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
      * Jolo's answer to "may I do this?": policy first, then the user, never a silent yes. Reads and mutations
      * are judged by where they reach; anything else needs a grant or a decision. Returns "allow", { deny },
      * or null when the run was cancelled while the user was being asked.
+     * Only a call that can reach the user carries the summary, script, working directory and digest
+     * that its request is written from; a read or a mutation is answered from its targets alone.
+     * @param {{ toolClass: string, toolName: string, targets?: any[], summary?: string, script?: string, cwd?: string, argumentDigest?: string }} request
      */
     async decide({ toolClass, toolName, targets = [], summary, script, cwd, argumentDigest }) {
       if (toolClass === "read" || toolClass === "mutation") {
@@ -181,7 +181,12 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       tool.shown += Buffer.byteLength(piece);
       if (piece.length < text.length) tool.truncated = true;
     },
-    /** The tool call ended: close its message, settle the invocation, and say how it went. */
+    /**
+     * The tool call ended: close its message, settle the invocation, and say how it went.
+     * @param {any} callId
+     * @param {{ text?: string, isError?: boolean, status?: string, errorCode?: string }} [result]
+     * a vendor that names its own failure passes `errorCode`; otherwise the status decides one
+     */
     toolFinished(callId, { text = "", isError = false, status = isError ? "error" : "ok", errorCode } = {}) {
       const tool = tools.get(String(callId));
       if (!tool) return;

@@ -2,6 +2,11 @@ import { createRemoteJWKSet, customFetch, jwtVerify } from 'jose';
 import { randomToken } from './security.js';
 import { SignInError, networkError } from './errors.js';
 
+// Every call to Google goes through an injectable fetch so tests and the workerd checks can stand in
+// for the network. The stand-ins take the same arguments the platform's own fetch does.
+/** @typedef {(...args: Parameters<typeof fetch>) => Promise<Response>} FetchLike */
+
+/** @type {FetchLike} */
 const providerFetch = (...args) => fetch(...args);
 const keySets = new WeakMap();
 

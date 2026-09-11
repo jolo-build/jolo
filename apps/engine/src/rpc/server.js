@@ -19,7 +19,9 @@ function tokenMatches(expected, supplied) {
 }
 
 /**
- * @param {{ token: string, bootId: string, build: string, storage: any, previews: import("node:events").EventEmitter, lifetime: any, log: any, handlers: Record<string, (params: any, conn: any) => any> }} options
+ * Guest credentials are optional: an engine started without a capability store simply accepts the
+ * owner's endpoint token and nothing else.
+ * @param {{ token: string, bootId: string, build: string, storage: any, previews: import("node:events").EventEmitter, lifetime: any, log: any, handlers: Record<string, (params: any, conn: any) => any>, capabilityTokens?: import("./capabilities.js").CapabilityTokens }} options
  */
 export function createRpcServer(options) {
   const { token, bootId, build, storage, previews, lifetime, log, handlers } = options;
@@ -27,6 +29,7 @@ export function createRpcServer(options) {
   let closing = false;
   const offRevoke = options.capabilityTokens?.onRevoke(token => { for (const conn of connections) if (conn.capabilityToken === token) conn.socket.destroy(); });
 
+  /** @param {any} conn @param {any} message @param {(error?: Error | null) => void} [onWritten] called once the frame has left the socket */
   const send = (conn, message, onWritten = () => {}) => {
     if (conn.closed || conn.socket.destroyed) return false;
     let frame;

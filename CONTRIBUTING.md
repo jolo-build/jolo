@@ -4,7 +4,7 @@ Bug reports, documentation improvements, and focused code changes are welcome. F
 
 ## Development setup
 
-Use Git and the exact Bun version in [.bun-version](.bun-version). macOS Apple Silicon is the current release target. Desktop work requires a graphical session; Linux desktop support still needs validation. Product code is JavaScript/JSX. Electron runs the desktop main process in Node and its renderer in Chromium; the engine and CLI use Bun.
+Use Git and the exact Bun version in [.bun-version](.bun-version). macOS Apple Silicon is the current release target. Desktop work requires a graphical session; Linux desktop support still needs validation. Product code is JavaScript/JSX, typed with JSDoc and checked by TypeScript without an emit step. Electron runs the desktop main process in Node and its renderer in Chromium; the engine and CLI use Bun.
 
 ```sh
 bun install --frozen-lockfile
@@ -30,7 +30,8 @@ The engine owns application state and side effects. Desktop and CLI clients shar
 
 - Update protocol schemas, callers, and wire fixtures together.
 - Keep database migrations ordered and compatible with existing data.
-- Engine migrations are TypeScript modules in `migrations/`; Access migrations are TypeScript modules in `apps/access/migrations/`. Register new migrations in the corresponding `index.ts`. Preserve released SQL strings and migration names exactly; add a new migration for schema changes. Access commands generate the SQL files required by Wrangler.
+- Engine migrations are TypeScript modules in `apps/engine/migrations/`; Access migrations are TypeScript modules in `apps/access/migrations/`. Register new migrations in the corresponding `index.ts`. Preserve released SQL strings and migration names exactly; add a new migration for schema changes. Access commands generate the SQL files required by Wrangler.
+- Each workspace keeps its own unit tests in its `test/` directory. `tests/integration` holds suites that spawn real engines and CLIs, `tests/release` covers the build and release tooling, and `tests/fixtures` holds fixtures more than one of those shares.
 - Use temporary profiles and fixture providers in tests.
 - Keep credentials, private conversations, generated bundles, and local measurements out of commits.
 - Review the [Ink patch notes](patches/README.md) before updating terminal dependencies.
@@ -39,6 +40,7 @@ The engine owns application state and side effects. Desktop and CLI clients shar
 
 | Change | Checks |
 | --- | --- |
+| Any code | `bun run typecheck` |
 | Product code | `bun run test` |
 | Desktop | `bun run desktop:smoke` in a graphical macOS session |
 | Terminal input/rendering | `bun test tests/integration/tui-screen.test.js tests/integration/tui.test.js` |
@@ -47,6 +49,8 @@ The engine owns application state and side effects. Desktop and CLI clients shar
 | Access service | `bun run access:test`, `bun run access:build`, and `bun run access:test:browser` for browser changes |
 
 `bun run test` includes unit, integration, and colocated application tests. Packaging tests use `dist-test/`; smoke checks use temporary profiles and fixture agents. Report relevant skips and platform limits. `bun run benchmark` writes local measurements under the ignored `results/` directory.
+
+`bun run typecheck` checks each program against the globals its runtime actually provides, so a browser API cannot be reached from the engine or a Bun API from the renderer. Nothing is emitted: Bun and Electron's Node run the source directly. A program is a directory with its own `tsconfig.json` extending [tsconfig.base.json](tsconfig.base.json); adding one means listing it in [scripts/typecheck.js](scripts/typecheck.js), which fails if a configuration goes unchecked. Pass a name to check one program, as in `bun run typecheck engine`.
 
 ## Pull requests
 

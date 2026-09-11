@@ -1,5 +1,12 @@
 // Query before Ink mounts: two simultaneous stdin readers can replay early keystrokes.
 // The caller owns raw mode; Ink owns enabling and restoring the negotiated protocol.
+/**
+ * The streams are described by what this function touches rather than as the process's own,
+ * because the tests drive it with a plain pipe and a recording writer.
+ * @param {import("node:stream").Readable & { isTTY?: boolean }} [stdin]
+ * @param {{ isTTY?: boolean, write: (text: string) => unknown }} [stdout]
+ * @returns {Promise<boolean>} whether the terminal answered the Kitty capability query
+ */
 export function supportsKittyKeyboard(stdin = process.stdin, stdout = process.stdout) {
   if (!stdin.isTTY || !stdout.isTTY) return Promise.resolve(false);
   return new Promise((resolve) => {

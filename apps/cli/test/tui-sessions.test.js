@@ -45,8 +45,10 @@ const stateEvent = (seq, state) => ({ eventSeq: String(seq), type: "run.state", 
 const page = (seq, state = "running") => ({ cursor: String(seq), messages: [], runs: [{ id: "run", state, revision: seq }] });
 
 test("restoring an active session cannot rewind live events with an older snapshot", async () => {
+  /** @type {(page: any) => void} */
   let resolve;
-  const projection = new SessionProjection({ readArtifact: async () => ({ bytes: 0 }) });
+  // These pages carry no messages, so nothing is ever filled and the reader is never called.
+  const projection = new SessionProjection({ readArtifact: async () => /** @type {{ text: string, bytes: number, eof: boolean }} */ ({ bytes: 0 }) });
   const loader = sessionLoader({ client: { call: () => new Promise((done) => { resolve = done; }) }, sessionId: "saved", projection, onPage: () => {}, onError: (error) => { throw error; } });
   const loaded = loader.load();
   loader.event(stateEvent(9, "queued")); // Already covered by the snapshot cursor.
@@ -62,7 +64,7 @@ test("restoring an active session cannot rewind live events with an older snapsh
 test("restoration refreshes on event-buffer overflow and ignores a late response after closing", async () => {
   const resolves = [];
   const pages = [];
-  const projection = new SessionProjection({ readArtifact: async () => ({ bytes: 0 }) });
+  const projection = new SessionProjection({ readArtifact: async () => /** @type {{ text: string, bytes: number, eof: boolean }} */ ({ bytes: 0 }) });
   const loader = sessionLoader({ client: { call: () => new Promise((done) => { resolves.push(done); }) }, sessionId: "saved", projection, maxPending: 1, onPage: (value) => pages.push(value), onError: (error) => { throw error; } });
   const loaded = loader.load();
   loader.event(stateEvent(11, "running")); loader.event(stateEvent(12, "completed"));

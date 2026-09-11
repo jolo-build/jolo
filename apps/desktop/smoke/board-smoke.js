@@ -69,7 +69,7 @@ export async function runBoardSmoke({ window, bridge, project, results, evaluate
   await waitFor('document.querySelectorAll(".board-workspace-tasks").length === 2', 'expanded board layout');
   const size = window.getSize(), theme = nativeTheme.themeSource;
   try {
-    for (const color of ['dark', 'light']) {
+    for (const color of /** @type {const} */ (['dark', 'light'])) {
       nativeTheme.themeSource = color;
       await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       const layout = await evaluate(`(() => {

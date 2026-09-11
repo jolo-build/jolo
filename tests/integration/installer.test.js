@@ -28,6 +28,8 @@ function fixture(version, { broken = false, symlink = false, checksum = true, co
   const tarball = path.join(temporary, `archive-${sequence++}.tar.gz`);
   const result = Bun.spawnSync(['tar', '-czf', tarball, '-C', directory, '.'], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdout: 'pipe', stderr: 'pipe' });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  // The traversal case replaces this with a gzip buffer, which Bun returns as a plain Uint8Array.
+  /** @type {Uint8Array} */
   let bytes = corrupt ? Buffer.from('not an archive') : readFileSync(tarball);
   if (traversal) {
     // A plain ustar header avoids macOS PAX records overriding the test pathname.

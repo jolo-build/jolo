@@ -7,5 +7,7 @@
     "types": ["bun", "react", "react-dom"],
     "jsx": "react-jsx"
   },
-  "include": ["."]
+  // The renderer's ambient declarations come too: these tests render the same components, so they
+  // need the same preload bridge. Its browser-runtime declarations do not, because Bun provides them.
+  "include": [".", "../src/renderer/globals.d.ts"]
 }

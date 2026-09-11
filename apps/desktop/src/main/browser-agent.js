@@ -336,6 +336,8 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, nativeImage }
     const lease = setTimeout(() => controller.abort(), params.leaseMs); // host-enforced lease, independent of the socket (§5.3)
     // Serialize observations and input so snapshots cannot be replaced mid-action.
     const previous = host.queue;
+    // The executor runs at once, so the gate's resolve is in hand before anything awaits, and `finally` calls it.
+    /** @type {(value?: unknown) => void} */
     let unlock;
     const gate = new Promise(resolve => { unlock = resolve; });
     host.queue = previous.then(() => gate);

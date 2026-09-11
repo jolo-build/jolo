@@ -41,7 +41,7 @@ export function failStartup(error) {
   const screen = document.getElementById('startup-screen');
   screen.dataset.failed = '';
   screen.setAttribute('aria-label', 'Jolo couldn’t finish loading');
-  screen.querySelector('.startup-status').hidden = true;
-  screen.querySelector('.startup-detail:not(.startup-status)').hidden = false;
+  /** @type {HTMLElement} */ (screen.querySelector('.startup-status')).hidden = true;
+  /** @type {HTMLElement} */ (screen.querySelector('.startup-detail:not(.startup-status)')).hidden = false;
   screen.querySelector('button').onclick = () => window.location.reload();
 }

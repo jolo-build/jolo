@@ -12,7 +12,10 @@ const canonical = (value) => JSON.stringify(value, Object.keys(value ?? {}).sort
 
 export class ToolDispatcher {
   /**
-   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null } }} options
+   * The last four collaborators are what a given deployment happens to host: an engine without a
+   * browser, a process supervisor, a patch directory or a search index simply leaves them out, and
+   * the tools that need them report themselves unavailable.
+   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any }} options
    */
   constructor(options) {
     this.registry = options.registry;
@@ -26,14 +29,14 @@ export class ToolDispatcher {
     this.search = options.search ?? null;
   }
 
-  /**
-   * Execute one admitted tool call. Never throws for model-caused failures; returns a structured result.
-   * @param {{ run: any, workspace: { id: string, root: string }, call: { callId: string, name: string, arguments: unknown }, signal: AbortSignal, deadlineMs?: number, approvedPermissionId?: string | null, onOutput?: (text: string) => void, hooks?: { onChanges?: Function, onCheck?: Function } }} request
-   */
   hasBrowser(workspaceId) { return Boolean(this.browser?.hasBrowser(workspaceId)); }
   executionClass(name) { return this.registry.get(name)?.executionClass; }
   searchContext(workspace, signal) { return { workspace: { id: workspace.id, root: workspace.path }, env: this.env, search: this.search, signal }; }
 
+  /**
+   * Execute one admitted tool call. Never throws for model-caused failures; returns a structured result.
+   * @param {{ run: any, workspace: { id: string, root: string }, call: { callId: string, name: string, arguments: unknown }, signal: AbortSignal, deadlineMs?: number, approvedPermissionId?: string | null, onOutput?: (text: string) => void, messageId?: string | null, hooks?: { onChanges?: Function, onCheck?: Function } }} request
+   */
   async invoke({ run, workspace, call, signal, deadlineMs, approvedPermissionId = null, onOutput, messageId = null, hooks = {} }) {
     const startedAt = Date.now();
     let tool;

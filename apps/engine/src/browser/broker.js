@@ -130,7 +130,11 @@ export class BrowserBroker {
 
   /**
    * Dispatch one admitted operation and await the host's result. The invocation already has durable intent.
-   * @param {{ workspaceId: string, invocationId: string, operation: string, args: Record<string, unknown>, leaseMs: number, signal: AbortSignal }} request
+   *
+   * `invocationId` and `leaseMs` identify and bound a call the host has to answer, so the two
+   * operations that never reach the host are allowed to omit them: an aborted signal throws first,
+   * and `tabs` is answered from the broker's own record of what is attached.
+   * @param {{ workspaceId: string, invocationId?: string, operation: string, args: Record<string, unknown>, leaseMs?: number, signal: AbortSignal }} request
    */
   execute({ workspaceId, invocationId, operation, args, leaseMs, signal }) {
     if (signal.aborted) throw new ProtocolError('interrupted', 'run cancelled');

@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import { readWorkspaceTasks } from './workspace-tasks.js';
 
+/**
+ * @param {{
+ *   call: (method: string, params?: any) => Promise<any>,
+ *   workspaceId?: string,
+ *   revision?: string,
+ *   state?: string,
+ *   standalone?: boolean,
+ * }} options a folder's tasks are read by `workspaceId`; the chats that belong to no folder are read
+ *   with `standalone` instead, so callers pass one or the other.
+ */
 export function useWorkspaceTasks({ call, workspaceId, revision, state = 'open', standalone }) {
   const [pages, setPages] = useState(1);
   const [result, setResult] = useState(null);

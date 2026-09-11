@@ -4,16 +4,33 @@ import { clean } from "./markdown.js";
 import { editDraft } from "./input.js";
 import { modelFields, modelForm, modelTargets, modelSettingsPatch, saveModelConfig, selectedAgent } from "./model-config.js";
 
+/**
+ * The editable copy of one target's settings, as `modelForm` builds it. A hosted agent only
+ * carries a model and an effort; the Jolo provider carries the whole provider block, and the
+ * panel starts out with an empty object before a target is chosen.
+ * @typedef {{
+ *   name?: string,
+ *   model?: string,
+ *   effort?: string,
+ *   contextWindowTokens?: string,
+ *   maxOutputTokens?: string,
+ *   baseUrl?: string,
+ *   reasoningEffort?: string,
+ *   apiKey?: string,
+ * }} ModelForm
+ */
+
 /** A bounded live panel; secret fields remain masked throughout editing. */
 export function ModelConfig({ client, initialTarget, currentAgentId, rows, columns, paused, onClose }) {
   const [settings, setSettings] = useState(null);
   const [targets, setTargets] = useState([]);
   const [target, setTarget] = useState(null);
-  const [form, setForm] = useState({});
+  const [form, setForm] = useState(/** @type {ModelForm} */ ({}));
   const [cursor, setCursor] = useState(0);
   const [editing, setEditing] = useState(null);
   const [choices, setChoices] = useState(null);
-  const [busy, setBusy] = useState("loading");
+  // Either the name of the work in progress, which the panel shows, or false for idle.
+  const [busy, setBusy] = useState(/** @type {"loading" | "saving" | "discovering" | false} */ ("loading"));
   const [note, setNote] = useState("Loading configuration…");
   const mounted = useRef(true);
   const open = (item, current) => { setTarget(item); setForm(modelForm(item, current)); setCursor(0); setNote(""); };

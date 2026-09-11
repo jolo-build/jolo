@@ -187,14 +187,15 @@ async function checkForms() {
   assert.match(await text(), /Continue with GitHub/);
   assert.match(await text(), /Continue with Google/);
   await checkAccessLayout('sign-in', ['a[href="/login"]', 'a[href="/login/google"]']);
-  for (const [route,label,controls] of [
+  // A route, the label its screenshots are filed under, and the controls that must stay in view.
+  for (const [route,label,controls] of /** @type {[string, string, string[]][]} */ ([
     ['/?error=email','sign-in-email',['a[href="/login"]']],
     ['/?error=signin','sign-in-error',['a[href="/login"]']],
     ['/__fixture/unavailable','sign-in-unavailable',['.task-nav']],
     ['/device','device-signed-out',['[name=user_code]','form[action="/device"] button']],
     ['/missing','not-found',['.access-panel a[href="/"]']],
     ['/__fixture/rate-limited','rate-limited',['.access-panel a[href="/"]']],
-  ]) {
+  ])) {
     await window.loadURL(origin+route);
     await checkAccessLayout(label, controls);
   }
