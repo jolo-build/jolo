@@ -8,6 +8,11 @@ import { AccountStatusSchema, parseEvent } from '@jolo/protocol';
 const services = [];
 afterEach(async () => { for (const service of services.splice(0)) await service.stop(); });
 
+/**
+ * Build an account service over in-memory preferences and a fake keychain, and return it together
+ * with the handles the cases drive. Each option is something a single case varies on its own.
+ * @param {{ prefs?: Map<string, any>, keychain?: Map<string, string>, dataDir?: string, origin?: string, failStore?: boolean }} [options]
+ */
 function setup({ prefs = new Map(), keychain = new Map(), dataDir = '/fixture/profile', origin, failStore = false } = {}) {
   const web = fixture(), events = [], timers = [], lifetime = { count: 0, workStarted() { this.count++; }, workFinished() { this.count--; } };
   const storage = { getPreference: key => prefs.get(key), setPreference: (key, value) => prefs.set(key, value), appendEvent: event => events.push(event) };
@@ -62,7 +67,8 @@ test('keychain login restores after engine restart, while profile/server namespa
   const restore = new AccountService({ storage: f.storage, paths: { dataDir: '/fixture/profile', profile: 'test' }, secrets: f.secrets, now: f.web.now, fetchImpl: (url, init) => f.web.app.fetch(new Request(url, init)) });
   services.push(restore);
   expect((await restore.status()).state).toBe('signed_in');
-  const other = new AccountSecretStore({ dataDir: '/fixture/other', mode: 'keychain', secrets: { get: async ({ name }) => f.keychain.get(name) } });
+  // This store is only ever read, so its double deliberately leaves out `set` and `delete`.
+  const other = new AccountSecretStore({ dataDir: '/fixture/other', mode: 'keychain', secrets: /** @type {ConstructorParameters<typeof AccountSecretStore>[0]['secrets']} */ ({ get: async ({ name }) => f.keychain.get(name) }) });
   expect(await other.get(f.web.env.ACCESS_ORIGIN)).toBeNull();
   expect(await f.secrets.get('https://different.example')).toBeNull();
   await restore.logout();
@@ -117,7 +123,8 @@ test('early polling increases the next interval and untrusted verification URLs 
 
 test('account mutation RPCs reject headless and scoped guest clients', async () => {
   const f = setup();
-  const handlers = createRpcHandlers({ account: f.service });
+  // Only the account handlers are called here, so the rest of the engine's services stay absent.
+  const handlers = createRpcHandlers(/** @type {import('../../apps/engine/src/rpc/handlers.js').RpcDependencies} */ ({ account: f.service }));
   for (const method of ['account.login', 'account.cancel', 'account.logout']) {
     expect(() => handlers[method]({}, { kind: 'headless' })).toThrow();
     expect(() => handlers[method]({}, { kind: 'desktop', capability: {} })).toThrow();
@@ -139,6 +146,7 @@ test('failed remote sign-out still clears local metadata and does not restore a 
 test('cancelling an in-flight token response revokes the late credential without affecting a new login', async () => {
   const f = setup(); await f.service.login(); await f.approve();
   const liveFetch = f.service.fetch;
+  /** @type {(value?: any) => void} */
   let release, received;
   const paused = new Promise(resolve => { release = resolve; });
   const issued = new Promise(resolve => { received = resolve; });
@@ -189,7 +197,8 @@ test('task access requires reapproval, cancellation keeps the old sign-in, and s
 
 test('sign-out during task fetch discards the response before it reaches an agent',async()=>{
   const f=setup(); await f.service.login({tasks:true}); await f.approve(); await f.poll();
-  const live=f.service.fetch; let release,received;
+  const live=f.service.fetch;
+  /** @type {(value?: any) => void} */ let release,received;
   const gate=new Promise(r=>{release=r;}), ready=new Promise(r=>{received=r;});
   f.service.fetch=async(url,init)=>{const response=await live(url,init); if(url.endsWith('/api/tasks')) {received();await gate;} return response;};
   const request=f.service.taskRequest('/api/tasks').catch(error=>error);

@@ -94,7 +94,9 @@ const scriptPath = path.join(home, "script.json");
 writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
 if (appIndex !== -1 && !process.argv[appIndex + 1]) throw new Error("--app requires the packaged desktop executable path");
-const command = appIndex === -1 ? [electronPath, path.join(root, "src/main/index.js")] : [path.resolve(process.argv[appIndex + 1])];
+// Electron's types describe the API its own runtime exposes; required from Bun, the package exports the
+// path to the Electron executable instead.
+const command = appIndex === -1 ? [/** @type {string} */ (/** @type {unknown} */ (electronPath)), path.join(root, "src/main/index.js")] : [path.resolve(process.argv[appIndex + 1])];
 let taskServer;
 if(tasks) {
   const { testDatabase }=await import('../../access/test/database.js');

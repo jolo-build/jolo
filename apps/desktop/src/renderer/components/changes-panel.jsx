@@ -6,7 +6,21 @@ import { Markdown } from './markdown.jsx';
 
 const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
 
-/** On-demand, bounded engine diffs. A review applies only to one specific file mutation. */
+/**
+ * On-demand, bounded engine diffs. A review applies only to one specific file mutation.
+ *
+ * @param {{
+ *   changes: any[],
+ *   status?: { source?: string, loading?: boolean, error?: string | null, truncated?: boolean },
+ *   onRefresh?: () => unknown,
+ *   view?: string,
+ *   onSelectFile?: () => void,
+ *   onLoadDiff: (path: string) => Promise<any>,
+ *   onLoadFile?: (path: string) => Promise<any>,
+ *   onRevert: (invocationId: string, path: string) => Promise<any>,
+ * }} props without `onLoadFile` there is nothing to render a markdown file from, so the preview tab
+ *   is not offered at all.
+ */
 export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFile, onLoadDiff, onLoadFile, onRevert }) {
   const [selected, setSelected] = useState(null);
   const [diff, setDiff] = useState(null);

@@ -23,7 +23,9 @@ test('sign-in uses GitHub code flow with PKCE and a fixed callback; the session 
   expect(f.sqlite.query('SELECT token_hash FROM sessions').get().token_hash).toBe(await hashToken(token));
   expect(f.sqlite.query('SELECT count(*) AS n FROM login_flows').get().n).toBe(0);
   const api = await f.send('/api/session');
-  expect(await api.json()).toEqual({ account: { id: expect.any(String), email: 'dev@example.com', name: 'Jolo Developer' } });
+  // Response.json() is generic on Workers, so name the body the session route sends back.
+  expect(/** @type {{ account: { id: string, email: string, name: string } }} */ (await api.json()))
+    .toEqual({ account: { id: expect.any(String), email: 'dev@example.com', name: 'Jolo Developer' } });
   const page = await f.send('/account');
   const body = await page.text();
   expect(body).toContain('dev@example.com');

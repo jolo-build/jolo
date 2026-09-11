@@ -139,6 +139,10 @@ export function renderHandoff(plan, summary = null) {
  * The package with a summary of the omitted middle when one can be written. `summarize(text)` returns a
  * string or null; a throw counts as null. When there is no summariser, or nothing was omitted, no call is made.
  */
+/**
+ * @param {any} storage
+ * @param {{ summarize?: ((text: string) => Promise<string | null>) | null, sessionId: string, excludeRunId?: string | null, from?: any, to?: any, budgetBytes?: number, afterOrdinal?: number }} options
+ */
 export async function buildHandoff(storage, { summarize = null, ...options }) {
   const plan = planHandoff(storage, options);
   let summary = null;
@@ -152,6 +156,11 @@ export async function buildHandoff(storage, { summarize = null, ...options }) {
 /**
  * A summariser over the configured provider, or null when none is configured: an unconfigured provider must
  * not write a note the user will read as authoritative. Bounded in output and in time.
+ */
+/**
+ * Everything but the factory is context for the one call this makes: without a factory there is no
+ * summarizer at all, and a caller that has no settings, log or run to name simply says so.
+ * @param {{ providerFactory: any, settings?: any, log?: any, sessionId?: string, runId?: string }} deps
  */
 export function createSummarizer({ providerFactory, settings, log, sessionId, runId }) {
   if (!providerFactory) return null;
@@ -189,6 +198,9 @@ export function createSummarizer({ providerFactory, settings, log, sessionId, ru
  * A vendor thread contains only turns that vendor saw. On resumption, catch it up
  * with messages added after its last completed turn; a legacy thread gets a full
  * bounded handoff once because it has no reliable delivery position yet.
+ * @param {{ storage: any, run: any, session?: any, resumed: boolean, from?: any, to?: any,
+ *   summarize?: ((text: string) => Promise<string | null>) | null }} input a session is absent when
+ * nothing has been recorded about what this agent has already been shown
  */
 export async function handoffPrompt({ storage, run, session, resumed, from = null, to = null, summarize = null }) {
   const asked = askedOf(run, storage);

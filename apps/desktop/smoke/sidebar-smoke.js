@@ -66,7 +66,7 @@ export async function runSidebarSmoke({ window, results, project, evaluate, wait
   await waitFor('window.__joloSmoke.state().projectId', 'sidebar test project reopened');
   const originalTheme = nativeTheme.themeSource;
   try {
-    for (const theme of ['light', 'dark']) {
+    for (const theme of /** @type {const} */ (['light', 'dark'])) {
       nativeTheme.themeSource = theme; await settle();
       writeFileSync(path.join(results, `sidebar-collapsed-${theme}.png`), (await window.webContents.capturePage()).toPNG());
     }
@@ -74,7 +74,7 @@ export async function runSidebarSmoke({ window, results, project, evaluate, wait
     await settle();
     assert((await measure()).sidebar === resized.sidebar - 16, 'sidebar shortcut did not restore remembered width');
     await checkHeader();
-    for (const theme of ['light', 'dark']) {
+    for (const theme of /** @type {const} */ (['light', 'dark'])) {
       nativeTheme.themeSource = theme; await settle();
       writeFileSync(path.join(results, `sidebar-expanded-${theme}.png`), (await window.webContents.capturePage()).toPNG());
     }

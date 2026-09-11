@@ -21,6 +21,7 @@ test('CLI task approval shares identity with desktop; native and hosted agents r
     engine = await startEngine({ home, env, idleMs: 60_000 });
     desktop = await engine.connect({ clientKind: 'desktop' });
     expect((await desktop.call('account.status', {})).state).toBe('signed_out');
+    /** @type {(value?: any) => void} */
     let resolvePending;
     const pending = new Promise(resolve => { resolvePending = resolve; });
     child = Bun.spawn([process.execPath, CLI_ENTRY, 'login', '--tasks', '--no-open', '--json', '--home', home, '--profile', 't'], { cwd: ROOT, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe' });
@@ -65,7 +66,7 @@ test('CLI task approval shares identity with desktop; native and hosted agents r
       const {run}=await desktop.call('run.start',{sessionId:session.id,requestId:`task-${agent}`,prompt});
       firstRun??=run;
       expect(run.taskReferences[0]).toMatchObject({key,revision:1}); expect(run.taskReferences[0]).not.toHaveProperty('description');
-      let snapshot;
+      /** @type {import('./helpers.js').RunSnapshot} */ let snapshot;
       await waitFor(async()=>{snapshot=await desktop.call('run.snapshot',{runId:run.id});return TERMINAL.includes(snapshot.run.state);},{timeoutMs:10000});
       expect(snapshot.run.state,snapshot.run.failure).toBe('completed');
       const user=snapshot.messages.find(m=>m.role==='user');
@@ -88,7 +89,7 @@ test('CLI task approval shares identity with desktop; native and hosted agents r
     expect(queued.state).toBe('queued'); expect(queued.taskReferences[0].revision).toBe(2);
     expect((await post(taskPath,{...fields,description:'Changed after queueing',revision:'2'})).status).toBe(303);
     await desktop.call('run.cancel',{runId:blocker.id});
-    let queuedSnapshot;
+    /** @type {import('./helpers.js').RunSnapshot} */ let queuedSnapshot;
     await waitFor(async()=>{queuedSnapshot=await desktop.call('run.snapshot',{runId:queued.id});return TERMINAL.includes(queuedSnapshot.run.state);},{timeoutMs:10000});
     expect(queuedSnapshot.run.state).toBe('completed');
     const queuedReply=queuedSnapshot.messages.filter(m=>m.role==='assistant'&&m.kind==='text').at(-1);

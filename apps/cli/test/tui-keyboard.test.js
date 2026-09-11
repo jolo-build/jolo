@@ -3,7 +3,8 @@ import { PassThrough } from "node:stream";
 import { supportsKittyKeyboard } from "../src/tui/keyboard.js";
 
 function terminal(tty = true) {
-  const stdin = new PassThrough();
+  // A pipe stands in for the terminal, so it has to carry the `isTTY` flag the query looks at.
+  const stdin = /** @type {PassThrough & { isTTY?: boolean }} */ (new PassThrough());
   stdin.isTTY = tty;
   const writes = [];
   const stdout = { isTTY: tty, write: (data) => writes.push(data) };

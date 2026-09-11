@@ -59,10 +59,10 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
       {project && !project.standalone && <button className="new-task-alt" onClick={onNewWorktree} title="New task in a worktree" aria-label="New task in a worktree"><Icon name="branch" size={14} /></button>}
     </div>
     <div className="task-tabs" role="tablist" aria-label="Workspace tasks" onKeyDown={event => {
-      if (event.target.getAttribute('role') !== 'tab' || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      if (/** @type {Element} */ (event.target).getAttribute('role') !== 'tab' || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const next = event.key === 'Home' ? false : event.key === 'End' ? true : !archived;
-      event.currentTarget.querySelectorAll('[role="tab"]')[next ? 1 : 0].focus();
+      /** @type {HTMLElement} */ (event.currentTarget.querySelectorAll('[role="tab"]')[next ? 1 : 0]).focus();
       onHistory(next ? 'archived' : 'open');
     }}>
       <button id="open-tasks-tab" className={!archived ? 'selected' : ''} role="tab" aria-selected={!archived} aria-controls="sidebar-task-list" tabIndex={archived ? -1 : 0} onClick={() => { if (archived) onHistory('open'); }}>Workspaces<span className="task-tab-count">{rows.length}</span></button>

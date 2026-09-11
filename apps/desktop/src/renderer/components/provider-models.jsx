@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { modelFromFields, ProviderOverridesSchema } from '@jolo/protocol';
+// The schemas subpath, not the package root: the root also re-exports the socket framing, which is
+// Node transport code the renderer never calls and must not carry into the browser bundle.
+import { modelFromFields, ProviderOverridesSchema } from '@jolo/protocol/schemas';
 import { Combobox } from './combobox.jsx';
 import { Select } from './select.jsx';
 

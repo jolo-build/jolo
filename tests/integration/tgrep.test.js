@@ -26,7 +26,8 @@ function fixture() {
   writeFileSync(path.join(root, 'oversize'), 'needle\n' + 'x'.repeat(1024 * 1024));
   writeFileSync(path.join(home, 'outside'), 'needle secret\n');
   symlinkSync(path.join(home, 'outside'), path.join(root, 'escape'));
-  const service = new TgrepService({ directory: path.join(home, 'indexes'), env });
+  // The service logs through an optional sink, and nothing here reads what it would have logged.
+  const service = new TgrepService(/** @type {ConstructorParameters<typeof TgrepService>[0]} */ ({ directory: path.join(home, 'indexes'), env }));
   cleanup.push(() => service.close());
   const search = (args, signal = AbortSignal.timeout(10_000), backend = service) => searchTool.execute({ workspace: { root }, env, search: backend, signal }, SearchTextParams.parse(args));
   return { home, root, service, search };
@@ -38,7 +39,8 @@ async function ready(service, root) {
 nativeTest('real index: warm-up fallback, scopes, ignore rules, regex, paging and live edits', async () => {
   const { root, service, search } = fixture();
   // Force an unavailable lease: a real index may finish warming before the first query.
-  expect((await search({ pattern: 'needle' }, AbortSignal.timeout(10_000), { acquire: async () => null })).freshness).toBe('live');
+  // Acquiring a lease is the only thing the search path asks of the backend, so the double stops there.
+  expect((await search({ pattern: 'needle' }, AbortSignal.timeout(10_000), /** @type {any} */ ({ acquire: async () => null }))).freshness).toBe('live');
   await ready(service, root);
   const indexed = await search({ pattern: 'needle' });
   expect(indexed.engine).toBe('tgrep');
@@ -108,7 +110,7 @@ nativeTest('cancelling an indexed request terminates both the query and its owne
 
 nativeTest('idle cleanup keeps a leased server alive and stops it after release', async () => {
   const { home, root } = fixture();
-  const service = new TgrepService({ directory: path.join(home, 'idle-index'), env, idleMs: 100 });
+  const service = new TgrepService(/** @type {ConstructorParameters<typeof TgrepService>[0]} */ ({ directory: path.join(home, 'idle-index'), env, idleMs: 100 }));
   cleanup.push(() => service.close());
   await ready(service, root);
   const lease = await service.acquire(root);
@@ -138,7 +140,8 @@ test('hosted stdio MCP searches only its pinned workspace through the engine', a
   send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'search_text', arguments: { pattern: 'needle', paths: ['../outside'] } } });
   proc.stdin.end();
   expect(await proc.exited).toBe(0); expect(await stderr).toBe('');
-  const responses = (await stdout).trim().split('\n').map(JSON.parse);
+  // `map` would hand `JSON.parse` an index where it expects a reviver, so name the one argument used.
+  const responses = (await stdout).trim().split('\n').map(/** @type {(line: string) => any} */ (JSON.parse));
   expect(responses.find(message => message.id === null).error.code).toBe(-32600);
   expect(responses.find(message => message.id === 1).result.serverInfo.name).toBe('jolo-search');
   expect(responses.find(message => message.id === 2).result.tools[0].name).toBe('search_text');

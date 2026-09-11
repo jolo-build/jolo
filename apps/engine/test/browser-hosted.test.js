@@ -37,7 +37,7 @@ test('native browser guidance follows the declared tool set', () => {
 test('hosted browser configuration preserves literal paths and pins the workspace', () => {
   const config = browserMcpConfig({ socketPath: '/tmp/my project/sock', tokenPath: '/tmp/quote" $literal/token' }, 'ws');
   const codex = codexBrowserArgs(config);
-  expect(Bun.TOML.parse([codex[1], codex[3]].join('\n')).mcp_servers.jolo_browser).toEqual(config);
+  expect(/** @type {{ mcp_servers: Record<string, any> }} */ (Bun.TOML.parse([codex[1], codex[3]].join('\n'))).mcp_servers.jolo_browser).toEqual(config);
   expect(acpBrowserServers(config)).toEqual([{ name: 'jolo_browser', ...config, env: [] }]);
   expect(config.args).toContain('browser-mcp');
   expect(config.args.at(-1)).toBe('ws');

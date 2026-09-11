@@ -3,6 +3,10 @@ const SERVICE = "jolo";
 const ENV_NAMES = Object.freeze({ openai: "OPENAI_API_KEY" });
 
 export class CredentialService {
+  /**
+   * @param {{ log?: any, env?: Record<string, string | undefined>, mode?: string, catalog?: any }} options
+   * the catalog names the environment variable a preset reads its key from
+   */
   constructor({ log, env = process.env, mode = env.JOLO_CREDENTIALS ?? "keychain", catalog }) {
     this.log = log;
     this.catalog = catalog;

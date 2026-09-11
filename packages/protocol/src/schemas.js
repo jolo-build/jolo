@@ -950,8 +950,19 @@ function strippedKeys(input, output, prefix = []) {
 }
 
 /**
+ * The outcome of validating a frame or payload: either a parsed value or the reason it was refused.
+ *
+ * Each member also declares the other's property as absent. That is what TypeScript's own inference
+ * produces for the sibling `parse*` helpers below, and it lets a caller read `.error` after testing
+ * `.ok` without a cast. A bare two-member union would only narrow under `strictNullChecks`, which
+ * this repository does not yet enable.
+ * @template T
+ * @typedef {{ ok: true, value: T, error?: undefined } | { ok: false, value?: undefined, error: ProtocolError }} Parsed
+ */
+
+/**
  * Validate params for a method. Unknown methods fail closed.
- * @returns {{ ok: true, value: any } | { ok: false, error: ProtocolError }}
+ * @returns {Parsed<any>}
  */
 export function parseParams(method, params) {
   const schema = MethodSchemas[method];

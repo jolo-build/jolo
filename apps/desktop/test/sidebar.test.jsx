@@ -29,7 +29,9 @@ test('archive keeps folder grouping without showing open task counts or selected
   expect(html).not.toContain('New task in beta');
 });
 test('nested chats have compact status and agent labels without repeating the folder', () => {
-  const html = renderToStaticMarkup(<SidebarTask task={{ sessionId: 'chat', title: 'Fix parser', projectName: 'Repeated folder', agentId: 'codex', updatedAt: '2026-09-10T00:00:00.000Z', run: { state: 'completed' } }} agentName={() => 'Codex'} selected />);
+  // Only the markup of a single row is under test, so this render leaves off the drag state and the
+  // open and menu callbacks: nothing here clicks the row, so nothing here can fire them.
+  const html = renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'chat', title: 'Fix parser', projectName: 'Repeated folder', agentId: 'codex', updatedAt: '2026-09-10T00:00:00.000Z', run: { state: 'completed' } }, agentName: () => 'Codex', selected: true }))} />);
   expect(html).toContain('Fix parser');
   expect(html).toContain('Done');
   expect(html).toContain('Codex');

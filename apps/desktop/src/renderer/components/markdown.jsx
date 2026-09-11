@@ -3,7 +3,10 @@ import { parseDocument } from "@jolo/markdown";
 import { MermaidDiagram } from "./mermaid.jsx";
 import { Visualization } from './visualization.jsx';
 
-const SyntaxCode = lazy(() => import("./syntax-code.jsx").catch(() => ({ default: ({ text }) => <code>{text}</code> })));
+// Naming what the loader resolves to keeps the highlighter and its plain-text fallback one component
+// type, rather than two unrelated ones the union of which nothing accepts.
+/** @typedef {import('react').ComponentType<{ text: string, language?: string }>} SyntaxCodeComponent */
+const SyntaxCode = lazy(/** @type {() => Promise<{ default: SyntaxCodeComponent }>} */ (() => import("./syntax-code.jsx").catch(() => ({ default: ({ text }) => <code>{text}</code> }))));
 
 /** Safe React rendering of the shared markdown model (§5.1): no HTML, links open externally. */
 function Inline({ nodes }) {
@@ -42,7 +45,8 @@ function MarkdownEmbed({ block, depth }) {
 
 function Block({ block, depth, sessionId, streaming }) {
   switch (block.type) {
-    case "heading": { const Tag = `h${Math.min(6, block.level + 2)}`; return <Tag><Inline nodes={block.children} /></Tag>; }
+    // The level is the document's own, pushed down so a fenced document never outranks the page around it.
+    case "heading": { const Tag = /** @type {'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'} */ (`h${Math.min(6, block.level + 2)}`); return <Tag><Inline nodes={block.children} /></Tag>; }
     case "paragraph": return <p><Inline nodes={block.children} /></p>;
     case 'visualization': return depth > 0 ? <p>Visualization: {block.path || 'incomplete reference'}</p> : <Visualization key={`${sessionId}:${block.path}`} block={block} sessionId={sessionId} streaming={streaming} />;
     case "code":
@@ -67,6 +71,16 @@ function Block({ block, depth, sessionId, streaming }) {
   }
 }
 
+/**
+ * @param {{
+ *   text: string,
+ *   cacheKey: string | number,
+ *   depth?: number,
+ *   sessionId?: string | null,
+ *   streaming?: boolean,
+ * }} props `sessionId` is what a visualization block needs to reach its artifacts; text with none renders
+ *   the reference as a note instead.
+ */
 export function Markdown({ text, cacheKey, depth = 0, sessionId, streaming = false }) {
   const cache = useMemo(() => new Map(), [cacheKey]); // completed blocks are parsed once per message
   const { blocks } = useMemo(() => parseDocument(text, { cache }), [text, cache]);

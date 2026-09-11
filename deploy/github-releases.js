@@ -9,6 +9,14 @@ const ASSET_PATH = new RegExp(`^/releases/(${VERSION})/(jolo-cli-(?:darwin|linux
 // published only the CLI must still be installable.
 const REQUIRED = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].flatMap(target => [`jolo-cli-${target}.tar.gz`, `jolo-cli-${target}.tar.gz.sha256`]);
 
+/**
+ * How these helpers reach GitHub. Tests inject a plain function, so this is the call signature they
+ * actually use rather than the platform `fetch` interface, which carries members no caller here
+ * touches and which no test double could supply.
+ * @typedef {(url: string, init?: any) => Promise<Response>} FetchLike
+ */
+
+/** @param {FetchLike} fetchImpl */
 function lookupLatest(fetchImpl) {
   return fetchImpl(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'jolo-release-installer', 'X-GitHub-Api-Version': '2022-11-28' },
@@ -18,7 +26,11 @@ function lookupLatest(fetchImpl) {
 const stableVersion = release => release.draft === false && release.prerelease === false
   ? release.tag_name?.match(/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/)?.[1] : null;
 
-/** Advertise desktop links only when both DMGs and their checksums are published. */
+/**
+ * Advertise desktop links only when both DMGs and their checksums are published.
+ * @param {Request} request
+ * @param {FetchLike} [fetchImpl]
+ */
 export async function latestDesktopRelease(request, fetchImpl = fetch) {
   const respond = body => new Response(request.method === 'HEAD' ? null : JSON.stringify(body), {
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
@@ -45,6 +57,11 @@ export function githubAssetRedirect(pathname) {
     'Cache-Control': 'public, max-age=300',
   } }) : null;
 }
+/**
+ * @param {Request} request
+ * @param {Record<string, any>} env
+ * @param {FetchLike} [fetchImpl]
+ */
 export async function latestRelease(request, env, fetchImpl = fetch) {
   try {
     const response = await lookupLatest(fetchImpl);

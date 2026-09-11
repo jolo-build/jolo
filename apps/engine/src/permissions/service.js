@@ -44,6 +44,9 @@ export class PermissionService {
   /**
    * Resolve the grant that authorizes a tool class in a workspace. Throws permission_denied when policy
    * forbids it outright and PermissionRequired when a user decision could allow it.
+   * Each class names only what it is judged on: a read names its workspace, an edit the run as well,
+   * and a process call the arguments and the tool whose approval it is looking for.
+   * @param {{ toolClass: string, workspaceId?: string, runId?: string, approvedPermissionId?: string | null, argumentDigest?: string, toolName?: string }} request
    */
   authorize({ toolClass, workspaceId, runId, approvedPermissionId, argumentDigest, toolName }) {
     if (toolClass === "read" || toolClass === 'browser_open') {

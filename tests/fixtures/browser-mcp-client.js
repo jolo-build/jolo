@@ -1,4 +1,9 @@
 // Exercise the real scoped MCP child advertised to a hosted vendor fixture.
+/**
+ * @param {{ command: string, args: string[] }} config the browser server as the vendor advertised it
+ * @param {(result: any) => void} [onResult] receives the decoded screenshot tool result, so a
+ *   fixture that reports tool output back to the engine can forward it verbatim.
+ */
 export async function browserMcpCheck(config, onResult = () => {}) {
   if (!config?.command) throw new Error('browser MCP was not configured');
   const child = Bun.spawn([config.command, ...config.args], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });

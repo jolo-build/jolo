@@ -26,7 +26,37 @@ import { useEngineConnection } from "../engine-context.jsx";
 import { PanePicker } from "./pane-picker.jsx";
 import { finishStartup } from "../startup.js";
 
-export const WorkspacePane = memo(function WorkspacePane({ pane, active, visible, multi, zoomed, canSplit, hosts, settingsOpen, onSettingsChange, onViewChange, onActivate, onSplit, onClose, onZoom, register, onBrowserOpen }) {
+/**
+ * One split of the window: its own engine state, its own task, and the slots it portals its chrome into.
+ * The shell owns the layout, so every geometry answer and every layout command arrives as a prop.
+ *
+ * @typedef {{
+ *   pane: { id: string, path?: string | null, task?: any, newChat?: boolean },
+ *   active: boolean,
+ *   visible: boolean,
+ *   multi: boolean,
+ *   zoomed: boolean,
+ *   canSplit: boolean,
+ *   hosts: {
+ *     header: HTMLElement | null,
+ *     sidebar: HTMLElement | null,
+ *     footer: HTMLElement | null,
+ *     settings: HTMLElement | null,
+ *     sidebarCollapsed: boolean,
+ *     toggleSidebar: () => void,
+ *   },
+ *   settingsOpen: boolean,
+ *   onSettingsChange: (paneId: string | null) => void,
+ *   onViewChange: (paneId: string, view: string) => void,
+ *   onActivate: () => void,
+ *   onSplit: (source: string, axis: string, options?: { task?: any, before?: boolean }) => void,
+ *   onClose: (paneId: string) => void,
+ *   onZoom: (paneId: string) => void,
+ *   register: (paneId: string, controller: any) => void,
+ *   onBrowserOpen: (paneId: string) => void,
+ * }} WorkspacePaneProps
+ */
+export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePaneProps} */ { pane, active, visible, multi, zoomed, canSplit, hosts, settingsOpen, onSettingsChange, onViewChange, onActivate, onSplit, onClose, onZoom, register, onBrowserOpen }) {
   const root = useRef(null);
   const [view, setView] = useState(pane.id === "pane-1" ? "board" : "task");
   useLayoutEffect(() => { onViewChange(pane.id, view); }, [onViewChange, pane.id, view]);
@@ -246,8 +276,8 @@ export const WorkspacePane = memo(function WorkspacePane({ pane, active, visible
         <aside className="inspector" aria-label="Task context" hidden={!context || view === "board"}>
           <div className="context-tabs" role="tablist" aria-label="Workspace view" onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-            const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
-            const index = tabs.indexOf(document.activeElement);
+            const tabs = /** @type {HTMLElement[]} */ ([...event.currentTarget.querySelectorAll('[role="tab"]')]);
+            const index = tabs.indexOf(/** @type {HTMLElement} */ (document.activeElement));
             if (index < 0) return;
             event.preventDefault();
             const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;

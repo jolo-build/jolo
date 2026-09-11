@@ -128,6 +128,8 @@ export function createBoard({ storage, env, log }) {
     /**
      * Every open task across every project, for a task list that is not scoped to one project (§5.1). The
      * same attention rule the board rows use, so a task reads the same wherever it is shown.
+     * @param {{ limit?: number, workspaceId?: string, before?: { updatedAt: string, sessionId: string }, state?: string, standalone?: boolean }} [query]
+     * `before` is the cursor the previous page returned
      */
     tasks({ limit = 200, workspaceId, before, state = 'open', standalone } = {}) {
       const generatedAt = new Date().toISOString();

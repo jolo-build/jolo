@@ -25,7 +25,7 @@ async function boot() {
   let counter = 0;
   const send = async (sessionId, prompt, expectedState = 'completed') => {
     const { run } = await client.call('run.start', { sessionId, requestId: `turn-${++counter}`, prompt });
-    let snapshot;
+    /** @type {import('./helpers.js').RunSnapshot} */ let snapshot;
     await waitFor(async () => { snapshot = await client.call('run.snapshot', { runId: run.id }); return TERMINAL.includes(snapshot.run.state); }, { timeoutMs: 20000 });
     expect(snapshot.run.state, snapshot.run.failure).toBe(expectedState);
     const reply = snapshot.messages.filter(message => message.role === 'assistant' && message.kind === 'text').at(-1);

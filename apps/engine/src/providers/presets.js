@@ -20,6 +20,12 @@ export const BUILTIN_PRESETS = Object.freeze([
   preset('fake', 'Demo provider', 'fake', 'http://localhost', 'none', 'none', null, { defaults: { contextWindowTokens: 128_000, maxOutputTokens: 4096 } }),
 ]);
 
+/**
+ * The endpoints this engine knows: the built-ins, plus any preset files the operator dropped in
+ * `dir`. Callers that only read the built-ins (tests, a factory without a data directory) pass
+ * nothing at all.
+ * @param {{ dir?: string, log?: any, env?: Record<string, string | undefined> }} [options]
+ */
 export function createProviderCatalog({ dir, log, env = process.env } = {}) {
   const demoEnabled = demoProviderEnabled(env);
   const allowed = p => demoEnabled || (p.id !== 'fake' && p.protocol !== 'fake');

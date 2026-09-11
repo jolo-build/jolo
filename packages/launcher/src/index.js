@@ -104,6 +104,8 @@ export async function connectOrStart(options) {
     while (Date.now() - startedAt < deadlineMs) {
       if (child && child.exitCode !== null) {
         if (child.exitCode !== 0 && child.exitCode !== EXIT_OWNERSHIP_BUSY) {
+          // Callers switch on `code`, the same vocabulary the protocol uses for transport failures.
+          /** @type {Error & { code?: string }} */
           const error = new Error(`engine exited with code ${child.exitCode} before publishing an endpoint; see the engine log under ${paths.logDir}`);
           error.code = "unavailable";
           throw error;
@@ -115,6 +117,7 @@ export async function connectOrStart(options) {
       if (client) return { client, started: Boolean(locked) };
       await sleep(100);
     }
+    /** @type {Error & { code?: string }} */
     const error = new Error(`engine did not become reachable within ${deadlineMs} ms`);
     error.code = "unavailable";
     throw error;

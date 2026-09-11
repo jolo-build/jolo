@@ -30,9 +30,11 @@ code,pre { font-family:var(--mono); font-variant-ligatures:none; }
 .hero-meta { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:9px; color:var(--muted); font-size:12px; }
 .activity-dot { display:inline-block; flex:none; width:6px; height:6px; border-radius:50%; background:var(--highlight); }
 .development-label { border-left:1px solid var(--line); margin-left:3px; padding-left:12px; font-size:11px; }
-/* Leave room for descenders so selection on the next line cannot paint over them. */
+/* Separate painting layers keep a following line’s selection behind descenders. */
 .hero h1 { margin-top:25px; font-size:clamp(38px,5.4vw,64px); line-height:1.25; letter-spacing:-.055em; }
-.hero h1 span { color:var(--muted); }
+.hero h1 .hero-title-line { display:block; position:relative; width:fit-content; max-width:100%; margin-inline:auto; line-height:1.35; }
+.hero-title-line:first-child { z-index:1; }
+.hero-title-line:last-child { color:var(--muted); }
 .hero-description { margin:24px auto 0; font-size:16px; line-height:1.75; color:var(--muted); }
 .hero-actions { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:10px; margin-top:26px; }
 .button { display:inline-flex; justify-content:center; align-items:center; gap:10px; min-height:40px; padding:9px 16px; border-radius:7px; font-size:13px; font-weight:500; border:1px solid transparent; }

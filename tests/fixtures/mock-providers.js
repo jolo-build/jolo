@@ -2,6 +2,28 @@
 const named = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 const data = events => events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('');
 export const PROTOCOLS = ['openai-responses', 'openai-chat', 'anthropic', 'gemini'];
+
+/**
+ * Everything one scripted turn can vary. A case sets only the fields it asserts on, so they are all
+ * optional; `reasoningChunks` carries whichever reasoning shape the chat protocol is being tested
+ * with, which is why it stays an open record rather than one vendor's field.
+ * @typedef {{
+ *   tool?: boolean,
+ *   incomplete?: boolean,
+ *   text?: string,
+ *   toolName?: string,
+ *   args?: Record<string, unknown>,
+ *   signature?: string,
+ *   reasoningChunks?: any[],
+ *   callId?: string,
+ * }} WireTurn
+ */
+
+/**
+ * Render one turn of a vendor's streaming wire format.
+ * @param {string} protocol one of {@link PROTOCOLS}
+ * @param {WireTurn} [options]
+ */
 export function wireTurn(protocol, { tool = false, incomplete = false, text = 'Fixture answer.', toolName = 'list_files', args = { path: '.' }, signature = 'SIGNED-FIXTURE', reasoningChunks, callId = 'call1' } = {}) {
   if (protocol === 'openai-responses') return named([
     ...(tool ? [
@@ -49,6 +71,18 @@ export function wireTurn(protocol, { tool = false, incomplete = false, text = 'F
   ]);
 }
 
+/**
+ * Serve a vendor's HTTP surface from memory: a model listing on GET, one scripted turn per POST.
+ * `failures` and `validate` are indexed by request, so a falsy entry lets that request through.
+ * @param {string} protocol one of {@link PROTOCOLS}
+ * @param {{
+ *   turns?: WireTurn[],
+ *   failures?: (number | { status: number, message?: string } | null)[],
+ *   hang?: boolean,
+ *   raw?: string | null,
+ *   validate?: (body: any, index: number) => string | undefined,
+ * }} [options]
+ */
 export function mockProvider(protocol, { turns = [{}], failures = [], hang = false, raw = null, validate } = {}) {
   const requests = [], listings = [];
   let turn = 0;

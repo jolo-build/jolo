@@ -10,7 +10,12 @@ export function mouseReport(input) {
   return { delta: wheel && (button & 3) < 2 ? ((button & 1) ? 5 : -5) : 0 };
 }
 
-/** Ask for cell-based reports and return the restore function; a no-op off a terminal. */
+/**
+ * Ask for cell-based reports and return the restore function; a no-op off a terminal.
+ * Only the two members used here are required, so a test can pass a recording writer.
+ * @param {{ isTTY?: boolean, write: (text: string) => unknown }} [stdout]
+ * @returns {() => void} restores the previous modes, at most once
+ */
 export function enableMouse(stdout = process.stdout) {
   if (!stdout.isTTY) return () => {};
   // Save the previous modes, request cell-based reports, and restore on every unmount.

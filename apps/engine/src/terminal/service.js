@@ -125,6 +125,8 @@ export class TerminalService {
   }
 
   snapshot(terminal) {
+    // Quartered on each pass until the snapshot fits the frame, so this is a count, not the constant.
+    /** @type {number} */
     let scrollback = TERMINAL_LIMITS.scrollbackLines;
     for (;;) {
       const text = terminal.serializer.serialize({ scrollback });

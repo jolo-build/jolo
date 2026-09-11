@@ -5,12 +5,15 @@ import { taskDropSide } from '../src/renderer/task-drag.jsx';
 test('task drops place an existing chat on every edge without replacing its target', () => {
   const task = { rootPath: '/other', session: { id: 'existing' }, historyState: 'archived' };
   const bounds = { left: 200, top: 100, width: 800, height: 600 };
-  for (const [x, y, side, expected] of [
+  // Each case is a drop point, the edge it should land on, and the rect that edge gives the new pane.
+  // The tuple type is spelled out because the rows are mixed, and without it every element would be
+  // the union of all four column types.
+  for (const [x, y, side, expected] of /** @type {[number, number, string, { x: number, y: number, width: number, height: number }][]} */ ([
     [210, 400, 'left', { x: 0, y: 0, width: 50, height: 100 }],
     [990, 400, 'right', { x: 50, y: 0, width: 50, height: 100 }],
     [600, 110, 'top', { x: 0, y: 0, width: 100, height: 50 }],
     [600, 690, 'bottom', { x: 0, y: 50, width: 100, height: 50 }],
-  ]) {
+  ])) {
     expect(taskDropSide(x, y, bounds)).toBe(side);
     const initial = initialLayout();
     const state = paneReducer(initial, { type: 'split', source: 'pane-1', id: 'new', axis: ['top', 'bottom'].includes(side) ? 'y' : 'x', before: ['left', 'top'].includes(side), task });

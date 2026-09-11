@@ -21,7 +21,7 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
   const themeBefore = nativeTheme.themeSource, sizeBefore = window.getSize();
   try {
     report.inputStyles = {}; report.controlLayout = {};
-    for (const theme of ['light', 'dark']) {
+    for (const theme of /** @type {const} */ (['light', 'dark'])) {
       nativeTheme.themeSource = theme;
       await tab('agents');
       report.controlLayout[theme] = await checkSettingsLayout(evaluate);

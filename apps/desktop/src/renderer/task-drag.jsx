@@ -20,6 +20,7 @@ export function taskDropSide(x, y, bounds) {
   const horizontal = (x - bounds.left) / bounds.width;
   const vertical = (y - bounds.top) / bounds.height;
   if (horizontal > .3 && horizontal < .7 && vertical > .3 && vertical < .7) return 'right';
-  return [ ['left', horizontal], ['right', 1 - horizontal], ['top', vertical], ['bottom', 1 - vertical] ]
+  // Each pair is a side and how far the pointer is from it; the nearest side wins.
+  return /** @type {[string, number][]} */ ([ ['left', horizontal], ['right', 1 - horizontal], ['top', vertical], ['bottom', 1 - vertical] ])
     .sort((a, b) => a[1] - b[1])[0][0];
 }

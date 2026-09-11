@@ -49,7 +49,7 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
   await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"] .branch-tag`)})?.textContent === 'Claude Code'`, 'long agent badge ready');
   const size = window.getSize(), theme = nativeTheme.themeSource;
   try {
-    for (const color of ['dark', 'light']) {
+    for (const color of /** @type {const} */ (['dark', 'light'])) {
       nativeTheme.themeSource = color;
       await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       writeFileSync(path.join(results, `workspace-sidebar-${color}.png`), (await window.webContents.capturePage()).toPNG());

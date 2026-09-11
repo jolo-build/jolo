@@ -3,8 +3,17 @@ import { fixture } from './fixture.js';
 import { taskRepository } from '../src/tasks/repository.js';
 import { deliverMail, invitationEmail, mailConfigured } from '../src/mail.js';
 
+/**
+ * The mailer calls the injected fetch with the Resend URL and an init whose headers and JSON body
+ * these tests read directly, so name that pair instead of the general fetch signature.
+ * @typedef {[url: string, init: { headers: Record<string, string>, body: string }]} MailCall
+ */
+
+/** @param {(...call: MailCall) => Promise<Response>} fetchImpl */
 async function setup(fetchImpl = async () => Response.json({id:'message-1'})) {
+  /** @type {MailCall[]} */
   const calls=[];
+  /** @type {(...call: MailCall) => Promise<Response>} */
   const mailFetch=async (...args)=>{calls.push(args);return fetchImpl(...args);};
   const f=fixture({RESEND_API_KEY:'re_fixture',MAIL_FROM:'Jolo <noreply@notifications.jolo.build>'},{mailFetch});
   await f.login();

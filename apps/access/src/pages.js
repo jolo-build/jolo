@@ -17,6 +17,12 @@ export function appPage(title, body, { kind = '', active = '', publicPage = fals
 const heading = (title, description = '', action = '') => `<div class="task-heading"><div><p class="eyebrow">JOLO ACCOUNT</p><h1>${e(title)}</h1>${description ? `<p class="fine">${e(description)}</p>` : ''}</div>${action}</div>`;
 const csrf = account => `<input type="hidden" name="csrf" value="${e(account.csrf)}">`;
 
+/**
+ * The sign-in page renders before the service is fully configured, so `providers` is empty until
+ * credentials exist for a provider. `error` is the reason code a failed callback redirected with,
+ * which is a query parameter rather than a flag, and is absent on a first visit.
+ * @param {{ providers?: { github?: boolean, google?: boolean }, error?: string | boolean | null, userCode?: string | null }} options
+ */
 export function signInPage({ providers = {}, error = false, userCode = null }) {
   const query = userCode ? `?user_code=${encodeURIComponent(userCode)}` : '';
   return appPage('Sign in', `${heading('Welcome to Jolo.', 'Sign in to manage your identity, tasks, and teams.')}

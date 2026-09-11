@@ -5,6 +5,10 @@
 const REGION_MAX_CHARS = 8 * 1024;
 
 /** Compile a manifest's rules once. An unusable pattern is dropped rather than failing the whole agent. */
+/**
+ * @param {readonly any[]} [rules] a manifest's rules, or the frozen generic set
+ * @param {any} [log]
+ */
 export function compileRules(rules = [], log = null) {
   const compiled = [];
   for (const rule of rules) {

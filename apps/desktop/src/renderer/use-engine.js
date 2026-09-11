@@ -223,7 +223,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   }, [refreshSessions, selectSession]);
 
   /** A model/agent choice changes the answerer, never the conversation identity. */
-  const send = useCallback(async (prompt, { agentId, queue = false, attachments = [] } = {}) => {
+  const send = useCallback(async (prompt, /** @type {{ agentId?: string | null, queue?: boolean, attachments?: any[] }} */ { agentId, queue = false, attachments = [] } = {}) => {
     setError(null);
     const previousSessionId = sessionRef.current;
     const previousProjectId = projectRef.current?.projectId;

@@ -7,6 +7,7 @@ describe("session projection", () => {
   const saved = (id, ordinal = 0, committedBytes = 4) => ({ id, runId: "r", role: "assistant", kind: "text", artifactId: id, ordinal, committedBytes, status: "complete" });
 
   test("a final commit arriving during an artifact read loads the remaining reply immediately", async () => {
+    /** @type {(chunk: { text: string, bytes: number, eof: boolean }) => void} */
     let release;
     const p = new SessionProjection({ readArtifact: (_id, offset) => offset === 0
       ? new Promise(resolve => { release = resolve; })
@@ -94,6 +95,7 @@ describe("session projection", () => {
   });
 
   test("a preview arriving during a read does not duplicate saved text", async () => {
+    /** @type {(chunk: { text: string, bytes: number, eof: boolean }) => void} */
     let release;
     const p = new SessionProjection({ readArtifact: () => new Promise(resolve => { release = resolve; }) });
     p.seed({ messages: [saved("m")] });

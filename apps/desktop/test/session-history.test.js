@@ -5,7 +5,9 @@ import { SessionHistory } from '../src/renderer/session-history.js';
 const messages = Array.from({ length: 388 }, (_, ordinal) => ({ id: `m${ordinal}`, artifactId: `m${ordinal}`, ordinal, role: 'assistant', kind: 'text', status: 'complete', committedBytes: 4 }));
 const page = (before = 388) => ({ messages: messages.slice(Math.max(0, before - 100), before), hasOlder: before > 100, cursor: '10' });
 function fixture(call, isCurrent = () => true) {
-  const projection = new SessionProjection({ readArtifact: async () => ({ text: 'body', bytes: 4 }) });
+  // The reader double answers every read in full, so it leaves `eof` off; the projection declares
+  // that field but never consults it, and inventing a value here would only suggest otherwise.
+  const projection = new SessionProjection({ readArtifact: async () => /** @type {{ text: string, bytes: number, eof: boolean }} */ ({ text: 'body', bytes: 4 }) });
   projection.seed(page());
   const history = new SessionHistory({ sessionId: 's', projection, call, isCurrent, onChange() {} });
   history.seed(page());
@@ -33,6 +35,7 @@ test('paging does not swallow live messages covered by the newer snapshot cursor
 });
 
 test('duplicate scroll events share one request and a failed page can be retried', async () => {
+  /** @type {(error: Error) => void} the first page's reject, captured by the promise below */
   let reject, calls = 0;
   const { projection, history } = fixture(async () => {
     if (++calls === 1) return new Promise((_, fail) => { reject = fail; });
@@ -51,6 +54,7 @@ test('duplicate scroll events share one request and a failed page can be retried
 });
 
 test('switching tasks discards an in-flight older page', async () => {
+  /** @type {(page: any) => void} the in-flight page's resolve, captured by the promise below */
   let resolve, current = true;
   const { projection, history } = fixture(() => new Promise(done => { resolve = done; }), () => current);
   const pending = history.loadOlder();

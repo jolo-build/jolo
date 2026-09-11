@@ -100,6 +100,22 @@ export function layoutFlowchart(model, metrics) {
   const layerCount = Math.max(0, ...[...layer.values()]) + 1;
   const layers = Array.from({ length: layerCount }, () => []);
   for (const node of nodes) layers[layer.get(node.id)].push(node);
+  /**
+   * One run of a link between two adjacent layers. A link that skips layers becomes several
+   * segments joined by placeholder nodes. The lane fields are assigned later, once every segment
+   * between a pair of layers is known and they can be packed into as few lanes as possible.
+   * @type {Array<{
+   *   edge: any,
+   *   from: string,
+   *   to: string,
+   *   layer: number,
+   *   reversedEdge: boolean,
+   *   sameLayer?: boolean,
+   *   headAtExit?: boolean,
+   *   lane?: number | null,
+   *   laneLabel?: string,
+   * }>}
+   */
   const segments = [];
   let dummies = 0;
   for (const edge of edges) {
@@ -270,7 +286,6 @@ export function layoutFlowchart(model, metrics) {
  *   labelWidth: (text: string) => number,
  *   noteRoom: (span: number) => number,
  *   snap?: (value: number) => number,
- *   maxDepth: number,
  * }} metrics
  */
 export function layoutSequence(model, metrics) {

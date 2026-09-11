@@ -8,7 +8,8 @@ export function SessionMenu({ client, project, currentId, command, rows, columns
   const [index, setIndex] = useState(0);
   const [confirm, setConfirm] = useState(null);
   const [note, setNote] = useState("Loading sessions…");
-  const [busy, setBusy] = useState("loading");
+  // Either the name of the work in progress, which decides what Escape does, or false for idle.
+  const [busy, setBusy] = useState(/** @type {"loading" | "restoring" | "deleting" | false} */ ("loading"));
   const mounted = useRef(true);
   const load = () => listSessions(client, project.projectId);
   const open = async (session) => {

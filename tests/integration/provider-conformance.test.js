@@ -6,6 +6,14 @@ import { mockProvider, PROTOCOLS, wireTurn } from '../fixtures/mock-providers.js
 
 const cleanup = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+/**
+ * Boot an engine against a mock provider and hand back the handles the assertions drive.
+ * @param {string} protocol
+ * @param {Parameters<typeof mockProvider>[1]} [options] the turns, failures and validation the mock replays
+ * @param {Record<string, unknown>} [presetOptions] extra preset fields merged into the written `fixture.json`
+ * @param {{ preset: string, model: string, effort?: string }} [model] the engine's default model;
+ *   cases that check what compaction asks for leave the effort out on purpose.
+ */
 async function setup(protocol, options = {}, presetOptions = {}, model = { preset: 'fixture', model: 'test-model', effort: 'low' }) {
   const home = tempHome(); cleanup.push(() => removeHome(home));
   const mock = mockProvider(protocol, options); cleanup.push(mock.stop);

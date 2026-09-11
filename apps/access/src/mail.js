@@ -10,6 +10,12 @@ export function mailConfigured(env) {
     /^(?:[^<>]+<)?[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>?$/.test(env.MAIL_FROM.trim()));
 }
 
+/**
+ * Renders the invitation message, or null when the service has no mail credentials. Nothing in the
+ * invitation is read before that check, so a caller that only expects null may pass an empty bag.
+ * @param env the Worker environment; `mailConfigured` names the bindings a message needs.
+ * @param {{ team?: { name: string }, inviter?: { name: string }, recipient?: string, role?: string }} invitation
+ */
 export function invitationEmail(env, { team, inviter, recipient, role }) {
   if (!mailConfigured(env)) return null;
   return {
@@ -25,7 +31,17 @@ const eligible = `SELECT i.id FROM team_invitations i WHERE i.id=mail_outbox.id
   AND (${roleSQL('i.team_id', 'i.inviter_id')}='owner' OR
     (${roleSQL('i.team_id', 'i.inviter_id')}='admin' AND i.role IN ('member','viewer')))`;
 
-/** Claim each message atomically; retries reuse the same persisted payload and idempotency key. */
+// Delivery goes through an injectable fetch so tests and the browser check never reach Resend. The
+// stand-ins take the same arguments the platform's own fetch does.
+/** @typedef {(...args: Parameters<typeof fetch>) => Promise<Response>} FetchLike */
+
+/**
+ * Claim each message atomically; retries reuse the same persisted payload and idempotency key.
+ * @param env the Worker environment, carrying the mail credentials and the database binding.
+ * @param {{ id?: string | null, now?: () => number, fetchImpl?: FetchLike }} [options] `id` narrows the
+ *   run to one queued message, which is how the invitation route sends a new invitation immediately;
+ *   the scheduled sweep passes nothing and drains whatever is due.
+ */
 export async function deliverMail(env, { id = null, now = Date.now, fetchImpl = fetch } = {}) {
   if (!mailConfigured(env) || !env.ACCESS_DB) return;
   const db = env.ACCESS_DB;

@@ -15,6 +15,13 @@ export const RELEASE_BASE_URL = `https://github.com/${REPOSITORY}`;
 export const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/;
 export const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES = 4096;
+/**
+ * How a caller may substitute the network. Tests and the desktop pass a plain function, so this is
+ * the call signature these helpers actually use rather than the full `fetch` interface, which on
+ * Bun also carries `preconnect`.
+ * @typedef {(input: any, init?: any) => Promise<Response>} FetchLike
+ */
+
 const PRODUCTS = Object.freeze({ cli: "tar.gz", desktop: "dmg" });
 const PLATFORMS = Object.freeze(["darwin", "linux"]);
 const ARCHITECTURES = Object.freeze(["arm64", "x64"]);
@@ -61,7 +68,11 @@ export function compareVersions(left, right) {
 
 export const isNewer = (candidate, current) => compareVersions(candidate, current) > 0;
 
-/** The published asset filename for a product on a platform. */
+/**
+ * The published asset filename for a product on a platform. Callers may pass any strings: the
+ * combination is checked against the published matrix here and refused if nothing was built for it.
+ * @param {{ product?: string, platform?: string, arch?: string }} [target]
+ */
 export function assetName({ product = "cli", platform = process.platform, arch = process.arch } = {}) {
   if (!PRODUCTS[product] || !PLATFORMS.includes(platform) || !ARCHITECTURES.includes(arch) || product === 'desktop' && platform !== 'darwin') {
     throw new Error(`No Jolo ${product} release is published for ${platform}-${arch}.`);
@@ -115,7 +126,10 @@ async function bounded(response, limit, what) {
   return Buffer.concat(chunks);
 }
 
-/** The newest published stable version, as the release itself reports it. */
+/**
+ * The newest published stable version, as the release itself reports it.
+ * @param {{ baseUrl?: string, fetchImpl?: FetchLike, timeoutMs?: number }} [options]
+ */
 export async function fetchLatestVersion({ baseUrl = RELEASE_BASE_URL, fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
   // GitHub answers this with a redirect to the release's own asset; following it is required.
   const body = await bounded(await fetchImpl(latestVersionUrl(baseUrl), { signal: AbortSignal.timeout(timeoutMs) }), MAX_METADATA_BYTES, "Release version");
@@ -124,7 +138,10 @@ export async function fetchLatestVersion({ baseUrl = RELEASE_BASE_URL, fetchImpl
   return version;
 }
 
-/** The checksum published beside an archive. Its presence also proves the platform build exists. */
+/**
+ * The checksum published beside an archive. Its presence also proves the platform build exists.
+ * @param {{ version?: string, name?: string, baseUrl?: string, fetchImpl?: FetchLike, timeoutMs?: number }} [options]
+ */
 export async function fetchChecksum({ version, name, baseUrl = RELEASE_BASE_URL, fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
   requireAssetName(name);
   const body = await bounded(await fetchImpl(`${assetUrl(version, name, baseUrl)}.sha256`, { signal: AbortSignal.timeout(timeoutMs) }), MAX_METADATA_BYTES, "Release checksum");
@@ -136,6 +153,7 @@ export async function fetchChecksum({ version, name, baseUrl = RELEASE_BASE_URL,
 
 /**
  * Download an archive and return it only when its bytes match the published checksum.
+ * @param {{ version?: string, name?: string, sha256?: string, baseUrl?: string, fetchImpl?: FetchLike, maxBytes?: number, timeoutMs?: number }} [options]
  * @returns {Promise<Buffer>}
  */
 export async function downloadAsset({ version, name, sha256, baseUrl = RELEASE_BASE_URL, fetchImpl = fetch, maxBytes = MAX_ARCHIVE_BYTES, timeoutMs = 300_000 } = {}) {
@@ -153,6 +171,7 @@ export async function downloadAsset({ version, name, sha256, baseUrl = RELEASE_B
  * really carries a build for this machine and returns what a download must match. A version
  * ahead of the release (a local build) reports no update rather than a downgrade.
  *
+ * @param {{ current?: string, product?: string, platform?: string, arch?: string, baseUrl?: string, fetchImpl?: FetchLike }} [options]
  * @returns {Promise<{ current: string, latest: string, available: boolean, name?: string, sha256?: string, url?: string, releaseUrl: string }>}
  */
 export async function checkForUpdate({ current, product, platform, arch, baseUrl = RELEASE_BASE_URL, fetchImpl = fetch } = {}) {

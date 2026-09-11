@@ -74,6 +74,12 @@ export class PlanRepository {
     return this.getPlanTask(id);
   }
 
+  /**
+   * @param {string} id
+   * @param {string} state
+   * @param {{ blockedReason?: string | null, sessionId?: string | null, acceptedExecutionId?: string | null, summary?: string | null }} [fields]
+   * only the fields named here are written; the rest of the row keeps what it held
+   */
   updatePlanTaskState(id, state, { blockedReason = null, sessionId, acceptedExecutionId, summary } = {}) {
     const sets = ["state = ?1", "blocked_reason = ?2", "revision = revision + 1", "updated_at = ?3"];
     const values = [state, blockedReason, now()];

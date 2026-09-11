@@ -6,6 +6,11 @@ const ERROR_BODY_MAX_BYTES = 64 * 1024;
 // A stream that stays silent this long is treated as lost. Reasoning providers send summaries, pings or
 // keep-alive comments well within it; without a bound a stalled endpoint would hold a run for hours.
 export const STREAM_IDLE_MS = 300_000;
+/**
+ * An injectable `fetch`. Only the two arguments the adapters pass are required, so the stubs tests
+ * hand in satisfy it where the platform's own `fetch` type, with its extra members, would not.
+ * @typedef {(input: any, init?: any) => Promise<Response>} FetchLike
+ */
 export function requestHeaders(options) {
   const headers = { 'content-type': 'application/json', ...options.headers };
   const kind = options.auth?.kind ?? 'bearer';

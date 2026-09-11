@@ -4,7 +4,7 @@
 // refuses project references that disable emit, so each program is checked on its own instead. A
 // program is a directory with one runtime, because the engine (Bun), the Electron main process
 // (Node), the renderer (browser), and the account service (Workers) have different globals.
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -65,6 +65,29 @@ if (strays.length) {
   process.exit(1);
 }
 
+// A source file under a directory no program covers would never be checked by anything, and the
+// gap would be invisible: every program still passes. Collect what the programs include and prove
+// the tree is covered. The configurations use full-line `//` comments, which JSON does not allow.
+const includeRoots = PROGRAMS.flatMap(program => {
+  const text = readFileSync(path.join(ROOT, program, "tsconfig.json"), "utf8").replace(/^\s*\/\/.*$/gm, "");
+  return (JSON.parse(text).include ?? []).map(entry => path.normalize(path.join(program, entry)));
+});
+const covered = (file) => includeRoots.some(root => file === root || file.startsWith(`${root}${path.sep}`));
+const orphans = [];
+const collect = (directory) => {
+  for (const entry of readdirSync(path.join(ROOT, directory), { withFileTypes: true })) {
+    if (skip.has(entry.name) || entry.name.startsWith(".")) continue;
+    const child = path.join(directory, entry.name);
+    if (entry.isDirectory()) { collect(child); continue; }
+    if (/\.(js|jsx|cjs|ts|tsx)$/.test(entry.name) && !covered(child)) orphans.push(child);
+  }
+};
+for (const top of ["apps", "packages", "scripts", "tests", "deploy"]) collect(top);
+if (orphans.length) {
+  console.error(`no program includes these source files, so nothing checks them:\n  ${orphans.join("\n  ")}`);
+  process.exit(1);
+}
+
 const only = process.argv.slice(2).filter(argument => !argument.startsWith("-"));
 const selected = only.length ? PROGRAMS.filter(program => only.some(name => program.includes(name))) : PROGRAMS;
 if (!selected.length) {
@@ -90,4 +113,4 @@ if (failed) {
   console.error(`\n${failed} of ${selected.length} programs failed type checking`);
   process.exit(1);
 }
-console.log(`\n${selected.length} programs type-check cleanly`);
+console.log(`\n${selected.length} program${selected.length === 1 ? "" : "s"} type-check${selected.length === 1 ? "s" : ""} cleanly`);

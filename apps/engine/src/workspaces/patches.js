@@ -44,7 +44,8 @@ function readCurrent(absolute) {
 
 /**
  * @param {{ storage: any, workspace: { id: string, root: string }, sessionId: string, invocationId: string, operations: any[], patchesDir: string }} input
- * @returns {{ changes: any[], manifestKey: string, hashes: Record<string, any> }}
+ * @returns {{ changes: any[], manifestKey: string, diffArtifactId: string | null }} the diff is absent
+ * when one could not be produced; the change itself is applied and recorded either way
  */
 export function applyPatchTransaction(input) {
   const { storage, workspace, sessionId, invocationId, operations, patchesDir } = input;
@@ -99,6 +100,11 @@ export function applyPatchTransaction(input) {
   // Phase 2: preimages into artifacts (recoverable, pinned by the manifest).
   const manifestKey = `${invocationId}/manifest.json`;
   const manifestPath = path.join(patchesDir, manifestKey);
+  /**
+   * The record that makes the transaction recoverable. It is written at phase 3 and rewritten as
+   * the status changes; `recoveryRequired` appears only when a rollback could not finish.
+   * @type {{ invocationId: string, workspaceId: string, status: string, operations: any[], recoveryRequired?: any[] }}
+   */
   let manifest;
   storage.transaction(() => {
   for (const plan of plans) {

@@ -144,7 +144,7 @@ function DesktopWorkspace() {
   const acceptsTaskDrop = event => draggedTask && !settingsOwner && layout.panes.length < MAX_PANES &&
     !document.querySelector('dialog[open]') && Array.from(event.dataTransfer.types).includes(TASK_DRAG_TYPE);
   return <TaskDragContext.Provider value={setDraggedTask}><div className={`app split-app${sidebarHidden ? ' sidebar-collapsed' : ''}${sidebarDragging ? ' sidebar-resizing' : ''}`} data-platform={window.jolo.platform}
-    style={{ '--sidebar-width': `${sidebarHidden ? 0 : width}px`, '--sidebar-expanded-width': `${width}px`, '--header-sidebar-width': sidebarHidden ? 'max-content' : `${width}px` }}>
+    style={/** @type {import('react').CSSProperties} */ ({ '--sidebar-width': `${sidebarHidden ? 0 : width}px`, '--sidebar-expanded-width': `${width}px`, '--header-sidebar-width': sidebarHidden ? 'max-content' : `${width}px` })}>
     <div className="shell-slot" ref={setHeader} />
     <div className={`workspace-body${settingsOwner ? ' settings-open' : ''}`}>
       <div className="workspace-sidebar" id="workspace-sidebar" ref={setSidebar} inert={Boolean(settingsOwner) || sidebarHidden} aria-hidden={sidebarHidden || undefined} />
@@ -164,7 +164,7 @@ function DesktopWorkspace() {
                 const side = taskDropSide(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
                 setDropPreview(current => current?.id === pane.id && current.side === side ? current : { id: pane.id, side });
               }}
-              onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setDropPreview(null); }}
+              onDragLeave={event => { if (!event.currentTarget.contains(/** @type {Node} */ (event.relatedTarget))) setDropPreview(null); }}
               onDrop={event => {
                 if (!acceptsTaskDrop(event)) return;
                 event.preventDefault(); event.stopPropagation();

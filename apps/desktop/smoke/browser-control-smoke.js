@@ -17,8 +17,9 @@ const fixture = http.createServer((request, response) => {
 });
 
 app.whenReady().then(async () => {
-await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
-const url = `http://127.0.0.1:${fixture.address().port}`;
+// Node's `listen` callback takes no arguments, and a fixture on port 0 is always given a TCP address.
+await new Promise(resolve => fixture.listen(0, '127.0.0.1', /** @type {() => void} */ (resolve)));
+const url = `http://127.0.0.1:${/** @type {import("node:net").AddressInfo} */ (fixture.address()).port}`;
 const window = new BrowserWindow({ width: 900, height: 700, show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
 const guest = window.webContents;
 guest.debugger.attach('1.3');

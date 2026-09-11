@@ -22,6 +22,13 @@ function profileResponse(value) {
 }
 
 export class AccountService {
+  /**
+   * The clock and the timers are injected so a test can drive the device flow without waiting for
+   * the poll interval; the engine leaves them at the platform's own.
+   * @param {{ storage: any, paths: any, lifetime?: any, env?: Record<string, string | undefined>,
+   *   fetchImpl?: import('../providers/transport.js').FetchLike, secrets?: any, now?: () => number,
+   *   setTimer?: (fn: () => void, ms: number) => any, clearTimer?: (timer: any) => void }} options
+   */
   constructor({ storage, paths, lifetime, env = process.env, fetchImpl = fetch, secrets, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.storage = storage;
     this.paths = paths;
@@ -32,6 +39,7 @@ export class AccountService {
     try { this.origin = accountOrigin(storage.getPreference(PREFERENCE)?.origin ?? env.JOLO_ACCOUNT_ORIGIN ?? DEFAULT_ORIGIN); }
     catch { this.origin = DEFAULT_ORIGIN; }
     this.pending = null; this.record = null; this.credential = null; this.note = null; this.stopped = false;
+    /** Tracks only when the last queued operation settled; its value is never read. @type {Promise<unknown>} */
     this.queue = Promise.resolve(); this.checkedAt = 0; this.checking = null;
     this.ready = this.restore().catch(() => { this.note = 'Could not restore your account. Sign in again.'; });
   }
@@ -43,6 +51,13 @@ export class AccountService {
     try { this.record = { ...profileResponse(saved), source: 'keychain', credentialID: saved.credentialID }; this.credential = secret.token; }
     catch { /* Malformed local metadata cannot authenticate a device. */ }
   }
+  /**
+   * Run `fn` after whatever is already queued, and hand back exactly what it returned. The queue
+   * itself only tracks completion, so a rejection here must not stop the next caller from running.
+   * @template T
+   * @param {() => T | Promise<T>} fn
+   * @returns {Promise<T>}
+   */
   exclusive(fn) {
     const result = this.queue.then(fn);
     this.queue = result.catch(() => {});
@@ -62,6 +77,13 @@ export class AccountService {
   changed() {
     if (!this.stopped) this.storage.appendEvent({ type: 'account.changed', payload: { state: this.snapshot().state } });
   }
+  /**
+   * One call to the account server. A `form` makes the request a POST with a urlencoded body, and a
+   * `token` authenticates the device; the method only needs naming when neither implies it.
+   * @param {string} origin
+   * @param {string} path
+   * @param {{ form?: Record<string, string>, token?: string, method?: string }} [options]
+   */
   async request(origin, path, { form, token, method = form ? 'POST' : 'GET' } = {}) {
     const headers = { Accept: 'application/json' };
     if (form) headers['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -109,6 +131,11 @@ export class AccountService {
       } else this.note = 'Account service unavailable. Showing your last verified account.';
     });
   }
+  /**
+   * Start the device flow. The origin and device name default to the connected server and this
+   * host; `tasks` additionally asks for the scope that lets runs read web tasks.
+   * @param {{ origin?: string, deviceName?: string, tasks?: boolean }} [options]
+   */
   async login({ origin, deviceName, tasks = false } = {}) {
     await this.ready;
     return this.exclusive(async () => {

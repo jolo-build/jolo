@@ -3,9 +3,26 @@ import { EventEmitter } from 'node:events';
 import { createBrowserAgent } from '../../apps/desktop/src/main/browser-agent.js';
 import { BrowserBroker } from '../../apps/engine/src/browser/broker.js';
 
+/**
+ * The slice of Electron's `WebContents` the browser agent attaches to. The debugger arrives a line
+ * after the guest itself, because it closes over the `send` this fixture was given.
+ * @typedef {EventEmitter & {
+ *   id: number,
+ *   getURL: () => string,
+ *   getTitle: () => string,
+ *   isDestroyed: () => boolean,
+ *   debugger?: EventEmitter & { sendCommand: (method: string, args?: any) => Promise<any> },
+ * }} FakeGuest
+ */
+
+/**
+ * @param {(method: string, args: any) => Promise<any>} [send] answers any CDP command the fixture
+ *   does not handle itself, which is how a case stalls or redirects one command.
+ */
 async function fixture(send = async () => ({})) {
   const calls = [], replies = [];
   let overlay = false;
+  /** @type {FakeGuest} */
   const guest = Object.assign(new EventEmitter(), { id: 1, getURL: () => 'http://fixture/', getTitle: () => 'Fixture', isDestroyed: () => false });
   guest.debugger = Object.assign(new EventEmitter(), { async sendCommand(method, args) {
     calls.push({ method, args });
@@ -13,7 +30,8 @@ async function fixture(send = async () => ({})) {
     if (method === 'DOM.resolveNode') return { object: { objectId: 'field' } };
     return send(method, args);
   } });
-  const agent = createBrowserAgent({ bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => overlay });
+  // No case here takes a screenshot, so the dependency bag deliberately leaves out `nativeImage`.
+  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => overlay }));
   const host = agent.attach(guest, 'ws');
   await Promise.resolve();
   let sequence = 0;
@@ -36,6 +54,7 @@ test('snapshot references never alias a later snapshot, and unknown snapshot ids
 });
 
 test('a cancelled focus cannot later insert text; a queued action is cancelled before it starts', async () => {
+  /** @type {(value?: any) => void} */
   let release;
   const f = await fixture(async method => method === 'Runtime.callFunctionOn' ? new Promise(resolve => { release = resolve; }) : {});
   await f.execute('snapshot').done;

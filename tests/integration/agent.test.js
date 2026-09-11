@@ -20,6 +20,12 @@ function fixtureRepo(home) {
   return repo;
 }
 
+/**
+ * Run one scripted conversation against a fresh engine and hand back the transcript it produced.
+ * @param {{ home: string, script: import("./helpers.js").FakeScriptTurn[], budgets?: Record<string, number>, fakeEnv?: Record<string, string> }} options
+ *   `budgets` is applied through `settings.update` before the run, and `fakeEnv` is layered over
+ *   the provider environment the engine starts with.
+ */
 async function runScript({ home, script, budgets, fakeEnv = {} }) {
   const scriptPath = path.join(home, "script.json");
   writeFileSync(scriptPath, JSON.stringify(script));

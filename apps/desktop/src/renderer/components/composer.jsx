@@ -226,7 +226,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
-      onSelect={(e) => setCaret(e.target.selectionStart ?? 0)}
+      onSelect={(e) => setCaret(/** @type {HTMLTextAreaElement} */ (e.target).selectionStart ?? 0)}
       onBlur={() => { setCaret(0); lastQueued.current = null; }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing) return;

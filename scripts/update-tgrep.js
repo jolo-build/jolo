@@ -43,6 +43,24 @@ async function bytes(response, limit) {
   return Buffer.concat(chunks);
 }
 
+/**
+ * The pin as `vendor/tgrep/release.json` records it: one entry per supported platform, each naming
+ * the target triple and the archive's SHA-256. `validatePin` enforces the shape at runtime, because
+ * the file is JSON this script also rewrites.
+ * @typedef {{ repository: string, version: string, assets: Record<string, { target: string, sha256: string }> }} ReleasePin
+ */
+
+/**
+ * How a check reaches GitHub. `fetchImpl` is injected by the tests, so it is any function with the
+ * platform fetch's call signature rather than the global itself.
+ * @typedef {{ fetchImpl?: (...args: Parameters<typeof fetch>) => Promise<Response>, token?: string, verify?: boolean }} ReleaseOptions
+ */
+
+/**
+ * @param {ReleasePin} pin
+ * @param {ReleaseOptions} [options] `token` only lifts the anonymous rate limit on api.github.com;
+ *   `verify` re-checks the pinned version instead of looking for a newer one.
+ */
 export async function checkRelease(pin, { fetchImpl = fetch, token, verify = false } = {}) {
   validatePin(pin);
   // The token is used only on api.github.com, never on archive/CDN downloads.
@@ -91,6 +109,10 @@ export async function checkRelease(pin, { fetchImpl = fetch, token, verify = fal
   return { changed: !verify, pin: next };
 }
 
+/**
+ * @param {string} file
+ * @param {ReleaseOptions} [options]
+ */
 export async function updateFile(file, options = {}) {
   const result = await checkRelease(JSON.parse(readFileSync(file, 'utf8')), options);
   if (result.changed) {

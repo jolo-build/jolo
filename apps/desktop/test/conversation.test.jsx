@@ -2,12 +2,32 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Conversation } from '../src/renderer/components/conversation.jsx';
 
+/**
+ * A message as the projection holds one, with only the fields a test cares about. The projection
+ * fills the rest in as events arrive, so every field here is optional and the tests name the few
+ * that drive the rendering they are checking.
+ * @typedef {Partial<import('@jolo/client/projection').ProjectedMessage>} PartialMessage
+ */
+
+/**
+ * Every case here renders the conversation once and reads the markup, so each render passes the
+ * projection or the history it is about and leaves off the identifiers, the review handles and the
+ * callbacks that only a click would reach. The props are asserted rather than stubbed out, because a
+ * stub would suggest a path these cases exercise.
+ * @typedef {import('react').ComponentProps<typeof Conversation>} ConversationProps
+ */
+
+/**
+ * A finished, empty reasoning message, which is the starting point for most of these cases.
+ * @param {PartialMessage} [overrides] the fields this case needs to differ
+ */
 const reasoning = (overrides = {}) => ({ id: 'thinking', role: 'assistant', kind: 'reasoning', text: '', status: 'complete', renderedBytes: 0, committedBytes: 0, ...overrides });
-const render = (...messages) => renderToStaticMarkup(<Conversation projection={{ ordered: () => messages, runs: new Map() }} hasProject changesCount={0} />);
+/** @param {PartialMessage[]} messages what the projection returns, newest last */
+const render = (...messages) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true, changesCount: 0 }))} />);
 
 test('saved history exposes a load action, progress, and retryable errors', () => {
   const history = { hasOlder: true, loading: false };
-  const markup = () => renderToStaticMarkup(<Conversation history={history} hasProject changesCount={0} />);
+  const markup = () => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ history, hasProject: true, changesCount: 0 }))} />);
   expect(markup()).toContain('Load earlier messages');
   history.loading = true;
   expect(markup()).toContain('Loading earlier messages…');
@@ -24,9 +44,19 @@ describe('conversation activity', () => {
     { id: 'codex', displayName: 'Codex', model: 'codex-model' },
     { id: 'claude', displayName: 'Claude Code', model: 'claude-model' },
   ];
+  /**
+   * Renders a conversation whose one run is still going, which is the only state these cases care
+   * about. `run` is merged into that run, so it carries whichever of the run's fields the case needs:
+   * `agentId` for an agent called into the task, and `execution` for what a saved run recorded.
+   * @param {{ state?: string, agentId?: string, execution?: { agentId?: string, model?: string } }} [run]
+   * @param {PartialMessage[]} [messages] what the projection returns, newest last
+   * @param {{ agents?: { id: string, displayName: string, model: string | null }[] }} [props] props this case overrides
+   */
   const renderWorking = (run = {}, messages = [reasoning({ runId: 'active', status: 'streaming' })], props = {}) => renderToStaticMarkup(<Conversation
-    projection={{ ordered: () => messages, runs: new Map([['active', { id: 'active', state: 'model', ...run }]]) }}
-    hasProject changesCount={0} assistantName="Codex" assistantAgentId="codex" providerModel="jolo-model" agents={agents} {...props}
+    {...(/** @type {ConversationProps} */ ({
+      projection: { ordered: () => messages, runs: new Map([['active', { id: 'active', state: 'model', ...run }]]) },
+      hasProject: true, changesCount: 0, assistantName: 'Codex', assistantAgentId: 'codex', providerModel: 'jolo-model', agents,
+    }))} {...props}
   />);
 
   test('a called-in agent and its model label one thinking indicator', () => {
@@ -101,7 +131,7 @@ describe('conversation activity', () => {
     expect(render(reasoning({ kind: 'tool', committedBytes: 12 }))).toContain('Loading tool…');
   });
   test('removing a queued follow-up does not label the active conversation stopped', () => {
-    const html = renderToStaticMarkup(<Conversation projection={{ ordered: () => [{ id: 'user', runId: 'active', role: 'user', kind: 'text', text: 'work', status: 'complete' }], runs: new Map([['active', { id: 'active', state: 'model' }], ['removed', { id: 'removed', state: 'cancelled' }]]) }} hasProject changesCount={0} />);
+    const html = renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [{ id: 'user', runId: 'active', role: 'user', kind: 'text', text: 'work', status: 'complete' }], runs: new Map([['active', { id: 'active', state: 'model' }], ['removed', { id: 'removed', state: 'cancelled' }]]) }, hasProject: true, changesCount: 0 }))} />);
     expect(html).not.toContain('Stopped');
     expect(html).toContain('Working');
   });

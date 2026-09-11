@@ -12,6 +12,12 @@ afterEach(async () => {
   }
 });
 
+/**
+ * Run the CLI to completion in a child process and collect everything the assertions read.
+ * @param {string[]} args
+ * @param {{ home?: string, env?: Record<string, string> }} [options] a home is appended as
+ *   `--home` when given, and `env` is layered over the fixture environment.
+ */
 async function jolo(args, { home, env = {} } = {}) {
   const proc = Bun.spawn([process.execPath, CLI_ENTRY, ...args, ...(home ? ["--home", home] : [])], {
     env: { ...process.env, JOLO_IDLE_MS: "1500", JOLO_FAKE_STEPS: "4", JOLO_FAKE_DELAY_MS: "10", ...env },

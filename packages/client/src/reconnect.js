@@ -1,5 +1,15 @@
 // Reconnect policy shared by frontends. In-flight calls fail on disconnect; they
 // are never replayed because a mutation may already have committed remotely.
+/**
+ * `onResync` is told where the stream restarted so the caller can discard a projection it can no
+ * longer trust: either the engine asked for a resync or the event stream identity changed.
+ * @param {{
+ *   open: () => Promise<any>,
+ *   onResync?: (state: { cursor: string, streamId: string | null }) => unknown,
+ *   retryBaseMs?: number,
+ *   retryMaxMs?: number,
+ * }} options
+ */
 export async function connectResumable({ open, onResync = () => {}, retryBaseMs = 100, retryMaxMs = 5000 }) {
   let current = null, connecting = null, stopped = false, retryTimer = null, failures = 0, fatal = null;
   let subscription = null, cursor = '0', streamId = null;

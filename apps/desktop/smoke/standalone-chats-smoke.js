@@ -58,7 +58,7 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(recent)}))`, 'chats stay available from workspace');
   await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
   await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'chat preserves both turns');
-  for (const theme of ['dark', 'light']) {
+  for (const theme of /** @type {const} */ (['dark', 'light'])) {
     nativeTheme.themeSource = theme;
     await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     writeFileSync(path.join(results, `standalone-chat-${theme}.png`), (await window.webContents.capturePage()).toPNG());

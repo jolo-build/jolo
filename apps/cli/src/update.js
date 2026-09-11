@@ -18,6 +18,8 @@ import { createUpdateCache } from "@jolo/updates/cache";
 import { EXIT } from "./exit-codes.js";
 
 export const updateBaseUrl = (env = process.env) => env.JOLO_UPDATE_BASE_URL || RELEASE_BASE_URL;
+/** @typedef {ReturnType<typeof resolvePaths>} ProfilePaths */
+/** @param {ProfilePaths} paths */
 const cacheFile = (paths) => path.join(paths.dataDir, "update.json");
 
 /**
@@ -81,6 +83,7 @@ function manualInstructions(install) {
 /**
  * Record what is available without blocking anything. Never throws: an update check that
  * cannot reach the network is not a failure the user needs to hear about.
+ * @param {{ paths?: ProfilePaths, build?: string, fetchImpl?: typeof fetch, env?: NodeJS.ProcessEnv, now?: () => number }} [options]
  * @returns {Promise<{ available: boolean, latest?: string } | null>}
  */
 export async function backgroundCheck({ paths, build = "dev", fetchImpl = fetch, env = process.env, now = Date.now } = {}) {
@@ -89,14 +92,19 @@ export async function backgroundCheck({ paths, build = "dev", fetchImpl = fetch,
   if (!cache.due()) return cache.read();
   try {
     const result = await checkForUpdate({ current: build, product: "cli", baseUrl: updateBaseUrl(env), fetchImpl });
-    return cache.record(result);
+    // `record` writes the failure shape only when handed a failure, and this branch always has a
+    // real answer, so the entry it returns carries `available` and `latest`.
+    return /** @type {{ available: boolean, latest?: string }} */ (cache.record(result));
   } catch {
     cache.record({ failed: true });
     return null;
   }
 }
 
-/** The last recorded result, for showing a new release without waiting for the network. */
+/**
+ * The last recorded result, for showing a new release without waiting for the network.
+ * @param {{ paths?: ProfilePaths, build?: string, now?: () => number }} [options]
+ */
 export function pendingUpdate({ paths, build = "dev", now = Date.now } = {}) {
   if (!VERSION_PATTERN.test(build)) return null;
   const entry = createUpdateCache({ file: cacheFile(paths), now }).read();

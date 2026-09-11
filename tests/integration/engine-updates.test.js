@@ -39,9 +39,10 @@ test('older engines receive one migration notice without an unsafe stop request'
 });
 
 test('idle reload refuses outstanding requests and closes admission before shutdown', async () => {
-  let finishProbe, stopped = 0;
-  const handlers = createRpcHandlers({ runs: { activeCount: 0, queuedCount: 0 }, terminals: { list: () => [] },
-    agentModels: { list: () => new Promise(resolve => { finishProbe = resolve; }) }, stop: () => stopped++ });
+  /** @type {(value?: any) => void} */ let finishProbe, stopped = 0;
+  // Only reload and the agent-model probe are exercised, so the other engine services stay absent.
+  const handlers = createRpcHandlers(/** @type {any} */ ({ runs: { activeCount: 0, queuedCount: 0 }, terminals: { list: () => [] },
+    agentModels: { list: () => new Promise(resolve => { finishProbe = resolve; }) }, stop: () => stopped++ }));
   const conn = { kind: 'desktop' };
   const probe = handlers['agent.models']({ agentId: 'agent' }, conn);
   await expect(handlers['engine.reload']({}, conn)).rejects.toMatchObject({ code: 'conflict' });

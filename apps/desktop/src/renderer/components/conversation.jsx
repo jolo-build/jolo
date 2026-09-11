@@ -118,7 +118,7 @@ function ReasoningBlock({ message }) {
   );
 }
 
-function ActivityGroup({ messages, identity, hasRunStatus = false }) {
+function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   const working = messages.some((message) => message.status === "streaming");
   const tools = messages.filter((message) => message.kind === "tool").length;
   if (!tools && !messages.some((message) => message.text.trim())) {
@@ -127,8 +127,10 @@ function ActivityGroup({ messages, identity, hasRunStatus = false }) {
   }
   // Background commands may span several replies. Their individual rows stay
   // live, while the task has one authoritative progress line below the transcript.
+  // A completed tool is only a gap in the run, not task completion. Keep
+  // the disclosure icon steady until the owning run explicitly completes.
   const label = `Task activity${tools ? ` · ${tools} ${tools === 1 ? 'action' : 'actions'}` : ' · Reasoning'}`;
-  return <details className="activity-group"><summary><ActivityIcon name={working ? tools ? 'tools' : 'think' : 'check'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
+  return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
 export function Conversation({ projection, sessionId, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
@@ -193,7 +195,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
       </div>}
       {!messages.length && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
-        if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
+        if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;
         if (message.loadError) return <div key={message.id} className="message" role="alert"><p>Couldn’t load saved {message.kind === "tool" ? "tool output" : message.kind === "reasoning" ? "reasoning" : "message"}.</p><button onClick={() => { void projection.fill(message.id).catch(() => {}); }}>Retry loading</button></div>;

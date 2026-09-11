@@ -2,6 +2,12 @@
 // chooses a workspace pane; the result waits for the guest's host registration.
 import { BrowserOpenSchema, BrowserOpenerSchema } from '@jolo/protocol';
 
+/**
+ * One open request while its guest attaches. The lease timer is hung on the entry a moment after it is
+ * made, which is why it is optional here, and `acknowledged` turns true when the renderer reports the pane.
+ * @typedef {{ invocationId: string, workspaceId: string, leaseMs: number, acknowledged: boolean, timer?: ReturnType<typeof setTimeout> }} PendingOpen
+ */
+
 export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log }) {
   let workspaceIds = [];
   let publishing = Promise.resolve();
@@ -39,6 +45,7 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log 
     handleOpen(params) {
       const checked = BrowserOpenSchema.safeParse(params);
       if (!checked.success || pending.has(params.invocationId)) return;
+      /** @type {PendingOpen} */
       const entry = { ...checked.data, acknowledged: false };
       entry.timer = setTimeout(() => finish(entry, { error: 'inline browser did not attach within the lease' }), entry.leaseMs);
       pending.set(entry.invocationId, entry);

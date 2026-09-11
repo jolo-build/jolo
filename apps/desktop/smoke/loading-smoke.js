@@ -53,7 +53,7 @@ export function prepareLoadingSmoke({ window, bridge, root }) {
     const originalTheme = nativeTheme.themeSource;
     try {
       await waitFor("document.querySelector('link[href=\"styles.css\"]') && !document.querySelector('.app') && !document.getElementById('startup-screen').hidden", 'loading paints before application styles and React');
-      for (const theme of ['light', 'dark']) {
+      for (const theme of /** @type {const} */ (['light', 'dark'])) {
         nativeTheme.themeSource = theme;
         await settle();
         const measured = await evaluate(`(() => {

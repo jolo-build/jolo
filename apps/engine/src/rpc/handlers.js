@@ -11,7 +11,24 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 
+/**
+ * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
+ * a single method stands in for the few that method touches and names this type as it does so.
+ * @typedef {{
+ *   storage: any, settingsService: any, providerFactory: any, agentModels: any, credentials: any,
+ *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
+ *   search: any, terminals: any, board: any, worktrees: any, plans: any, agents: any, runs: any,
+ *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
+ *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
+ * }} RpcDependencies
+ */
+
+/** @param {RpcDependencies} deps */
 export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+  /**
+   * The one write path behind rename, archive and delete: each names only the field it changes.
+   * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
+   */
   const editSession = ({ sessionId, expectedRevision, title, state, deleted = false }) => storage.transaction(() => {
     const session = storage.getSession(sessionId);
     if (!session) throw new ProtocolError("not_found", "task no longer exists");
@@ -162,6 +179,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
       return { session: updated };
     }),
+    /** @param {{ archived: boolean, sessionId: string, expectedRevision: number }} params */
     "session.archive": ({ archived, ...params }) => editSession({ ...params, state: archived ? "archived" : "open" }),
     "session.delete": (params) => editSession({ ...params, deleted: true }),
     "session.page": ({ sessionId, beforeOrdinal, limit }) => storage.transaction(() => {
@@ -314,7 +332,9 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
   return Object.fromEntries(Object.entries(handlers).map(([method, handler]) => [method, async (...args) => {
     if (reloading) throw new ProtocolError("unavailable", "engine is reloading");
     inFlight++;
-    try { return await handler(...args); }
+    // Each handler takes its own params shape; the wrapper only counts them, so it calls through
+    // the one signature they all share.
+    try { return await /** @type {(...args: any[]) => any} */ (handler)(...args); }
     finally { inFlight--; }
   }]));
 }

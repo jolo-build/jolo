@@ -11,7 +11,9 @@ const REFRESH_DEBOUNCE_MS = 250;
 const BOARD_EVENTS = new Set(["run.state", "permission.requested", "permission.resolved", "workspace.viewed", "session.updated", "session.deleted", "run.verification", "files.changed"]);
 
 /**
- * @param {{ bridge: { rawCall: (method: string, params: any) => Promise<any> }, window: import("electron").BrowserWindow, log: any, smoke?: boolean }} options
+ * The badge and the notifications come in as arguments rather than as imports, so that this file holds
+ * the decisions and `attention.js` is the only place that reaches for Electron.
+ * @param {{ bridge: { rawCall: (method: string, params: any) => Promise<any> }, window: import("electron").BrowserWindow, log: any, app: typeof import("electron").app, Notification: typeof import("electron").Notification, smoke?: boolean }} options
  */
 export function createAttentionService({ bridge, window, log, app, Notification, smoke = false }) {
   let timer = null, disposed = false;

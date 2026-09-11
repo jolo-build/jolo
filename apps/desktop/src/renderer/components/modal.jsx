@@ -1,5 +1,16 @@
 import { useEffect, useRef } from 'react';
-/** Native dialog supplies keyboard trapping, an inert background, and focus restoration. */
+/**
+ * Native dialog supplies keyboard trapping, an inert background, and focus restoration.
+ *
+ * @param {{
+ *   children: import('react').ReactNode,
+ *   label: string,
+ *   onClose: () => void,
+ *   onKeyDown?: import('react').KeyboardEventHandler<HTMLDialogElement>,
+ *   initialFocus?: { current: HTMLElement | null },
+ *   className?: string,
+ * }} props `onKeyDown` and `initialFocus` belong to dialogs with a primary action; most have neither.
+ */
 export function Modal({ children, label, onClose, onKeyDown, initialFocus, className = '' }) {
   const dialog = useRef(null);
   const backdropPress = useRef(false);
@@ -12,7 +23,8 @@ export function Modal({ children, label, onClose, onKeyDown, initialFocus, class
   };
   useEffect(() => {
     const element = dialog.current;
-    const previous = document.activeElement;
+    // Whatever had focus before the dialog opened; only elements that can take focus back matter here.
+    const previous = /** @type {HTMLElement} */ (document.activeElement);
     element.showModal();
     initialFocus?.current?.focus();
     const cancel = (event) => { event.preventDefault(); close.current?.(); };

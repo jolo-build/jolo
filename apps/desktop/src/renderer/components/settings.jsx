@@ -133,7 +133,7 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
   return <section className="settings-page" aria-label="Settings">
     <nav className="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical" onKeyDown={event => {
       if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-      const tabs = [...event.currentTarget.querySelectorAll('[role=tab]')], index = tabs.indexOf(document.activeElement);
+      const tabs = /** @type {HTMLElement[]} */ ([...event.currentTarget.querySelectorAll('[role=tab]')]), index = tabs.indexOf(/** @type {HTMLElement} */ (document.activeElement));
       if (index < 0) return;
       event.preventDefault();
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1) + tabs.length) % tabs.length;

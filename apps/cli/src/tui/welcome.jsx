@@ -11,6 +11,11 @@ const LOGO = [
   " \\___/ \\___/|_|\\___/ ",
 ];
 
+/**
+ * `hasHistory` decides which pair of shortcuts is worth showing first. Its one caller does not
+ * pass it, so the panel shows the shortcuts for a terminal with nothing above it.
+ * @param {{ height: number, columns: number, hasHistory?: boolean, update?: { latest?: string } | null }} props
+ */
 export function Welcome({ height, columns, hasHistory, update = null }) {
   const roomy = height >= 12;
   // A new release is news, not an interruption: one line, and only where there is room for it.

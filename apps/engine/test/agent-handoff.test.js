@@ -20,6 +20,7 @@ function fixture({ messages = [], runs = [], changed = {} } = {}) {
     storage: {
       listMessagesForSession: (_id, { limit, afterOrdinal = -1 }) => { const eligible = rows.filter(row => row.ordinal > afterOrdinal); return { messages: eligible.slice(-limit), hasOlder: eligible.length > limit }; },
       lastMessageOrdinal: (_id, runId = null) => rows.filter(row => !runId || row.runId === runId).at(-1)?.ordinal ?? -1,
+      /** @param {any} _id @param {{ role?: string }} [filter] */
       firstMessageForSession: (_id, { role } = {}) => rows.find((row) => !role || row.role === role) ?? null,
       listRunsForSession: (_id, limit) => runs.slice(-limit),
       getRun: id => runs.find(run => run.id === id) ?? null,

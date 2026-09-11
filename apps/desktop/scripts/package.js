@@ -14,8 +14,9 @@ const root = path.resolve(import.meta.dir, "..", "..", "..");
 const app = path.join(root, "dist", "desktop-app");
 if (!existsSync(path.join(app, "main.js"))) throw new Error("run `bun scripts/build.js` first");
 const electronVersion = JSON.parse(readFileSync(path.join(root, "apps/desktop/package.json"), "utf8")).devDependencies.electron;
-const platform = process.env.JOLO_PACKAGE_PLATFORM ?? process.platform;
-const arch = process.env.JOLO_PACKAGE_ARCH ?? process.arch;
+// The packager names the targets it knows; an environment variable naming something else is its error to report.
+const platform = /** @type {import("@electron/packager").SupportedPlatform} */ (process.env.JOLO_PACKAGE_PLATFORM ?? process.platform);
+const arch = /** @type {import("@electron/packager").SupportedArch} */ (process.env.JOLO_PACKAGE_ARCH ?? process.arch);
 const out = await packager({
   dir: app,
   out: path.join(root, "dist", "desktop"),

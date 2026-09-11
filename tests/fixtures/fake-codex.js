@@ -88,7 +88,8 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
   let match;
   if (prompt === 'browser-check') {
     if (!entry.developerInstructions?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
-    const settings = Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n'));
+    // `Bun.TOML.parse` only promises `object`; the engine writes the browser server under this key.
+    const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
     if (!settings.mcp_servers?.jolo_browser) { say('Browser tools unavailable'); end('completed'); return; }
     const { browserMcpCheck } = await import('./browser-mcp-client.js');
     const tool = item('mcpToolCall', { server: 'jolo_browser', tool: 'browser_screenshot', arguments: {}, status: 'inProgress' });

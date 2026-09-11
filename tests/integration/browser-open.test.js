@@ -13,7 +13,8 @@ test('a closed pane is discoverable only in advertised workspaces; opening waits
   const broker = new BrowserBroker({ storage: { appendEvent() {} }, log: {} });
   const desktop = connection(), other = connection();
   broker.setOpener(desktop, ['one']);
-  const dispatcher = new ToolDispatcher({ browser: broker });
+  // Only `hasBrowser` is asked of the dispatcher here, so the rest of its dependencies stay absent.
+  const dispatcher = new ToolDispatcher(/** @type {ConstructorParameters<typeof ToolDispatcher>[0]} */ ({ browser: broker }));
   expect(dispatcher.hasBrowser('one')).toBe(true);
   expect(dispatcher.hasBrowser('two')).toBe(false);
   const opened = broker.execute({ ...request('one', 'i1'), leaseMs: 60_000 });
@@ -58,7 +59,8 @@ function desktopFixture() {
 }
 
 test('run admission waits until the latest pane list is registered with the engine', async () => {
-  const calls = []; let release;
+  const calls = [];
+  /** @type {(value?: any) => void} */ let release;
   const bridge = { client: {}, rawCall(method, params) { calls.push(params.workspaceIds); return calls.length === 1 ? new Promise(resolve => { release = resolve; }) : Promise.resolve({}); } };
   const opener = createBrowserOpener({ bridge, agent: { hosts: new Map(), onRegistered() {} }, send() {}, isOverlayActive: () => false, log: { warn() {} } });
   opener.setWorkspaces({ workspaceIds: ['old'] });
@@ -146,7 +148,8 @@ test('busy replies leave other workspace operations pending and return a conflic
 test('stale and removed workspace ids do not poison valid opener registrations', async () => {
   const storage = { getWorkspace(id) { return id === 'live' ? { id } : id === 'removed' ? { id, removedAt: 'now' } : null; }, appendEvent() {} };
   const browser = new BrowserBroker({ storage, log: {} });
-  const handlers = createRpcHandlers({ storage, browser });
+  // Only the browser handlers run here, so the rest of the engine's services are left out.
+  const handlers = createRpcHandlers(/** @type {import('../../apps/engine/src/rpc/handlers.js').RpcDependencies} */ ({ storage, browser }));
   const conn = { ...connection(), kind: 'desktop' };
   expect(await handlers['browser.setOpener']({ workspaceIds: ['live', 'missing', 'removed', 'live'] }, conn)).toEqual({ registered: true });
   expect(browser.hasBrowser('live')).toBe(true);
