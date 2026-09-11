@@ -1,6 +1,6 @@
 import { appPage, escapeHTML as e } from '../pages.js';
 import { TASK_STATES, TASK_PRIORITIES, LABEL_COLORS } from '../../../../packages/protocol/src/tasks.js';
-import { canManage, canManageMember, canWriteTask } from './permissions.js';
+import { canManage, canManageMember, canWriteTask, canCommentTask } from './permissions.js';
 
 const input = (name, val = '', type = 'text', extra = '') => `<input type="${type}" name="${name}" value="${e(val ?? '')}" ${extra}>`;
 const hidden = (name, val) => input(name, val, 'hidden');
@@ -16,19 +16,47 @@ export const labelBadge = label => `<span class="task-label color-${e(label.colo
 export const taskErrorPage = (message, status = 400) => page('Unable to continue', `<h1>Unable to continue.</h1>${note(message)}<p><a href="/tasks">Return to tasks</a> · <a href="/teams">Teams</a></p><p class="fine">${status}</p>`);
 const taskHint = task => `<p class="task-chat-hint">Reference in chat: <code>@codex #JOLO-${task.id} fix this problem</code><span class="fine">Revision ${task.revision} · Open the correct local project before sending.</span></p>`;
 
-export function taskViewPage({ account, task, labels, members = [], team = null, error = null }) {
+function commentTime(at) {
+  const date = new Date(at), iso = date.toISOString();
+  return `<time datetime="${iso}" title="${iso}">${e(date.toLocaleString('en-US', { month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZone:'UTC' }))} UTC</time>`;
+}
+function commentCard(comment, account, path, editable, draft) {
+  const mine = comment.author_id === account.id, editing = draft?.id === comment.id;
+  return `<article class="task-comment" id="comment-${comment.id}">
+    <span class="comment-avatar" aria-hidden="true">${e([...comment.author_name.trim()][0]?.toUpperCase() || '?')}</span>
+    <div class="comment-content"><div class="comment-heading"><strong>${e(comment.author_name)}</strong>${commentTime(comment.created_at)}${comment.revision>1?'<span class="comment-edited">edited</span>':''}</div>
+    <p class="comment-body">${e(comment.body)}</p>
+    ${mine && editable ? `<div class="comment-actions">
+      <details class="comment-edit"${editing?' open':''}><summary>Edit</summary>${post(`${path}/comments/${comment.id}/edit`,account,hidden('revision',comment.revision)+`<label>Edit your comment<textarea name="body" rows="3" maxlength="8192" required>${e(editing?draft.body:comment.body)}</textarea></label>${button('Save comment')}`)}</details>
+      <details class="comment-delete"><summary>Delete</summary>${post(`${path}/comments/${comment.id}/delete`,account,hidden('revision',comment.revision)+'<p>Delete this comment?</p>'+button('Delete comment',true))}</details>
+    </div>`:''}</div></article>`;
+}
+
+export function taskViewPage({ account, task, labels, members = [], team = null, error = null, comments = [], older = null, commentsBefore = null, commentDraft = null }) {
   const writable = canWriteTask(task, account.id), path = `/tasks/JOLO-${task.id}`;
+  const commentable = canCommentTask(task, account.id);
   const selected = JSON.parse(task.labels ?? '[]');
   const assignee = task.assignee_id ? (task.assignee_id === account.id ? account.name : members.find(m => m.id === task.assignee_id)?.name ?? 'Previously assigned member') : 'Unassigned';
   const property = (name, value) => `<div><dt>${e(name)}</dt><dd>${e(value)}</dd></div>`;
+  const properties = `<dl>${property('State', TASK_STATES[task.state])}${property('Priority', task.priority)}${property('Project label', task.project || 'None')}${property('Assignee', assignee)}<div><dt>Labels</dt><dd>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ') || 'None'}</dd></div></dl>${taskHint(task)}`;
+  const draft = commentDraft?.id ? null : commentDraft;
   return page(`JOLO-${task.id}`, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>JOLO-${task.id}</h1></div><div class="task-heading-actions"><a href="/tasks${team ? '?team=' + e(team.id) : ''}">Back to tasks</a>${writable && !task.archived_at ? `<a class="button" href="${path}/edit">Edit task</a>` : ''}</div></div>${note(error)}
-    ${taskHint(task)}
     ${task.archived_at ? '<p class="notice">This task is archived.</p>' : ''}
+    <details class="task-mobile-details"><summary>Details <span>${e(TASK_STATES[task.state])} · ${e(task.priority)}</span></summary><div class="task-scroll">${properties}</div></details>
     <div class="task-view-layout">
-      <article class="task-view-body task-scroll" tabindex="0" aria-labelledby="task-title"><h2 id="task-title">${e(task.title)}</h2><h3>Description</h3>${task.description ? `<pre class="task-description">${e(task.description)}</pre>` : '<p class="fine">No description provided.</p>'}</article>
-      <aside class="task-summary task-scroll" tabindex="0" aria-label="Task details"><h2>Details</h2><dl>${property('State', TASK_STATES[task.state])}${property('Priority', task.priority)}${property('Project label', task.project || 'None')}${property('Assignee', assignee)}<div><dt>Labels</dt><dd>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ') || 'None'}</dd></div></dl></aside>
+      <section class="task-discussion" aria-label="Task discussion">
+        <div class="task-conversation task-scroll" tabindex="0" aria-label="Task description and comments">
+          <article class="task-view-body" aria-labelledby="task-title"><h2 id="task-title">${e(task.title)}</h2>${task.description ? `<pre class="task-description">${e(task.description)}</pre>` : '<p class="fine">No description provided.</p>'}</article>
+          <section class="task-comments" id="comments" aria-labelledby="comments-title"><div class="comments-heading"><h3 id="comments-title">Comments</h3>${commentsBefore?`<a href="${path}#comments">Latest comments</a>`:''}</div>
+            ${older?`<a class="older-comments" href="${path}?comments_before=${older}#comments">Load older comments</a>`:''}
+            ${comments.length?comments.map(comment=>commentCard(comment,account,path,commentable,commentDraft)).join(''):'<p class="comment-empty">No comments yet.</p>'}
+          </section>
+        </div>
+        ${commentable?post(`${path}/comments`,account,hidden('request_id',draft?.requestID??crypto.randomUUID())+`<label for="comment-body">Leave a comment</label><textarea id="comment-body" name="body" rows="2" maxlength="8192" required placeholder="Share an update or ask a question…">${e(draft?.body??'')}</textarea><div class="comment-compose-actions"><span>${team?`Visible to ${e(team.name)}`:'Only visible to you'}</span>${button('Comment')}</div>`,'id="comment-composer" class="task-comment-compose"'):`<p class="task-comment-readonly">${task.archived_at?'Restore this task to add comments.':'Your role allows you to read comments.'}</p>`}
+      </section>
+      <aside class="task-summary task-scroll" tabindex="0" aria-label="Task details"><h2>Details</h2>${properties}</aside>
     </div>
-    ${writable ? `<div class="task-actions">${post(`${path}/${task.archived_at ? 'restore' : 'archive'}`, account, hidden('revision', task.revision) + button(task.archived_at ? 'Restore task' : 'Archive task', true))}</div>` : ''}`, 'task-detail-page');
+    ${writable ? `<div class="task-actions">${post(`${path}/${task.archived_at ? 'restore' : 'archive'}`, account, hidden('revision', task.revision) + button(task.archived_at ? 'Restore task' : 'Archive task', true))}</div>` : ''}`, 'task-detail-page task-discussion-page');
 }
 
 export function taskListPage({ tasks, teams, labels, filters, next }) {

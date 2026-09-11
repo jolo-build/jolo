@@ -3,6 +3,8 @@ const reasons = new Set([
   'github_token_network', 'github_token_http', 'github_token_response',
   'github_credentials', 'github_code', 'github_redirect', 'github_email',
   'github_identity_network', 'github_identity_http', 'github_identity_response',
+  'google_token_network', 'google_token_http', 'google_token_response', 'google_id_token', 'google_email',
+  'google_keys_network', 'google_keys_http',
   'runtime_binding', 'network_certificate', 'network_timeout',
 ]);
 

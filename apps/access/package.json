@@ -9,12 +9,15 @@
     "deploy": "bun scripts/check-deploy.js && bun scripts/migrations.js && bun scripts/assets.js && bun scripts/deploy.js",
     "secrets:store": "bun scripts/deploy.js store",
     "db:local": "bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --local --config ../../deploy/access.wrangler.jsonc --env development",
-    "test": "bun scripts/migrations.js && bun test test && node scripts/test-worker.js && node scripts/test-task-runtime.js",
+    "test": "bun scripts/migrations.js && bun test test && node scripts/test-worker.js && node scripts/test-google-runtime.js && node scripts/test-task-runtime.js",
     "test:browser": "bun scripts/test-browser.js",
     "db:generate": "bun scripts/migrations.js",
     "db:remote": "bun scripts/check-deploy.js && bun scripts/migrations.js && wrangler d1 migrations apply ACCESS_DB --remote --config ../../deploy/access.wrangler.jsonc --env ''"
   },
   "devDependencies": {
     "wrangler": "4.130.0"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
   }
 }

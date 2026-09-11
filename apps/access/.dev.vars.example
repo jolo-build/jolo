@@ -3,3 +3,7 @@
 # http://127.0.0.1:8788/callback
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
+# Google OAuth client type: Web application. Authorized redirect URI:
+# http://127.0.0.1:8788/callback/google
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=

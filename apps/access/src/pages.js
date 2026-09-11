@@ -17,13 +17,16 @@ export function appPage(title, body, { kind = '', active = '', publicPage = fals
 const heading = (title, description = '', action = '') => `<div class="task-heading"><div><p class="eyebrow">JOLO ACCOUNT</p><h1>${e(title)}</h1>${description ? `<p class="fine">${e(description)}</p>` : ''}</div>${action}</div>`;
 const csrf = account => `<input type="hidden" name="csrf" value="${e(account.csrf)}">`;
 
-export function signInPage({ configured, error = false }) {
+export function signInPage({ providers = {}, error = false, userCode = null }) {
+  const query = userCode ? `?user_code=${encodeURIComponent(userCode)}` : '';
   return appPage('Sign in', `${heading('Welcome to Jolo.', 'Sign in to manage your identity, tasks, and teams.')}
     <div class="access-grid access-two-column">
-      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">Sign in with GitHub</h2><p>Continue with your GitHub account.</p>
-        ${error ? `<p class="notice" role="alert">${error === 'email' ? 'Your GitHub account needs a verified primary email to sign in. Verify it in GitHub settings, then try again.' : 'We couldn’t complete sign-in. Please start again. If this keeps happening, contact the service administrator.'}</p>` : ''}
-        ${configured ? '<a class="button" href="/login">Continue with GitHub <span aria-hidden="true">↗</span></a>' : '<p class="notice" role="status">Sign-in is not available yet. Please check back soon.</p>'}
-        <p class="fine">We request your profile and verified email. Signing in does not grant access to your repositories.</p>
+      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">Sign in to your account</h2><p>${userCode ? 'Sign in to review your device connection.' : 'Choose an account to continue.'}</p>
+        ${error ? `<p class="notice" role="alert">${error === 'email' ? 'Your account needs a verified email to sign in. Verify it with your sign-in provider, then try again. GitHub requires a verified primary email.' : 'We couldn’t complete sign-in. Please start again. If this keeps happening, contact the service administrator.'}</p>` : ''}
+        <div class="signin-providers">${providers.google ? `<a class="button secondary" href="/login/google${query}">Continue with Google <span aria-hidden="true">↗</span></a>` : ''}
+        ${providers.github ? `<a class="button secondary" href="/login${query}">Continue with GitHub <span aria-hidden="true">↗</span></a>` : ''}</div>
+        ${!providers.google && !providers.github ? '<p class="notice" role="status">Sign-in is not available yet. Please check back soon.</p>' : ''}
+        <p class="fine">We request only your profile and verified email. Use the same sign-in provider each time to access your tasks and teams.</p>
       </div></section>
       <section class="access-panel" aria-labelledby="workspace-title"><div class="access-panel-body"><h2 id="workspace-title">Your account, across Jolo</h2><p>Manage tasks and teams here. Connect your desktop app or CLI to use your account in Jolo.</p><p class="fine">The Jolo desktop and CLI can still be used without an account.</p></div><div class="access-panel-actions"><a class="button secondary" href="/device">Connect a device</a></div></section>
     </div>`, { kind: 'access-page', active: 'signin', publicPage: true });
@@ -32,7 +35,7 @@ export function signInPage({ configured, error = false }) {
 export function accountPage(account) {
   return appPage('Your account', `${heading('Account', `Welcome, ${account.name}.`)}
     <div class="access-grid account-grid">
-      <section class="access-panel" aria-labelledby="account-title"><div class="access-panel-body"><h2 id="account-title">Account details</h2><dl class="account-details"><div><dt>Name</dt><dd>${e(account.name)}</dd></div><div><dt>Email</dt><dd>${e(account.email)}</dd></div><div><dt>Connected through</dt><dd>GitHub</dd></div></dl></div></section>
+      <section class="access-panel" aria-labelledby="account-title"><div class="access-panel-body"><h2 id="account-title">Account details</h2><dl class="account-details"><div><dt>Name</dt><dd>${e(account.name)}</dd></div><div><dt>Email</dt><dd>${e(account.email)}</dd></div><div><dt>Connected through</dt><dd>${account.provider === 'google' ? 'Google' : 'GitHub'}</dd></div></dl></div></section>
       <section class="access-panel" aria-labelledby="devices-title"><div class="access-panel-body"><h2 id="devices-title">Connected devices</h2><p>Review desktop and CLI connections, manage access, or sign out a device.</p></div><div class="access-panel-actions"><a class="button secondary" href="/devices">Manage devices</a><a href="/device">Connect a device</a></div></section>
       <section class="access-panel" aria-labelledby="session-title"><div class="access-panel-body"><h2 id="session-title">Browser session</h2><p>Signing out here ends this browser session. Connected devices stay signed in.</p></div><form class="access-panel-actions" method="post" action="/logout">${csrf(account)}<button class="button secondary" type="submit">Sign out</button></form></section>
     </div>`, { kind: 'access-page', active: 'account' });

@@ -1,4 +1,5 @@
 import { authenticate, authorization } from './auth.js';
+import { authenticateGoogle, googleAuthorization } from './google-auth.js';
 import { deviceRoutes } from './devices.js';
 import { taskRoutes } from './tasks/routes.js';
 import { createRepository } from './storage.js';
@@ -23,7 +24,7 @@ export function createAccessApp(env, options = {}) {
   const handleTasks = taskRoutes({ env, config, repository, session, now, mailFetch: options.mailFetch });
   const failedSignIn = error => {
     reportSignInFailure(env, error);
-    const response = redirect(error instanceof SignInError && error.reason === 'github_email' ? '/?error=email' : '/?error=signin');
+    const response = redirect(error instanceof SignInError && ['github_email', 'google_email'].includes(error.reason) ? '/?error=email' : '/?error=signin');
     setCookie(response, 'flow', '', 0);
     return response;
   };
@@ -45,10 +46,10 @@ export function createAccessApp(env, options = {}) {
     }
     if (request.method === 'GET' && path === '/') {
       if (config.configured && await session(request)) return redirect('/account');
-      return html(signInPage({ configured: config.configured, error: url.searchParams.get('error') }));
+      return html(signInPage({ providers: config.providers, error: url.searchParams.get('error'), userCode: deviceUserCode(url.searchParams.get('user_code')) }));
     }
     if (!config.configured) return html(errorPage(503), 503);
-    if (['/login', '/callback', '/device', '/device/code', '/device/token', '/device/approve'].includes(path) && env.ACCESS_RATE_LIMIT) {
+    if (['/login', '/login/google', '/callback', '/callback/google', '/device', '/device/code', '/device/token', '/device/approve'].includes(path) && env.ACCESS_RATE_LIMIT) {
       const { success } = await env.ACCESS_RATE_LIMIT.limit({ key: `${path}:${request.headers.get('cf-connecting-ip') ?? 'local'}` });
       if (!success) {
         const response = html(errorPage(429), 429);
@@ -60,33 +61,38 @@ export function createAccessApp(env, options = {}) {
     if (deviceResponse) return deviceResponse;
     const taskResponse = await handleTasks(request, context);
     if (taskResponse) return taskResponse;
-    if (request.method === 'GET' && path === '/login') {
+    if (request.method === 'GET' && ['/login', '/login/google'].includes(path)) {
+      const provider = path === '/login/google' ? 'google' : 'github';
+      if (!config.providers[provider]) return html(errorPage(503), 503);
       const previous = readToken(request, 'flow', config.secure);
       if (previous) await repository.removeFlow(await hashToken(previous));
       const token = randomToken();
-      const flow = await authorization(env, config.origin);
+      const flow = await (provider === 'google' ? googleAuthorization : authorization)(env, config.origin);
       await repository.saveFlow(await hashToken(token), flow, now() + FLOW_SECONDS * 1000, deviceUserCode(url.searchParams.get('user_code')) ? `/device?user_code=${deviceUserCode(url.searchParams.get('user_code'))}` : null);
       const response = redirect(flow.url);
       setCookie(response, 'flow', token, FLOW_SECONDS);
       return response;
     }
-    if (request.method === 'GET' && path === '/callback') {
+    if (request.method === 'GET' && ['/callback', '/callback/google'].includes(path)) {
+      const provider = path === '/callback/google' ? 'google' : 'github';
       const token = readToken(request, 'flow', config.secure);
       if (!token) return failedSignIn(new SignInError('missing_browser_flow'));
       const flow = await repository.consumeFlow(await hashToken(token));
       const p = url.searchParams;
-      if (!flow || p.has('error') || p.getAll('code').length !== 1 || p.getAll('state').length !== 1 || p.get('state') !== flow.state || !p.get('code') || p.get('code').length > 512) return failedSignIn(new SignInError('invalid_browser_flow'));
+      if (!flow || flow.provider !== provider || !config.providers[provider] || p.has('error') || p.getAll('code').length !== 1 || p.getAll('state').length !== 1 || p.get('state') !== flow.state || !p.get('code') || p.get('code').length > 512) return failedSignIn(new SignInError('invalid_browser_flow'));
       let stage = 'signin';
       try {
-        const identity = await authenticate(env, config.origin, p.get('code'), flow.verifier, options.fetch ?? fetch);
+        const identity = provider === 'google'
+          ? await authenticateGoogle(env, config.origin, p.get('code'), flow, options.fetch, now)
+          : await authenticate(env, config.origin, p.get('code'), flow.verifier, options.fetch ?? fetch);
         stage = 'account_storage';
-        const account = await repository.account(identity);
+        const account = await repository.account(identity, provider);
         stage = 'session_storage';
         const previous = readToken(request, 'session', config.secure);
         if (previous) await repository.removeSession(await hashToken(previous));
         const sessionToken = randomToken();
         await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), now() + SESSION_SECONDS * 1000);
-        // GitHub tokens never leave the server or become browser sessions.
+        // Provider tokens never leave the server or become browser sessions.
         const response = redirect(flow.return_to ?? '/account');
         setCookie(response, 'flow', '', 0);
         setCookie(response, 'session', sessionToken, SESSION_SECONDS);

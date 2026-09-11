@@ -1,19 +1,20 @@
 export function createRepository(db, now = Date.now) {
   return {
-    async account(identity) {
+    async account(identity, provider = 'github') {
+      if (!['github', 'google'].includes(provider)) throw new Error('Unknown identity provider');
       // Link by immutable provider ID, never by a matching email address.
-      return db.prepare(`INSERT INTO accounts (id, github_id, email, name, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(github_id) DO UPDATE SET
+      return db.prepare(`INSERT INTO accounts (id, provider_key, provider, email, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider_key) DO UPDATE SET
         email = excluded.email, name = excluded.name, updated_at = excluded.updated_at
         RETURNING id, email, name, created_at`)
-        .bind(crypto.randomUUID(), identity.id, identity.email, identity.name, now(), now()).first();
+        .bind(crypto.randomUUID(), `${provider}:${identity.id}`, provider, identity.email, identity.name, now(), now()).first();
     },
     async saveFlow(hash, challenge, expiresAt, returnTo = null) {
-      await db.prepare('INSERT INTO login_flows (token_hash, state, verifier, expires_at, return_to) VALUES (?, ?, ?, ?, ?)')
-        .bind(hash, challenge.state, challenge.verifier, expiresAt, returnTo).run();
+      await db.prepare('INSERT INTO login_flows (token_hash, state, verifier, expires_at, return_to, provider, nonce) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(hash, challenge.state, challenge.verifier, expiresAt, returnTo, challenge.provider ?? 'github', challenge.nonce ?? null).run();
     },
     async consumeFlow(hash) {
-      const row = await db.prepare('DELETE FROM login_flows WHERE token_hash = ? RETURNING state, verifier, expires_at, return_to').bind(hash).first();
+      const row = await db.prepare('DELETE FROM login_flows WHERE token_hash = ? RETURNING state, verifier, expires_at, return_to, provider, nonce').bind(hash).first();
       return row && row.expires_at > now() ? row : null;
     },
     async removeFlow(hash) {
@@ -24,7 +25,7 @@ export function createRepository(db, now = Date.now) {
         .bind(hash, accountID, csrf, expiresAt, now()).run();
     },
     getSession(hash) {
-      return db.prepare(`SELECT accounts.id, accounts.email, accounts.name, accounts.created_at, sessions.csrf
+      return db.prepare(`SELECT accounts.id, accounts.email, accounts.name, accounts.provider, accounts.created_at, sessions.csrf
         FROM sessions JOIN accounts ON accounts.id = sessions.account_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?`)
         .bind(hash, now()).first();
     },

@@ -7,7 +7,7 @@ import { randomToken, hashToken } from '../src/security.js';
 async function actor(f,n) {
   f.cookies.clear(); f.identity.id=n; f.identity.name=`Person ${n}`; f.emails[0].email=`person${n}@example.com`;
   await f.login();
-  const account=f.sqlite.query('SELECT * FROM accounts WHERE github_id=?').get(String(n));
+  const account=f.sqlite.query('SELECT * FROM accounts WHERE provider_key=?').get(`github:${n}`);
   return {...account,cookie:[...f.cookies].map(([k,v])=>`${k}=${v}`).join('; '),csrf:f.sqlite.query('SELECT csrf FROM sessions WHERE account_id=?').get(account.id).csrf};
 }
 function post(f,a,path,values={},origin=f.env.ACCESS_ORIGIN) {

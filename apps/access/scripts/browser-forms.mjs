@@ -3,6 +3,7 @@ import { app, BrowserWindow, nativeTheme } from 'electron';
 import { writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { checkLoading } from './browser-loading.mjs';
+import { checkComments } from './browser-comments.mjs';
 
 app.setPath('userData', process.env.JOLO_ACCESS_TEST_HOME);
 let phase = 'starting Electron';
@@ -132,6 +133,8 @@ async function checkForms() {
   assert.match(await text(), /Revision 2/);
   assert.equal(await contents.executeJavaScript('document.querySelector("#task-edit")'),null,'Saving a task should return to its detail view');
   assert.match(await contents.executeJavaScript('document.querySelector(".task-summary").textContent'),/In progress/);
+  phase = 'checking task comments and fixed scrolling';
+  await checkComments(window, origin, taskPath);
   await checkAccessLayout('task-view', [`a[href="${taskPath}/edit"]`,'form[action$="/archive"] button']);
   await contents.executeJavaScript('document.querySelector(".task-description").textContent += "\\nLong description".repeat(150)');
   await checkAccessLayout('task-view-long', [`a[href="${taskPath}/edit"]`,'form[action$="/archive"] button']);
@@ -171,8 +174,9 @@ async function checkForms() {
   await fit('account actions', ['form[action="/logout"] button','.access-panel-actions a[href="/devices"]']);
   assert.equal(await contents.executeJavaScript('document.querySelector(".task-nav [aria-current=page]").textContent'),'Account');
   await submit('form[action="/logout"] button');
-  assert.match(await text(), /Continue with your GitHub account/);
-  await checkAccessLayout('sign-in', ['a[href="/login"]']);
+  assert.match(await text(), /Continue with GitHub/);
+  assert.match(await text(), /Continue with Google/);
+  await checkAccessLayout('sign-in', ['a[href="/login"]', 'a[href="/login/google"]']);
   for (const [route,label,controls] of [
     ['/?error=email','sign-in-email',['a[href="/login"]']],
     ['/?error=signin','sign-in-error',['a[href="/login"]']],
