@@ -26,6 +26,7 @@
     "install:desktop": "bun scripts/build.js && bun apps/desktop/scripts/package.js --install",
     "benchmark": "bun scripts/benchmark.js",
     "website": "bun run --cwd apps/website dev",
+    "guide:build": "bun apps/guide/build.js",
     "website:build": "bun run --cwd apps/website build",
     "website:preview": "bun run --cwd apps/website preview",
     "website:deploy": "bun run --cwd apps/website deploy",
