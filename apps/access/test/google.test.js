@@ -73,6 +73,17 @@ test('matching Google and GitHub email addresses and subject IDs never merge acc
   expect(f.sqlite.query('SELECT count(*) AS n FROM accounts').get().n).toBe(2);
 });
 
+test('Google registration is measured once and returning Google sign-ins do not convert', async () => {
+  const f = googleFixture({ X_PIXEL_ID: 'test123', X_REGISTRATION_EVENT_ID: 'tw-test123-event123' });
+  expect((await f.login()).headers.get('location')).toBe('/welcome');
+  const welcome = await (await f.send('/welcome')).text();
+  expect(welcome).toContain('data-event="tw-test123-event123"');
+  expect(welcome).not.toContain('dev@example.com');
+  expect(welcome).not.toContain('secret-google-token');
+  expect((await f.login()).headers.get('location')).toBe('/account');
+  expect(await (await f.send('/welcome')).text()).not.toContain('/x-pixel.js');
+});
+
 test('Google can be the only provider, and device sign-in retains the approval code', async () => {
   const f = googleFixture({ GITHUB_CLIENT_ID: '', GITHUB_CLIENT_SECRET: '' });
   expect((await f.send('/health')).status).toBe(200);

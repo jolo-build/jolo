@@ -4,7 +4,8 @@ import { chatRoutes } from './chats.js';
 import { deviceRoutes } from './devices.js';
 import { taskRoutes } from './tasks/routes.js';
 import { createRepository } from './storage.js';
-import { accountPage, errorPage, signInPage } from './pages.js';
+import { accountPage, errorPage, signInPage, welcomePage } from './pages.js';
+import { advertisingConfig, advertisingScript } from './advertising.js';
 import { SignInError, reportSignInFailure } from './errors.js';
 import { deliverMail } from './mail.js';
 import { FLOW_SECONDS, SESSION_SECONDS, configuration, cookie, hashToken, protect, randomToken, readToken, readForm, formValue, deviceUserCode } from './security.js';
@@ -14,6 +15,13 @@ const redirect = path => new Response(null, { status: 303, headers: { Location: 
 
 export function createAccessApp(env, options = {}) {
   const config = configuration(env);
+  const advertising = advertisingConfig(env);
+  const marketingResponses = new WeakSet();
+  const marketingHTML = (body, conversionID = null) => {
+    const response = html(body.replace('</body>', `${advertisingScript(advertising, conversionID)}</body>`));
+    if (advertising) marketingResponses.add(response);
+    return response;
+  };
   const now = options.now ?? Date.now;
   const repository = env.ACCESS_DB ? createRepository(env.ACCESS_DB, now) : null;
   const setCookie = (response, name, value, seconds) => response.headers.append('Set-Cookie', cookie(name, value, seconds, config.secure));
@@ -35,7 +43,7 @@ export function createAccessApp(env, options = {}) {
     const url = new URL(request.url);
     if (url.origin !== config.origin) return html(errorPage(421), 421);
     const path = url.pathname;
-    if ((path === '/styles.css' || path === '/theme.js' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
+    if ((path === '/styles.css' || path === '/theme.js' || path === '/x-pixel.js' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
       return env.ASSETS?.fetch(request) ?? html(errorPage(404), 404);
     }
     if (request.method === 'GET' && path === '/health') {
@@ -48,7 +56,10 @@ export function createAccessApp(env, options = {}) {
     }
     if (request.method === 'GET' && path === '/') {
       if (config.configured && await session(request)) return redirect('/account');
-      return html(signInPage({ providers: config.providers, error: url.searchParams.get('error'), userCode: deviceUserCode(url.searchParams.get('user_code')) }));
+      const error = url.searchParams.get('error');
+      const userCode = deviceUserCode(url.searchParams.get('user_code'));
+      const page = signInPage({ providers: config.providers, error, userCode });
+      return !url.searchParams.has('user_code') && !error && config.configured ? marketingHTML(page) : html(page);
     }
     if (!config.configured) return html(errorPage(503), 503);
     if (['/login', '/login/google', '/callback', '/callback/google', '/device', '/device/code', '/device/token', '/device/approve'].includes(path) && env.ACCESS_RATE_LIMIT) {
@@ -95,15 +106,23 @@ export function createAccessApp(env, options = {}) {
         const previous = readToken(request, 'session', config.secure);
         if (previous) await repository.removeSession(await hashToken(previous));
         const sessionToken = randomToken();
-        await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), now() + SESSION_SECONDS * 1000);
+        const registration = account.isNew && advertising && !flow.return_to ? crypto.randomUUID() : null;
+        await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), now() + SESSION_SECONDS * 1000, registration);
         // Provider tokens never leave the server or become browser sessions.
-        const response = redirect(flow.return_to ?? '/account');
+        const response = redirect(flow.return_to ?? (registration ? '/welcome' : '/account'));
         setCookie(response, 'flow', '', 0);
         setCookie(response, 'session', sessionToken, SESSION_SECONDS);
         return response;
       } catch (error) {
         return failedSignIn(error instanceof SignInError ? error : new SignInError(stage));
       }
+    }
+    if (request.method === 'GET' && path === '/welcome') {
+      if (!await session(request)) return redirect('/');
+      if (url.search) return redirect('/welcome');
+      const token = readToken(request, 'session', config.secure);
+      const conversionID = advertising ? await repository.consumeRegistration(await hashToken(token)) : null;
+      return conversionID ? marketingHTML(welcomePage(), conversionID) : html(welcomePage());
     }
     if (request.method === 'GET' && path === '/account') {
       const account = await session(request);
@@ -130,7 +149,10 @@ export function createAccessApp(env, options = {}) {
 
   return {
     async fetch(request, context) {
-      try { return protect(await route(request, context), config.secure); }
+      try {
+        const response = await route(request, context);
+        return protect(response, config.secure, marketingResponses.has(response));
+      }
       catch { return protect(html(errorPage(503), 503), config.secure); }
     },
   };

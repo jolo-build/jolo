@@ -13,7 +13,9 @@
   "vars": {
     "ACCESS_ORIGIN": "https://access.jolo.build",
     "ENVIRONMENT": "production",
-    "MAIL_FROM": "Jolo <noreply@notifications.jolo.build>"
+    "MAIL_FROM": "Jolo <noreply@notifications.jolo.build>",
+    "X_PIXEL_ID": "rf82t",
+    "X_REGISTRATION_EVENT_ID": "tw-rf82t-rf84j"
   },
   "assets": {
     "directory": "../apps/access/public",

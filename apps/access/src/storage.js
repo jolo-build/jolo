@@ -4,13 +4,14 @@ export function createRepository(db, now = Date.now) {
     async account(identity, provider = 'github') {
       if (!['github', 'google'].includes(provider)) throw new Error('Unknown identity provider');
       // Link by immutable provider ID, never by a matching email address.
+      const candidateID = crypto.randomUUID();
       const account = await db.prepare(`INSERT INTO accounts (id, provider_key, provider, email, name, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider_key) DO UPDATE SET
         email = excluded.email, name = excluded.name, updated_at = excluded.updated_at
         RETURNING id, email, name, created_at`)
-        .bind(crypto.randomUUID(), `${provider}:${identity.id}`, provider, identity.email, identity.name, now(), now()).first();
+        .bind(candidateID, `${provider}:${identity.id}`, provider, identity.email, identity.name, now(), now()).first();
       await ensureTaskPrefix(db, {accountId:account.id, name:account.name});
-      return account;
+      return { ...account, isNew: account.id === candidateID };
     },
     async saveFlow(hash, challenge, expiresAt, returnTo = null) {
       await db.prepare('INSERT INTO login_flows (token_hash, state, verifier, expires_at, return_to, provider, nonce) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -23,9 +24,18 @@ export function createRepository(db, now = Date.now) {
     async removeFlow(hash) {
       await db.prepare('DELETE FROM login_flows WHERE token_hash = ?').bind(hash).run();
     },
-    async saveSession(hash, accountID, csrf, expiresAt) {
-      await db.prepare('INSERT INTO sessions (token_hash, account_id, csrf, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(hash, accountID, csrf, expiresAt, now()).run();
+    async saveSession(hash, accountID, csrf, expiresAt, registrationEventID = null) {
+      await db.prepare('INSERT INTO sessions (token_hash, account_id, csrf, expires_at, created_at, registration_event_id) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(hash, accountID, csrf, expiresAt, now(), registrationEventID).run();
+    },
+    async consumeRegistration(hash) {
+      const row = await db.prepare('SELECT registration_event_id FROM sessions WHERE token_hash = ? AND expires_at > ?')
+        .bind(hash, now()).first();
+      if (!row?.registration_event_id) return null;
+      // Compare-and-clear makes refreshes and concurrent requests count only once.
+      const claimed = await db.prepare('UPDATE sessions SET registration_event_id = NULL WHERE token_hash = ? AND registration_event_id = ? AND expires_at > ? RETURNING token_hash')
+        .bind(hash, row.registration_event_id, now()).first();
+      return claimed ? row.registration_event_id : null;
     },
     getSession(hash) {
       return db.prepare(`SELECT accounts.id, accounts.email, accounts.name, accounts.provider, accounts.created_at, sessions.csrf

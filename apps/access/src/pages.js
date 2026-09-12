@@ -25,17 +25,23 @@ const csrf = account => `<input type="hidden" name="csrf" value="${e(account.csr
  */
 export function signInPage({ providers = {}, error = false, userCode = null }) {
   const query = userCode ? `?user_code=${encodeURIComponent(userCode)}` : '';
-  return appPage('Sign in', `${heading('Welcome to Jolo.', 'Sign in to manage your identity, tasks, and teams.')}
+  return appPage('Sign in', `${heading(userCode ? 'Connect your Jolo account.' : 'Your tasks, connected to your coding agents.', userCode ? 'Sign in to review your device connection.' : 'Manage personal and team tasks in your browser. Reference them from Jolo desktop or CLI.')}
     <div class="access-grid access-two-column">
-      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">Sign in to your account</h2><p>${userCode ? 'Sign in to review your device connection.' : 'Choose an account to continue.'}</p>
+      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">${userCode ? 'Sign in to your account' : 'Get started with Jolo Access'}</h2><p>${userCode ? 'Sign in to review your device connection.' : 'Create your account or sign in with a provider below.'}</p>
         ${error ? `<p class="notice" role="alert">${error === 'email' ? 'Your account needs a verified email to sign in. Verify it with your sign-in provider, then try again. GitHub requires a verified primary email.' : 'We couldn’t complete sign-in. Please start again. If this keeps happening, contact the service administrator.'}</p>` : ''}
         <div class="signin-providers">${providers.google ? `<a class="button secondary" href="/login/google${query}">Continue with Google <span aria-hidden="true">↗</span></a>` : ''}
         ${providers.github ? `<a class="button secondary" href="/login${query}">Continue with GitHub <span aria-hidden="true">↗</span></a>` : ''}</div>
         ${!providers.google && !providers.github ? '<p class="notice" role="status">Sign-in is not available yet. Please check back soon.</p>' : ''}
         <p class="fine">We request only your profile and verified email. Use the same sign-in provider each time to access your tasks and teams.</p>
       </div></section>
-      <section class="access-panel" aria-labelledby="workspace-title"><div class="access-panel-body"><h2 id="workspace-title">Your account, across Jolo</h2><p>Manage tasks and teams here. Connect your desktop app or CLI to use your account in Jolo.</p><p class="fine">The Jolo desktop and CLI can still be used without an account.</p></div><div class="access-panel-actions"><a class="button secondary" href="/device">Connect a device</a></div></section>
+      <section class="access-panel" aria-labelledby="workspace-title"><div class="access-panel-body"><h2 id="workspace-title">From task to coding workspace</h2><p>Keep requirements, priorities, and discussion with each task. Share work with your team, then reference a task in Jolo desktop or CLI to give your agent the context.</p><p class="fine">The Jolo desktop and CLI can still be used without an account.</p></div><div class="access-panel-actions"><a class="button secondary" href="/device">Connect a device</a></div></section>
     </div>`, { kind: 'access-page signin-page', active: 'signin', publicPage: true });
+}
+
+export function welcomePage() {
+  // Intentionally contains no account details or task data: this is the only
+  // signed-in page on which a registration conversion can be measured.
+  return layout('Account created', `<section class="task-app"><div class="task-content access-page">${heading('Your account is ready.', 'Create your first task and keep the context with your work.')}<section class="access-panel"><div class="access-panel-body"><h2>Start with one task</h2><p>Add what you want to build or fix. You can organize tasks in your browser and reference them from Jolo desktop or CLI.</p></div><div class="access-panel-actions"><a class="button" href="/tasks/new">Create your first task</a><a class="button secondary" href="/tasks">Open tasks</a></div></section></div></section>`);
 }
 
 export function accountPage(account) {

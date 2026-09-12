@@ -59,7 +59,7 @@ export function readToken(request, name, secure) {
   return /^[a-f0-9]{64}$/.test(value) ? value : null;
 }
 
-export function protect(response, secure = true) {
+export function protect(response, secure = true, advertising = false) {
   const headers = new Headers(response.headers);
   headers.set('Cache-Control', 'no-store');
   // no-referrer turns Origin into "null" on native form POSTs, failing CSRF
@@ -68,7 +68,8 @@ export function protect(response, secure = true) {
   headers.set('Referrer-Policy', 'strict-origin');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
-  headers.set('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  const adOrigins = 'https://ads-twitter.com https://ads-api.twitter.com https://analytics.twitter.com https://t.co';
+  headers.set('Content-Security-Policy', `default-src 'none'; script-src 'self'${advertising ? ' https://static.ads-twitter.com' : ''}; style-src 'self'; img-src 'self'${advertising ? ` ${adOrigins}` : ''}; ${advertising ? `connect-src ${adOrigins}; ` : ''}font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
   headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   if (secure) headers.set('Strict-Transport-Security', 'max-age=31536000');
   return new Response(response.body, { status: response.status, headers });

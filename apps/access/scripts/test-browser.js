@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { testDatabase } from '../test/database.js';
 import { createAccessApp } from '../src/worker.js';
 import { createRepository } from '../src/storage.js';
-import { signInPage, errorPage } from '../src/pages.js';
+import { signInPage, errorPage, welcomePage } from '../src/pages.js';
 import { cookie, hashToken, randomToken, SESSION_SECONDS } from '../src/security.js';
 
 const requireDesktop = createRequire(new URL('../../desktop/package.json', import.meta.url));
@@ -32,6 +32,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) 
   if (pathname === '/__fixture/decline') return Response.redirect(declined.verification_uri_complete, 303);
   if (pathname === '/__fixture/unavailable') return new Response(signInPage({ providers: {} }), { headers: { 'Content-Type': 'text/html' } });
   if (pathname === '/__fixture/rate-limited') return new Response(errorPage(429), { status: 429, headers: { 'Content-Type': 'text/html' } });
+  if (pathname === '/__fixture/welcome') return new Response(welcomePage(), { headers: { 'Content-Type': 'text/html' } });
   const response = await app.fetch(request);
   if (request.method === 'POST') {
     submissions.push({ path: pathname, origin: request.headers.get('origin'), referrer: request.headers.get('referer'), status: response.status });

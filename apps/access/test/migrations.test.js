@@ -23,6 +23,17 @@ const released = [
   }
 ];
 
+test('registration migration preserves existing sessions without counting them as signups', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const { sql } of migrations.slice(0, 9)) db.exec(sql);
+    db.exec("INSERT INTO accounts(id,provider_key,provider,email,name,created_at,updated_at) VALUES ('existing','github:existing','github','existing@example.com','Existing',1,1); INSERT INTO sessions(token_hash,account_id,csrf,expires_at,created_at) VALUES ('existing-session','existing','csrf',9999999999999,1)");
+    db.exec(migrations[9].sql);
+    expect(db.query('SELECT token_hash, registration_event_id FROM sessions').get()).toEqual({ token_hash: 'existing-session', registration_event_id: null });
+    expect(db.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { db.close(); }
+});
+
 test('TypeScript migrations generate the original D1 filenames and SQL checksums', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'access-migrations-'));
   try {

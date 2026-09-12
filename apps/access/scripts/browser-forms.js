@@ -197,6 +197,7 @@ async function checkForms() {
   for (const [route,label,controls] of /** @type {[string, string, string[]][]} */ ([
     ['/?error=email','sign-in-email',['a[href="/login"]']],
     ['/?error=signin','sign-in-error',['a[href="/login"]']],
+    ['/__fixture/welcome','welcome',['a[href="/tasks/new"]']],
     ['/__fixture/unavailable','sign-in-unavailable',['.task-nav']],
     ['/device','device-signed-out',['[name=user_code]','form[action="/device"] button']],
     ['/missing','not-found',['.access-panel a[href="/"]']],

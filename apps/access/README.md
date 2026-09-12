@@ -39,6 +39,16 @@ For changes to browser forms, cookies, or response headers, also run `bun run ac
 
 Tests exercise both OAuth exchanges, signed Google token verification, provider mix-ups, callback replay, account separation, and device approval, polling, expiry, cancellation, and revocation. They execute the actual migrations and repository queries in SQLite, including fresh initialization, upgrades of existing data, independent workspace counters, and unique prefix enforcement. Node-based checks also run both providers inside Wrangler's workerd runtime, with outbound requests handled by local fixtures, including rejected upstream redirects. `bun test tests/integration/account.test.js` additionally connects real CLI and engine processes to the fixture service. The build bundles the Worker and assets with Wrangler's deployment dry run; these checks need no provider account and deploy nothing.
 
+## Registration measurement
+
+Production uses X Pixel `rf82t` and the Lead event `tw-rf82t-rf84j` (Jolo Access — registration completed). `X_PIXEL_ID` and `X_REGISTRATION_EVENT_ID` must both be valid to enable measurement; omit them for local development. Apply migration `0010_registration_events.sql` before deploying this version.
+
+The pixel runs on the public sign-in landing page and a generic `/welcome` page after a new browser account is created. The welcome page links to the first-task form and contains no profile or task data. Returning sign-ins, failed authentication, and device approval flows do not generate registration events. The session stores a random, one-use conversion ID; concurrent requests and refreshes cannot emit another event. Existing provider-based identity rules still apply: using Google and GitHub creates two separate accounts, even with the same email.
+
+X receives its standard browser/page signals and a random conversion ID with `status: completed`; the integration does not supply email, name, phone, account ID, task data, or provider credentials. Private pages and OAuth callbacks do not load the pixel or allow X in their security policy. The optional SDK loads after the page has loaded, and Global Privacy Control or Do Not Track disables it. Browser blocking, leaving the welcome page before delivery, or a network failure can undercount events; the one-use event is not retried. X retains its click attribution in its first-party cookie across OAuth. Use campaign-specific UTM links and compare X's reports with actual account creation and first-task activity.
+
+Verify a new Google and GitHub account, a returning login, a welcome-page refresh, and a blocked pixel. Check the event in X Events Manager before enabling conversion-optimized ads. Local tests use fixture event IDs and mocked delivery, so they do not generate production conversions.
+
 ## Source map
 
 | Path | Responsibility |
