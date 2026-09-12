@@ -41,6 +41,8 @@ Tests exercise both OAuth exchanges, signed Google token verification, provider 
 
 ## Registration measurement
 
+The public sign-in page demonstrates writing a task, connecting Jolo, and referencing the task in agent chat. Examples contain fictional data and work without JavaScript. New browser accounts reach a welcome page with a first-task action regardless of whether advertising is configured. Returning sign-ins and device approval retain their existing destinations. Task pages show connection guidance until the account has an unexpired device with `tasks:read` access; revoking or expiring that access brings the guidance back.
+
 Production uses X Pixel `rf82t` and the Lead event `tw-rf82t-rf84j` (Jolo Access — registration completed). `X_PIXEL_ID` and `X_REGISTRATION_EVENT_ID` must both be valid to enable measurement; omit them for local development. Apply migration `0010_registration_events.sql` before deploying this version.
 
 The pixel runs on the public sign-in landing page and a generic `/welcome` page after a new browser account is created. The welcome page links to the first-task form and contains no profile or task data. Returning sign-ins, failed authentication, and device approval flows do not generate registration events. The session stores a random, one-use conversion ID; concurrent requests and refreshes cannot emit another event. Existing provider-based identity rules still apply: using Google and GitHub creates two separate accounts, even with the same email.

@@ -31,7 +31,9 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
   }
   async function taskView(account,task,team,error=null,{before=null,draft=null}={}) {
     const history=await comments.list(account.id,task.id,before);
-    return taskViewPage({origin:config.origin,account,task,team,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],...history,commentsBefore:before,commentDraft:draft,error});
+    const devices=await auth.listDevices(account.id);
+    const needsConnection=!devices.some(device=>device.scope?.split(' ').includes('tasks:read'));
+    return taskViewPage({origin:config.origin,account,task,team,needsConnection,labels:await repo.labels(account.id,team?.id),members:team?await repo.members(account.id,team.id):[],...history,commentsBefore:before,commentDraft:draft,error});
   }
   return async (request,context) => {
     const url=new URL(request.url),path=url.pathname,api=path==='/api/tasks'||path.startsWith('/api/tasks/');

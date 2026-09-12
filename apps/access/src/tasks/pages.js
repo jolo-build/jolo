@@ -34,7 +34,7 @@ function commentCard(comment, account, path, editable, draft) {
     </div>`:''}</div></article>`;
 }
 
-export function taskViewPage({ origin, account, task, labels, members = [], team = null, error = null, comments = [], older = null, commentsBefore = null, commentDraft = null }) {
+export function taskViewPage({ origin, account, task, labels, members = [], team = null, needsConnection = false, error = null, comments = [], older = null, commentsBefore = null, commentDraft = null }) {
   const writable = canWriteTask(task, account.id), path = taskPath(task);
   const commentable = canCommentTask(task, account.id);
   const selected = JSON.parse(task.labels ?? '[]');
@@ -48,6 +48,7 @@ export function taskViewPage({ origin, account, task, labels, members = [], team
     <div class="task-view-layout">
       <section class="task-discussion" aria-label="Task discussion">
         <div class="task-conversation task-scroll" tabindex="0" aria-label="Task description and comments">
+          ${needsConnection && !task.archived_at ? `<details class="task-connect-guide" open><summary>Next: use this task with your coding agent</summary><div><p>In Jolo desktop, open <strong>Settings → Account → Connect tasks</strong>. Sign in with the same provider you used here and approve task access.</p><p>For the CLI, run <code>jolo login --tasks</code>.</p><p>Then open the right project and send <code>@codex implement #${taskKeyOf(task)}</code> in Jolo chat.</p><a href="https://jolo.build">Get Jolo</a><span> · </span><a href="/device">Enter a device code</a></div></details>` : ''}
           <article class="task-view-body" aria-labelledby="task-title"><h2 id="task-title">${e(task.title)}</h2>${task.description ? `<div class="task-description markdown-body">${renderMarkdown(task.description)}</div>` : '<p class="fine">No description provided.</p>'}</article>
           <section class="task-comments" id="comments" aria-labelledby="comments-title"><div class="comments-heading"><h3 id="comments-title">Comments</h3>${commentsBefore?`<a href="${path}#comments">Latest comments</a>`:''}</div>
             ${older?`<a class="older-comments" href="${path}?comments_before=${older}#comments">Load older comments</a>`:''}
@@ -93,7 +94,7 @@ export function taskFormPage({ origin, account, task = null, teams, labels, memb
   const title = task ? `Edit ${taskKeyOf(task)}` : 'New task';
   const fields = `${hidden('team', team?.id ?? '')}${hidden('request_id', values.requestID ?? crypto.randomUUID())}${task ? hidden('revision', task.revision) : ''}
     <div class="task-main-fields">
-      <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="Task title"')}</label>
+      <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="e.g. Add a password visibility toggle"')}</label>
       <div class="task-description-field" data-markdown-editor><div class="description-toolbar"><label for="task-description">Description <span class="markdown-hint">Markdown supported</span></label><div data-markdown-tabs hidden><button type="button" data-mode="write" aria-pressed="true">Write</button><button type="button" data-mode="preview" aria-pressed="false">Preview</button></div></div><textarea id="task-description" name="description" rows="6" maxlength="8192" placeholder="What needs to be done? Add context, links, or acceptance criteria…">${e(values.description)}</textarea><div class="markdown-body description-preview" data-markdown-preview hidden tabindex="0" aria-label="Description preview"></div></div>
     </div>
     <div class="task-properties">
