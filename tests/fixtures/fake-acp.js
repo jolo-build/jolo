@@ -70,6 +70,8 @@ async function prompt(id, params) {
   const tool = (fields) => { const toolCallId = `call-${++counter}`; update({ sessionUpdate: "tool_call", toolCallId, status: "pending", ...fields }); return toolCallId; };
   update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking about it." } });
   if (text.startsWith('image-check')) return finish(`Images received: ${(params.prompt ?? []).filter(part => part.type === 'image').map(image => `${image.mimeType}:${Buffer.from(image.data, 'base64').length}`).join(', ')}`);
+  // Recorded Devin reply format: no private-use delimiters, split across ACP chunks by say().
+  if (text === 'devin-visualization') return finish(`visualize${JSON.stringify({ path: path.join(session.cwd, 'proposal-assessment.html'), mode: 'wide', title: 'Proposal assessment' })}`);
   let match;
   if (text === 'browser-check') {
     if (!received.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');

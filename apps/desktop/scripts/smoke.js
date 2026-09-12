@@ -109,7 +109,8 @@ if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
   '  I -->|Required for host-loss protection| J[Encrypted off-host storage]',
 ].join('\n') + '\n```\n');
 if (visualization) writeFileSync(visualizationPath, `<div style="padding:20px"><h2>Interactive preview</h2><p>Local visualization fixture.</p><button id="increment" onclick="document.querySelector('#count').textContent=String(++window.count)">Increment</button><output id="count">0</output></div><script>window.count=0;</script>`);
-const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({path:visualizationPath,mode:'wide',title:'Interactive preview'})}\n\nAnd a missing file:\n\nvisualize${JSON.stringify({path:path.join(realpathSync(project),'missing-preview.html')})}`;
+// Exercise the delimiter-free agent output alongside the original marker format.
+const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({path:visualizationPath,mode:'wide',title:'Interactive preview'})}\n\nAnd a missing file:\n\nvisualize${JSON.stringify({path:path.join(realpathSync(project),'missing-preview.html')})}`;
 const scriptPath = path.join(home, "script.json");
 writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
+import { parseDocument } from '@jolo/markdown';
 
 const engines = [];
 const homes = [];
@@ -49,6 +50,24 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('Devin visualization replies survive ACP streaming, storage, and session resume', async () => {
+    const { client, repo, session, runTo, text, messagesOf } = await boot();
+    const visualizationPath = path.join(realpathSync(repo), 'proposal-assessment.html');
+    try {
+      for (const request of ['visualization-first', 'visualization-resumed']) {
+        const run = await runTo(request, 'devin-visualization');
+        expect(run.state).toBe('completed');
+        const reply = (await messagesOf(run.id)).at(-1);
+        const raw = await text(reply);
+        expect(raw).toBe(`visualize${JSON.stringify({ path: visualizationPath, mode: 'wide', title: 'Proposal assessment' })}`);
+        expect(parseDocument(raw).blocks).toEqual([{ type: 'visualization', status: 'ready', path: visualizationPath, mode: 'wide', title: 'Proposal assessment' }]);
+        const saved = (await client.call('session.page', { sessionId: session.id })).messages.find(message => message.id === reply.id);
+        expect(await text(saved)).toBe(raw);
+      }
+      expect((await client.call('session.page', { sessionId: session.id })).messages).toHaveLength(6);
+    } finally { await client.close(); }
+  }, 25_000);
+
   test('ACP omits unavailable browser tools when creating and resuming a session', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {

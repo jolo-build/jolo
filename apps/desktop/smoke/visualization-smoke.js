@@ -21,7 +21,7 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   await evaluate("window.__joloSmoke.send('Show a visualization')");
   await waitFor("window.__joloSmoke.state().runState === 'completed'", 'visualization reply completed');
   await waitFor("document.querySelectorAll('.visualization').length === 2", 'markers become preview blocks');
-  if (await evaluate("document.querySelector('.conversation').textContent.includes('visualize')")) throw new Error('raw marker still visible');
+  if (await evaluate("/visualize|visualize\\{/.test(document.querySelector('.conversation').textContent)")) throw new Error('raw marker still visible');
   await evaluate("document.querySelector('.visualization').scrollIntoView({block:'center'})");
   await waitFor("Boolean(document.querySelector('.visualization iframe'))", 'inline frame loaded');
   const frame = () => window.webContents.mainFrame.frames.find(item => item.url.startsWith('jolo-visualization:'));

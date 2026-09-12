@@ -7,7 +7,32 @@ const MAX_BLOCK_CHARS = 64 * 1024;
 const LIST_ITEM = /^\s*([-*+]|\d{1,9}[.)])\s+/;
 const VISUALIZE_START = 'visualize';
 const VISUALIZE_END = '';
-const startsVisualization = line => line.trimStart().startsWith(VISUALIZE_START) || (line.trim().startsWith('') && VISUALIZE_START.startsWith(line.trim()));
+// Some agents emit the directive without its private-use delimiter characters.
+// Require the JSON opener so ordinary prose beginning with "visualize" stays prose.
+function visualizationStart(line) {
+  const source = line.trimStart();
+  if (source.startsWith(VISUALIZE_START) || (source.trim().startsWith('') && VISUALIZE_START.startsWith(source.trim()))) return VISUALIZE_START;
+  return /^visualize[ \t]*\{/.test(source) ? 'visualize' : null;
+}
+
+function visualizationState(start) {
+  return { start, depth: 0, quoted: false, escaped: false };
+}
+
+// Track JSON strings and nesting across lines; a brace in a title is not an end marker.
+function endsVisualization(text, state) {
+  if (state.start === VISUALIZE_START) return text.includes(VISUALIZE_END);
+  for (const char of text) {
+    if (state.quoted) {
+      if (state.escaped) state.escaped = false;
+      else if (char === '\\') state.escaped = true;
+      else if (char === '"') state.quoted = false;
+    } else if (char === '"') state.quoted = true;
+    else if (char === '{') state.depth++;
+    else if (char === '}' && --state.depth === 0) return true;
+  }
+  return false;
+}
 
 /** Split text into block segments at blank lines, keeping fenced code intact. */
 export function segment(text) {
@@ -15,12 +40,12 @@ export function segment(text) {
   const segments = [];
   let current = [];
   let inFence = null;
-  let inVisualization = false;
+  let inVisualization = null;
   const flush = () => { if (current.length) { segments.push(current.join("\n")); current = []; } };
   for (const line of lines) {
     if (inVisualization) {
       current.push(line);
-      if (line.includes(VISUALIZE_END)) { inVisualization = false; flush(); }
+      if (endsVisualization(line, inVisualization)) { inVisualization = null; flush(); }
       continue;
     }
     const fence = line.match(/^\s{0,3}(`{3,}|~{3,})/);
@@ -30,10 +55,11 @@ export function segment(text) {
       if (fence && fence[1][0] === inFence[0] && fence[1].length >= inFence.length && /^\s{0,3}(`{3,}|~{3,})\s*$/.test(line)) { inFence = null; flush(); }
       continue;
     }
-    if (startsVisualization(line)) {
+    const start = visualizationStart(line);
+    if (start) {
       flush(); current.push(line);
-      if (line.includes(VISUALIZE_END)) flush();
-      else inVisualization = true;
+      inVisualization = visualizationState(start);
+      if (endsVisualization(line, inVisualization)) { inVisualization = null; flush(); }
       continue;
     }
     // A fence indented under a list item belongs to that item only when the item opened a code span mid-line
@@ -48,7 +74,7 @@ export function segment(text) {
     current.push(line);
   }
   flush();
-  return { segments, openFence: Boolean(inFence), openVisualization: inVisualization };
+  return { segments, openFence: Boolean(inFence), openVisualization: Boolean(inVisualization) };
 }
 
 export function parseInline(text) {
@@ -142,12 +168,13 @@ function parseList(lines) {
 
 /** Parse one segment into a block. */
 export function parseBlock(text) {
-  if (startsVisualization(text.split('\n', 1)[0])) {
-    if (!text.includes(VISUALIZE_END) && text.length <= MAX_BLOCK_CHARS) return { type: 'visualization', status: 'pending' };
+  const start = visualizationStart(text.split('\n', 1)[0]);
+  if (start) {
+    if (!endsVisualization(text, visualizationState(start)) && text.length <= MAX_BLOCK_CHARS) return { type: 'visualization', status: 'pending' };
     try {
       const source = text.trim();
-      if (source.length > MAX_BLOCK_CHARS || !source.startsWith(VISUALIZE_START) || !source.endsWith(VISUALIZE_END)) throw new Error();
-      const value = JSON.parse(source.slice(VISUALIZE_START.length, -VISUALIZE_END.length));
+      if (source.length > MAX_BLOCK_CHARS || !source.startsWith(start) || (start === VISUALIZE_START && !source.endsWith(VISUALIZE_END))) throw new Error();
+      const value = JSON.parse(source.slice(start.length, start === VISUALIZE_START ? -VISUALIZE_END.length : undefined));
       if (!value || typeof value.path !== 'string' || !value.path.trim() || value.path.length > 4096 || /[\x00-\x1f\x7f]/.test(value.path) || !/\.html?$/i.test(value.path)) throw new Error();
       return { type: 'visualization', status: 'ready', path: value.path, mode: value.mode === 'wide' ? 'wide' : 'inline', title: typeof value.title === 'string' ? value.title.slice(0, 250) : null };
     } catch { return { type: 'visualization', status: 'invalid' }; }
