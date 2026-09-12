@@ -2,6 +2,7 @@ import { CHAT_BYTES, validChat } from '../../../packages/protocol/src/chat-sync.
 import { hashToken } from './security.js';
 import { appPage, escapeHTML as e } from './pages.js';
 import { renderMarkdown } from './tasks/markdown.js';
+import { chatsPage } from './chat-pages.js';
 
 export function chatRoutes({ env, repository, session }) {
   const db = env.ACCESS_DB;
@@ -43,10 +44,24 @@ export function chatRoutes({ env, repository, session }) {
       if (api) return Response.json({ chat, revision: row.revision });
       return new Response(appPage(chat.title, `<h1>${e(chat.title)}</h1><p class="fine">Synced conversation · Files and running agents remain on the original device.</p>${chat.messages.map(m=>`<article class="synced-message"><p class="fine">${e(m.role === 'user' ? 'You' : 'Assistant')}</p><div class="markdown-body">${renderMarkdown(m.text)}</div></article>`).join('')}`, { active: 'chats', kind: 'synced-chats-page' }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
+    if (!api) {
+      const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+      const before = url.searchParams.get('before') ?? '';
+      const cursor = /^(\d{1,16}):([a-f0-9-]{36})$/.exec(before);
+      const timestamp = cursor ? Number(cursor[1]) : null;
+      if (before && (!cursor || !Number.isSafeInteger(timestamp))) return Response.json({ error: 'Invalid chat cursor.' }, { status: 400 });
+      const rows = (await db.prepare(`SELECT id,title,updated_at,json_array_length(content,'$.messages') AS message_count
+        FROM synced_chats WHERE account_id=?1 AND (?2='' OR instr(lower(title),lower(?2))>0)
+        AND (?3 IS NULL OR updated_at<?3 OR (updated_at=?3 AND id<?4))
+        ORDER BY updated_at DESC,id DESC LIMIT 51`).bind(actor.id,query,timestamp,cursor?.[2] ?? '').all()).results;
+      const count = await db.prepare("SELECT count(*) AS total FROM synced_chats WHERE account_id=?1 AND (?2='' OR instr(lower(title),lower(?2))>0)").bind(actor.id,query).first();
+      const chats = rows.slice(0,50), last = chats.at(-1);
+      const next = rows.length > 50 ? `${last.updated_at}:${last.id}` : null;
+      return new Response(chatsPage({ chats, total: count.total, query, next, before }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
     const after = url.searchParams.get('after') ?? '';
     const rows = (await db.prepare('SELECT id,title,revision,updated_at FROM synced_chats WHERE account_id=?1 AND id>?2 ORDER BY id LIMIT 51').bind(actor.id,after.slice(0,36)).all()).results;
     const chats = rows.slice(0,50), next = rows.length > 50 ? chats.at(-1).id : null;
-    if (api) return Response.json({ chats, next });
-    return new Response(appPage('Chats', `<h1>Chats</h1><p class="fine">Enable chat sync in Jolo Settings → Account on each device.</p>${chats.map(c=>`<a class="task-row" href="/chats/${e(c.id)}">${e(c.title || 'Untitled chat')}</a>`).join('') || '<p>No synced chats yet.</p>'}${next ? `<a href="/chats?after=${e(next)}">More chats</a>` : ''}`, { active: 'chats', kind: 'synced-chats-page' }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    return Response.json({ chats, next });
   };
 }

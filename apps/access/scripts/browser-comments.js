@@ -29,7 +29,7 @@ export async function checkComments(window, origin, taskPath) {
     for(let i=0;i<35;i++) {const row=first.cloneNode(true);row.id='scroll-fixture-'+i;row.querySelector('.comment-body').textContent='Update '+(i+1)+': '+row.querySelector('.comment-body').textContent;list.append(row);}
   })()`);
   const settle = () => evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
-  for (const [width,height] of [[1280,720],[1024,768],[1280,560],[390,844]]) {
+  for (const [width,height] of [[1280,720],[1024,768],[1280,560],[768,1024],[390,844],[320,740]]) {
     window.setContentSize(width,height);
     await settle();
     const metrics = () => evaluate(`(() => {
