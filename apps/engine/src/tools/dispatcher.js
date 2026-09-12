@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import path from 'node:path';
+import os from 'node:os';
 import { ProtocolError } from "@jolo/protocol";
 import { TOOL_RESULT_MAX_BYTES } from "./registry.js";
 import { PermissionRequired } from "../permissions/service.js";
@@ -175,7 +176,13 @@ export class ToolDispatcher {
 
 /** Resolve the engine's environment profile for tools (§10.3): explicit executables, not a login shell. */
 export function resolveToolEnvironment(env = process.env) {
-  const pathValue = env.JOLO_TOOL_PATH ?? env.PATH ?? "/usr/bin:/bin";
+  // Finder launches do not read shell startup files. Append standard installer locations
+  // while preserving the caller's ordering and any explicit restricted tool path.
+  const home = env.HOME || os.homedir();
+  const defaults = [path.join(home, '.local/bin'), path.join(home, '.bun/bin'), path.join(home, '.npm-global/bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  const pathValue = env.JOLO_TOOL_PATH ?? [...new Set([
+    ...(env.PATH ?? '/usr/bin:/bin').split(path.delimiter).filter(Boolean), ...defaults,
+  ])].join(path.delimiter);
   const find = (name) => {
     for (const dir of pathValue.split(":")) {
       const candidate = `${dir}/${name}`;
