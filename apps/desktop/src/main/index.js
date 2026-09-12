@@ -18,6 +18,7 @@ import { newestSourceTime } from "./staleness.js";
 import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
+import { openChatFile } from './chat-files.js';
 import { installReloadShortcuts } from './reload-shortcuts.js';
 import { HostDialogs } from './host-dialogs.js';
 
@@ -257,6 +258,11 @@ function registerIpc(window, bridge, visualizations, releases) {
   ipcMain.handle("jolo:homeDirectory", (event) => {
     if (!trusted(event)) throw new Error("untrusted sender");
     return os.homedir();
+  });
+  ipcMain.handle('jolo:openChatFile', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { await openChatFile((method, args) => bridge.rawCall(method, args), shell, params ?? {}); return { ok: true }; }
+    catch (error) { return { ok: false, error: String(error?.message ?? 'Could not open this file.') }; }
   });
   ipcMain.handle("jolo:openExternal", (event, url) => {
     if (!trusted(event)) throw new Error("untrusted sender");

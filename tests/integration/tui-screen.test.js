@@ -119,7 +119,8 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
       const promptRow = lines().findLastIndex((row) => row.startsWith("▎❯ "));
       for (const row of [promptRow - 1, promptRow, promptRow + 1]) {
         const cell = screen.buffer.active.getLine(row).getCell(screen.cols - 3);
-        expect(cell.getBgColor()).toBe(0x242424);
+        // The composer inherits the terminal background in both light and dark themes.
+        expect(cell.getBgColor()).toBe(-1);
         expect(cell.getChars()).toBe(""); // Background fill must not become reflowable space characters.
       }
     }

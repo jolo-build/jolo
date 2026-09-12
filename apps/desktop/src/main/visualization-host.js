@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { VISUALIZATION_STYLES } from './visualization-styles.js';
 
 export const VISUALIZATION_SCHEME = 'jolo-visualization';
 export const MAX_VISUALIZATION_BYTES = 1024 * 1024;
@@ -36,10 +37,9 @@ export async function readVisualization(call, { sessionId, path: requested }) {
 
 export function visualizationDocument(html, id) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-    :root{color-scheme:light dark;--background:light-dark(#fcfcfb,#191a1c);--foreground:light-dark(#242629,#ededee);--muted-foreground:light-dark(#73767d,#9ea0a8);--border:light-dark(#e9e9e7,#303236);--card:light-dark(#fff,#202124);--card-foreground:var(--foreground);--primary:light-dark(#4264d6,#9caeff);--primary-foreground:light-dark(#fff,#191a1c);--font-size-base:14px;--viz-series-1:#4264d6;--viz-series-2:#389879;--viz-series-3:#bc7f36;--viz-series-4:#a666c4;--viz-series-5:#d06476;--viz-series-6:#448fa8}
-    *{box-sizing:border-box}body{margin:0;color:var(--foreground);background:transparent;font:14px/1.5 system-ui,sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}[hidden]{display:none!important}img,svg,canvas{max-width:100%}.text-muted,.text-small{color:var(--muted-foreground)}.text-small{font-size:12px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.table-responsive{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:8px;text-align:left;border-bottom:1px solid var(--border)}.btn{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--foreground)}.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+    ${VISUALIZATION_STYLES}
     </style><script>
-    (()=>{const id=${JSON.stringify(id)};let queued=false;const send=()=>{queued=false;if(document.body)parent.postMessage({type:'jolo:visualization-height',id,height:Math.ceil(Math.max(document.body.scrollHeight,document.body.getBoundingClientRect().height))},'*')};const queue=()=>{if(!queued){queued=true;requestAnimationFrame(send)}};addEventListener('DOMContentLoaded',()=>{new ResizeObserver(queue).observe(document.body);queue()});addEventListener('load',queue);addEventListener('resize',queue)})();
+    (()=>{const id=${JSON.stringify(id)};addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.isComposing)parent.postMessage({type:'jolo:visualization-escape',id},'*')},true);let queued=false;const send=()=>{queued=false;if(document.body)parent.postMessage({type:'jolo:visualization-height',id,height:Math.ceil(document.body.getBoundingClientRect().height)},'*')};const queue=()=>{if(!queued){queued=true;requestAnimationFrame(send)}};addEventListener('DOMContentLoaded',()=>{new ResizeObserver(queue).observe(document.body);queue()});addEventListener('load',queue);addEventListener('resize',queue)})();
     </script></head><body>${html}</body></html>`;
 }
 

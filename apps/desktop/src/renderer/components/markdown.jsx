@@ -1,4 +1,5 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { createContext, useContext, lazy, Suspense, useMemo, useState } from "react";
+import { fileReference } from '@jolo/markdown/file-links';
 import { parseDocument } from "@jolo/markdown";
 import { MermaidDiagram } from "./mermaid.jsx";
 import { Visualization } from './visualization.jsx';
@@ -8,18 +9,37 @@ import { Visualization } from './visualization.jsx';
 /** @typedef {import('react').ComponentType<{ text: string, language?: string }>} SyntaxCodeComponent */
 const SyntaxCode = lazy(/** @type {() => Promise<{ default: SyntaxCodeComponent }>} */ (() => import("./syntax-code.jsx").catch(() => ({ default: ({ text }) => <code>{text}</code> }))));
 
+const ChatSession = createContext(null);
+function FileLink({ reference, children }) {
+  const sessionId = useContext(ChatSession);
+  const [error, setError] = useState(null);
+  if (!sessionId) return children;
+  return <><a href="#" title={`Open ${reference}`} onClick={async event => {
+    event.preventDefault(); event.stopPropagation(); setError(null);
+    try {
+      if (!window.jolo.openChatFile) throw new Error('Restart Jolo to open file references.');
+      const result = await window.jolo.openChatFile({ sessionId, path: reference });
+      if (!result.ok) throw new Error(result.error);
+    } catch (error) { setError(/No handler registered|jolo:openChatFile/.test(error.message) ? 'Quit and reopen Jolo to enable file opening. Reloading the chat is not enough.' : error.message); }
+  }}>{children}</a>{error && <span className="file-link-error" role="alert">{error}</span>}</>;
+}
+function FileText({ text }) {
+  // Plain filenames in prose are common in generated-file replies; keep surrounding prose intact.
+  return text.split(/((?:\/?[\w.-]+\/)*[\w.-]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|webp|csv|txt|md)\b)/gi).map((part, index) => fileReference(part) ? <FileLink key={index} reference={part}>{part}</FileLink> : part);
+}
+
 /** Safe React rendering of the shared markdown model (§5.1): no HTML, links open externally. */
-function Inline({ nodes }) {
+function Inline({ nodes, linkify = true }) {
   return nodes.map((node, i) => {
     switch (node.type) {
-      case "text": return node.text;
+      case "text": return linkify ? <FileText key={i} text={node.text} /> : node.text;
       // A span the model wrapped across lines is a block of code: keep its breaks so it stays copyable.
       case "code": return node.text.includes("\n")
         ? <code key={i} className="md-code-lines">{node.text.replace(/^\n+|\n+$/g, "")}</code>
-        : <code key={i}>{node.text}</code>;
-      case "strong": return <strong key={i}><Inline nodes={node.children} /></strong>;
-      case "em": return <em key={i}><Inline nodes={node.children} /></em>;
-      case "link": return <a key={i} href="#" title={node.href} onClick={(e) => { e.preventDefault(); window.jolo.openExternal(node.href); }}><Inline nodes={node.children} /></a>;
+        : linkify && fileReference(node.text) ? <FileLink key={i} reference={node.text}><code>{node.text}</code></FileLink> : <code key={i}>{node.text}</code>;
+      case "strong": return <strong key={i}><Inline nodes={node.children} linkify={linkify} /></strong>;
+      case "em": return <em key={i}><Inline nodes={node.children} linkify={linkify} /></em>;
+      case "link": return node.local ? <FileLink key={i} reference={node.href}><Inline nodes={node.children} linkify={false} /></FileLink> : <a key={i} href="#" title={node.href} onClick={(e) => { e.preventDefault(); window.jolo.openExternal(node.href); }}><Inline nodes={node.children} linkify={false} /></a>;
       default: return null;
     }
   });
@@ -84,5 +104,5 @@ function Block({ block, depth, sessionId, streaming }) {
 export function Markdown({ text, cacheKey, depth = 0, sessionId, streaming = false }) {
   const cache = useMemo(() => new Map(), [cacheKey]); // completed blocks are parsed once per message
   const { blocks } = useMemo(() => parseDocument(text, { cache }), [text, cache]);
-  return <div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div>;
+  return <ChatSession.Provider value={sessionId}><div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div></ChatSession.Provider>;
 }

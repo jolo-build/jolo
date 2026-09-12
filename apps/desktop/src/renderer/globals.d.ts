@@ -27,6 +27,7 @@ declare global {
     openFolder: () => Promise<string | null>;
     answererMenu: (options: { items: { id: string, label: string, checked?: boolean, enabled?: boolean }[] }) => Promise<string | null>;
     taskMenu: (options: { archived?: boolean, worktree?: boolean }) => Promise<string | null>;
+    openChatFile?: (params: { sessionId: string, path: string }) => Promise<{ ok: boolean, error?: string }>;
     openExternal: (url: string) => Promise<boolean>;
     /** Absent for the same reason as `prepareVisualization`; a source checkout reports `managed: false`. */
     checkForUpdate?: (options?: { force?: boolean }) => Promise<JoloUpdateState>;

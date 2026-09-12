@@ -32,6 +32,19 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   }
   await frame().executeJavaScript("document.querySelector('#increment').click()");
   if (await frame().executeJavaScript("document.querySelector('#count').textContent") !== '1') throw new Error('visualization scripts did not work');
+  // Generated fragments rely on these shared styles; missing tokens made whole bars invisible.
+  const primitives = /** @type {{grid: string, card: string, color: string, padding: number}} */ (await frame().executeJavaScript(`(()=>{
+    const root=document.createElement('section');root.id='style-regression';
+    root.innerHTML='<div class="viz-grid"><div class="card viz-stat"><span>Published</span><span class="viz-stat-value">45</span></div><div class="card viz-stat">Retained</div></div><div id="regression-bar" style="height:10px;background:var(--green)"></div><div id="regression-tall" style="height:1900px"></div>';
+    document.body.append(root);
+    const card=root.querySelector('.card'),bar=root.querySelector('#regression-bar');
+    return {grid:getComputedStyle(root.firstChild).display,card:getComputedStyle(card).display,color:getComputedStyle(bar).backgroundColor,padding:parseFloat(getComputedStyle(document.body).paddingLeft)};
+  })()`));
+  if (primitives.grid !== 'grid' || primitives.card !== 'flex' || primitives.color === 'rgba(0, 0, 0, 0)' || primitives.padding < 14) throw new Error(`missing visualization primitives: ${JSON.stringify(primitives)}`);
+  await waitFor("document.querySelector('.visualization iframe')?.clientHeight > 1900", 'long preview grows beyond the old nested-scroll limit');
+  const longHeight = await evaluate("document.querySelector('.visualization iframe').clientHeight");
+  await frame().executeJavaScript("document.querySelector('#style-regression').remove()");
+  await waitFor(`document.querySelector('.visualization iframe')?.clientHeight < ${longHeight - 1500}`, 'preview shrinks when content is removed');
   // What the preview reports about itself; the assertions below are the point of the check.
   const isolation = /** @type {{ parentReadable: boolean, storageReadable: boolean, network: boolean, bridge: string, node: string }} */ (await frame().executeJavaScript(`(async()=>{
     let parentReadable=false,storageReadable=false;
@@ -53,6 +66,24 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   await waitFor("Boolean(document.querySelector('.visualization-modal[open] iframe'))", 'expanded preview opens');
   await evaluate("document.querySelector('[aria-label=\"Close preview\"]').click()");
   await waitFor("!document.querySelector('.visualization-modal')", 'expanded preview closes');
+  await evaluate("document.querySelector('[aria-label=\"Expand Interactive preview\"]').click()");
+  await waitFor("Boolean(document.querySelector('.visualization-modal[open] iframe'))", 'preview reopens for keyboard check');
+  const expandedUrl = await evaluate("document.querySelector('.visualization-modal iframe').src");
+  const expandedFrame = () => window.webContents.mainFrame.frames.filter(item => item.url === expandedUrl).at(-1);
+  const keyboardDeadline = Date.now() + 10000;
+  while (!(expandedFrame() && await expandedFrame().executeJavaScript("Boolean(document.querySelector('#increment'))").catch(() => false))) {
+    if (Date.now() > keyboardDeadline) throw new Error('expanded frame did not load');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  // A message from the inline sibling must not dismiss the expanded frame.
+  await frame().executeJavaScript(`parent.postMessage({type:'jolo:visualization-escape',id:location.pathname.slice(1)},'*')`);
+  await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+  if (!await evaluate("Boolean(document.querySelector('.visualization-modal'))")) throw new Error('inline frame dismissed expanded preview');
+  await expandedFrame().executeJavaScript("document.querySelector('#increment').focus()");
+  window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+  window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+  await waitFor("!document.querySelector('.visualization-modal')", 'Escape closes a focused sandboxed preview');
+  report.checks.push('Escape closes the expanded preview from inside its sandbox; sibling frames cannot dismiss it');
   await evaluate("document.querySelectorAll('.visualization')[1].scrollIntoView({block:'center'})");
   await waitFor("Boolean(document.querySelector('.visualization [role=alert]'))", 'missing file has a retry fallback');
   writeFileSync(path.join(realpathSync(project), 'missing-preview.html'), '<h2>Recovered preview</h2>');

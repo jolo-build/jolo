@@ -8,6 +8,7 @@
     "./tokens": "./src/tokens.js",
     "./mermaid": "./src/mermaid.js",
     "./mermaid-layout": "./src/mermaid-layout.js",
+    "./file-links": "./src/file-links.js",
     "./text": "./src/text.js"
   },
   "dependencies": {

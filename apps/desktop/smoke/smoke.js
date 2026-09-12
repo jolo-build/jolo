@@ -817,6 +817,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor("!document.querySelector('.mention-list')", "a name mid-sentence is just text");
 
     const runsBefore = await evaluate("window.__joloSmoke.state().runCount");
+    const sessionAgentBeforeMention = await evaluate("window.__joloSmoke.state().sessionAgentId");
     await setDraft("@codex review what changed");
     await evaluate(`document.querySelector('.composer button[type=submit]').click()`);
     await waitFor(`window.__joloSmoke.state().runCount > ${runsBefore} && window.__joloSmoke.state().runState === 'completed'`, "the called-in agent answered", 30_000);
@@ -826,7 +827,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     if (!answered.labels.at(-1)?.startsWith("Codex")) throw new Error(`the reply should name who was called in: ${JSON.stringify(answered.labels.slice(-2))}`);
     if (!answered.labels.at(-1)?.includes("called in for this message")) throw new Error(`the reply should say it was a one-off: ${JSON.stringify(answered.labels.at(-1))}`);
     if (!answered.user.includes("@codex review what changed")) throw new Error(`the transcript should keep what was typed: ${JSON.stringify(answered.user)}`);
-    if (!/Jolo/.test(answered.answerer ?? "")) throw new Error(`the task should still be answered by Jolo afterwards: ${JSON.stringify(answered.answerer)}`);
+    if (await evaluate("window.__joloSmoke.state().sessionAgentId") !== sessionAgentBeforeMention) throw new Error("calling in an agent changed the task’s saved agent");
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "mention.png"), (await window.webContents.capturePage()).toPNG());
     report.checks.push("typing @ offered the agents that can answer, and the message it named answered that one turn in the same conversation while the task stayed with Jolo");

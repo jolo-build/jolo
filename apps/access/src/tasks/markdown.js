@@ -4,6 +4,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&a
 const inline = nodes => nodes.map(node => {
   if (node.type === 'strong' || node.type === 'em') return `<${node.type}>${inline(node.children)}</${node.type}>`;
   if (node.type === 'code') return `<code>${escape(node.text)}</code>`;
+  if (node.type === 'link' && node.local) return inline(node.children);
   if (node.type === 'link') return `<a href="${escape(node.href)}" rel="noreferrer noopener">${inline(node.children)}</a>`;
   return escape(node.text);
 }).join('');

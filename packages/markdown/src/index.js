@@ -1,3 +1,4 @@
+import { fileReference } from './file-links.js';
 // Constrained markdown → document model. No HTML is ever produced or
 // interpreted; renderers map blocks to React DOM elements or terminal text. Streaming callers parse
 // completed segments once and re-parse only the unfinished tail.
@@ -66,6 +67,7 @@ export function parseInline(text) {
       const href = safeHref(match[2]);
       if (rest.startsWith("!")) push({ type: "text", text: `[image: ${match[1] || href || "image"}]` });
       else if (href) push({ type: "link", href, children: parseInline(match[1] || href) });
+      else if (fileReference(match[2])) push({ type: "link", href: fileReference(match[2]), local: true, children: parseInline(match[1] || match[2]) });
       else push({ type: "text", text: match[1] });
       i += match[0].length; continue;
     }

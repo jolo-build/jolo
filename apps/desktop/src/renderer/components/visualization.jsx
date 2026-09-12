@@ -10,19 +10,23 @@ const RESTART_MESSAGE = 'Restart Jolo to enable visualization previews. Reloadin
  *   title: string,
  *   onHeight?: (height: number) => void,
  *   expanded?: boolean,
+ *   onClose?: () => void,
  * }} props an expanded frame fills its dialog, so it neither measures nor reports its content height.
  */
-function PreviewFrame({ preview, title, onHeight, expanded = false }) {
+function PreviewFrame({ preview, title, onHeight, expanded = false, onClose }) {
   const frame = useRef(null);
   useEffect(() => {
-    if (!onHeight) return;
     const resize = event => {
-      if (event.source !== frame.current?.contentWindow || event.data?.type !== 'jolo:visualization-height' || event.data.id !== preview.id || !Number.isFinite(event.data.height)) return;
-      onHeight(Math.max(120, Math.min(1600, event.data.height)));
+      if (event.source !== frame.current?.contentWindow || event.data?.id !== preview.id) return;
+      if (event.data.type === 'jolo:visualization-escape') {
+        if (expanded) onClose?.();
+        return;
+      }
+      if (event.data.type === 'jolo:visualization-height' && Number.isFinite(event.data.height)) onHeight?.(Math.max(120, Math.min(16000, event.data.height)));
     };
     window.addEventListener('message', resize);
     return () => window.removeEventListener('message', resize);
-  }, [preview.id, onHeight]);
+  }, [preview.id, onHeight, expanded, onClose]);
   return <iframe ref={frame} className="visualization-frame" title={title} src={preview.url} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'" style={expanded ? undefined : { height: preview.height }} />;
 }
 
@@ -63,6 +67,6 @@ export function Visualization({ block, sessionId, streaming }) {
       : error ? <div className="visualization-note" role="alert"><p>{error.message}</p>{!error.restart && <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry preview</button>}</div>
       : preview ? <PreviewFrame preview={{ ...preview, height }} title={title} onHeight={setHeight} />
       : <div className="visualization-note" style={{ minHeight: height }} role="status">{active ? 'Loading visualization…' : 'Visualization preview'}</div>}
-    {expanded && preview && <Modal label={title} className={`visualization-modal${block.mode === 'wide' ? ' wide' : ''}`} onClose={() => setExpanded(false)}><div className="visualization-toolbar"><span>{title}</span><button type="button" onClick={() => setExpanded(false)} aria-label="Close preview"><Icon name="close" size={16} /></button></div><PreviewFrame preview={preview} title={title} expanded /></Modal>}
+    {expanded && preview && <Modal label={title} className={`visualization-modal${block.mode === 'wide' ? ' wide' : ''}`} onClose={() => setExpanded(false)}><div className="visualization-toolbar"><span>{title}</span><button type="button" onClick={() => setExpanded(false)} aria-label="Close preview"><Icon name="close" size={16} /></button></div><PreviewFrame preview={preview} title={title} expanded onClose={() => setExpanded(false)} /></Modal>}
   </section>;
 }

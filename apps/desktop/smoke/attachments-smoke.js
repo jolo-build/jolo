@@ -1,3 +1,4 @@
+import { shell } from 'electron';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -45,7 +46,7 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   try {
     await evaluate("document.querySelector('.composer button[type=submit]').click()");
     await waitFor("document.body.textContent.includes('Image upload interrupted for retry check')", 'upload failure');
-    if (!(await evaluate("document.querySelector('.composer textarea').value === 'image-check' && document.querySelectorAll('.composer-attachment').length === 1"))) throw new Error('failed first send lost its text or image');
+    await waitFor("document.querySelector('.composer textarea').value === 'image-check' && document.querySelectorAll('.composer-attachment').length === 1", 'failed first send restores its text and image');
   } finally { bridge.call = call; }
   writeFileSync(path.join(results, 'image-paste-draft.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate("document.querySelector('.composer button[type=submit]').click()");
@@ -149,5 +150,16 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   await waitFor("document.querySelector('.message.user')?.textContent.includes('Report.pdf')", 'task rail loads the selected conversation');
   writeFileSync(path.join(results, 'task-rail.png'), (await window.webContents.capturePage()).toPNG());
   report.checks.push('task rail switches between saved chats and highlights the active chat');
+
+  const documentPath = path.join(results, 'open-test.pdf');
+  writeFileSync(documentPath, '%PDF-1.7\nfixture');
+  const originalOpen = shell.openPath;
+  let openedPath;
+  shell.openPath = async file => { openedPath = file; return ''; };
+  try {
+    const result = await evaluate(`window.jolo.openChatFile({ sessionId: ${JSON.stringify(fileSessionId)}, path: ${JSON.stringify(documentPath)} })`);
+    if (!result.ok || openedPath !== documentPath) throw new Error('File opening did not reach the native handler');
+  } finally { shell.openPath = originalOpen; }
+  report.checks.push('file reference opening reaches the registered native handler and opens the resolved PDF');
 
 }

@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld("jolo", {
   openFolder: () => ipcRenderer.invoke("jolo:dialog:openFolder"),
   answererMenu: (options) => ipcRenderer.invoke("jolo:answererMenu", { items: (options?.items ?? []).map((item) => ({ id: String(item.id), label: String(item.label), checked: Boolean(item.checked), enabled: item.enabled !== false })) }),
   taskMenu: (options) => ipcRenderer.invoke("jolo:taskMenu", typeof options === "boolean" ? { archived: options } : { archived: Boolean(options?.archived), worktree: Boolean(options?.worktree) }),
+  openChatFile: (params) => ipcRenderer.invoke('jolo:openChatFile', { sessionId: params.sessionId, path: params.path }),
   openExternal: (url) => ipcRenderer.invoke("jolo:openExternal", url),
   checkForUpdate: desktopApi ? (options) => ipcRenderer.invoke("jolo:update:check", { force: Boolean(options?.force) }) : undefined,
   resync: () => ipcRenderer.invoke("jolo:resync"),
