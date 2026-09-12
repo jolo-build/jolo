@@ -92,7 +92,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
       }
     }}>
       {view === 'effort' ? <>
-        <div className="effort-heading"><Icon name="bolt" size={18} /><button type="button" className="effort-model" disabled={saving} onClick={() => setView('models')}><strong>{effortLabel(shownEffort)}<Icon name="chevron" size={13} /></strong><span title={modelLabel(label)}>{modelLabel(label)}</span></button><button type="button" className="effort-reset" title="Reset effort to default" aria-label="Reset effort to default" disabled={saving || !effort} onClick={() => save(selectedModel, null)}><Icon name="refresh" size={17} /></button></div>
+        <div className="effort-heading"><span className="effort-heading-label">Effort</span><button type="button" className="effort-model" disabled={saving} onClick={() => setView('models')}><strong>{effortLabel(shownEffort)}<Icon name="chevron" size={13} /></strong><span title={modelLabel(label)}>{modelLabel(label)}</span></button><button type="button" className="effort-reset" title="Reset effort to default" aria-label="Reset effort to default" disabled={saving || !effort} onClick={() => save(selectedModel, null)}><Icon name="refresh" size={17} /></button></div>
         {levels.length > 0 ? <div className="effort-control">
           <div className="effort-slider" style={/** @type {import('react').CSSProperties} */ ({ '--progress': index / (steps.length - 1) })}>
             <div className="effort-track" aria-hidden="true" /><div className="effort-ticks" aria-hidden="true">{steps.map((step, i) => <span key={step ?? 'default'} className={i <= index ? 'filled' : ''} />)}</div>

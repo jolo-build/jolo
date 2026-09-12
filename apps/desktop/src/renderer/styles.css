@@ -997,8 +997,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .model-select > svg:last-child { color: color-mix(in srgb, var(--muted) 75%, var(--bg)); flex: none; }
 .model-popover { position: fixed; inset: auto; margin: 0; width: min(264px, calc(100vw - 16px)); padding: 10px; border: 0; border-radius: 14px; color: var(--text); background: var(--panel); box-shadow: 0 10px 40px #0002, 0 2px 8px #0001; overflow: auto; }
 .model-popover::backdrop { background: transparent; }
-.effort-heading { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; align-items: center; gap: 4px; }
-.effort-heading > .icon { margin: auto; color: var(--muted); }
+.effort-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) 24px; align-items: center; gap: 4px; }
+.effort-heading-label { color: var(--muted); font-size: 12px; padding-right: 4px; }
 .effort-model { display: flex; flex-direction: column; gap: 1px; min-width: 0; padding: 2px 4px 4px; border-radius: 10px; }
 .effort-model strong { display: flex; align-items: center; gap: 5px; color: var(--highlight); font-size: 13px; font-weight: 550; }
 .effort-model > span { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
