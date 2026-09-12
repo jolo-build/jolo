@@ -12,3 +12,6 @@ for (const [source, name] of [
 ]) {
   await copyFile(new URL(`../../../assets/${source}`, import.meta.url), new URL(name, destination));
 }
+
+const bundle = await Bun.build({ entrypoints: [new URL('../src/tasks/markdown-editor.js', import.meta.url).pathname], outdir: destination.pathname, naming: 'task-markdown.js', target: 'browser', minify: true });
+if (!bundle.success) throw new Error(`Markdown editor build failed: ${bundle.logs.join('\n')}`);

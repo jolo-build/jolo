@@ -139,4 +139,15 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   writeFileSync(path.join(results, 'files-sent.png'), (await window.webContents.capturePage()).toPNG());
   report.checks.push('file input accepts PDF, drag-and-drop accepts source files, Codex opens uploaded bytes, and sent file cards persist');
 
+  const fileSessionId = await evaluate('window.__joloSmoke.state().sessionId');
+  await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${textSessionId}"]'))`, 'task rail lists another chat');
+  await evaluate(`document.querySelector('.task-rail [data-task-id="${textSessionId}"]').click()`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(textSessionId)}`, 'task rail switches chats');
+  await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${textSessionId}"][aria-current="page"]'))`, 'task rail highlights selection');
+  await evaluate(`document.querySelector('.task-rail [data-task-id="${fileSessionId}"]').click()`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(fileSessionId)}`, 'task rail returns to previous chat');
+  await waitFor("document.querySelector('.message.user')?.textContent.includes('Report.pdf')", 'task rail loads the selected conversation');
+  writeFileSync(path.join(results, 'task-rail.png'), (await window.webContents.capturePage()).toPNG());
+  report.checks.push('task rail switches between saved chats and highlights the active chat');
+
 }

@@ -1,6 +1,7 @@
 import { modelLabel } from '../model-options.js';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useEngine } from "../use-engine.js";
+import { TaskRail } from "./task-rail.jsx";
 import { Sidebar } from "./sidebar.jsx";
 import { Conversation } from "./conversation.jsx";
 import { ModelControls } from "./model-controls.jsx";
@@ -278,7 +279,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
         </div>
       </div>}
       <div className="pane-body">
-        <main className={`main${view === "board" ? " board-main" : ""}`} aria-label={view === "board" ? "Work board" : "Conversation"}>
+        <main className={`main${view === "board" ? " board-main" : " has-task-rail"}`} aria-label={view === "board" ? "Work board" : "Conversation"}>
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {view === "board" ? <Board board={state.board} connected={engine.connected} onOpen={openRow} onNewChat={newChat} onChatMenu={task => reportError(async () => taskMenu((await state.call('session.page', { sessionId: task.sessionId })).session))} onNewTask={row => reportError(async () => { await state.newFromBoard(row); showTask(); })} onOpenFolder={openFolder} call={state.call} /> : <>
           {(!project?.standalone || activeRun || pendingPermission) && <TaskHeader status={runLabel(activeRun ?? lastRun)} working={Boolean(activeRun)} branch={session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null} branchPath={workspace?.path} agent={sessionAgentId ? agentName(sessionAgentId) : null} />}
@@ -287,6 +288,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
           {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen && !modelMenuOpen} running={Boolean(activeRun)} model={modelLabel(providerLabel)} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} modelControl={<ModelControls agentId={chosenAgentId ?? 'jolo'} agents={hostedAgents} nativeModel={selectedModel} hasSession={Boolean(sessionId)} disabled={!engine.connected || !active || !visible || showSettings || Boolean(pendingPermission || taskDialog || worktreeDialog)} onAgent={setAnswerer} onSave={saveModelChoice} call={state.call} onSettings={setShowSettings} onOpenChange={setModelMenuOpen} />} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
           </>}
+        {view !== "board" && !showSettings && <TaskRail call={state.call} revision={state.board?.generatedAt} sessionId={sessionId} onOpen={row => reportError(async () => { await state.openFromBoard(row); showTask(); })} />}
         </main>
         <aside id={`${pane.id}-context`} className="inspector" aria-label="Task context" hidden={!context || view === "board"}>
           <div className="context-bar">

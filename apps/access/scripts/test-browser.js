@@ -1,3 +1,4 @@
+import './assets.js';
 // Opt-in graphical check: real Chromium forms, isolated cookies/SQLite, no GitHub calls.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';

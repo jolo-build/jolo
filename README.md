@@ -48,6 +48,8 @@ Click the model name beneath the desktop composer to choose an agent or model an
 
 Use **+** in the composer to attach files, or drop files into the message. Images retain their previews, and small UTF-8 text and source files can be previewed as text. Other files, including PDFs and documents, are saved with the chat and supplied to the agent as local file paths for its tools to inspect. Each message supports four images up to 5 MB each, four text attachments up to 256 KB each, and four other files up to 20 MB each.
 
+The slim rail on the right of each conversation switches between recent tasks and chats. Hover a marker for its title, workspace, and status; click it to open the chat. The current chat has a longer marker, and small dots distinguish working tasks and tasks needing attention.
+
 Separate chats run concurrently, including chats using the same folder, agent, or model. Follow-up messages queue within their own chat; **Send now** interrupts only that chat’s current turn. Tasks in the same folder share its files, and separate Git worktrees remain available when you want isolated changes.
 
 Choose **New chat** to start a conversation without selecting a folder. These chats appear under **Recents**, below your workspace folders, and support the same model and agent choices, saved history, archive, and split views. Chats receive a title from their first message. Each chat has private working storage for agents and generated files, separate from your projects.

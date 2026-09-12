@@ -1059,3 +1059,18 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .mermaid-full-controls .mermaid-zoom { padding: 5px; border-radius: 999px; gap: 5px; background: var(--panel); box-shadow: 0 4px 20px #0003; }
 .mermaid-full-controls button { width: 32px; height: 32px; padding: 8px; border-radius: 50%; }
 .mermaid-full-controls output { min-width: 44px; font-size: 11px; }
+
+.main.has-task-rail { position:relative; padding-right:28px; }
+.task-rail { position:absolute; right:2px; top:18px; bottom:18px; width:24px; display:flex; flex-direction:column; align-items:center; z-index:2; }
+.task-rail-marks { width:100%; overflow-y:auto; scrollbar-width:none; padding:4px 0; }
+.task-rail-marks::-webkit-scrollbar { display:none; }
+.task-rail button { position:relative; display:flex; width:24px; height:26px; padding:0; border-radius:8px; color:var(--muted); }
+.task-rail-mark { display:block; width:4px; height:10px; border-radius:4px; background:var(--muted); opacity:.35; transition:height .15s,opacity .15s; }
+.task-rail button:hover .task-rail-mark,.task-rail button:focus-visible .task-rail-mark { height:16px; opacity:.8; }
+.task-rail button[aria-current] .task-rail-mark { height:20px; opacity:1; background:var(--highlight); }
+.task-rail button i { position:absolute; right:3px; top:4px; width:4px; height:4px; border-radius:50%; background:var(--highlight); }
+.task-rail button.attention i { background:var(--red); }
+.task-rail-tooltip { position:fixed; z-index:100; pointer-events:none; max-width:260px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--panel); box-shadow:0 5px 20px #0002; font-size:12px; }
+.task-rail-tooltip strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.task-rail-tooltip span { display:block; margin-top:4px; color:var(--muted); font-size:11px; }
+@media(prefers-reduced-motion:reduce) { .task-rail-mark { transition:none; } }

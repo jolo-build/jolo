@@ -127,11 +127,16 @@ async function checkForms() {
     assert.equal(await contents.executeJavaScript('document.querySelector("[name=title]").value'), 'Keep my draft');
     assert.equal(await contents.executeJavaScript('document.querySelector("[name=description]").value'), 'A draft before switching workspaces.');
   }
-  await fill({title:'Preserve task drafts after sign-in',description:'When sign-in expires, preserve the task description and selected labels.\n\nVerify the browser flow and add a regression check.',project:'Jolo',priority:'high'});
+  await fill({title:'Preserve task drafts after sign-in',description:'When sign-in expires, preserve the task description and selected labels.\n\nVerify the browser flow and add a regression check.\n\n**Ready to ship**',project:'Jolo',priority:'high'});
+  await contents.executeJavaScript('document.querySelector("[data-mode=preview]").click()');
+  assert.equal(await contents.executeJavaScript('document.querySelector("[data-markdown-preview] strong").textContent'), 'Ready to ship');
+  await contents.executeJavaScript('document.querySelector("[data-mode=write]").click()');
+  assert.equal(await contents.executeJavaScript('document.querySelector("[name=description]").hidden'), false);
   await contents.executeJavaScript('document.querySelector("[name=label]").checked=true');
   await submit('button[form="task-edit"]');
   assert.match(await text(), /CYPHO-1/);
   assert.match(await text(), /@codex fix #CYPHO-1/);
+  assert.equal(await contents.executeJavaScript('document.querySelector(".task-description strong").textContent'), 'Ready to ship');
   const taskPath=new URL(contents.getURL()).pathname;
   assert.equal(await contents.executeJavaScript('document.querySelector("#task-edit")'),null,'Creating a task should open its detail view');
   await submit(`a[href="${taskPath}/edit"]`);
@@ -172,7 +177,7 @@ async function checkForms() {
     for(const route of ['/tasks/new?team='+team,taskPath,taskPath+'/edit','/teams','/teams/'+team,'/labels?team='+team]) {
       await window.loadURL(origin+route);
       await fit(route, route===taskPath ? [`a[href="${taskPath}/edit"]`] : route.startsWith('/tasks') ? ['button[form=task-edit]','.task-actions a'] : ['.task-nav']);
-      if(width===1280&&height===720) {const name=route.startsWith('/tasks/new')?'new-task':route===taskPath?'task-view':route===taskPath+'/edit'?'task-editor':route==='/teams'?'teams':route.startsWith('/teams/')?'team-detail':'labels';writeFileSync('/tmp/jolo-access-'+name+'.png',(await contents.capturePage()).toPNG());}
+      if(width===1280&&height===720) {const name=route.startsWith('/tasks/new')?'new-task':route===taskPath?'task-view':route===taskPath+'/edit'?'task-editor':route==='/teams'?'teams':route.startsWith('/teams/')?'team-detail':'labels';writeFileSync('/tmp/jolo-access-'+name+'.png',(await contents.capturePage()).toPNG());if(name==='new-task'){await chooseTheme('dark');await settle();writeFileSync('/tmp/jolo-access-new-task-dark.png',(await contents.capturePage()).toPNG());await chooseTheme('light');}}
     }
   }
   await window.loadURL(origin + '/tasks?team='+team);

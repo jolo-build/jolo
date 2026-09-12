@@ -1,3 +1,4 @@
+import { renderMarkdown } from './markdown.js';
 import { taskKeyOf, taskPath } from './identity.js';
 import { appPage, escapeHTML as e } from '../pages.js';
 import { TASK_STATES, TASK_PRIORITIES, LABEL_COLORS } from '../../../../packages/protocol/src/tasks.js';
@@ -26,7 +27,7 @@ function commentCard(comment, account, path, editable, draft) {
   return `<article class="task-comment" id="comment-${comment.id}">
     <span class="comment-avatar" aria-hidden="true">${e([...comment.author_name.trim()][0]?.toUpperCase() || '?')}</span>
     <div class="comment-content"><div class="comment-heading"><strong>${e(comment.author_name)}</strong>${commentTime(comment.created_at)}${comment.revision>1?'<span class="comment-edited">edited</span>':''}</div>
-    <p class="comment-body">${e(comment.body)}</p>
+    <div class="comment-body markdown-body">${renderMarkdown(comment.body)}</div>
     ${mine && editable ? `<div class="comment-actions">
       <details class="comment-edit"${editing?' open':''}><summary>Edit</summary>${post(`${path}/comments/${comment.id}/edit`,account,hidden('revision',comment.revision)+`<label>Edit your comment<textarea name="body" rows="3" maxlength="8192" required>${e(editing?draft.body:comment.body)}</textarea></label>${button('Save comment')}`)}</details>
       <details class="comment-delete"><summary>Delete</summary>${post(`${path}/comments/${comment.id}/delete`,account,hidden('revision',comment.revision)+'<p>Delete this comment?</p>'+button('Delete comment',true))}</details>
@@ -47,7 +48,7 @@ export function taskViewPage({ origin, account, task, labels, members = [], team
     <div class="task-view-layout">
       <section class="task-discussion" aria-label="Task discussion">
         <div class="task-conversation task-scroll" tabindex="0" aria-label="Task description and comments">
-          <article class="task-view-body" aria-labelledby="task-title"><h2 id="task-title">${e(task.title)}</h2>${task.description ? `<pre class="task-description">${e(task.description)}</pre>` : '<p class="fine">No description provided.</p>'}</article>
+          <article class="task-view-body" aria-labelledby="task-title"><h2 id="task-title">${e(task.title)}</h2>${task.description ? `<div class="task-description markdown-body">${renderMarkdown(task.description)}</div>` : '<p class="fine">No description provided.</p>'}</article>
           <section class="task-comments" id="comments" aria-labelledby="comments-title"><div class="comments-heading"><h3 id="comments-title">Comments</h3>${commentsBefore?`<a href="${path}#comments">Latest comments</a>`:''}</div>
             ${older?`<a class="older-comments" href="${path}?comments_before=${older}#comments">Load older comments</a>`:''}
             ${comments.length?comments.map(comment=>commentCard(comment,account,path,commentable,commentDraft)).join(''):'<p class="comment-empty">No comments yet.</p>'}
@@ -92,8 +93,8 @@ export function taskFormPage({ origin, account, task = null, teams, labels, memb
   const title = task ? `Edit ${taskKeyOf(task)}` : 'New task';
   const fields = `${hidden('team', team?.id ?? '')}${hidden('request_id', values.requestID ?? crypto.randomUUID())}${task ? hidden('revision', task.revision) : ''}
     <div class="task-main-fields">
-      <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="Give this task a clear title"')}</label>
-      <label class="task-description-field">Description<textarea name="description" rows="6" maxlength="8192" placeholder="Describe the problem, expected behavior, and how to verify the fix.">${e(values.description)}</textarea></label>
+      <label class="task-title-field">Title${input('title', values.title, 'text', 'required maxlength="200" placeholder="Task title"')}</label>
+      <div class="task-description-field" data-markdown-editor><div class="description-toolbar"><label for="task-description">Description <span class="markdown-hint">Markdown supported</span></label><div data-markdown-tabs hidden><button type="button" data-mode="write" aria-pressed="true">Write</button><button type="button" data-mode="preview" aria-pressed="false">Preview</button></div></div><textarea id="task-description" name="description" rows="6" maxlength="8192" placeholder="What needs to be done? Add context, links, or acceptance criteria…">${e(values.description)}</textarea><div class="markdown-body description-preview" data-markdown-preview hidden tabindex="0" aria-label="Description preview"></div></div>
     </div>
     <div class="task-properties">
       <h2 class="task-properties-heading">Details</h2><div class="task-fields">
@@ -106,7 +107,7 @@ export function taskFormPage({ origin, account, task = null, teams, labels, memb
     </div>`;
   return page(title, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${e(title)}</h1></div><a href="${task ? taskPath(task) : '/tasks' + (team ? '?team=' + e(team.id) : '')}">${task ? 'Back to task' : 'Back to tasks'}</a></div>${note(error)}
     ${!task ? `<form class="task-filters workspace-picker" method="get" action="/tasks/new"><label>Workspace${select('team', scopeOptions(teams), team?.id)}</label>${button('Choose workspace', true)}</form>` : taskHint(task)}
-    ${editable ? post(task ? taskPath(task) : '/tasks', account, `<div class="task-editor">${fields}</div>`, 'id="task-edit" class="task-form"') : `<div class="task-read-view"><h2>${e(values.title)}</h2><p>${e(TASK_STATES[values.state])} · ${e(values.priority)}</p><pre class="task-description task-scroll" tabindex="0">${e(values.description)}</pre><p>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ')}</p><p class="fine">${task?.archived_at ? 'This task is archived.' : 'Your role allows viewing this task.'}</p></div>`}
+    ${editable ? post(task ? taskPath(task) : '/tasks', account, `<div class="task-editor">${fields}</div>`, 'id="task-edit" class="task-form"') : `<div class="task-read-view"><h2>${e(values.title)}</h2><p>${e(TASK_STATES[values.state])} · ${e(values.priority)}</p><div class="task-description task-scroll markdown-body" tabindex="0">${renderMarkdown(values.description)}</div><p>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ')}</p><p class="fine">${task?.archived_at ? 'This task is archived.' : 'Your role allows viewing this task.'}</p></div>`}
     <div class="task-actions">${editable ? button(task ? 'Save task' : 'Create task', false, 'form="task-edit"') : ''}<a class="button secondary" href="${task ? taskPath(task) : '/tasks' + (team ? '?team=' + e(team.id) : '')}">Cancel</a></div>`, 'task-detail-page task-compose-page');
 }
 
