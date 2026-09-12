@@ -22,7 +22,7 @@ Accounts are keyed by provider and immutable subject, never merged automatically
 
 The header's **Theme** selector offers System, Light, and Dark. System follows the browser's color preference, including when JavaScript is disabled. Explicit choices are saved in this browser and applied before rendering subsequent pages. The small same-origin theme script does not change account data; account and task forms remain server-rendered.
 
-Access shares the desktop palette, compact Inter typography, rounded controls, blue activity accents, and quiet scrollbars in both light and dark themes. Code and task references use JetBrains Mono.
+Access uses a neutral palette, compact Inter typography, rounded controls, and quiet scrollbars in both light and dark themes. Avatars, activity indicators, links, focus states, and selections use neutral accents. Code and task references use JetBrains Mono.
 
 Pages preload the bundled Inter font and show their content after initial resources and fonts finish loading. While loading, the background already follows the selected theme. Failed downloads fall back normally, and an eight-second deadline prevents a stalled resource from leaving the page hidden. Without JavaScript, pages remain visible.
 

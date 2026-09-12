@@ -17,8 +17,8 @@
   --button-hover:light-dark(#3a3d42,#d9dadd);
   --strong-line:light-dark(#e9e9e7,#303236);
   --control-line:light-dark(#e0e2df,#393c42);
-  --highlight:light-dark(#4264d6,#9caeff);
-  --tint:light-dark(#edf1ff,#282f47);
+  --highlight:var(--fg);
+  --tint:var(--strong-line);
   --muted:light-dark(#73767d,#9ea0a8);
   --line:light-dark(#e9e9e7,#303236);
   --scroll-thumb:light-dark(#b5b8bf,#50545d);
