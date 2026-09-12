@@ -138,3 +138,19 @@ test('Claude, Codex and image-capable ACP receive actual images; unsupported ACP
     expect(result.run.attachments).toEqual([image]);
   }
 }, 60000);
+
+
+test('binary files reach Codex as readable persisted paths and remain scoped to their task', async () => {
+  const { client, session } = await boot();
+  const chat = await session('codex');
+  const bytes = Buffer.from('%PDF-1.7\nBinary file\0\xff', 'latin1');
+  const file = { ...await upload(client, chat.id, bytes, 'application/octet-stream'), name: 'Report.pdf' };
+  const { run } = await client.call('run.start', { sessionId: chat.id, requestId: 'file', prompt: 'file-check', attachments: [file] });
+  const result = await finish(client, run.id);
+  expect(result.run.state).toBe('completed');
+  expect(result.text).toBe(`File received: ${bytes.toString('hex')}`);
+  expect((await client.call('session.page', { sessionId: chat.id })).runs[0].attachments).toEqual([file]);
+  const other = await session('codex');
+  await expect(client.call('run.start', { sessionId: other.id, requestId: 'foreign-file', prompt: 'file-check', attachments: [file] })).rejects.toMatchObject({ code: 'invalid_params' });
+  await expect(client.call('run.start', { sessionId: chat.id, requestId: 'too-many-files', prompt: 'file-check', attachments: Array(5).fill(file) })).rejects.toMatchObject({ code: 'limit_exceeded' });
+}, 20000);

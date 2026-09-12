@@ -5,7 +5,7 @@ import { engineCall } from '../engine-context.jsx';
 import { Icon } from './icon.jsx';
 import { StopIndicator } from './stop-indicator.jsx';
 import { IMAGE_LIMITS as LIMITS } from '@jolo/protocol/attachments';
-import { clipboardImages, readImageAttachment } from '../image-attachments.js';
+import { readFileAttachment } from '../file-attachments.js';
 import { isLongPaste, readTextAttachment, attachmentSummary } from '../text-attachments.js';
 import { TextAttachment } from './text-attachment.jsx';
 
@@ -77,6 +77,7 @@ function typingMention(value, caret) {
 
 export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
+  const fileInput = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
   const [text, setText] = useState('');
@@ -90,8 +91,12 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   const [attachmentError, setAttachmentError] = useState('');
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const updateAttachments = images => { attachmentsRef.current = images; setAttachments(images); };
+  const addFiles = files => {
+    if (disabled || sending || !files.length) return;
+    enqueue(files);
+  };
   const paste = event => {
-    const files = clipboardImages(event.clipboardData);
+    const files = Array.from(event.clipboardData?.files ?? []);
     const pastedText = event.clipboardData.getData('text/plain');
     const attachText = isLongPaste(pastedText);
     if ((!files.length && !attachText) || disabled) return; // short text keeps native selection/undo
@@ -101,11 +106,15 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       const start = input.current.selectionStart, end = input.current.selectionEnd;
       setText(current => current.slice(0, start) + pastedText + current.slice(end));
     }
+    enqueue(files, attachText ? pastedText : null);
+  };
+  const enqueue = (files, pastedText = null) => {
+    lastQueued.current = null;
     pendingPastes.current++;
     setReadingImages(true);
     setAttachmentError('');
     pasteQueue.current = pasteQueue.current.then(async () => {
-      if (attachText) {
+      if (pastedText !== null) {
         if (!mounted.current) return;
         const count = attachmentsRef.current.filter(item => item.mimeType === 'text/plain').length;
         if (count >= LIMITS.textAttachments) throw new Error('Attach up to 4 text files per message.');
@@ -114,8 +123,8 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       }
       for (const file of files) {
         if (!mounted.current) return;
-        if (attachmentsRef.current.filter(item => item.mimeType !== 'text/plain').length >= LIMITS.imageAttachments) throw new Error('Attach up to 4 images per message.');
-        const image = await readImageAttachment(file);
+        const image = await readFileAttachment(file);
+        if (attachmentsRef.current.filter(item => item.mimeType === image.mimeType || (image.mimeType.startsWith('image/') && item.mimeType.startsWith('image/'))).length >= 4) throw new Error('Attach up to 4 images, 4 text files, and 4 other files per message.');
         if (mounted.current) updateAttachments([...attachmentsRef.current, image]);
       }
     }).catch(error => { if (mounted.current) setAttachmentError(error.message); }).finally(() => {
@@ -184,7 +193,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   }, [autoFocusOnType, disabled]);
   const submit = async () => {
     const images = attachmentsRef.current;
-    const prompt = text.trim() || (images.some(item => item.mimeType === 'text/plain') ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
+    const prompt = text.trim() || (images.some(item => !item.mimeType.startsWith('image/')) ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
     if (!prompt || disabled || submitting.current || pendingPastes.current) return;
     submitting.current = true;
     setSending(true);
@@ -207,11 +216,11 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
         <button type="button" disabled={disabled} onClick={() => onRemoveQueued?.(run.id)} aria-label="Remove queued message" title="Remove queued message"><Icon name="close" size={12} /></button>
       </li>)}</ul>
     </section>}
-    <form className="composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-    {attachments.length > 0 && <div className="composer-attachments" aria-label="Attachments">{attachments.map(image => <div className={`composer-attachment${image.mimeType === 'text/plain' ? ' text-file' : ''}`} key={image.id}>
-      {image.mimeType === 'text/plain' ? <TextAttachment attachment={image} /> : <img src={image.dataUrl} alt={image.name} />}
+    <form className="composer" onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = disabled || sending ? 'none' : 'copy'; } }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); } }} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    {attachments.length > 0 && <div className="composer-attachments" aria-label="Attachments">{attachments.map(image => <div className={`composer-attachment${!image.mimeType.startsWith('image/') ? ' text-file' : ''}`} key={image.id}>
+      {!image.mimeType.startsWith('image/') ? <TextAttachment attachment={image} /> : <img src={image.dataUrl} alt={image.name} />}
       <button type="button" disabled={sending} onClick={() => { updateAttachments(attachmentsRef.current.filter(entry => entry.id !== image.id)); setAttachmentError(''); lastQueued.current = null; }} aria-label={`Remove ${image.name}`} title={`Remove ${image.name}`}><Icon name="close" size={12} /></button>
-      {image.mimeType !== 'text/plain' && <span title={image.name}>{image.name}</span>}
+      {image.mimeType.startsWith('image/') && <span title={image.name}>{image.name}</span>}
     </div>)}</div>}
     {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
@@ -244,7 +253,9 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
           } else { void submit(); }
         }
       }} />
+    <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     <div className="composer-controls">
+      <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
       <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton usage={usage} answererName={answerer ?? answererName} />

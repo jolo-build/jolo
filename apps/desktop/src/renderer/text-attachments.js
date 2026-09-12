@@ -4,8 +4,9 @@ export const isLongPaste = text => text.length >= 2000 || text.split('\n').lengt
 
 export function attachmentSummary(attachments) {
   const texts = attachments.filter(item => item.mimeType === 'text/plain').length;
-  const images = attachments.length - texts;
-  return [images ? `${images} ${images === 1 ? 'image' : 'images'}` : '', texts ? `${texts} ${texts === 1 ? 'text file' : 'text files'}` : ''].filter(Boolean).join(' · ');
+  const images = attachments.filter(item => item.mimeType.startsWith('image/')).length;
+  const files = attachments.length - texts - images;
+  return [images ? `${images} ${images === 1 ? 'image' : 'images'}` : '', texts ? `${texts} ${texts === 1 ? 'text file' : 'text files'}` : '', files ? `${files} ${files === 1 ? 'file' : 'files'}` : ''].filter(Boolean).join(' · ');
 }
 
 export async function readTextAttachment(text, name = 'Pasted text.txt') {

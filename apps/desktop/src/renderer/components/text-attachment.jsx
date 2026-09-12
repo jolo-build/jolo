@@ -4,6 +4,7 @@ import { Icon } from './icon.jsx';
 import { engineCall } from '../engine-context.jsx';
 
 export function TextAttachment({ attachment }) {
+  const binary = attachment.mimeType === 'application/octet-stream';
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(attachment.text ?? null);
   const [error, setError] = useState(null);
@@ -24,6 +25,7 @@ export function TextAttachment({ attachment }) {
     })().catch(error => { if (!cancelled) setError(error.message); });
     return () => { cancelled = true; };
   }, [open, text, attachment.artifactId, attachment.bytes]);
+  if (binary) return <div className="text-attachment-card" title={attachment.name}><Icon name="file" size={22} /><span><strong>{attachment.name}</strong><small>File · {Math.max(1, Math.ceil(attachment.bytes / 1024))} KB</small></span></div>;
   return <>
     <button className="text-attachment-card" type="button" onClick={() => { setError(null); setOpen(true); }} aria-label={`Open ${attachment.name}`}>
       <Icon name="file" size={22} /><span><strong>{attachment.name}</strong><small>Text · {Math.max(1, Math.ceil(attachment.bytes / 1024))} KB</small></span>

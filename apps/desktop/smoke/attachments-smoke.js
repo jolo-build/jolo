@@ -58,21 +58,22 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   await waitFor("document.querySelector('.message-attachment img')?.naturalWidth === 320", 'saved attachment after reopening');
   writeFileSync(path.join(results, 'image-paste-sent.png'), (await window.webContents.capturePage()).toPNG());
 
-  // An image-only message can be queued, and unsupported image formats have a visible error.
+  // An image-only message can be queued; other image formats attach as ordinary files.
   await evaluate("window.__joloSmoke.newTask()");
   await evaluate("window.__joloSmoke.pickAnswerer('grok')");
   await waitFor("window.__joloSmoke.state().answerer === 'Grok CLI'", 'queue image answerer');
   const running = await evaluate("window.__joloSmoke.send('sleep for image queue')");
   await waitFor("Boolean(document.querySelector('.composer [aria-label=\"Stop task\"]'))", 'image queue running');
   await pasteImages(1, 'image/svg+xml');
-  await waitFor("document.querySelector('.attachment-note[role=alert]')?.textContent.includes('PNG')", 'unsupported image format explained');
+  await waitFor("document.querySelector('.composer-attachment.text-file') && !document.querySelector('.attachment-note[role=status]')", 'other image format attached as file');
+  await evaluate("document.querySelector('.composer-attachment > button').click()");
   await pasteImages(1);
   await waitFor("document.querySelector('.composer button[type=submit]') && !document.querySelector('.composer button[type=submit]').disabled", 'image-only queue enabled');
   await evaluate("document.querySelector('.composer button[type=submit]').click()");
   await waitFor("document.querySelector('.message-queue')?.textContent.includes('1 image')", 'image-only message queued');
   await evaluate("document.querySelector('.message-queue [aria-label=\"Remove queued message\"]').click()");
   await bridge.rawCall('run.cancel', { runId: running.id });
-  report.checks.push('image paste previews and removal, first-send failure retains the draft, retry delivers pixels to Claude, sent images survive reopening, image-only queueing, and unsupported-format errors');
+  report.checks.push('image paste previews and removal, first-send failure retains the draft, retry delivers pixels to Claude, sent images survive reopening, image-only queueing, and other formats attach as files');
 
   await evaluate("window.__joloSmoke.newTask()");
   await evaluate("window.__joloSmoke.pickAnswerer('claude')");
@@ -112,4 +113,30 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   writeFileSync(path.join(results, 'text-paste-preview.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate("document.querySelector('[aria-label=\"Close text preview\"]').click()");
   report.checks.push('long text paste becomes a removable compact file, preserves the prompt, previews all Unicode text, sends successfully, and survives reopening');
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate("window.__joloSmoke.pickAnswerer('codex')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Codex'", 'file answerer');
+  await evaluate(`(() => {
+    const input = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'file-check');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const files = new DataTransfer();
+    files.items.add(new File(['%PDF-test'], 'Report.pdf', { type: 'application/pdf' }));
+    const picker = document.querySelector('.composer input[type=file]');
+    picker.files = files.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitFor("document.querySelector('.composer-attachment')?.textContent.includes('Report.pdf') && !document.querySelector('.attachment-note[role=status]')", 'PDF chosen in file input');
+  await evaluate(`(() => {
+    const files = new DataTransfer();
+    files.items.add(new File(['export const ready = true;'], 'example.ts', { type: 'text/plain' }));
+    document.querySelector('.composer').dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
+  })()`);
+  await waitFor("document.querySelectorAll('.composer-attachment').length === 2 && !document.querySelector('.attachment-note[role=status]')", 'source file dropped alongside PDF');
+  await evaluate("document.querySelector('.composer button[type=submit]').click()");
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && document.querySelector('.message.assistant')?.textContent.includes('File received: 255044462d74657374')", 'Codex opens uploaded PDF bytes');
+  if (!(await evaluate("document.querySelector('.message.user').textContent.includes('Report.pdf') && document.querySelector('.message.user').textContent.includes('example.ts') && !document.querySelector('.composer-attachment')"))) throw new Error('File cards missing or draft not cleared');
+  writeFileSync(path.join(results, 'files-sent.png'), (await window.webContents.capturePage()).toPNG());
+  report.checks.push('file input accepts PDF, drag-and-drop accepts source files, Codex opens uploaded bytes, and sent file cards persist');
+
 }

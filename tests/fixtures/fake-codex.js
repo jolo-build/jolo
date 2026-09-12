@@ -65,6 +65,14 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     if (current?.id === turnId) current = null;
     notify("turn/completed", { threadId, turn: { ...turn, status, error, completedAt: Date.now(), durationMs: 5 } });
   };
+  if (prompt.startsWith('file-check')) {
+    const match = /saved at ("(?:[^"\\]|\\.)*")/.exec(prompt);
+    if (!match) throw new Error('No attached file path received');
+    const bytes = await Bun.file(JSON.parse(match[1])).bytes();
+    say(`File received: ${Buffer.from(bytes).toString('hex')}`);
+    end('completed');
+    return;
+  }
   if (prompt === 'image-check') {
     const sizes = await Promise.all(images.map(async image => (await Bun.file(image.path).arrayBuffer()).byteLength));
     say(`Images received: ${sizes.join(', ')}`);
