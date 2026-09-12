@@ -50,6 +50,13 @@ let child;
 try {
   const repository = createRepository(db, () => time);
   const account = await repository.account({ id: 'browser-fixture', name: 'Browser fixture', email: 'browser@example.com' });
+  const chatTitles = ['Prepare the desktop app for release', 'Refine the workspace navigation and keyboard shortcuts', 'Review the packaging changes', 'Plan the next iteration of the account settings', 'A conversation with a long title about improving the development experience across desktop, terminal, and browser workspaces'];
+  for (let n = 0; n < 24; n++) {
+    const title = chatTitles[n] ?? `Explore workspace improvements ${n + 1}`;
+    const content = JSON.stringify({ version: 1, title, messages: [{ role: 'user', text: 'Help me plan this change.' }, { role: 'assistant', text: 'Let’s start with the current behavior.' }] });
+    const at = time - (n < 3 ? n * 3600000 : n < 7 ? 86400000 + n * 60000 : (n - 5) * 86400000);
+    sqlite.query('INSERT INTO synced_chats (account_id,id,revision,title,content,updated_at) VALUES (?,?,1,?,?,?)').run(account.id, `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, title, content, at);
+  }
   await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), time + SESSION_SECONDS * 1000);
   app = createAccessApp({ ACCESS_ORIGIN: origin, ENVIRONMENT: 'development', ACCESS_DB: db, GITHUB_CLIENT_ID: 'fixture', GITHUB_CLIENT_SECRET: 'fixture', GOOGLE_CLIENT_ID: 'fixture', GOOGLE_CLIENT_SECRET: 'fixture', RESEND_API_KEY: 're_fixture', MAIL_FROM: 'Jolo <noreply@notifications.jolo.build>' }, { now: () => time, fetch: () => { throw new Error('Browser smoke must not contact identity providers'); }, mailFetch: async () => Response.json({id:'browser-mail-fixture'}) });
   const start = async (scope = 'account:read') => (await app.fetch(new Request(origin + '/device/code', { method: 'POST', body: new URLSearchParams({ client_id: 'jolo', device_name: 'Browser smoke device', scope }) }))).json();

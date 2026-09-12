@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { checkLoading } from './browser-loading.js';
 import { checkComments } from './browser-comments.js';
+import { checkChats } from './browser-chats.js';
 
 app.setPath('userData', process.env.JOLO_ACCESS_TEST_HOME);
 let phase = 'starting Electron';
@@ -32,6 +33,14 @@ async function checkForms() {
     assert(metrics.contentWidthOverflow<=1,`${label}: content exceeds available width: ${JSON.stringify(metrics)}`);
     if(metrics.width>700) assert(metrics.contentOverflow<=1,`${label}: workspace should fit without page-content scrolling: ${JSON.stringify(metrics)}`);
     assert(metrics.controls.every(control=>control.visible),`${label}: controls left the viewport: ${JSON.stringify(metrics)}`);
+    if (metrics.width <= 700) {
+      const phoneControls = await contents.executeJavaScript(`(() => {
+        const fields=[...document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]),select,textarea')].filter(e=>e.getBoundingClientRect().width>0);
+        const buttons=[...document.querySelectorAll('.task-nav a,.button')].filter(e=>e.getBoundingClientRect().width>0);
+        return {readable:fields.every(e=>parseFloat(getComputedStyle(e).fontSize)>=16),tappable:buttons.every(e=>e.getBoundingClientRect().height>=44)};
+      })()`);
+      assert(phoneControls.readable && phoneControls.tappable, `${label}: mobile controls must use readable text and 44px targets: ${JSON.stringify(phoneControls)}`);
+    }
   };
   const submit = async selector => {
     phase = `submitting ${selector}`;
@@ -41,7 +50,7 @@ async function checkForms() {
   };
   const checkAccessLayout = async (label, controls = []) => {
     phase = `checking ${label} layout`;
-    for (const [width,height] of [[1280,720],[1024,768],[1280,560],[390,844]]) {
+    for (const [width,height] of [[1280,720],[1024,768],[1280,560],[768,1024],[390,844],[320,740]]) {
       window.setContentSize(width,height);
       await fit(label, controls);
       if ((width===1280&&height===720)||width===390) writeFileSync(`/tmp/jolo-access-${label}${width===390?'-mobile':''}.png`,(await contents.capturePage()).toPNG());
@@ -81,6 +90,8 @@ async function checkForms() {
   await submit('button[value="approved"]');
   assert.match(await text(), /Device approved\./, 'Native browser approval must succeed');
   await checkAccessLayout('approved', ['.access-panel-actions a[href="/devices"]']);
+  phase = 'checking chat history';
+  await checkChats(window, origin);
   await window.loadURL(origin + '/__fixture/decline');
   await submit('button[value="denied"]');
   assert.match(await text(), /Sign-in declined\./);
@@ -172,7 +183,7 @@ async function checkForms() {
   await contents.executeJavaScript(`(() => {const list=document.querySelector('.task-list'),row=list.firstElementChild;for(let n=0;n<40;n++) list.append(row.cloneNode(true));})()`);
   await fit('long task list', ['.task-nav','.task-heading .button']);
   assert(await contents.executeJavaScript('document.querySelector(".task-list").scrollHeight > document.querySelector(".task-list").clientHeight'));
-  for(const [width,height] of [[1280,720],[1024,768],[1280,560],[390,844]]) {
+  for(const [width,height] of [[1280,720],[1024,768],[1280,560],[768,1024],[390,844],[320,740]]) {
     window.setContentSize(width,height);
     for(const route of ['/tasks/new?team='+team,taskPath,taskPath+'/edit','/teams','/teams/'+team,'/labels?team='+team]) {
       await window.loadURL(origin+route);

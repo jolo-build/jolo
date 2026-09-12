@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { once } from 'node:events';
+import { checkMobile } from './browser-mobile.js';
 
 app.setPath('userData', process.env.JOLO_WEBSITE_TEST_HOME);
 app.setPath('logs', path.join(process.env.JOLO_WEBSITE_TEST_HOME, 'logs'));
@@ -223,6 +224,8 @@ async function checkLoading() {
     await evaluate("document.querySelector('.cli-install').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     assert.equal(await evaluate("document.querySelector('.install-command pre').scrollWidth <= document.querySelector('.install-command pre').clientWidth"), true);
     if (process.env.JOLO_WEBSITE_SCREENSHOT_DIR) await writeFile(path.join(process.env.JOLO_WEBSITE_SCREENSHOT_DIR, 'jolo-website-cli-mobile.png'), (await window.webContents.capturePage()).toPNG());
+    phase = 'mobile navigation and product interactions';
+    await checkMobile(window);
     await command('Emulation.setScriptExecutionDisabled', { value: true });
     phase = 'no JavaScript';
     await window.loadURL(origin);

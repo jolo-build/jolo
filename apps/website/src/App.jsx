@@ -15,6 +15,17 @@ function Icon({ name, size = 18, ...props }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}><path d={paths[name] || paths.code} /></svg>;
 }
 function Brand({ footer = false }) { return <a className={`brand${footer ? ' brand-footer' : ''}`} href="#top" aria-label="Jolo home">jolo</a>; }
+function NavigationLinks() {
+  return <><a href="#workspace">Product</a><a href="#orchestrator">Orchestrator</a><a href="https://docs.jolo.build">Documentation</a><a href="https://access.jolo.build">Access <Icon name="diagonal" size={13} /></a><a className="nav-cta" href="#get-jolo">Get Jolo <Icon name="arrow" size={14} /></a></>;
+}
+function SiteHeader() {
+  const mobileMenu = useRef(null);
+  return <header className="site-header section-width"><Brand /><nav className="desktop-navigation" aria-label="Main navigation"><NavigationLinks /></nav><details className="mobile-navigation" ref={mobileMenu} onKeyDown={event => {
+    if (event.key === 'Escape') { mobileMenu.current.open = false; mobileMenu.current.querySelector('summary').focus(); }
+  }}><summary>Menu <Icon name="chevron" size={16} /></summary><nav aria-label="Mobile navigation" onClick={event => {
+    if (event.target instanceof Element && event.target.closest('a')) mobileMenu.current.open = false;
+  }}><NavigationLinks /></nav></details></header>;
+}
 const exampleTasks = ['Refine workspace navigation', 'Add comments to web tasks', 'Polish the settings page', 'Set up inline browser control'];
 const exampleFolders = [['jolo', '7', '~/work/jolo', 'main'], ['orbis', '3', '~/work/orbis', 'fix/navigation'], ['studio', '2', '~/work/studio', 'main']];
 const previewPanels = [['changes','Changes','changes'],['browser','Browser','browser'],['files','Files','file'],['terminal','Terminal','terminal'],['plans','Plans','plans'],['checks','Checks','checks']];
@@ -58,15 +69,16 @@ function PreviewContext({ panel, onClose }) {
 }
 function Workspace() {
   const [screen, setScreen] = useState('chat'), [task, setTask] = useState(exampleTasks[0]), [panel, setPanel] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [openFolders, setOpenFolders] = useState(['jolo']);
-  const openTask = title => { setTask(title); setScreen('chat'); };
+  const openTask = title => { setTask(title); setScreen('chat'); setSidebarOpen(false); setPanel(null); };
   const toggleFolder = name => setOpenFolders(openFolders.includes(name) ? openFolders.filter(f => f !== name) : [...openFolders,name]);
   const tasksFor = name => name === 'jolo' ? exampleTasks : [name === 'orbis' ? 'Refine the project sidebar' : 'Explore the codebase'];
   const taskRow = (title,index) => <button type="button" className={`example-task ${task === title ? 'selected' : ''}`} key={title} onClick={() => openTask(title)} aria-current={task === title ? 'true' : undefined}>
     <span className="example-status" aria-label={title === exampleTasks[0] ? 'Working' : 'Done'}>{title === exampleTasks[0] ? <span className="working-ring" /> : <Icon name="check" size={14} />}</span><span className="example-task-copy"><span className="example-task-title">{title}</span><small>{taskDetails[index][0]}</small><small className="example-task-branch"><Icon name="branch" size={11} /><span>{taskDetails[index][1]}</span><span>{taskDetails[index][2]}</span></small></span>
   </button>;
   return <div className="workspace-example">
-    <div className="app-bar"><div className="app-brand-area"><span className="app-wordmark">jolo</span><Icon name="panels" size={15} /></div><Icon name="chat" size={14} /><span className="app-bar-title">{screen === 'board' ? 'Workspaces' : task}</span><div className="app-bar-end"><button type="button" onClick={() => setScreen(screen === 'board' ? 'chat' : 'board')} aria-pressed={screen === 'board'}><Icon name="board" size={14} /> Board</button><PreviewPanels selected={panel} onSelect={value => { setPanel(value); setScreen('chat'); }} /></div></div>
+    <div className="app-bar"><div className="app-brand-area"><span className="app-wordmark">jolo</span><Icon name="panels" size={15} /><button className="mobile-preview-tasks" type="button" aria-expanded={sidebarOpen && screen === 'chat'} aria-label="Show example tasks" onClick={() => { setSidebarOpen(!sidebarOpen); setScreen('chat'); setPanel(null); }}><Icon name="panels" size={16} /> Tasks</button></div><Icon name="chat" size={14} /><span className="app-bar-title">{screen === 'board' ? 'Workspaces' : task}</span><div className="app-bar-end"><button type="button" onClick={() => { setScreen(screen === 'board' ? 'chat' : 'board'); setSidebarOpen(false); }} aria-pressed={screen === 'board'}><Icon name="board" size={14} /> Board</button><PreviewPanels selected={panel} onSelect={value => { setPanel(value); setScreen('chat'); setSidebarOpen(false); }} /></div></div>
     {screen === 'board' ? <div className="preview-board">
       <div className="preview-board-heading"><div><h3>Workspaces</h3><p><span className="activity-dot" /> 1 working <span>·</span> 1 new result</p></div><button className="preview-new-chat" type="button" onClick={() => openTask('New chat')}><Icon name="compose" size={15} /> New chat</button></div>
       <div className="preview-section-label"><span>Folders <span>3</span></span><span>Recent activity</span></div>
@@ -75,7 +87,7 @@ function Workspace() {
         {openFolders.includes(name) && <div className="preview-folder-tasks">{tasksFor(name).map((title,index) => <button type="button" className={`preview-task ${name === 'jolo' && index === 0 ? 'is-working' : ''}`} key={title} onClick={() => openTask(title)}>{index === 0 && name === 'jolo' ? <span className="working-ring" /> : <Icon name="check" size={15} />}<span>{title}</span><small>{index === 0 && name === 'jolo' ? 'Working' : 'Done'}</small></button>)}{name === 'jolo' && <span className="preview-older">3 older tasks</span>}</div>}
       </div>)}
       <div className="preview-section-label preview-chats-label"><span>Chats</span><span>Outside workspaces</span></div><button className="preview-chat-row" type="button" onClick={() => openTask('Plan the next release')}><Icon name="chat" size={18} /><span>Plan the next release</span><small>Yesterday</small></button>
-    </div> : <div className={`app-body ${panel ? 'has-panel' : ''}`}>
+    </div> : <div className={`app-body ${panel ? 'has-panel' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
       <aside className="app-sidebar" aria-label="Example tasks"><button className="example-new" type="button" onClick={() => openTask('New chat')}><Icon name="compose" size={16} /> New chat</button><div className="sidebar-label">Projects</div>
         {exampleFolders.map(([name]) => <div key={name}><button type="button" className="sidebar-folder" aria-expanded={openFolders.includes(name)} onClick={() => toggleFolder(name)}><Icon name={openFolders.includes(name) ? 'chevron' : 'folder'} size={16} /><span>{name}</span>{name === 'jolo' && <span className="activity-dot" />}</button>{openFolders.includes(name) && <div className="sidebar-task-tree">{tasksFor(name).slice(0,3).map(taskRow)}</div>}</div>)}
         <div className="sidebar-label">Chats</div><button className={`example-chat ${task === 'Plan the next release' ? 'selected' : ''}`} type="button" onClick={() => openTask('Plan the next release')}><Icon name="check" size={14} /><span>Plan the next release<small>Claude Code · Opus</small></span></button>
@@ -196,7 +208,7 @@ function GettingStarted() {
 
 export default function App() {
   return <><a href="#main" className="skip-link">Skip to content</a><div id="top" />
-    <header className="site-header section-width"><Brand /><nav aria-label="Main navigation"><a href="#workspace">Product</a><a href="#orchestrator">Orchestrator</a><a href="https://docs.jolo.build">Documentation</a><a href="https://access.jolo.build">Access <Icon name="diagonal" size={13} /></a><a className="nav-cta" href="#get-jolo">Get Jolo <Icon name="arrow" size={14} /></a></nav></header>
+    <SiteHeader />
     <main id="main"><section className="hero section-width"><div className="hero-meta"><span className="activity-dot" /><span>Your workspace for coding agents</span><span className="development-label">In development</span></div><h1><span className="hero-title-line">Your agents.</span><span className="hero-title-line">One workspace.</span></h1><p className="hero-description">Conversations, code, and the browser. Together.<br />Stay with the task, from the first prompt to the final diff.</p><div className="hero-actions"><a className="button button-dark" href="#get-jolo">Get Jolo <Icon name="arrow" size={16} /></a><a className="button button-outline" href="https://access.jolo.build">Open Access <Icon name="diagonal" size={15} /></a></div><p className="hero-note">On your desktop. In your terminal. Connected through Access.</p></section>
     <ProductPreview />
     <DesktopExamples />
