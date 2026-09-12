@@ -435,7 +435,7 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .usage-panel .hint { font-size: 11px; }
 .composer-controls .composer-submit { width: 28px; height: 28px; flex: none; padding: 0; border-radius: 7px; }
 .composer-controls .composer-submit:disabled { opacity: 1; background: var(--hover); color: var(--muted); }
-.model-select { padding: 5px 6px; font-size: 11px; color: var(--muted); max-width: 50%; min-width: 0; }
+.model-select { gap: 4px; padding: 5px 6px; font-size: 11px; color: var(--text); max-width: 50%; min-width: 0; }
 .model-select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shortcut { font-size: 10px; color: var(--muted); white-space: nowrap; margin-right: 4px; }
 .stop-button { background: var(--accent); color: var(--on-accent); font-weight: 500; font-size: 12px; padding: 5px 9px; }
@@ -993,7 +993,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 
 /* A quiet, native popover keeps model controls above clipped panes and webviews. */
 .model-select > .agent-logo { width: 16px; height: 16px; flex: none; }
-.model-select > small { color: var(--muted); font: inherit; flex: none; }
+.model-select > small { color: color-mix(in srgb, var(--muted) 75%, var(--bg)); font: inherit; flex: none; }
+.model-select > svg:last-child { color: color-mix(in srgb, var(--muted) 75%, var(--bg)); flex: none; }
 .model-popover { position: fixed; inset: auto; margin: 0; width: min(264px, calc(100vw - 16px)); padding: 10px; border: 0; border-radius: 14px; color: var(--text); background: var(--panel); box-shadow: 0 10px 40px #0002, 0 2px 8px #0001; overflow: auto; }
 .model-popover::backdrop { background: transparent; }
 .effort-heading { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; align-items: center; gap: 4px; }

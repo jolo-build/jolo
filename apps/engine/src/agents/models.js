@@ -130,13 +130,15 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
       const options = message.result?.configOptions;
       const thoughtLevel = (Array.isArray(options) ? options : []).find(option => option?.category === "thought_level" && option.type === "select");
       const levels = efforts(thoughtLevel?.options);
-      if (selector) return { models: selector.options.map((option) => model({ id: option.value, displayName: option.name, description: option.description, isDefault: option.value === selector.current })), efforts: levels, note: null };
+      // ACP exposes effort alongside the model selector, rather than on each model.
+      // Keep that capability on the model entries consumed by the composer too.
+      if (selector) return { models: selector.options.map((option) => model({ id: option.value, displayName: option.name, description: option.description, isDefault: option.value === selector.current, efforts: levels })), efforts: levels, note: null };
       const vendor = message.result?.models;
       if (Array.isArray(vendor?.availableModels)) {
         return {
           models: vendor.availableModels.filter((entry) => text(entry?.modelId)).map((entry) => model({
             id: entry.modelId, displayName: entry.name, description: entry.description,
-            isDefault: entry.modelId === vendor.currentModelId, efforts: entry._meta?.reasoningEfforts,
+            isDefault: entry.modelId === vendor.currentModelId, efforts: entry._meta?.reasoningEfforts ?? levels,
           })),
           efforts: levels,
           note: null,

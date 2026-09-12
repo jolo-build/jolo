@@ -164,7 +164,8 @@ describe("choosing a model for each hosted agent", () => {
     // An ACP agent publishes its models as a session config option.
     const grok = await client.call("agent.models", { agentId: "grok" });
     expect(grok.models.map((model) => model.id)).toEqual(["fake-fast", "fake-deep"]);
-    expect(grok.models[0]).toMatchObject({ displayName: "Fake Fast", isDefault: true });
+    expect(grok.models[0]).toMatchObject({ displayName: "Fake Fast", isDefault: true, efforts: ["low", "high"] });
+    expect(grok.models[1].efforts).toEqual(["low", "high"]);
     expect(grok.efforts).toEqual(["low", "high"]);
   }, 60_000);
 
