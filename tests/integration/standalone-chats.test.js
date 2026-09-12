@@ -3,6 +3,26 @@ import { mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { startEngine, tempHome, removeHome, waitFor } from './helpers.js';
 
+test('chat and task creation persist explicit model choices without changing existing sessions', async () => {
+  const home = tempHome();
+  let engine, client;
+  try {
+    engine = await startEngine({ home, fakeSteps: 1, fakeDelayMs: 1 });
+    client = await engine.connect();
+    const model = { preset: 'openai', model: 'selected-model', effort: 'high', contextWindowTokens: null, maxOutputTokens: null };
+    const chat = await client.call('chat.create', { model });
+    const original = await client.call('chat.create', {});
+    const task = await client.call('session.create', { projectId: chat.session.projectId, workspaceId: chat.session.workspaceId, model });
+    expect(chat.session.model).toEqual(model);
+    expect(task.session.model).toEqual(model);
+    expect((await client.call('session.page', { sessionId: original.session.id })).session.model).toBeNull();
+    await expect(client.call('chat.create', { model: { ...model, preset: 'missing-preset' } })).rejects.toBeDefined();
+    client.close(); await engine.stop();
+    engine = await startEngine({ home, fakeSteps: 1, fakeDelayMs: 1 }); client = await engine.connect();
+    expect((await client.call('session.page', { sessionId: task.session.id })).session.model).toEqual(model);
+  } finally { client?.close(); await engine?.stop(); removeHome(home); }
+});
+
 test('standalone chats need no folder, keep separate storage, persist history, and page independently of workspaces', async () => {
   const home = tempHome();
   let engine, client;

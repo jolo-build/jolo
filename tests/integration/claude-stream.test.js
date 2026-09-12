@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
@@ -131,7 +131,7 @@ describe("Claude Code through its structured stream", () => {
     client.onEvent((event) => { if (event.type === "permission.requested" && !decision) { decision = event.payload; client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: "allow_project" }); } });
     const run = await runTo("req_cmd", "run echo hosted-ok");
     expect(run.state).toBe("completed");
-    expect(decision).toMatchObject({ tool: "claude:Bash", summary: "Bash: echo hosted-ok", script: "echo hosted-ok", cwd: "." });
+    expect(decision).toMatchObject({ tool: "claude:Bash", summary: "Bash: echo hosted-ok", script: "echo hosted-ok", cwd: realpathSync(repo) });
     expect(events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "awaiting_permission")).toBe(true);
     const messages = await messagesOf(run.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "tool", "text"]);

@@ -73,6 +73,40 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await evaluate("document.querySelector('.context-close').click()");
     await select('Browser');
     assert(await evaluate("document.querySelector('.browser webview') === window.__panelBrowser && window.__panelBrowser.executeJavaScript('window.retainedPanelPage === 42')"), 'closing Checks discarded the browser page');
+    // Test the bundled font: fallback fonts hid the slash substitution in earlier input checks.
+    await evaluate("document.fonts.load('11px \"JetBrains Mono\"'); document.querySelector('.browser-bar input').focus(); document.querySelector('.browser-bar input').select()");
+    window.webContents.focus();
+    for (const keyCode of 'https://d') { window.webContents.sendInputEvent({ type: 'char', keyCode }); await frame(); }
+    assert(await evaluate(`(() => {
+      const input = document.querySelector('.browser-bar input'), style = getComputedStyle(input);
+      return input.value === 'https://d' && style.fontVariantLigatures === 'none' && style.fontFeatureSettings.includes('"calt" 0') && style.fontFeatureSettings.includes('"liga" 0');
+    })()`), 'address font substitutes the first slash after typing the hostname');
+    writeFileSync(path.join(results, 'browser-address-literal.png'), (await window.webContents.capturePage()).toPNG());
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    await frame();
+    const chatWidth = () => evaluate("document.querySelector('.pane-body > .main').getBoundingClientRect().width");
+    const initialChatWidth = await chatWidth();
+    const dragPanel = async delta => {
+      const point = await evaluate("(() => { const r = document.querySelector('.context-divider').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + 80) }; })()");
+      window.webContents.focus();
+      window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+      window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+      await waitFor("Boolean(document.querySelector('.context-resizing'))", 'panel resize captures the mouse');
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x + delta, y: point.y });
+      await frame();
+      window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x + delta, y: point.y, button: 'left', clickCount: 1 });
+      await waitFor("!document.querySelector('.context-resizing')", 'panel resize releases the mouse');
+      await frame();
+    };
+    await dragPanel(-80);
+    assert(await chatWidth() < initialChatWidth - 60, 'dragging left did not widen the browser');
+    await dragPanel(160);
+    assert(await chatWidth() > initialChatWidth + 60, 'dragging over the browser lost the resize pointer');
+    assert(await evaluate("document.querySelector('.browser webview') === window.__panelBrowser && window.__panelBrowser.executeJavaScript('window.retainedPanelPage === 42')"), 'resizing reloaded the browser');
+    await evaluate("document.querySelector('.context-divider').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
+    await frame();
+    assert(Math.abs(await chatWidth() - initialChatWidth) < 2, 'double-click did not reset panel width');
     await select('Plans');
     assert(await evaluate("document.querySelector('.plan-new input').value === 'Keep this plan draft'"), 'switching tabs discarded the plan draft');
     await evaluate("document.querySelector('.plan-new [type=button]').click()");

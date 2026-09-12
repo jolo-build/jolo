@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { LIMITS, ProtocolError, AttachmentSchema } from '@jolo/protocol';
 
 const kindFor = mimeType => `attachment:${mimeType}`;
-function mimeOf(buffer) {
+export function mimeOf(buffer) {
   if (buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png';
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
   if (['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) return 'image/gif';

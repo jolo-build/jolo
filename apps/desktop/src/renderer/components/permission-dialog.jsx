@@ -2,13 +2,14 @@ import { useRef, useState } from 'react';
 import { Modal } from './modal.jsx';
 import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
-export function PermissionDialog({ request, onDecide }) {
+export function PermissionDialog({ request, onDecide, workspacePath = null }) {
   const [scope, setScope] = useState('allow_once');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
   const deciding = useRef(false);
   const allowButton = useRef(null);
-  const command = request.argv ? request.argv.join(' ') : request.script;
+  const command = request.argv?.join(' ').trim() || request.script?.trim();
+  const directory = !request.cwd || request.cwd === '.' ? workspacePath || 'Current task folder' : request.cwd;
   const decide = async (decision) => {
     if (deciding.current) return;
     deciding.current = true;
@@ -27,12 +28,12 @@ export function PermissionDialog({ request, onDecide }) {
     event.preventDefault();
     void decide(scope);
   }}>
-    <div className="modal-eyebrow"><Icon name="shield" />Command permission</div>
-    <h2>Run this command?</h2>
+    <div className="modal-eyebrow"><Icon name="shield" />{command ? 'Command permission' : 'Tool permission'}</div>
+    <h2>{command ? 'Run this command?' : 'Allow this action?'}</h2>
     <p className="muted">Jolo needs your approval to continue this task.</p>
-    <div className="command-card"><pre className="command">{command}</pre><div className="hint">Working directory: {request.cwd}</div></div>
-    <p className="hint">Runs with your account’s access. The command can read or change files outside this project.</p>
-    <label className="permission-scope">Allow for<Select value={scope} onChange={(event) => setScope(event.target.value)} disabled={pending}><option value="allow_once">This command only</option><option value="allow_run">This task</option><option value="allow_project">This project</option></Select></label>
+    <div className="command-card"><pre className="command">{command || request.summary || request.tool || 'Tool details unavailable'}</pre><div className="hint">Runs in: {directory}</div></div>
+    <p className="hint">Runs with your account’s access. This action can read or change files outside this project.</p>
+    <label className="permission-scope">Allow for<Select value={scope} onChange={(event) => setScope(event.target.value)} disabled={pending}><option value="allow_once">{command ? 'This command only' : 'This action only'}</option><option value="allow_run">This task</option><option value="allow_project">This project</option></Select></label>
     {error && <p className="negative" role="alert">{error}</p>}
     <div className="modal-actions"><button className="outline" disabled={pending} onClick={() => decide('deny')}>Don’t run</button><button ref={allowButton} className="primary" disabled={pending} onClick={() => decide(scope)}>{pending ? 'Applying…' : ({ allow_once: 'Allow once', allow_run: 'Allow for task', allow_project: 'Allow for project' })[scope]}</button></div>
   </Modal>;

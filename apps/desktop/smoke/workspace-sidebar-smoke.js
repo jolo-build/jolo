@@ -63,12 +63,12 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
       const x = left('.new-chat span');
       const task = document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"]`)});
       return Math.abs(left('.sidebar-workspace-name') - x) < 1
-        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x) < 1
-        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-chat-details`)}) - x) < 1
+        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x - 28) < 1
+        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-chat-details`)}) - x - 28) < 1
         && task.getBoundingClientRect().height === 42
         && task.querySelector('.sidebar-task-progress[aria-label="Ready"]');
     })()`);
-    if (!aligned) throw new Error('sidebar icon/text columns or compact task row height are inconsistent');
+    if (!aligned) throw new Error('sidebar tree indentation, title/metadata alignment or compact task row height are inconsistent');
     writeFileSync(path.join(results, 'workspace-sidebar-narrow.png'), (await window.webContents.capturePage()).toPNG());
   } finally { window.setSize(...size); nativeTheme.themeSource = theme; }
   const { run } = await bridge.rawCall('run.start', { sessionId: selectedNew, requestId: 'folder-animation', prompt: 'Show ongoing folder activity' });

@@ -1,8 +1,12 @@
 // Grants, permission requests, and policy checks.
 import { EventEmitter } from "node:events";
+import path from 'node:path';
 import { ProtocolError } from "@jolo/protocol";
 
 export const SCOPES = Object.freeze({ inspect: "inspect", browse: "browse", edit: "edit", execute: "execute" });
+
+/** Permission displays use the session's workspace, never the engine's current directory. */
+export const permissionCwd = (workspacePath, cwd) => path.resolve(workspacePath, cwd || '.');
 
 /** Thrown by authorize() when a user decision is required before execution. */
 export class PermissionRequired extends Error {
@@ -73,6 +77,7 @@ export class PermissionService {
   }
 
   request({ run, workspaceId, tool, argumentDigest, summary, cwd }) {
+    cwd = permissionCwd(this.storage.getWorkspace(workspaceId).path, cwd);
     const permission = this.storage.transaction(() => {
       const created = this.storage.insertPermission({ runId: run.id, sessionId: run.sessionId, workspaceId, tool: tool.name, request: { argumentDigest, ...summary, cwd, isolation: "none" } });
       this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "permission.requested", payload: { permissionId: created.id, runId: run.id, workspaceId, tool: tool.name, summary: summary.summary, ...(summary.argv ? { argv: summary.argv } : {}), ...(summary.script ? { script: summary.script } : {}), cwd, isolation: "none", revision: created.revision } });

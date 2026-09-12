@@ -19,10 +19,12 @@ import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
 import { openChatFile } from './chat-files.js';
+import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
+import { saveArtifactImage } from './image-downloads.js';
 import { installReloadShortcuts } from './reload-shortcuts.js';
 import { HostDialogs } from './host-dialogs.js';
 
-protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }, { scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // Packaged layout: main.js sits at the app root next to dist/, preload/, and engine/. Development: src/main/.
@@ -203,9 +205,14 @@ function createWindow() {
   return window;
 }
 
-function registerIpc(window, bridge, visualizations, releases) {
+function registerIpc(window, bridge, visualizations, releases, filePreviews) {
   // A closing renderer can still deliver IPC after the window is gone; never dereference a destroyed window.
   const trusted = (event) => !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+  ipcMain.handle('jolo:image:save', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { return { ok: true, result: await saveArtifactImage((method, args) => bridge.rawCall(method, args), options => dialog.showSaveDialog(window, options), params) }; }
+    catch (error) { return { ok: false, error: String(error?.message ?? 'Couldn’t download this image.') }; }
+  });
   ipcMain.handle('jolo:visualization:prepare', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try { return { ok: true, result: await visualizations.prepare(params ?? {}) }; }
@@ -264,6 +271,12 @@ function registerIpc(window, bridge, visualizations, releases) {
     try { await openChatFile((method, args) => bridge.rawCall(method, args), shell, params ?? {}); return { ok: true }; }
     catch (error) { return { ok: false, error: String(error?.message ?? 'Could not open this file.') }; }
   });
+  ipcMain.handle('jolo:previewChatFile', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { return { ok: true, result: await filePreviews.prepare(params ?? {}) }; }
+    catch (error) { return { ok: false, error: String(error?.message ?? 'Could not preview this file.') }; }
+  });
+  ipcMain.handle('jolo:releaseChatFile', (event, url) => { if (!trusted(event)) throw new Error('untrusted sender'); filePreviews.release(url); });
   ipcMain.handle("jolo:openExternal", (event, url) => {
     if (!trusted(event)) throw new Error("untrusted sender");
     try { if (["http:", "https:"].includes(new URL(url).protocol)) return shell.openExternal(url); } catch { /* ignore */ }
@@ -301,13 +314,18 @@ app.whenReady().then(async () => {
   nativeTheme.on("updated", updateIcon);
   window.once("closed", () => nativeTheme.removeListener("updated", updateIcon));
   const bridge = new EngineBridge({ window });
+  const filePreviews = createFilePreviewStore((method, params) => bridge.rawCall(method, params));
+  protocol.handle(FILE_PREVIEW_SCHEME, request => filePreviews.response(request));
+  window.webContents.on('did-start-navigation', event => { if (event.isMainFrame && !event.isSameDocument) filePreviews.clear(); });
+  window.once('closed', () => { filePreviews.clear(); protocol.unhandle(FILE_PREVIEW_SCHEME); });
   const visualizations = createVisualizationStore((method, params) => bridge.rawCall(method, params));
   protocol.handle(VISUALIZATION_SCHEME, request => visualizations.response(request));
   // A preview can interact inside its own sandbox, but cannot navigate another surface.
   window.webContents.on('will-frame-navigate', event => {
+    if (filePreviews.allowsFrameNavigation(event)) return;
     if (event.isMainFrame) {
       if (event.initiator && event.initiator !== window.webContents.mainFrame) event.preventDefault();
-    } else if (!visualizations.has(event.url) || event.frame?.parent !== window.webContents.mainFrame || event.initiator && event.initiator !== window.webContents.mainFrame) event.preventDefault();
+    } else if ((!visualizations.has(event.url) && !filePreviews.has(event.url)) || event.frame?.parent !== window.webContents.mainFrame || event.initiator && event.initiator !== window.webContents.mainFrame) event.preventDefault();
   });
   window.webContents.on('did-start-navigation', event => { if (event.isMainFrame && !event.isSameDocument) visualizations.clear(); });
   window.once('closed', () => { visualizations.clear(); protocol.unhandle(VISUALIZATION_SCHEME); });
@@ -323,7 +341,7 @@ app.whenReady().then(async () => {
   }) : null;
   releases?.start();
   window.once("closed", () => releases?.stop());
-  registerIpc(window, bridge, visualizations, releases);
+  registerIpc(window, bridge, visualizations, releases, filePreviews);
   const isOverlayActive = () => bridge.hostDialogs.active;
   const waitForOverlay = signal => bridge.hostDialogs.wait(signal);
   const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive, waitForOverlay });

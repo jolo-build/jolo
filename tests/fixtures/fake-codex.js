@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import path from 'node:path';
 // A stand-in for `codex app-server` that speaks its JSON-RPC protocol, so the adapter is tested end to end
 // without the real CLI or its account. Shapes mirror what the real binary sent in live sessions (0.153.3).
 // Behaviour is scripted by the prompt text: "run <cmd>" asks approval for a command, "patch <file> <text>"
@@ -76,6 +77,22 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
   if (prompt === 'image-check') {
     const sizes = await Promise.all(images.map(async image => (await Bun.file(image.path).arrayBuffer()).byteLength));
     say(`Images received: ${sizes.join(', ')}`);
+    end('completed');
+    return;
+  }
+  if (prompt.startsWith('generate-image ')) {
+    const mode = prompt.slice('generate-image '.length);
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const image = item('imageGeneration', { status: 'inProgress', result: '' });
+    if (mode !== 'completed-only') started(image);
+    const savedPath = path.join(cwd, 'generated.png');
+    if (mode === 'saved') await Bun.write(savedPath, Buffer.from(png, 'base64'));
+    const result = { ...image, status: mode === 'failed' ? 'failed' : 'completed',
+      result: mode === 'invalid' ? 'not an image' : ['saved', 'missing', 'failed'].includes(mode) ? '' : png,
+      ...(mode === 'saved' ? { savedPath } : {}) };
+    completed(result);
+    if (mode === 'duplicate') completed(result);
+    say('A compact design mockup.');
     end('completed');
     return;
   }
@@ -200,10 +217,21 @@ async function handle(message) {
       return;
     }
     case "thread/resume": {
+      const resumeMode = Bun.file(path.join(params.cwd, '.fake-codex-resume'));
+      if (await resumeMode.exists()) {
+        const mode = await resumeMode.text();
+        if (mode === 'exit') { process.stderr.write('scripted exit during resume\n'); process.exit(71); }
+        if (mode === 'wait') { await Bun.write(path.join(params.cwd, '.fake-codex-resuming'), 'ready'); return; }
+        if (mode === 'reject') return fail(-32602, 'scripted resume rejection');
+      }
       if (typeof params.threadId !== "string" || !params.threadId.startsWith("fake-thread-")) return fail(-32602, "unknown thread");
       if (params.approvalPolicy !== "untrusted" || params.sandbox !== "workspace-write") return fail(-32602, "unexpected thread/resume params");
       const thread = makeThread(params.cwd, params.threadId, true, params.model ?? null);
       threads.get(thread.id).developerInstructions = params.developerInstructions;
+      if (await resumeMode.exists() && await resumeMode.text() === 'large' && !params.excludeTurns) {
+        // Resuming a real image-heavy thread can replay more than the 8 MB line limit.
+        thread.turns = [{ id: 'old-turn', items: [{ id: 'old-image', type: 'imageGeneration', result: 'A'.repeat(9 * 1024 * 1024) }] }];
+      }
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       return;
     }

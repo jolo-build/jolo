@@ -8,6 +8,7 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
   const settle = () => evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   const tab = async name => { await evaluate(`document.querySelector('.settings-nav [data-section="${name}"]').click()`); await settle(); };
   const draft = 'Keep my workspace draft';
+  const choiceBefore = await evaluate("localStorage.getItem('jolo.lastModelChoice')");
   await evaluate(`(() => { const input = document.querySelector('.composer textarea'); window.__settingsDraftNode = input; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(draft)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
   await evaluate("document.querySelector('.settings-link').click()");
   await waitFor("Boolean(document.querySelector('.settings-page'))", 'settings page opened');
@@ -64,6 +65,9 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
     await waitFor("document.querySelector('.settings-provider [role=status]')?.textContent.includes('Default model saved')", 'raw model saved');
     assert(await evaluate("window.jolo.call('settings.get', {}).then(r => r.ok && r.result.settings.model.preset === 'smoke-model' && r.result.settings.model.model === 'test-model' && r.result.settings.model.contextWindowTokens === null)"), 'model selection or automatic limits were not saved');
     await evaluate("window.jolo.call('settings.update', {model:null})");
+    // Restore the remembered choice as well as the default before the shared
+    // harness continues with its deterministic provider.
+    await evaluate(choiceBefore === null ? "localStorage.removeItem('jolo.lastModelChoice')" : `localStorage.setItem('jolo.lastModelChoice', ${JSON.stringify(choiceBefore)})`);
     report.checks.push('Models discovers a fixture endpoint and saves a raw model with automatic token limits through the renderer bridge');
     window.setSize(720, 560);
     await tab('agents');

@@ -94,7 +94,7 @@ export function createBoard({ storage, env, log }) {
     const run = latest?.run ?? null;
     const session = run ? storage.getSession(run.sessionId) : project.preferences.standalone ? storage.listSessions({ projectId: project.id, limit: 1 })[0] : null;
     const pendingRecord = run && (run.state === "awaiting_permission" || run.state === "paused") ? storage.pendingPermissionForRun(run.id) : null;
-    const pendingPermission = pendingRecord ? { permissionId: pendingRecord.id, tool: pendingRecord.tool, summary: pendingRecord.request.summary ?? pendingRecord.tool, ...(pendingRecord.request.argv ? { argv: pendingRecord.request.argv } : {}), ...(pendingRecord.request.script ? { script: pendingRecord.request.script } : {}), cwd: pendingRecord.request.cwd ?? ".", createdAt: pendingRecord.createdAt } : null;
+    const pendingPermission = pendingRecord ? { permissionId: pendingRecord.id, tool: pendingRecord.tool, summary: pendingRecord.request.summary ?? pendingRecord.tool, ...(pendingRecord.request.argv ? { argv: pendingRecord.request.argv } : {}), ...(pendingRecord.request.script ? { script: pendingRecord.request.script } : {}), cwd: path.resolve(workspace.path, pendingRecord.request.cwd || '.'), createdAt: pendingRecord.createdAt } : null;
     const actions = run ? storage.recentToolActivity(run.id, 3) : [];
     const { attention, reason } = attentionFor(run, workspace);
     const stopped = run && (TERMINAL_RUN_STATES.includes(run.state) || run.state === "paused");

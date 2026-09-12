@@ -41,7 +41,14 @@ describe("markdown model", () => {
     expect(blocks[6].rows[0].map((c) => c[0].text)).toEqual(["1", "2"]);
   });
 
-  test("rejects unsafe links and renders images as text", () => {
+  test('renders stored images as artifact references, while rejecting arbitrary artifact URLs', () => {
+    expect(parseInline('![Generated image](jolo-artifact:art_123-abc)')).toEqual([{ type: 'image', artifactId: 'art_123-abc', alt: 'Generated image' }]);
+    expect(renderPlain(parseDocument('![Generated image](jolo-artifact:art_123-abc)').blocks)).toBe('[image: Generated image]');
+    for (const target of ['jolo-artifact:../secret', 'jolo-artifact:art_123?path=secret', 'javascript:alert', 'file:///tmp/image.png']) {
+      expect(parseInline(`![image](${target})`).some(node => node.type === 'image')).toBe(false);
+    }
+  });
+  test("rejects unsafe links and renders external images as text", () => {
     const nodes = parseInline("[x](javascript:alert(1)) ![alt](https://img) https://auto.link/path");
     expect(nodes.find((n) => n.type === "link" && n.href.startsWith("javascript"))).toBeUndefined();
     expect(nodes.some((n) => n.type === "text" && n.text.includes("[image: alt]"))).toBe(true);

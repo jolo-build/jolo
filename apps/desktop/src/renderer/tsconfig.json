@@ -6,5 +6,5 @@
     "types": ["react", "react-dom"],
     "jsx": "react-jsx"
   },
-  "include": ["."]
+  "include": [".", "../shared"]
 }

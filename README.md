@@ -37,10 +37,12 @@ This installs the CLI, not the desktop app. CLI packages are available for macOS
 
 ## Start a task
 
-1. Open Jolo and choose a folder, or start a new chat.
+1. On your first launch, follow the guide to choose an agent, open a folder, and prepare a first task. You can skip it and reopen it from **Getting started** on the work board.
 2. Choose an agent and model below the message box.
 3. Describe what you want to do.
 4. Review the agent's work and continue the conversation.
+
+The guide opens suggested tasks as editable drafts. Review the message and press Send when you are ready. You can also start a new chat without a project folder.
 
 Install and sign in to your coding agent separately before using it in Jolo. You can also configure an API provider.
 

@@ -541,11 +541,11 @@ export const MethodSchemas = {
     result: z.object({ workspaceId: Id, branch: z.string().nullable(), path: z.string() }),
   },
   'chat.create': {
-    params: z.object({ title: z.string().max(200).default(''), agentId: Id.optional() }),
+    params: z.object({ title: z.string().max(200).default(''), agentId: Id.optional(), model: ModelRefSchema.optional() }),
     result: z.object({ session: SessionSchema, rootPath: z.string() }),
   },
   "session.create": {
-    params: z.object({ projectId: Id, workspaceId: Id, title: z.string().max(200).default(""), agentId: Id.optional() }),
+    params: z.object({ projectId: Id, workspaceId: Id, title: z.string().max(200).default(""), agentId: Id.optional(), model: ModelRefSchema.optional() }),
     result: z.object({ session: SessionSchema, cursor: DecimalString }),
   },
   "session.list": {

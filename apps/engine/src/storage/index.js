@@ -257,10 +257,10 @@ export class Storage {
 
   // ---- sessions -------------------------------------------------------------------------------
 
-  createSession({ projectId, workspaceId, title, agentId = null, planTaskId = null }) {
+  createSession({ projectId, workspaceId, title, agentId = null, planTaskId = null, model = null }) {
     const id = newId("ses");
     const at = now();
-    this.db.query("INSERT INTO sessions (id, project_id, workspace_id, title, agent_id, plan_task_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)").run(id, projectId, workspaceId, title, agentId, planTaskId, at);
+    this.db.query("INSERT INTO sessions (id, project_id, workspace_id, title, agent_id, plan_task_id, model_ref, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)").run(id, projectId, workspaceId, title, agentId, planTaskId, model ? JSON.stringify(model) : null, at);
     return this.getSession(id);
   }
 

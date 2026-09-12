@@ -3,6 +3,8 @@ import { fileReference } from '@jolo/markdown/file-links';
 import { parseDocument } from "@jolo/markdown";
 import { MermaidDiagram } from "./mermaid.jsx";
 import { Visualization } from './visualization.jsx';
+import { ImageAttachment } from './image-attachment.jsx';
+import { FilePreviewContext } from '../file-preview-context.js';
 
 // Naming what the loader resolves to keeps the highlighter and its plain-text fallback one component
 // type, rather than two unrelated ones the union of which nothing accepts.
@@ -12,26 +14,35 @@ const SyntaxCode = lazy(/** @type {() => Promise<{ default: SyntaxCodeComponent 
 const ChatSession = createContext(null);
 function FileLink({ reference, children }) {
   const sessionId = useContext(ChatSession);
+  const showPreview = useContext(FilePreviewContext);
   const [error, setError] = useState(null);
   if (!sessionId) return children;
   return <><a href="#" title={`Open ${reference}`} onClick={async event => {
     event.preventDefault(); event.stopPropagation(); setError(null);
     try {
+      if (showPreview) {
+        if (!window.jolo.previewChatFile) throw new Error('Quit and reopen Jolo to enable file previews.');
+        const reply = await window.jolo.previewChatFile({ sessionId, path: reference });
+        if (!reply.ok || !reply.result) throw new Error(reply.error || 'Could not preview this file.');
+        showPreview(reply.result);
+        return;
+      }
       if (!window.jolo.openChatFile) throw new Error('Restart Jolo to open file references.');
       const result = await window.jolo.openChatFile({ sessionId, path: reference });
       if (!result.ok) throw new Error(result.error);
-    } catch (error) { setError(/No handler registered|jolo:openChatFile/.test(error.message) ? 'Quit and reopen Jolo to enable file opening. Reloading the chat is not enough.' : error.message); }
+    } catch (error) { setError(/No handler registered|jolo:(open|preview)ChatFile/.test(error.message) ? 'Quit and reopen Jolo to enable file opening. Reloading the chat is not enough.' : error.message); }
   }}>{children}</a>{error && <span className="file-link-error" role="alert">{error}</span>}</>;
 }
 function FileText({ text }) {
   // Plain filenames in prose are common in generated-file replies; keep surrounding prose intact.
-  return text.split(/((?:\/?[\w.-]+\/)*[\w.-]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|webp|csv|txt|md)\b)/gi).map((part, index) => fileReference(part) ? <FileLink key={index} reference={part}>{part}</FileLink> : part);
+  return text.split(/((?:\/?[\w.-]+\/)*[\w.-]+\.(?:pdf|docx|xlsx|pptx|png|jpg|jpeg|gif|webp|svg|csv|txt|md|markdown|mdx|js|jsx|ts|tsx|py|go|rs|java|cpp|css|html|json|yaml|yml|toml|log|zip|mp3|mp4|wav|webm)\b)/gi).map((part, index) => fileReference(part) ? <FileLink key={index} reference={part}>{part}</FileLink> : part);
 }
 
 /** Safe React rendering of the shared markdown model (§5.1): no HTML, links open externally. */
 function Inline({ nodes, linkify = true }) {
   return nodes.map((node, i) => {
     switch (node.type) {
+      case 'image': return <ImageAttachment key={i} attachment={{ artifactId: node.artifactId, name: node.alt }} generated />;
       case "text": return linkify ? <FileText key={i} text={node.text} /> : node.text;
       // A span the model wrapped across lines is a block of code: keep its breaks so it stays copyable.
       case "code": return node.text.includes("\n")

@@ -19,26 +19,34 @@ test('ACP controls the inline browser on first and resumed turns with Jolo guida
   await checkHostedBrowser(await boot());
 }, 30_000);
 
+test('Devin discovers browser tools from its per-run config on first and resumed turns', async () => {
+  const context = await boot({ agentId: 'devin' });
+  await checkHostedBrowser(context);
+  const directories = readFileSync(path.join(context.home, 'acp-state/devin-configs'), 'utf8').trim().split('\n');
+  expect(new Set(directories).size).toBe(2);
+  for (const directory of directories) expect(existsSync(directory)).toBe(false);
+}, 30_000);
+
 /** A profile with an ACP agent played by the fixture, so nothing here reaches any vendor's CLI or account. */
-async function boot({ clientKind = "test" } = {}) {
+async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, "repo");
   mkdirSync(repo, { recursive: true });
   writeFileSync(path.join(repo, "notes.txt"), "alpha\n");
   const launcher = path.join(home, "fake-acp");
-  writeFileSync(launcher, `#!/bin/sh\nFAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))} exec "${process.execPath}" "${FAKE}" "$@"\n`);
+  writeFileSync(launcher, `#!/bin/sh\nFAKE_DEVIN_CONFIG=${agentId === 'devin' ? '1' : '0'} FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))} exec "${process.execPath}" "${FAKE}" "$@"\n`);
   chmodSync(launcher, 0o755);
   const agentsDir = path.join(home, "data", "t", "agents");
   mkdirSync(agentsDir, { recursive: true });
-  writeFileSync(path.join(agentsDir, "fixture-acp.json"), JSON.stringify({ id: "fixture-acp", displayName: "Fixture Agent", binary: launcher, args: ["--acp"], transport: "acp" }));
-  const engine = await startEngine({ home });
+  writeFileSync(path.join(agentsDir, `${agentId}.json`), JSON.stringify({ id: agentId, displayName: "Fixture Agent", binary: launcher, args: ["--acp"], transport: "acp" }));
+  const engine = await startEngine({ home, ...(agentId === 'devin' ? { env: { XDG_CONFIG_HOME: path.join(home, 'config') } } : {}) });
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
   const status = await client.call("engine.status", {});
   await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event) });
   const project = await client.call("project.open", { path: repo });
-  const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "hosted", agentId: "fixture-acp" });
+  const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "hosted", agentId });
   const runTo = async (requestId, prompt) => {
     const { run } = await client.call("run.start", { sessionId: session.id, requestId, prompt });
     await waitFor(() => events.some((e) => e.type === "run.state" && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: `${requestId} finished`, timeoutMs: 20_000 });
@@ -50,6 +58,21 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('partial permission requests preserve tool details and resolve the execution directory across reloads', async () => {
+    const { client, events, repo, session } = await boot();
+    for (const prompt of ['permission-partial', 'permission-title']) {
+      const { run } = await client.call('run.start', { sessionId: session.id, requestId: prompt, prompt });
+      const event = await waitFor(() => events.find(event => event.type === 'permission.requested' && event.runId === run.id));
+      const expected = { summary: 'Fixture Agent: Inspect browser tools', cwd: path.join(realpathSync(repo), prompt === 'permission-partial' ? 'subfolder' : '') };
+      expect(event.payload).toMatchObject(expected);
+      if (prompt === 'permission-partial') expect(event.payload.script).toBe('echo tool-details');
+      const page = await client.call('session.page', { sessionId: session.id });
+      expect(page.pendingPermissions[0]).toMatchObject(expected);
+      await client.call('permission.resolve', { permissionId: event.payload.permissionId, decision: 'deny' });
+      await waitFor(() => events.some(event => event.type === 'run.state' && event.runId === run.id && TERMINAL.includes(event.payload.state)));
+    }
+  }, 40_000);
+
   test('Devin visualization replies survive ACP streaming, storage, and session resume', async () => {
     const { client, repo, session, runTo, text, messagesOf } = await boot();
     const visualizationPath = path.join(realpathSync(repo), 'proposal-assessment.html');
@@ -118,12 +141,12 @@ describe("an agent hosted through the Agent Client Protocol", () => {
   }, 40_000);
 
   test("the agent's permission questions become Jolo permission requests, answered once and never 'always'", async () => {
-    const { client, events, runTo, text, messagesOf } = await boot();
+    const { client, events, repo, runTo, text, messagesOf } = await boot();
     let decision = null;
     client.onEvent((event) => { if (event.type === "permission.requested" && !decision) { decision = event.payload; client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: "allow_project" }); } });
     const run = await runTo("req_cmd", "run echo acp-ok");
     expect(run.state).toBe("completed");
-    expect(decision).toMatchObject({ tool: "fixture-acp:execute", summary: "Fixture Agent: Execute `echo acp-ok`", script: "echo acp-ok", cwd: "." });
+    expect(decision).toMatchObject({ tool: "fixture-acp:execute", summary: "Fixture Agent: Execute `echo acp-ok`", script: "echo acp-ok", cwd: realpathSync(repo) });
     const messages = await messagesOf(run.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "reasoning", "tool", "text"]);
     expect(await text(messages[2])).toContain("execute Execute `echo acp-ok` echo acp-ok");

@@ -11,10 +11,12 @@ if (changeSummary) process.env.JOLO_CHANGE_SUMMARY_SMOKE = '1';
 if (process.argv.includes('--mermaid')) process.env.JOLO_MERMAID_SMOKE = '1';
 if (process.argv.includes('--host-dialogs')) process.env.JOLO_HOST_DIALOG_SMOKE = '1';
 const chats = process.argv.includes('--chats');
+if (process.argv.includes('--onboarding')) process.env.JOLO_ONBOARDING_SMOKE = '1';
 if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 if (process.argv.includes('--reload')) process.env.JOLO_RELOAD_SMOKE = '1';
 if (process.argv.includes('--zoom')) process.env.JOLO_ZOOM_SMOKE = '1';
 if (process.argv.includes('--panels')) process.env.JOLO_PANELS_SMOKE = '1';
+if (process.argv.includes('--file-previews')) process.env.JOLO_FILE_PREVIEWS_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
@@ -101,6 +103,7 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const visualizationPath = path.join(realpathSync(project), 'preview.html');
+if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · [app.js](src/app.js) · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip)'];
 if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
   'flowchart TD',
   '  A[Workflow authors] -->|HTTPS after DNS is configured| D[Caddy reverse proxy\\nonly published entry point]',

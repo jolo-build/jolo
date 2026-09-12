@@ -14,6 +14,7 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await type('.composer textarea','Keep this draft.');
   await click('.model-select'); await waitFor(open,'popover opens');
   await waitFor("document.querySelector('.effort-slider input')?.max === '2'",'reported effort levels');
+  await waitFor("document.querySelector('.model-select')?.getAttribute('aria-expanded') === 'true'", 'popover toggle handled');
   await click('.model-select'); await waitFor('!'+open,'second click closes popover');
   await click('.model-select'); await waitFor(open,'popover reopens');
   await click('.effort-model');
@@ -77,5 +78,26 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await waitFor("window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().runCount === 2",'native provider answers in same task');
   assert.equal(await evaluate('window.__joloSmoke.state().sessionId'),currentSession);
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/Fixture answer/);
+  await evaluate('window.__joloSmoke.newTask()');
+  await waitFor(`window.__joloSmoke.state().sessionId !== ${JSON.stringify(currentSession)} && window.__joloSmoke.state().answerer === 'Jolo · Test Model'`, 'new task remembers native model');
+  const nativeTask = await evaluate('window.__joloSmoke.state().sessionId');
+  assert.deepEqual((await bridge.rawCall('session.page', { sessionId: nativeTask })).session.model, session.model);
+  await evaluate('window.__joloSmoke.newChat()');
+  await waitFor("window.__joloSmoke.state().standalone && window.__joloSmoke.state().answerer === 'Jolo · Test Model'", 'new chat remembers native model');
+  await evaluate("window.__joloSmoke.pickAnswerer('codex')");
+  await evaluate('window.__joloSmoke.newChat()');
+  await waitFor("window.__joloSmoke.state().sessionAgentId === 'codex' && document.querySelector('.model-select')?.textContent.includes('Fake Small')", 'new chat remembers hosted model');
+  assert.match(await evaluate("document.querySelector('.model-select').textContent"), /Low/);
+  await new Promise((resolve, reject) => {
+    const loaded = () => { clearTimeout(timer); resolve(null); };
+    const timer = setTimeout(() => { window.webContents.removeListener('did-finish-load', loaded); reject(new Error('model choice reload timed out')); }, 10000);
+    window.webContents.once('did-finish-load', loaded);
+    window.webContents.reload();
+  });
+  await waitFor("Boolean(window.__joloSmoke?.newChat)", 'app reloaded');
+  await evaluate('window.__joloSmoke.newChat()');
+  await waitFor("window.__joloSmoke.state().sessionAgentId === 'codex' && document.querySelector('.model-select')?.textContent.includes('Fake Small')", 'choice survives app reload');
+  assert.deepEqual((await bridge.rawCall('settings.get', {})).settings.model, originalDefault);
   report.checks.push('Composer model list, supported effort stops, keyboard and pointer selection, reset, double-click dismissal, draft preservation, light/dark layout agent/provider switching, and actual hosted/native execution passed.');
+  report.checks.push('New tasks and standalone chats retain the last model, agent and effort, including after reload, without changing the provider default.');
 }

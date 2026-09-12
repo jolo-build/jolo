@@ -3,6 +3,7 @@ import { requestId as createRequestId, TERMINAL } from "@jolo/client/run-state";
 import { sessionForSend, queuedExecution } from "./session-send.js";
 import { SessionHistory } from './session-history.js';
 import { uploadImages } from './image-attachments.js';
+import { newSessionModelChoice } from './last-model-choice.js';
 // Renderer state: everything crosses the narrow bridge; the shared projection keeps text bounded (§4.1, §5.1).
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { SessionProjection } from "@jolo/client/projection";
@@ -11,6 +12,10 @@ import { PendingPermissions } from "./pending-permissions.js";
 import { useWorkingChanges } from './use-working-changes.js';
 
 const WORKSPACE_EVENTS = new Set(["workspace.created", "workspace.removed"]);
+async function newModelChoice(agentId = undefined) {
+  const [{ agents }, { settings }] = await Promise.all([call('agent.catalog', {}), call('settings.get', {})]);
+  return newSessionModelChoice(agents, settings.model, agentId);
+}
 export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, initialNewChat = false, visible = true, watchChanges = false } = {}) {
   const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog } = useEngineConnection();
   const [agents, setAgents] = useState([]);
@@ -166,7 +171,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   }, [refreshSessions, refreshWorkspaces, selectSession]);
 
   const newChat = useCallback(async () => {
-    const { session, rootPath } = await call('chat.create', {});
+    const { session, rootPath } = await call('chat.create', await newModelChoice());
     await openProject(rootPath, { sessionId: session.id });
     await refreshBoard();
     return session;
@@ -186,7 +191,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       const { workspaces } = await call('workspace.list', { projectId: current.projectId });
       if (!workspaces.some(workspace => workspace.id === workspaceId)) workspaceId = current.workspaceId;
     }
-    const { session } = await call("session.create", { projectId: current.projectId, workspaceId, title, ...(options.agentId ? { agentId: options.agentId } : {}) });
+    const { session } = await call("session.create", { projectId: current.projectId, workspaceId, title, ...await newModelChoice(options.agentId) });
     historyRef.current = "open";
     setHistoryState("open");
     const preferredMode = workspaceId === current.workspaceId ? "direct" : "worktree";
@@ -320,7 +325,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (!engine.connected || initialized.current) return;
     initialized.current = true;
     let path = initialProject;
-    if (!path && restoreLastProject && !window.jolo.smoke) {
+    if (!path && restoreLastProject) {
       try { path = localStorage.getItem("jolo.lastProject"); } catch { /* optional */ }
     }
     if (initialNewChat || initialTask || path) void (initialNewChat ? newChat() : initialTask ? openFromBoard(initialTask) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));

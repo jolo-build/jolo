@@ -1,7 +1,7 @@
 /** Keep conversation identity when the composer chooses a different answerer.
  * Read the current revision before switching; a conflict leaves the draft intact. */
 export async function sessionForSend({ call, sessionId, agentId, prompt, newSession }) {
-  if (!sessionId) return newSession(prompt.slice(0, 80), { agentId: agentId ?? undefined });
+  if (!sessionId) return newSession(prompt.slice(0, 80), { agentId });
   if (agentId === undefined) return { id: sessionId };
   const { session } = await call('session.page', { sessionId });
   if ((session.agentId ?? null) === agentId) return session;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
@@ -49,6 +49,89 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Codex through its app-server", () => {
+  test('image-heavy conversations resume without replaying oversized history', async () => {
+    const { client, repo, runTo, messagesOf, text } = await boot();
+    try {
+      await runTo('req_seed', 'hello');
+      writeFileSync(path.join(repo, '.fake-codex-resume'), 'large');
+      const run = await runTo('req_large_resume', 'continue');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toMatch(/^Continuing thread fake-thread-\w+: continue$/);
+    } finally { await client.close(); }
+  });
+
+  test('a server exit during resume settles the run and releases queued follow-ups', async () => {
+    const { client, repo, session, events, runTo } = await boot();
+    try {
+      await runTo('req_seed', 'hello');
+      writeFileSync(path.join(repo, '.fake-codex-resume'), 'exit');
+      const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'req_resume_exit', prompt: 'continue' });
+      const { run: next } = await client.call('run.start', { sessionId: session.id, requestId: 'req_after_exit', prompt: 'continue again' });
+      for (const id of [run.id, next.id]) {
+        await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === id && TERMINAL.includes(e.payload.state)), { timeoutMs: 5000, label: 'resume exit settled' });
+        expect((await client.call('run.snapshot', { runId: id })).run).toMatchObject({ state: 'failed', failure: expect.stringContaining('exited') });
+      }
+      expect((await client.call('engine.status', {})).activeRuns).toBe(0);
+      unlinkSync(path.join(repo, '.fake-codex-resume'));
+      expect((await runTo('req_recovered', 'continue')).state).toBe('completed');
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test('cancelling during resume settles and a live resume rejection can still start a new thread', async () => {
+    const { client, repo, session, events, runTo, messagesOf, text } = await boot();
+    try {
+      await runTo('req_seed', 'hello');
+      writeFileSync(path.join(repo, '.fake-codex-resume'), 'wait');
+      const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'req_cancel_resume', prompt: 'continue' });
+      await waitFor(() => existsSync(path.join(repo, '.fake-codex-resuming')), { label: 'resume requested' });
+      await client.call('run.cancel', { runId: run.id });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { timeoutMs: 5000, label: 'resume cancelled' });
+      writeFileSync(path.join(repo, '.fake-codex-resume'), 'reject');
+      const recovered = await runTo('req_resume_rejected', 'history');
+      expect(recovered.state).toBe('completed');
+      expect(await text((await messagesOf(recovered.id)).at(-1))).toStartWith('Fresh agent context:');
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test('generated images are durable inline artifacts, including saved paths and completion-only events', async () => {
+    const { client, events, runTo, messagesOf, text, home, engine, repo } = await boot();
+    let saved;
+    try {
+      for (const mode of ['base64', 'saved', 'completed-only', 'duplicate']) {
+        const run = await runTo(`req_image_${mode}`, `generate-image ${mode}`);
+        expect(run.state).toBe('completed');
+        const messages = await messagesOf(run.id);
+        const transcript = await Promise.all(messages.map(text));
+        const images = transcript.filter(value => value.startsWith('![Generated image]'));
+        expect(images).toHaveLength(1);
+        const artifactId = /jolo-artifact:([\w-]+)/.exec(images[0])[1];
+        if (mode === 'saved') { unlinkSync(path.join(repo, 'generated.png')); saved = { runId: run.id, artifactId }; }
+        const image = await client.call('artifact.read', { artifactId, encoding: 'base64' });
+        expect(image.kind).toBe('attachment:image/png');
+        expect(Buffer.from(image.text, 'base64').subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+        expect(transcript.join('\n')).not.toContain('iVBOR');
+        expect(JSON.stringify(events)).not.toContain('iVBOR');
+        expect(messages[transcript.indexOf(images[0])]).toMatchObject({ role: 'assistant', kind: 'text', status: 'complete' });
+        expect(transcript.at(-1)).toBe('A compact design mockup.');
+      }
+      for (const mode of ['invalid', 'missing', 'failed']) {
+        const run = await runTo(`req_image_${mode}`, `generate-image ${mode}`);
+        expect(run.state).toBe('completed');
+        const transcript = await Promise.all((await messagesOf(run.id)).map(text));
+        expect(transcript.some(value => value.includes(mode === 'failed' ? 'Image generation did not complete' : 'Jolo could not load it'))).toBe(true);
+        expect(transcript.join('\n')).not.toContain('jolo-artifact:');
+      }
+    } finally { await client.close(); }
+    await engine.stop();
+    const restarted = await startEngine({ home }); engines.push(restarted);
+    const reader = await restarted.connect();
+    try {
+      const snapshot = await reader.call('run.snapshot', { runId: saved.runId });
+      const texts = await Promise.all(snapshot.messages.map(async message => (await reader.call('artifact.read', { artifactId: message.artifactId })).text));
+      expect(texts).toContain(`![Generated image](jolo-artifact:${saved.artifactId})`);
+      expect((await reader.call('artifact.read', { artifactId: saved.artifactId, encoding: 'base64' })).text).toStartWith('iVBOR');
+    } finally { await reader.close(); }
+  }, 30_000);
   test('Codex omits browser MCP when no desktop can open this workspace', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {
@@ -132,12 +215,12 @@ describe("Codex through its app-server", () => {
   }, 40_000);
 
   test("Codex's command approvals become Jolo permission requests, decided by Jolo's grants and the user", async () => {
-    const { client, events, session, runTo, text, messagesOf } = await boot();
+    const { client, events, repo, session, runTo, text, messagesOf } = await boot();
     let decision = null;
     client.onEvent((event) => { if (event.type === "permission.requested" && !decision) { decision = event.payload; client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: "allow_project" }); } });
     const run = await runTo("req_cmd", "run echo hosted-ok");
     expect(run.state).toBe("completed");
-    expect(decision).toMatchObject({ tool: "codex:command", summary: "Codex: echo hosted-ok", script: "/bin/sh -lc 'echo hosted-ok'", cwd: "." });
+    expect(decision).toMatchObject({ tool: "codex:command", summary: "Codex: echo hosted-ok", script: "/bin/sh -lc 'echo hosted-ok'", cwd: realpathSync(repo) });
     expect(events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "awaiting_permission")).toBe(true);
     const messages = await messagesOf(run.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "tool", "text"]);

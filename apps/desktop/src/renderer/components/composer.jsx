@@ -75,12 +75,17 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
+export function Composer({ standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText);
+  useEffect(() => {
+    if (!initialText) return;
+    input.current?.focus();
+    onInitialTextUsed?.();
+  }, [initialText, onInitialTextUsed]);
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const attachmentsRef = useRef([]);

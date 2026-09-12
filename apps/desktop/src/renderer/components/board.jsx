@@ -96,7 +96,7 @@ export function WorkspaceRow({ row, revision, now, expanded, onToggle, onOpen, o
   </div>;
 }
 
-export function Board({ board, connected, onOpen, onNewTask, onNewChat, onChatMenu, onOpenFolder, call }) {
+export function Board({ board, connected, onOpen, onNewTask, onNewChat, onChatMenu, onOpenFolder, call, onGetStarted = null }) {
   const [now, setNow] = useState(Date.now());
   const [homeDirectory, setHomeDirectory] = useState(null);
   useEffect(() => {
@@ -115,5 +115,6 @@ export function Board({ board, connected, onOpen, onNewTask, onNewChat, onChatMe
     {!rows.length && board && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>Start with a chat.</h2><p>You can also open a folder when you want to work on a project.</p></div>}
     {rows.length > 0 && <section className="board-folders" aria-label="Workspace folders"><div className="board-section-heading"><h2>Folders <span className="board-total">{rows.length}</span></h2><span>Recent activity</span></div><div className="board-list">{rows.map(row => <WorkspaceRow key={row.workspaceId} row={row} homeDirectory={homeDirectory} revision={board.generatedAt} now={now} expanded={open.has(row.workspaceId)} onToggle={() => toggle(row.workspaceId)} onOpen={onOpen} onNewTask={onNewTask} call={call} />)}</div></section>}
     <RecentChats call={call} revision={board?.generatedAt} onOpen={onOpen} onMenu={onChatMenu} variant="board" now={now} />
+    {onGetStarted && <div className="board-get-started"><button type="button" onClick={onGetStarted}><Icon name="circleCheck" size={14} />Getting started</button></div>}
   </div></div>;
 }

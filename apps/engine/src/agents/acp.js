@@ -20,6 +20,7 @@ import { acpBrowserServers } from '../browser/hosted.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, acpImageContent } from '../attachments.js';
+import { prepareDevinMcp } from './devin-mcp.js';
 
 export const PROTOCOL_VERSION = 1;
 const READ_KINDS = new Set(["read", "search"]);
@@ -89,16 +90,20 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 1, contextUsed: null, contextWindow: null }, // ACP reports context, not tokens
       };
       const pending = new Map();
+      const toolCalls = new Map();
       let nextId = 1;
       let link;
+      let devinMcp;
       const onCancel = () => {
         if (!state.sessionId || state.done) return false;
         link.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: state.sessionId } });
         return true;
       };
       try {
-        link = spawnLineChild({ argv, cwd: workspace.path, env, signal, onCancel, log, agentId: manifest.id });
+        if (manifest.id === 'devin' && mcpServers.length) devinMcp = prepareDevinMcp(env, mcpServers);
+        link = spawnLineChild({ argv, cwd: workspace.path, env: devinMcp?.env ?? env, signal, onCancel, log, agentId: manifest.id });
       } catch (error) {
+        devinMcp?.dispose();
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
@@ -114,6 +119,8 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       };
 
       const onToolUpdate = (update) => {
+        const previous = toolCalls.get(update.toolCallId) ?? {};
+        toolCalls.set(update.toolCallId, { ...previous, ...Object.fromEntries(Object.entries(update).filter(([, value]) => value != null)) });
         if (!turn.hasTool(update.toolCallId)) return;
         const text = contentText(update.content);
         if (update.status === "completed" || update.status === "failed") {
@@ -134,11 +141,13 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
 
       /** The agent asks before a tool call: Jolo answers with one of the agent's own options, once, never "always". */
       const onPermission = async (id, params) => {
-        const call = params.toolCall ?? {};
+        const incoming = params.toolCall ?? {};
+        const call = { ...toolCalls.get(incoming.toolCallId), ...Object.fromEntries(Object.entries(incoming).filter(([, value]) => value != null)) };
         if (call.toolCallId && !turn.hasTool(call.toolCallId)) onToolCall(call);
         const paths = toolPaths(call);
         const toolClass = classify(call.kind, paths);
-        const decision = await turn.decide({ toolClass, toolName: callName(call), targets: paths, summary: `${manifest.displayName}: ${call.title ?? callName(call)}`, script: rawDetail(call.rawInput), cwd: ".", argumentDigest: digestOf({ kind: call.kind ?? null, rawInput: call.rawInput ?? null }) });
+        const cwd = [call.rawInput?.cwd, call.rawInput?.workdir, call.rawInput?.working_directory, call.rawInput?.workingDirectory].find(value => typeof value === 'string' && value);
+        const decision = await turn.decide({ toolClass, toolName: callName(call), targets: paths, summary: `${manifest.displayName}: ${call.title ?? callName(call)}`, script: rawDetail(call.rawInput) || contentText(call.content), cwd, argumentDigest: digestOf({ kind: call.kind ?? null, rawInput: call.rawInput ?? null, cwd: cwd ?? workspace.path, title: call.title ?? null, content: call.content ?? null }) });
         if (decision === null) return respond(id, { outcome: { outcome: "cancelled" } }); // a cancelled turn must answer every open question this way
         const options = Array.isArray(params.options) ? params.options : [];
         const kind = (name) => options.find((candidate) => candidate?.kind === name);
@@ -293,7 +302,9 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       for (const waiter of pending.values()) waiter.reject(new Error(`${manifest.displayName} exited`));
       pending.clear();
       await driver;
-      const { exitCode, stderr } = await link.settle();
+      let exitCode, stderr;
+      try { ({ exitCode, stderr } = await link.settle()); }
+      finally { devinMcp?.dispose(); }
       closeText(state.stopReason ? "complete" : "interrupted");
       turn.finish({ usage: state.usage });
 

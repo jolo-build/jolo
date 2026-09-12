@@ -91,9 +91,10 @@ export function parseInline(text) {
     if ((match = rest.match(/^\*([^*\n]+?)\*/)) || (underscoreBoundary && (match = rest.match(/^_([^_\n]+?)_(?![\p{L}\p{N}_])/u)))) { push({ type: "em", children: parseInline(match[1]) }); i += match[0].length; continue; }
     if ((match = rest.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/))) {
       const href = safeHref(match[2]);
-      if (rest.startsWith("!")) push({ type: "text", text: `[image: ${match[1] || href || "image"}]` });
+      if (rest.startsWith('!') && /^jolo-artifact:[A-Za-z0-9_-]{1,128}$/.test(match[2])) push({ type: 'image', artifactId: match[2].slice('jolo-artifact:'.length), alt: match[1] || 'Generated image' });
+      else if (rest.startsWith("!")) push({ type: "text", text: `[image: ${match[1] || href || "image"}]` });
       else if (href) push({ type: "link", href, children: parseInline(match[1] || href) });
-      else if (fileReference(match[2])) push({ type: "link", href: fileReference(match[2]), local: true, children: parseInline(match[1] || match[2]) });
+      else if (fileReference(match[2], { explicit: true })) push({ type: "link", href: fileReference(match[2], { explicit: true }), local: true, children: parseInline(match[1] || match[2]) });
       else push({ type: "text", text: match[1] });
       i += match[0].length; continue;
     }
@@ -224,7 +225,7 @@ export function parseDocument(text, { cache } = {}) {
 
 /** Plain-text projection for terminals and previews: no ANSI, no HTML. */
 export function renderPlain(blocks, { width = 80 } = {}) {
-  const inline = (nodes) => nodes.map((n) => (n.type === "text" ? n.text : n.type === "code" ? `\`${n.text}\`` : n.type === "link" ? `${inline(n.children)} <${n.href}>` : inline(n.children))).join("");
+  const inline = (nodes) => nodes.map((n) => (n.type === "text" ? n.text : n.type === 'image' ? `[image: ${n.alt}]` : n.type === "code" ? `\`${n.text}\`` : n.type === "link" ? `${inline(n.children)} <${n.href}>` : inline(n.children))).join("");
   const lines = [];
   for (const block of blocks) {
     switch (block.type) {

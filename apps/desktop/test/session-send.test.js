@@ -41,6 +41,13 @@ test('a new draft creates exactly one session with its selected answerer', async
   expect(created).toBe(1);
 });
 
+test('a new draft preserves an explicit native answerer over the remembered agent', async () => {
+  await sessionForSend({ sessionId: null, agentId: null, prompt: 'start here', call() { throw new Error('unexpected call'); }, newSession(_title, options) {
+    expect(options.agentId).toBeNull();
+    return { id: 'new' };
+  } });
+});
+
 test('queued answerer choices keep @mention routing and the session default intact', () => {
   expect(queuedExecution('grok', 'grok', 'continue')).toBeUndefined();
   expect(queuedExecution('grok', 'grok', '@codex check this')).toBeUndefined();

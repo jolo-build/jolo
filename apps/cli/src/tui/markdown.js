@@ -46,6 +46,7 @@ function segments(nodes, style = {}) {
   const out = [];
   for (const node of nodes) {
     switch (node.type) {
+      case 'image': out.push({ text: `[image: ${clean(node.alt)} — open in Jolo desktop]`, dim: true }); break;
       case "text": out.push({ text: clean(node.text), ...style }); break;
       case "code": out.push({ text: clean(node.text), color: "cyan", ...style, code: true }); break;
       case "strong": out.push(...segments(node.children, { ...style, bold: true })); break;

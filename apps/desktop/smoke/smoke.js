@@ -37,6 +37,18 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   };
   const report = { measuredAt: new Date().toISOString(), electron: process.versions.electron, chrome: process.versions.chrome, checks: [] };
   await waitFor("Boolean(window.__joloSmoke)", "renderer hook");
+  await waitFor("Boolean(document.querySelector('.onboarding, .board'))", 'initial workspace ready');
+  if (process.env.JOLO_ONBOARDING_SMOKE === '1') {
+    const { runOnboardingSmoke } = await import('./onboarding-smoke.js');
+    try {
+      await runOnboardingSmoke({ window, bridge, project, results, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'onboarding-smoke.json'), JSON.stringify(report, null, 2));
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  // Other suites exercise normal workspaces after explicitly skipping first-run setup.
+  await evaluate("document.querySelector('.onboarding-footer button')?.click()");
   if (process.env.JOLO_CHATS_SMOKE === '1') {
     const { runStandaloneChatsSmoke } = await import('./standalone-chats-smoke.js');
     try { await runStandaloneChatsSmoke({ window, bridge, project, results, evaluate, waitFor, report }); }
@@ -133,6 +145,15 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
       await runTasksSmoke({ window, bridge, results, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_FILE_PREVIEWS_SMOKE === '1') {
+    const { runFilePreviewsSmoke } = await import('./file-previews-smoke.js');
+    try {
+      await runFilePreviewsSmoke({ window, project, results, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    }
+    finally { fixture.close(); }
     return;
   }
   if (process.env.JOLO_ATTACHMENTS_SMOKE === '1') {

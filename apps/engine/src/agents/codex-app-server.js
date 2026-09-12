@@ -18,6 +18,7 @@ import { codexBrowserArgs, browserPreview } from '../browser/hosted.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages } from '../attachments.js';
+import { saveGeneratedImage } from './generated-images.js';
 
 const APPROVAL_POLICY = "untrusted";
 const SANDBOX = "workspace-write";
@@ -33,6 +34,7 @@ const changePaths = (changes) => (changes ?? []).flatMap((change) => [change.pat
 /** What a Codex item looks like in the transcript and the invocation record: the essentials, never the whole object. */
 export function describeItem(item, root) {
   switch (item.type) {
+    case 'imageGeneration': return { input: { prompt: item.revisedPrompt ?? null }, display: 'Generate image' };
     case "commandExecution": {
       const input = { command: String(item.command ?? ""), cwd: displayPath(root, item.cwd ?? root) };
       return { input, display: `command ${friendlyCommand(item)}` };
@@ -101,6 +103,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         items: new Map(), // Codex item id -> item as started (a fileChange approval names only the id)
         texts: new Map(), // agentMessage/plan/reasoning item id -> { messageId, streamed }
         streamed: new Set(), // tool items whose output already arrived as deltas
+        images: new Set(), // completed image items already published
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
       };
       const pending = new Map(); // JSON-RPC id -> { resolve, reject }
@@ -117,7 +120,12 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
-      const request = (method, params) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); link.write({ id, method, params }); });
+      const request = (method, params) => new Promise((resolve, reject) => {
+        if (state.done) { reject(new Error(`${manifest.displayName} exited`)); return; }
+        const id = nextId++;
+        pending.set(id, { resolve, reject });
+        link.write({ id, method, params });
+      });
       const respond = (id, result) => link.write({ id, result });
       const refuse = (id, message, code = JSON_RPC_METHOD_NOT_FOUND) => link.write({ id, error: { code, message } });
       const rpcFailure = (error) => String(error?.message ?? error).slice(0, 500);
@@ -230,6 +238,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         turn.toolStarted({ callId: item.id, name: item.type, input, display });
       };
       const onItemCompleted = (item) => {
+        if (item.type === 'imageGeneration' && state.images.has(item.id)) return;
         state.items.delete(item.id);
         if (SILENT_ITEMS.has(item.type)) return;
         if (TEXT_ITEMS.has(item.type)) {
@@ -252,6 +261,21 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         const text = item.type === "commandExecution" && state.streamed.has(item.id) ? outcome.text.split("\n").filter((line) => line.startsWith("exit ") || line === "declined").join("\n") : outcome.text;
         state.streamed.delete(item.id);
         turn.toolFinished(item.id, { text, status: outcome.status });
+        if (item.type === 'imageGeneration' && !state.images.has(item.id)) {
+          state.images.add(item.id);
+          let image;
+          if (outcome.status !== 'ok') image = 'Image generation did not complete. Please try again.';
+          else {
+            try { image = saveGeneratedImage(storage, session.id, item); }
+            catch (error) {
+              log.warn('could not save generated image', { itemId: item.id, error: String(error.message) });
+              image = 'Codex generated an image, but Jolo could not load it. Ask Codex to save it again as a PNG, JPEG, GIF, or WebP under 5 MB.';
+            }
+          }
+          const messageId = ctx.startMessage('assistant', 'text');
+          turn.appendBounded(messageId, image);
+          ctx.finishMessage(messageId, 'complete');
+        }
       };
 
       const onNotification = (message) => {
@@ -336,8 +360,13 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         let thread = null;
         let resumed = false;
         if (remembered) {
-          try { thread = (await request("thread/resume", { threadId: remembered, cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, developerInstructions, ...(chosen.model ? { model: chosen.model } : {}) })).thread; resumed = Boolean(thread); }
-          catch (error) { log.warn("codex thread could not be resumed; starting a new one", { threadId: remembered, error: rpcFailure(error) }); }
+          // Jolo already owns the transcript. Replaying image-heavy history here
+          // can exceed the transport's line limit; Codex still retains its context.
+          try { thread = (await request("thread/resume", { threadId: remembered, excludeTurns: true, cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, developerInstructions, ...(chosen.model ? { model: chosen.model } : {}) })).thread; resumed = Boolean(thread); }
+          catch (error) {
+            if (state.done || signal.aborted) throw error;
+            log.warn("codex thread could not be resumed; starting a new one", { threadId: remembered, error: rpcFailure(error) });
+          }
         }
         if (!thread) thread = (await request("thread/start", { cwd: workspace.path, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX, developerInstructions, ...(chosen.model ? { model: chosen.model } : {}) })).thread;
         if (!thread?.id) throw new Error("Codex did not return a thread");
@@ -358,6 +387,9 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       } catch (error) {
         state.failure ??= String(error?.message ?? error).slice(0, 500);
       }
+      // Close admission before rejecting requests: the resume fallback otherwise
+      // enqueues thread/start on the dead transport and leaves driver waiting forever.
+      state.done = true;
       for (const waiter of pending.values()) waiter.reject(new Error(`${manifest.displayName} exited`));
       pending.clear();
       await driver;

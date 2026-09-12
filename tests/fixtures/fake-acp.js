@@ -18,6 +18,15 @@ if (!argv.includes("--acp")) {
   process.exit(64);
 }
 const stateDir = process.env.FAKE_ACP_STATE ?? null;
+const configuredBrowser = params => {
+  if (process.env.FAKE_DEVIN_CONFIG !== '1') return params.mcpServers?.find(server => server.name === 'jolo_browser');
+  // Mirror Devin's actual behavior: ACP mcpServers is ignored; configuration comes from disk.
+  const configHome = process.platform === 'win32' ? process.env.APPDATA : process.env.XDG_CONFIG_HOME;
+  const config = JSON.parse(readFileSync(path.join(configHome, 'devin/mcp_config.json'), 'utf8'));
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, 'devin-configs'), `${configHome}\n`, { flag: 'a' });
+  return config.mcpServers.jolo_browser;
+};
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
 let chosenModel = valueOf("-m") ?? valueOf("--model");
 const chosenEffort = valueOf("--reasoning-effort");
@@ -73,6 +82,14 @@ async function prompt(id, params) {
   // Recorded Devin reply format: no private-use delimiters, split across ACP chunks by say().
   if (text === 'devin-visualization') return finish(`visualize${JSON.stringify({ path: path.join(session.cwd, 'proposal-assessment.html'), mode: 'wide', title: 'Proposal assessment' })}`);
   let match;
+  if (text === 'permission-partial' || text === 'permission-title') {
+    const title = 'Inspect browser tools';
+    const toolCallId = tool({ title, kind: 'execute' });
+    if (text === 'permission-partial') update({ sessionUpdate: 'tool_call_update', toolCallId, rawInput: { command: 'echo tool-details', cwd: 'subfolder' } });
+    const verdict = await permission({ toolCallId }, [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }]);
+    update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+    return finish(`Permission: ${verdict}`);
+  }
   if (text === 'browser-check') {
     if (!received.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
     if (!browserServer) return finish('Browser tools unavailable');
@@ -181,14 +198,14 @@ async function handle(message) {
       return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: [], agentInfo: { name: "fake-acp", version: "0.0.0" } });
     case "session/new": {
       if (!client) return fail(-32002, "initialize first");
-      browserServer = params.mcpServers?.find(server => server.name === 'jolo_browser');
+      browserServer = configuredBrowser(params);
       const sessionId = `acp-${Math.random().toString(36).slice(2, 10)}`;
       sessions.set(sessionId, { cwd: params.cwd, history: [], loaded: false });
       persist(sessionId);
       return reply({ sessionId, configOptions: configOptions() });
     }
     case "session/load": {
-      browserServer = params.mcpServers?.find(server => server.name === 'jolo_browser');
+      browserServer = configuredBrowser(params);
       const file = stateFile(params.sessionId);
       if (!file || !existsSync(file)) return fail(-32602, "unknown session");
       const saved = JSON.parse(readFileSync(file, "utf8"));

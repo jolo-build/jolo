@@ -15,6 +15,7 @@ const source = readFileSync(new URL('../src/preload/index.cjs', import.meta.url)
  *   call: (method: string, params?: unknown) => Promise<unknown>,
  *   homeDirectory: () => Promise<string | null>,
  *   prepareVisualization?: (params: { sessionId: string, path: string, [key: string]: unknown }) => Promise<unknown>,
+ *   saveImage: (params: { artifactId: string, name: string, [key: string]: unknown }) => Promise<unknown>,
  * }} PreloadApi
  */
 
@@ -49,8 +50,10 @@ test('a current desktop exposes the new handlers through the narrow bridge', asy
   const { api, calls } = preload(['electron', '--jolo-desktop-api=1']);
   await api.homeDirectory();
   await api.prepareVisualization({ sessionId: 'chat', path: '/repo/preview.html', ignored: true });
+  await api.saveImage({ artifactId: 'art_image', name: 'Generated image', path: '/ignored.png', data: 'ignored' });
   expect(calls).toEqual([
     ['jolo:homeDirectory'],
     ['jolo:visualization:prepare', { sessionId: 'chat', path: '/repo/preview.html' }],
+    ['jolo:image:save', { artifactId: 'art_image', name: 'Generated image' }],
   ]);
 });

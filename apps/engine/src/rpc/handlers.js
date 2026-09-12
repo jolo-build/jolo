@@ -1,4 +1,5 @@
 import { requireInteractive } from "./authorization.js";
+import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
 import { closeSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync } from "node:fs";
@@ -123,7 +124,8 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     },
     // Hosted coding agents still require a cwd. Each standalone chat gets its own
     // private working directory, never the user's last selected repository.
-    'chat.create': ({ title, agentId }) => {
+    'chat.create': ({ title, agentId, model }) => {
+      if (model) providerFactory.catalog.get(model.preset);
       if (agentId && agents.catalog.get(agentId).transport === 'pty') throw new ProtocolError('invalid_params', 'Choose an agent that supports chat');
       const directory = path.join(paths.dataDir, 'chats');
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -135,13 +137,14 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
           const workspace = storage.ensureDirectWorkspace(project.id, root);
           const { grant, created } = permissions.grantInspect(workspace.id);
           if (created) storage.appendEvent({ type: 'grant.created', payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
-          const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title, agentId: agentId ?? null });
+          const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title, agentId: agentId ?? null, model });
           storage.appendEvent({ sessionId: session.id, type: 'session.created', payload: { session } });
           return { session, rootPath: root };
         });
       } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
     },
-    "session.create": ({ projectId, workspaceId, title, agentId }) => storage.transaction(() => {
+    "session.create": ({ projectId, workspaceId, title, agentId, model }) => storage.transaction(() => {
+      if (model) providerFactory.catalog.get(model.preset);
       const workspace = storage.getWorkspace(workspaceId);
       if (!workspace || workspace.projectId !== projectId || workspace.removedAt) throw new ProtocolError("not_found", "unknown project/workspace");
       if (agentId) {
@@ -150,7 +153,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a terminal; open it from the Agents panel instead of as a task`);
       }
       storage.setProjectPreferences(projectId, { ...storage.getProjectPreferences(projectId), workspaceMode: workspace.mode }); // remember the selected mode (§9.1)
-      const session = storage.createSession({ projectId, workspaceId, title, agentId: agentId ?? null });
+      const session = storage.createSession({ projectId, workspaceId, title, agentId: agentId ?? null, model });
       storage.appendEvent({ sessionId: session.id, type: "session.created", payload: { session } });
       return { session, cursor: storage.maxSeq() };
     }),
@@ -187,7 +190,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit });
-      const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permission.request.cwd ?? ".", isolation: "none", revision: permission.revision }));
+      const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
       return { session, messages, runs: storage.listRunsForSession(sessionId), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
     "run.start": async (params) => {

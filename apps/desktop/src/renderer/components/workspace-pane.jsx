@@ -1,4 +1,5 @@
 import { modelLabel } from '../model-options.js';
+import { readLastModelChoice, rememberModelChoice, newSessionModelChoice } from '../last-model-choice.js';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useEngine } from "../use-engine.js";
 import { TaskRail } from "./task-rail.jsx";
@@ -7,6 +8,9 @@ import { Conversation } from "./conversation.jsx";
 import { ModelControls } from "./model-controls.jsx";
 import { Composer } from "./composer.jsx";
 import { BrowserPane } from "./browser-pane.jsx";
+import { ContextSplit } from './context-split.jsx';
+import { FilePreview } from './file-preview.jsx';
+import { FilePreviewContext } from '../file-preview-context.js';
 import { SettingsPage } from "./settings.jsx";
 import { PermissionDialog } from "./permission-dialog.jsx";
 import { PermissionNotice } from "./permission-notice.jsx";
@@ -21,6 +25,8 @@ import { TaskHeader } from "./task-header.jsx";
 import { Board } from "./board.jsx";
 import { BoardHeader } from "./board-header.jsx";
 import { WorktreeDialog } from "./worktree-dialog.jsx";
+import { Onboarding } from './onboarding.jsx';
+import { initialOnboardingState, readOnboardingState, saveOnboardingState, onboardingAgentAvailable } from '../onboarding.js';
 import { basename, runLabel, pauseDescription, uniqueChanges, verificationLabel } from "../presentation.js";
 
 import { createPortal } from "react-dom";
@@ -64,8 +70,18 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [view, setView] = useState(pane.id === "pane-1" ? "board" : "task");
   useLayoutEffect(() => { onViewChange(pane.id, view); }, [onViewChange, pane.id, view]);
   const [context, setContext] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
+  const previewSession = useRef(null);
   const state = useEngine({ restoreLastProject: pane.id === "pane-1", initialProject: pane.path, initialTask: pane.task, initialNewChat: pane.newChat, visible: visible && view === "task", watchChanges: context === 'changes' || context === 'files' });
   const connection = useEngineConnection();
+  const [onboarding, setOnboarding] = useState(readOnboardingState);
+  const [firstTaskDraft, setFirstTaskDraft] = useState(null);
+  const updateOnboarding = value => { saveOnboardingState(value); setOnboarding(value); };
+  useEffect(() => {
+    if (pane.id !== 'pane-1' || onboarding !== null || connection.initializing || state.restoringProject) return;
+    const next = initialOnboardingState(null, state.board);
+    if (next) updateOnboarding(next);
+  }, [pane.id, onboarding, connection.initializing, state.restoringProject, state.board]);
   const { setOverlay } = connection;
   const [pickerOpen, setPickerOpen] = useState(false);
   const [panelMenuOpen, setPanelMenuOpen] = useState(false);
@@ -84,6 +100,13 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [worktreeDialog, setWorktreeDialog] = useState(false);
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const { engine, project, sessions, sessionId, settings, error, relayNote, projection, activeRun, usage, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
+  previewSession.current = sessionId;
+  useEffect(() => { setPreviewFile(null); }, [sessionId]);
+  useEffect(() => () => { if (previewFile?.url) void window.jolo.releaseChatFile?.(previewFile.url); }, [previewFile]);
+  const openFilePreview = file => {
+    if (file.sessionId !== previewSession.current) { if (file.url) void window.jolo.releaseChatFile?.(file.url); return; }
+    setPreviewFile(file); setContext('files'); setView('task');
+  };
   useLayoutEffect(() => {
     if (pane.id === 'pane-1' && hosts.header && hosts.sidebar && hosts.footer && !connection.initializing && (!state.restoringProject || engine.error)) return finishStartup();
   }, [pane.id, hosts.header, hosts.sidebar, hosts.footer, connection.initializing, state.restoringProject, engine.error]);
@@ -94,6 +117,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const agentName = (id) => agentCatalog.find((entry) => entry.id === id)?.displayName ?? id;
   const lastRun = projection ? [...projection.runs.values()].at(-1) : null;
   const session = sessions.find((item) => item.id === sessionId);
+  useEffect(() => { setAnswerer(null); }, [sessionId, project?.projectId]);
   const projectLabel = project?.standalone ? 'Chat' : project ? basename(project.rootPath) : 'Workspace';
   const newChat = () => reportError(async () => { await state.newChat(); setAnswerer(null); showTask(); });
   const changedFiles = uniqueChanges(changes);
@@ -144,6 +168,21 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     await state.openProject(path);
     showTask();
   });
+  const openOnboardingFolder = async () => {
+    const path = await window.jolo.openFolder();
+    if (path) await state.openProject(path, { sessionId: null });
+  };
+  const finishOnboarding = async (prompt, agentId, model) => {
+    const [{ agents }, { presets }] = await Promise.all([state.call('agent.catalog', {}), state.call('provider.presets', {})]);
+    if (!onboardingAgentAvailable(agentId, agents, model, presets)) throw new Error('This agent or provider is no longer available. Go back to choose another one.');
+    if (!project || project.standalone) throw new Error('Choose a project folder first.');
+    rememberModelChoice(agentId, model);
+    const created = await state.newSession('', { agentId: agentId === 'jolo' ? null : agentId, workspaceId: project.workspaceId });
+    setFirstTaskDraft({ sessionId: created.id, prompt });
+    setAnswerer(null);
+    updateOnboarding('completed');
+    showTask();
+  };
 
   useLayoutEffect(() => {
     register(pane.id, {
@@ -166,7 +205,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       startAgent: async (agentId) => { const agent = await state.startAgent(agentId);  return agent; },
       stopAgent: (terminalId) => state.stopAgent(terminalId),
       agents: () => state.agents,
-      pickAnswerer: (agentId) => setAnswerer(agentId ?? "jolo"),
+      pickAnswerer: (agentId) => chooseAnswerer(agentId ?? "jolo"),
       hostedAgents: () => hostedAgents,
       showSettings: () => setShowSettings(true),
       closeSettings: () => setShowSettings(false),
@@ -209,14 +248,19 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   });
   useEffect(() => () => register(pane.id, null), [pane.id, register]);
 
-  const selectedModel = session?.model ?? settings?.model;
+  const selectedModel = session ? session.model ?? settings?.model : readLastModelChoice()?.model ?? settings?.model;
   const providerLabel = (selectedModel?.preset === "fake" ? "Demo provider" : selectedModel?.model) ?? (settings?.demoProviderEnabled ? "Demo provider" : "Configure provider");
   const sessionAgentId = session?.agentId ?? null;
-  const chosenAgentId = answerer === null ? sessionAgentId : answerer === "jolo" ? null : answerer;
+  const chosenAgentId = answerer === null ? (session ? sessionAgentId : newSessionModelChoice(hostedAgents, settings?.model).agentId ?? null) : answerer === "jolo" ? null : answerer;
+  const chooseAnswerer = agentId => {
+    setAnswerer(agentId);
+    rememberModelChoice(agentId, selectedModel);
+  };
   const answererLabel = chosenAgentId ? agentName(chosenAgentId) : `Jolo · ${modelLabel(providerLabel)}`;
   const saveModelChoice = async ({ agentId, preset, model, effort }) => {
     if (agentId !== 'jolo') {
       await state.call('settings.update', { agents: { [agentId]: { model, effort } } });
+      rememberModelChoice(agentId, selectedModel);
       await Promise.all([state.refreshSettings(), state.refreshCatalog()]);
       return;
     }
@@ -226,8 +270,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       await state.call('session.setModel', { sessionId, model: selection, expectedRevision: current.revision });
     } else {
       await state.call('settings.update', { model: selection });
-      await state.refreshSettings();
     }
+    rememberModelChoice(null, selection);
+    if (!sessionId) await state.refreshSettings();
   };
   const taskMenu = (session) => reportError(async () => {
     const sessionWorkspace = workspaces.find((item) => item.id === session.workspaceId);
@@ -240,6 +285,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const showTaskRail = view !== 'board' && !showSettings && hosts.sidebarCollapsed;
   const boardHeader = view === 'board' && !multi && !showSettings;
   return (
+    <FilePreviewContext.Provider value={openFilePreview}>
     <div ref={root} className={`pane-workspace${context && view !== "board" ? " with-context" : ""}`} data-view={view}>
       {active && hosts.header && createPortal(boardHeader ? <BoardHeader connected={engine.connected} call={state.call} onSettings={() => setShowSettings('account')} /> : <header className="header">
         <div className="header-brand"><JoloLogo />{view !== "board" && <button className="sidebar-toggle" onClick={hosts.toggleSidebar} aria-label={hosts.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!hosts.sidebarCollapsed} aria-controls="workspace-sidebar" title={`${hosts.sidebarCollapsed ? 'Show' : 'Hide'} sidebar (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}B)`} disabled={showSettings}><Icon name="sidebar" /></button>}</div>
@@ -279,15 +325,15 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           {multi && <><button onClick={() => onZoom(pane.id)} aria-label={zoomed ? "Restore panes" : "Maximize pane"} title={zoomed ? "Restore panes" : "Maximize pane"}><Icon name={zoomed ? "restore" : "maximize"} size={13} /></button><button onClick={() => onClose(pane.id)} aria-label="Close pane" title="Close pane · tasks keep running"><Icon name="close" size={13} /></button></>}
         </div>
       </div>}
-      <div className="pane-body">
+      <ContextSplit enabled={Boolean(context) && view !== 'board'}>
         <main className={`main${view === "board" ? " board-main" : showTaskRail ? " has-task-rail" : ""}`} aria-label={view === "board" ? "Work board" : "Conversation"}>
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
-          {view === "board" ? <Board board={state.board} connected={engine.connected} onOpen={openRow} onNewChat={newChat} onChatMenu={task => reportError(async () => taskMenu((await state.call('session.page', { sessionId: task.sessionId })).session))} onNewTask={row => reportError(async () => { await state.newFromBoard(row); showTask(); })} onOpenFolder={openFolder} call={state.call} /> : <>
+          {view === "board" ? pane.id === 'pane-1' && onboarding === 'active' ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : pane.id === 'pane-1' && onboarding === null && (connection.initializing || state.restoringProject || state.board) && !engine.error ? <div className="empty-state" role="status">Getting your workspace ready…</div> : <Board board={state.board} connected={engine.connected} onGetStarted={pane.id === 'pane-1' ? () => updateOnboarding('active') : null} onOpen={openRow} onNewChat={newChat} onChatMenu={task => reportError(async () => taskMenu((await state.call('session.page', { sessionId: task.sessionId })).session))} onNewTask={row => reportError(async () => { await state.newFromBoard(row); showTask(); })} onOpenFolder={openFolder} call={state.call} /> : <>
           {(!project?.standalone || activeRun || pendingPermission) && <TaskHeader status={runLabel(activeRun ?? lastRun)} working={Boolean(activeRun)} branch={session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null} branchPath={workspace?.path} agent={sessionAgentId ? agentName(sessionAgentId) : null} />}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} changedFiles={changedFiles} onLoadDiff={state.loadDiff} onReview={() => setContext("changes")} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />
           <PermissionNotice request={pendingPermission} active={active} onReview={onActivate} />
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
-          {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen && !modelMenuOpen} running={Boolean(activeRun)} model={modelLabel(providerLabel)} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} modelControl={<ModelControls agentId={chosenAgentId ?? 'jolo'} agents={hostedAgents} nativeModel={selectedModel} hasSession={Boolean(sessionId)} disabled={!engine.connected || !active || !visible || showSettings || Boolean(pendingPermission || taskDialog || worktreeDialog)} onAgent={setAnswerer} onSave={saveModelChoice} call={state.call} onSettings={setShowSettings} onOpenChange={setModelMenuOpen} />} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
+          {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} initialText={firstTaskDraft?.sessionId === sessionId ? firstTaskDraft.prompt : ""} onInitialTextUsed={() => setFirstTaskDraft(null)} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen && !modelMenuOpen} running={Boolean(activeRun)} model={modelLabel(providerLabel)} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} modelControl={<ModelControls agentId={chosenAgentId ?? 'jolo'} agents={hostedAgents} nativeModel={selectedModel} hasSession={Boolean(sessionId)} disabled={!engine.connected || !active || !visible || showSettings || Boolean(pendingPermission || taskDialog || worktreeDialog)} onAgent={chooseAnswerer} onSave={saveModelChoice} call={state.call} onSettings={setShowSettings} onOpenChange={setModelMenuOpen} />} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
           </>}
         {showTaskRail && <TaskRail call={state.call} revision={state.board?.generatedAt} sessionId={sessionId} onOpen={row => reportError(async () => { await state.openFromBoard(row); showTask(); })} />}
         </main>
@@ -308,7 +354,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div id={`${pane.id}-context-content`} className="context-content" role="tabpanel" aria-labelledby={`${pane.id}-${context ?? "changes"}-tab`}>
             <div className="changes-host" hidden={context !== "changes" && context !== "files"}>
-              <ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} onSelectFile={() => setContext("changes")} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} />
+              {previewFile && context === 'files' ? <FilePreview key={`${previewFile.path}:${previewFile.text ?? previewFile.url}`} file={previewFile} onClose={() => setPreviewFile(null)} /> : <ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} onSelectFile={() => setContext("changes")} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} />}
             </div>
             {browser && workspaceId && <div className="browser-host" hidden={context !== "browser"}><BrowserPane key={workspaceId} workspaceId={workspaceId} initialUrl={browser.url} onTitle={setBrowserTitle} onNavigate={(url) => setBrowser({ url })} /></div>}
             <div className="tool-panel" id={`${pane.id}-checks-panel`} hidden={context !== "checks"}><ChecksPanel verification={verification} /></div>
@@ -316,13 +362,14 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); showTask(); }} />}</div>
           </div>
         </aside>
-      </div>
+      </ContextSplit>
       {active && hosts.footer && createPortal(<footer className={`status${boardHeader && !engine.error && !relayNote ? ' board-status' : ''}`} hidden={boardHeader && !engine.error && !relayNote}><span><Icon name={project?.standalone ? "chat" : "folder"} size={12} />{project ? projectLabel : "No project"}</span><span title={engine.connected ? `Engine process ${engine.status?.pid ?? ""}` : engine.error}><span className={`state-dot ${engine.connected ? "" : "offline"}`} />{engine.connected ? "Local engine" : "Connecting…"}</span><span className="grow" /><span className={engine.error ? "warn" : ""}>{engine.error || relayNote || (activeRun ? runLabel(activeRun) : runLabel(lastRun))}</span></footer>, hosts.footer)}
       {active && pickerOpen && !pendingPermission && <PanePicker project={project} sessionId={sessionId} board={state.board} onOpen={async (path, sessionId) => { await state.openProject(path, { sessionId }); showTask(); }} onClose={() => setPickerOpen(false)} />}
-      {active && showSettings && hosts.settings && createPortal(<SettingsPage settings={settings} initialSection={settingsSection} session={session} onPresets={() => state.call("provider.presets", {})} onDiscoverProviderModels={(preset, options) => state.call("provider.models", { preset, ...options })} onSaveConnection={async (providers) => { await state.call("settings.update", { providers }); await state.refreshSettings(); }} onUseModel={async (model) => { let current = (await state.call("session.page", { sessionId: session.id })).session; if (current.agentId) current = (await state.call("session.setAgent", { sessionId: current.id, agentId: null, expectedRevision: current.revision })).session; await state.call("session.setModel", { sessionId: current.id, model, expectedRevision: current.revision }); setAnswerer("jolo"); }} agents={agentCatalog} onSaveAgents={async (agents) => { await state.call("settings.update", { agents }); await state.refreshSettings(); await state.refreshCatalog(); }} onDiscoverModels={(agentId, { refresh = false } = {}) => state.call("agent.models", { agentId, refresh })} onSave={async (model) => { await state.call("settings.update", { model }); await state.refreshSettings(); }} onSetCredential={async (provider, value) => (await state.call("credential.set", { provider, value })).stored} onClose={() => setShowSettings(false)} />, hosts.settings)}
-      {active && pendingPermission && <PermissionDialog key={pendingPermission.permissionId} request={pendingPermission} onDecide={(decision) => state.resolvePermission(pendingPermission.permissionId, decision)} />}
+      {active && showSettings && hosts.settings && createPortal(<SettingsPage settings={settings} initialSection={settingsSection} session={session} onPresets={() => state.call("provider.presets", {})} onDiscoverProviderModels={(preset, options) => state.call("provider.models", { preset, ...options })} onSaveConnection={async (providers) => { await state.call("settings.update", { providers }); await state.refreshSettings(); }} onUseModel={async (model) => { let current = (await state.call("session.page", { sessionId: session.id })).session; if (current.agentId) current = (await state.call("session.setAgent", { sessionId: current.id, agentId: null, expectedRevision: current.revision })).session; await state.call("session.setModel", { sessionId: current.id, model, expectedRevision: current.revision }); setAnswerer("jolo"); rememberModelChoice(null, model); }} agents={agentCatalog} onSaveAgents={async (agents) => { await state.call("settings.update", { agents }); await state.refreshSettings(); await state.refreshCatalog(); }} onDiscoverModels={(agentId, { refresh = false } = {}) => state.call("agent.models", { agentId, refresh })} onSave={async (model) => { await state.call("settings.update", { model }); rememberModelChoice(null, model); await state.refreshSettings(); }} onSetCredential={async (provider, value) => (await state.call("credential.set", { provider, value })).stored} onClose={() => setShowSettings(false)} />, hosts.settings)}
+      {active && pendingPermission && <PermissionDialog key={pendingPermission.permissionId} request={pendingPermission} workspacePath={workspaces.find(item => item.id === pendingPermission.workspaceId)?.path ?? workspace?.path} onDecide={(decision) => state.resolvePermission(pendingPermission.permissionId, decision)} />}
       {active && taskDialog && !pendingPermission && <TaskDialog key={`${taskDialog.session.id}:${taskDialog.action}`} {...taskDialog} onSubmit={(value) => taskDialog.action === "remove-worktree" ? state.removeWorktree(taskDialog.workspace.id, value.force) : state.manageSession(sessions.find((item) => item.id === taskDialog.session.id) ?? taskDialog.session, taskDialog.action, value)} onClose={() => setTaskDialog(null)} />}
       {active && worktreeDialog && !pendingPermission && project && <WorktreeDialog projectName={basename(project.rootPath)} onSubmit={startWorktree} onClose={() => setWorktreeDialog(false)} />}
     </div>
+    </FilePreviewContext.Provider>
   );
 });
