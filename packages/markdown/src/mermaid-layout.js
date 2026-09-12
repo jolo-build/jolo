@@ -155,7 +155,7 @@ export function layoutFlowchart(model, metrics) {
 
   // Between layers: every link that travels sideways gets a lane, sharing one where they do not overlap.
   const gaps = [];
-  const labelRooms = [];
+  const laneSizes = [];
   for (let index = 0; index < Math.max(0, layers.length - 1); index += 1) {
     const between = segments.filter((segment) => segment.layer === index && !segment.sameLayer);
     const used = [];
@@ -165,7 +165,7 @@ export function layoutFlowchart(model, metrics) {
       const to = centre(byId.get(segment.to));
       const label = segment.edge.label && !byId.get(segment.from).dummy ? segment.edge.label : "";
       if (label && !vertical) room = Math.max(room, labelRoom(label));
-      if (from === to && !(label && vertical)) { segment.lane = null; segment.laneLabel = label; continue; }
+      if (from === to && !label) { segment.lane = null; segment.laneLabel = label; continue; }
       const start = Math.min(from, to);
       const stop = Math.max(from, to) + (label && vertical ? labelSpan(label) : 0);
       let slot = used.findIndex((end) => end < start - 1);
@@ -174,12 +174,15 @@ export function layoutFlowchart(model, metrics) {
       segment.lane = slot;
       segment.laneLabel = label;
     }
-    labelRooms.push(room);
-    gaps.push((Math.max(1, used.length) + 1) * lane + room);
+    // Horizontal labels occupy the run after their turn. Reserve their width for
+    // each lane, including straight labelled links, so converging labels cannot overlap.
+    laneSizes.push(lane + room);
+    gaps.push(Math.max(1, used.length) * (lane + room) + lane);
   }
 
   // Along the layers: each layer is as deep as its deepest box, plus the lanes that follow it.
   const major = new Map();
+  const layerExits = [];
   let majorExtent = 0;
   for (const [index, nodesInLayer] of layers.entries()) {
     const depth = Math.max(lane, ...nodesInLayer.map(majorOf));
@@ -187,6 +190,7 @@ export function layoutFlowchart(model, metrics) {
       major.set(node.id, majorExtent);
       if (node.dummy) { if (vertical) node.h = depth; else node.w = depth; } // its line passes straight through
     }
+    layerExits.push(majorExtent + depth - inset);
     majorExtent += depth + (index < layers.length - 1 ? gaps[index] : 0);
   }
   const totalMajor = majorExtent;
@@ -230,8 +234,11 @@ export function layoutFlowchart(model, metrics) {
     const exit = port(from, "exit");
     const enter = port(to, "enter");
     const step = reversed ? -1 : 1;
-    const gapLane = (segment.lane ?? 0) * lane;
-    const laneAt = (vertical ? exit.y : exit.x) + step * (lane + gapLane);
+    const gapLane = (segment.lane ?? 0) * laneSizes[segment.layer];
+    // Reserve lanes from the whole layer's boundary. A shorter box must not pull
+    // its connector (and label) back into a neighbouring box or another lane.
+    const boundary = reversed ? totalMajor - layerExits[segment.layer] - inset : layerExits[segment.layer];
+    const laneAt = boundary + step * (lane + gapLane);
     const points = vertical
       ? [exit, { x: exit.x, y: laneAt }, { x: enter.x, y: laneAt }, enter]
       : [exit, { x: laneAt, y: exit.y }, { x: laneAt, y: enter.y }, enter];

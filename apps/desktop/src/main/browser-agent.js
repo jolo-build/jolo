@@ -13,7 +13,7 @@ const SCREENSHOT_MAX_BYTES = Math.min(1024 * 1024, Math.floor((FRAME_MAX_BYTES -
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createBrowserAgent({ bridge, log, isOverlayActive, nativeImage }) {
+export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverlay = null, nativeImage }) {
   /** @type {Map<number, any>} guest webContents id -> host record */
   const hosts = new Map();
   const inflight = new Map(); // invocationId -> { controller, host }
@@ -349,6 +349,10 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, nativeImage }
       host.signal = controller.signal;
       host.inputOperation = INPUT_OPERATIONS.has(params.operation);
       host.expectedRevision = params.navigationRevision;
+      if (isOverlayActive() && (host.inputOperation || ['navigate', 'history'].includes(params.operation)) && waitForOverlay) {
+        await waitForOverlay(controller.signal);
+        controller.signal.throwIfAborted();
+      }
       if (host.inputOperation && params.navigationRevision !== host.navigationRevision) return reply({ status: 'stale', error: { code: 'stale_reference', message: 'the page navigated since the engine admitted this action' }, navigationRevision: host.navigationRevision });
       if (isOverlayActive() && (host.inputOperation || ['navigate', 'history'].includes(params.operation))) throw Object.assign(new Error('a host dialog is open; browser control is suspended'), { code: 'host_overlay' });
       const outcome = await operate(host, params.operation, params.arguments, controller.signal);

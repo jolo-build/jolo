@@ -1,3 +1,4 @@
+import { modelLabel } from '../model-options.js';
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
@@ -38,7 +39,7 @@ function activityIdentity(run, { assistantName, assistantAgentId, agents, provid
   const agent = agents.find(entry => entry.id === agentId);
   const name = guestId === 'jolo' ? 'Jolo' : agent?.displayName ?? (guestId || assistantName);
   const model = run?.execution?.model || (native ? providerModel : agent?.model);
-  return `${name} · ${model || 'Default model'}`;
+  return `${name} · ${modelLabel(model) || 'Default model'}`;
 }
 
 /** Reads a stored PNG artifact through the bridge and shows it; used for browser_screenshot results. */

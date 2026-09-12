@@ -44,6 +44,8 @@ In Jolo, use `/model` to choose an installed coding agent or configure an API pr
 
 In the desktop board and sidebar, each folder is a workspace and each task is a chat. Expand a workspace to list its tasks, click a task to open its conversation, or choose **New task** in that workspace. The board uses the full window; the workspace sidebar returns when you open a chat. Archived tasks stay grouped by folder in the sidebar’s **Archive** tab.
 
+Click the model name beneath the desktop composer to choose an agent or model and adjust its reasoning effort with the stepped slider. The slider uses that model’s reported effort levels; drag it or use the arrow keys, and reset it to use the default. Hosted-agent choices update that agent’s saved defaults for new messages. Direct provider choices apply to the current task, or become the default when no task exists yet.
+
 Separate chats run concurrently, including chats using the same folder, agent, or model. Follow-up messages queue within their own chat; **Send now** interrupts only that chat’s current turn. Tasks in the same folder share its files, and separate Git worktrees remain available when you want isolated changes.
 
 Choose **New chat** to start a conversation without selecting a folder. These chats appear under **Recents**, below your workspace folders, and support the same model and agent choices, saved history, archive, and split views. Chats receive a title from their first message. Each chat has private working storage for agents and generated files, separate from your projects.
@@ -80,10 +82,10 @@ The optional [Access service](apps/access/README.md) provides GitHub sign-in, pe
 After signing in with task access, reference a task in chat:
 
 ```text
-@codex #JOLO-123 investigate and fix this problem, then run the relevant tests
+@codex #CYPHO-123 investigate and fix this problem, then run the relevant tests
 ```
 
-Open the correct local project before sending. The selected task's content is supplied to the coding agent, subject to your current account permissions.
+Each personal account and team has a unique ticket prefix and its own sequence. Choose a prefix when creating a team, or let Jolo assign one. Type `#` in desktop chat to choose a task, or write its full key directly. Open the correct local project before sending. The selected task's content is supplied to the coding agent, subject to your current account permissions.
 
 ## Repository
 
@@ -117,3 +119,5 @@ GitHub Actions builds Apple Silicon and Intel DMG installers alongside the four 
 Read the [Jolo documentation](https://docs.jolo.build) for installation, split view, orchestration, agents, inline browser control, changes, Access, and CLI workflows. Animated desktop walkthroughs autoplay with pause controls and respect reduced motion.
 
 The static guide lives in `apps/guide` (run `bun run guide:build`). `bun apps/guide/serve.js` previews the built pages on port 8792. GitHub Actions deploys it through `deploy/guide.wrangler.jsonc` when guide changes reach main.
+
+Agent logos are bundled from [Lobe Icons](https://github.com/lobehub/lobe-icons) under its MIT license; see `assets/brand/agents/LICENSE`.

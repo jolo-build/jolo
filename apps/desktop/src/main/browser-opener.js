@@ -5,10 +5,10 @@ import { BrowserOpenSchema, BrowserOpenerSchema } from '@jolo/protocol';
 /**
  * One open request while its guest attaches. The lease timer is hung on the entry a moment after it is
  * made, which is why it is optional here, and `acknowledged` turns true when the renderer reports the pane.
- * @typedef {{ invocationId: string, workspaceId: string, leaseMs: number, acknowledged: boolean, timer?: ReturnType<typeof setTimeout> }} PendingOpen
+ * @typedef {{ invocationId: string, workspaceId: string, leaseMs: number, expiresAt: number, controller: AbortController, acknowledged: boolean, timer?: ReturnType<typeof setTimeout> }} PendingOpen
  */
 
-export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log }) {
+export function createBrowserOpener({ bridge, agent, send, isOverlayActive, waitForOverlay = null, log }) {
   let workspaceIds = [];
   let publishing = Promise.resolve();
   const pending = new Map();
@@ -20,6 +20,7 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log 
   const finish = (entry, result, reply = true) => {
     if (!pending.delete(entry.invocationId)) return;
     clearTimeout(entry.timer);
+    entry.controller.abort();
     send('jolo:browserOpenCancel', { invocationId: entry.invocationId });
     if (reply) void bridge.rawCall('browser.openResult', { invocationId: entry.invocationId, ...result }).catch(error => log.warn('browser open result failed', { error: String(error?.message ?? error) }));
   };
@@ -29,6 +30,21 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log 
     if (host) finish(entry, { capabilityId: host.capabilityId });
   };
   agent.onRegistered(() => { for (const entry of pending.values()) ready(entry); });
+  const open = (entry) => {
+    if (!pending.has(entry.invocationId)) return;
+    if (!workspaceIds.includes(entry.workspaceId)) return finish(entry, { error: 'open this workspace in Jolo desktop to use its inline browser' });
+    // Reserve the browser while waiting for approval and while its guest attaches.
+    if ([...pending.values()].some(other => other.workspaceId !== entry.workspaceId)
+      || [...agent.hosts.values()].some(host => host.workspaceId !== entry.workspaceId && !host.guest.isDestroyed())) {
+      return finish(entry, { errorCode: 'browser_busy', error: 'the inline browser is open or opening in another workspace; its page has been left untouched' });
+    }
+    if (isOverlayActive()) {
+      if (!waitForOverlay) return finish(entry, { error: 'a host dialog is open; browser opening is suspended' });
+      void waitForOverlay(entry.controller.signal).then(() => open(entry)).catch(() => {});
+      return;
+    }
+    send('jolo:browserOpen', { invocationId: entry.invocationId, workspaceId: entry.workspaceId, expiresAt: entry.expiresAt });
+  };
   return {
     setWorkspaces(params) {
       const checked = BrowserOpenerSchema.safeParse(params);
@@ -46,17 +62,10 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, log 
       const checked = BrowserOpenSchema.safeParse(params);
       if (!checked.success || pending.has(params.invocationId)) return;
       /** @type {PendingOpen} */
-      const entry = { ...checked.data, acknowledged: false };
-      entry.timer = setTimeout(() => finish(entry, { error: 'inline browser did not attach within the lease' }), entry.leaseMs);
+      const entry = { ...checked.data, expiresAt: Date.now() + checked.data.leaseMs, controller: new AbortController(), acknowledged: false };
+      entry.timer = setTimeout(() => finish(entry, { error: isOverlayActive() ? 'browser opening timed out while waiting for a host approval dialog to close' : 'inline browser did not attach within the lease' }), entry.leaseMs);
       pending.set(entry.invocationId, entry);
-      if (!workspaceIds.includes(entry.workspaceId)) return finish(entry, { error: 'open this workspace in Jolo desktop to use its inline browser' });
-      if (isOverlayActive()) return finish(entry, { error: 'a host dialog is open; browser opening is suspended' });
-      // Reserve the browser while its guest attaches as well as while it is open.
-      if ([...pending.values()].some(other => other.workspaceId !== entry.workspaceId)
-        || [...agent.hosts.values()].some(host => host.workspaceId !== entry.workspaceId && !host.guest.isDestroyed())) {
-        return finish(entry, { errorCode: 'browser_busy', error: 'the inline browser is open or opening in another workspace; its page has been left untouched' });
-      }
-      send('jolo:browserOpen', { invocationId: entry.invocationId, workspaceId: entry.workspaceId, expiresAt: Date.now() + entry.leaseMs });
+      open(entry);
     },
     acknowledge(params) {
       const entry = pending.get(params?.invocationId);

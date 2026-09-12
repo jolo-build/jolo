@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createBrowserAgent } from '../../apps/desktop/src/main/browser-agent.js';
 import { BrowserBroker } from '../../apps/engine/src/browser/broker.js';
+import { HostDialogs } from '../../apps/desktop/src/main/host-dialogs.js';
 
 /**
  * The slice of Electron's `WebContents` the browser agent attaches to. The debugger arrives a line
@@ -19,7 +20,7 @@ import { BrowserBroker } from '../../apps/engine/src/browser/broker.js';
  * @param {(method: string, args: any) => Promise<any>} [send] answers any CDP command the fixture
  *   does not handle itself, which is how a case stalls or redirects one command.
  */
-async function fixture(send = async () => ({})) {
+async function fixture(send = async () => ({}), dialogs = null) {
   const calls = [], replies = [];
   let overlay = false;
   /** @type {FakeGuest} */
@@ -31,7 +32,7 @@ async function fixture(send = async () => ({})) {
     return send(method, args);
   } });
   // No case here takes a screenshot, so the dependency bag deliberately leaves out `nativeImage`.
-  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => overlay }));
+  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => dialogs ? dialogs.active : overlay, waitForOverlay: dialogs ? signal => dialogs.wait(signal) : null }));
   const host = agent.attach(guest, 'ws');
   await Promise.resolve();
   let sequence = 0;
@@ -41,6 +42,24 @@ async function fixture(send = async () => ({})) {
   };
   return { calls, replies, guest, host, agent, execute, overlay: value => { overlay = value; } };
 }
+
+test('browser input waits for approval, resumes on close, and cancelled input never resumes', async () => {
+  for (const cancel of [false, true]) {
+    const dialogs = new HostDialogs();
+    const f = await fixture(undefined, dialogs);
+    dialogs.set(true);
+    const call = f.execute('press', {key:'Enter'});
+    await Bun.sleep(1);
+    expect(f.replies).toHaveLength(0);
+    expect(f.calls.some(call => call.method.startsWith('Input.'))).toBe(false);
+    if (cancel) f.agent.handleCancel(call);
+    dialogs.set(false);
+    await call.done;
+    expect(f.replies.at(-1).status).toBe(cancel ? 'cancelled' : 'ok');
+    expect(f.calls.some(call => call.method.startsWith('Input.'))).toBe(!cancel);
+    expect(dialogs.listeners.size).toBe(0);
+  }
+});
 
 test('snapshot references never alias a later snapshot, and unknown snapshot ids are stale', async () => {
   const f = await fixture();

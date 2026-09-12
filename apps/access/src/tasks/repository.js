@@ -1,3 +1,5 @@
+import { ensureTaskPrefix, prefixCandidate } from './prefixes.js';
+import { taskPrefix } from '../../../../packages/protocol/src/tasks.js';
 import { roleSQL, readSQL, writeSQL } from './permissions.js';
 
 export function taskRepository(db, now = Date.now) {
@@ -9,7 +11,7 @@ export function taskRepository(db, now = Date.now) {
   const mutate = async (sql, values, { actor, team = null, action, subject, after = [] }) => {
     const results = await db.batch([
       statement(sql, values),
-      statement("INSERT INTO task_audit(team_id,account_id,actor_id,action,subject,at) SELECT ?,?,?,?,CASE WHEN ?='task.created' THEN (SELECT 'JOLO-'||number FROM tasks WHERE mutation_id=?) WHEN ? LIKE 'task.%' THEN (SELECT 'JOLO-'||number FROM tasks WHERE id=?) ELSE ? END,? WHERE changes() > 0", [team, actor, actor, action, action, subject, action, subject, subject, now()]),
+      statement("INSERT INTO task_audit(team_id,account_id,actor_id,action,subject,at) SELECT ?,?,?,?,CASE WHEN ?='task.created' THEN (SELECT prefix||'-'||number FROM tasks WHERE mutation_id=?) WHEN ? LIKE 'task.%' THEN (SELECT prefix||'-'||number FROM tasks WHERE id=?) ELSE ? END,? WHERE changes() > 0", [team, actor, actor, action, action, subject, action, subject, subject, now()]),
       ...after,
     ]);
     return results[0].results?.[0] ?? null;
@@ -19,11 +21,23 @@ export function taskRepository(db, now = Date.now) {
   const validLabels = `(SELECT count(*) FROM task_labels l WHERE l.id IN (SELECT value FROM json_each(?9)) AND ((?2 IS NULL AND l.team_id IS NULL AND l.account_id = ?1) OR (?2 IS NOT NULL AND l.team_id = ?2))) = json_array_length(?9)`;
   const validAssignee = `(?3 IS NULL OR (?2 IS NULL AND ?3 = ?1) OR (?2 IS NOT NULL AND ${roleSQL('?2', '?3')} IS NOT NULL))`;
   return {
-    team: (actor, id) => one(`SELECT teams.*, ${role('teams.id')} AS role FROM teams WHERE id = ?2 AND ${role('teams.id')} IS NOT NULL`, [actor, id]),
-    teams: actor => all(`SELECT teams.id,teams.name,${role('teams.id')} AS role FROM teams WHERE ${role('teams.id')} IS NOT NULL ORDER BY name LIMIT 100`, [actor]),
-    createTeam: (actor, name) => {
-      const id = crypto.randomUUID();
-      return mutate('INSERT INTO teams(id,owner_id,name,created_at,updated_at) SELECT ?2,?1,?3,?4,?4 WHERE (SELECT count(*) FROM teams WHERE owner_id=?1)<50 RETURNING *', [actor,id,name,now()], { actor, team:id, action:'team.created', subject:id });
+    team: (actor, id) => one(`SELECT teams.*,(SELECT prefix FROM task_prefixes WHERE team_id=teams.id) AS prefix, ${role('teams.id')} AS role FROM teams WHERE id = ?2 AND ${role('teams.id')} IS NOT NULL`, [actor, id]),
+    teams: actor => all(`SELECT teams.id,teams.name,(SELECT prefix FROM task_prefixes WHERE team_id=teams.id) AS prefix,${role('teams.id')} AS role FROM teams WHERE ${role('teams.id')} IS NOT NULL ORDER BY name LIMIT 100`, [actor]),
+    personalPrefix: actor => one('SELECT prefix FROM task_prefixes WHERE account_id=?1', [actor]),
+    async createTeam(actor, name, requestedPrefix = null) {
+      if (requestedPrefix && !taskPrefix(requestedPrefix)) return null;
+      for (let attempt = 0; attempt < (requestedPrefix ? 1 : 16); attempt++) {
+        const id = crypto.randomUUID(), prefix = requestedPrefix ? taskPrefix(requestedPrefix) : prefixCandidate(name, 'TEAM', attempt);
+        const team = await mutate(`INSERT INTO teams(id,owner_id,name,created_at,updated_at)
+          SELECT ?2,?1,?3,?4,?4 WHERE (SELECT count(*) FROM teams WHERE owner_id=?1)<50
+          AND NOT EXISTS(SELECT 1 FROM task_prefixes WHERE prefix=?5) RETURNING *`, [actor,id,name,now(),prefix], {
+          actor, team:id, action:'team.created', subject:id,
+          after:[statement('INSERT INTO task_prefixes(prefix,team_id) SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM teams WHERE id=?2)', [prefix,id])],
+        });
+        if (team) return {...team,prefix};
+        if (requestedPrefix || !(await one('SELECT prefix FROM task_prefixes WHERE prefix=?1',[prefix]))) return null;
+      }
+      return null;
     },
     renameTeam: (actor, id, name, revision) => mutate('UPDATE teams SET name=?3,revision=revision+1,updated_at=?5 WHERE owner_id=?1 AND id=?2 AND revision=?4 RETURNING *', [actor,id,name,revision,now()], {actor,team:id,action:'team.renamed',subject:id}),
     members: (actor, id) => all(`SELECT a.id,a.name,a.email,'owner' AS role,0 AS revision FROM teams t JOIN accounts a ON a.id=t.owner_id WHERE t.id=?2 AND ${role('t.id')} IS NOT NULL UNION ALL SELECT a.id,a.name,a.email,m.role,m.revision FROM team_members m JOIN accounts a ON a.id=m.account_id WHERE m.team_id=?2 AND ${role('m.team_id')} IS NOT NULL`, [actor,id]),
@@ -57,12 +71,15 @@ export function taskRepository(db, now = Date.now) {
     editLabel: (actor,id,name,color,revision,team=null) => mutate(`UPDATE task_labels SET name=?3,color=?4,revision=revision+1 WHERE id=?2 AND revision=?5 AND (${scopeWrite}) AND NOT EXISTS(SELECT 1 FROM task_labels other WHERE other.scope_key=task_labels.scope_key AND other.name=?3 AND other.id!=?2) RETURNING *`, [actor,id,name,color,revision], {actor,team,action:'label.updated',subject:id}),
     task: (actor,id) => one(`SELECT tasks.*,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE id=?2 AND ${readSQL()}`, [actor,id]),
     scopedTask: (actor,number,kind,scope) => one(`SELECT tasks.*,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE number=?2 AND ((?3='accounts' AND team_id IS NULL AND account_id=?4) OR (?3='teams' AND team_id=?4)) AND ${readSQL()}`, [actor,number,kind,scope]),
-    taskNumber: (actor,number,team='') => all(`SELECT tasks.*,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE number=?2 AND (?3='' OR (?3='personal' AND team_id IS NULL) OR team_id=?3) AND ${readSQL()} LIMIT 2`, [actor,number,team]),
+    prefixedTask: (actor,prefix,number,team='') => one(`SELECT tasks.*,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE prefix=?2 AND number=?3 AND (?4='' OR (?4='personal' AND team_id IS NULL) OR team_id=?4) AND ${readSQL()}`, [actor,prefix,number,team]),
     async list(actor,{q='',state='',team='',label='',project='',archived=false,before=null}={}) {
-      return all(`SELECT tasks.id,tasks.number,tasks.account_id,tasks.team_id,tasks.assignee_id,tasks.title,tasks.project,tasks.state,tasks.priority,tasks.labels,tasks.revision,tasks.archived_at,tasks.created_at,tasks.updated_at,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE ${readSQL()} AND (?2='' OR instr(lower(title),lower(?2))>0 OR ('JOLO-'||number) LIKE upper(?2)||'%') AND (?3='' OR state=?3) AND (?4='' OR (?4='personal' AND team_id IS NULL) OR team_id=?4) AND (?5='' OR ?5 IN (SELECT value FROM json_each(labels))) AND ((?6=0 AND archived_at IS NULL) OR (?6=1 AND archived_at IS NOT NULL)) AND (?7 IS NULL OR id<?7) AND (?8='' OR project=?8) ORDER BY id DESC LIMIT 21`, [actor,q,state,team,label,Number(archived),before,project]);
+      return all(`SELECT tasks.id,tasks.number,tasks.prefix,tasks.account_id,tasks.team_id,tasks.assignee_id,tasks.title,tasks.project,tasks.state,tasks.priority,tasks.labels,tasks.revision,tasks.archived_at,tasks.created_at,tasks.updated_at,${role('tasks.team_id')} AS role,(SELECT name FROM teams WHERE id=tasks.team_id) AS team_name FROM tasks WHERE ${readSQL()} AND (?2='' OR instr(lower(title),lower(?2))>0 OR (prefix||'-'||number) LIKE upper(?2)||'%') AND (?3='' OR state=?3) AND (?4='' OR (?4='personal' AND team_id IS NULL) OR team_id=?4) AND (?5='' OR ?5 IN (SELECT value FROM json_each(labels))) AND ((?6=0 AND archived_at IS NULL) OR (?6=1 AND archived_at IS NOT NULL)) AND (?7 IS NULL OR id<?7) AND (?8='' OR project=?8) ORDER BY id DESC LIMIT 21`, [actor,q,state,team,label,Number(archived),before,project]);
     },
     async createTask(actor,fields) {
       const {team=null,assignee=null,title,description,project,state,priority,labels,requestID}=fields, mutation=crypto.randomUUID();
+      const scope = team ? await one(`SELECT name FROM teams WHERE id=?2 AND ${role('teams.id')} IN ('owner','admin','member')`,[actor,team]) : await one('SELECT name FROM accounts WHERE id=?1',[actor]);
+      if (!scope) return null;
+      await ensureTaskPrefix(db,{accountId:team?null:actor,teamId:team,name:scope.name});
       const values=[actor,team,assignee,title,description,project,state,priority,JSON.stringify(labels),requestID,mutation,now()];
       await mutate(`INSERT INTO tasks(account_id,team_id,assignee_id,title,description,project,state,priority,labels,request_id,mutation_id,created_at,updated_at) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12 WHERE (?2 IS NULL OR ${role('?2')} IN ('owner','admin','member')) AND ${validAssignee} AND (?3 IS NULL OR ?3=?1 OR ${role('?2')} IN ('owner','admin')) AND ${validLabels} ON CONFLICT(account_id,request_id) DO NOTHING RETURNING *`, values, {actor,team,action:'task.created',subject:mutation});
       return one(`SELECT * FROM tasks WHERE account_id=?1 AND request_id=?2 AND ${readSQL()}`, [actor,requestID]);

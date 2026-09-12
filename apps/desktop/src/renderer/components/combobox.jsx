@@ -18,15 +18,17 @@ export function Combobox({ label, value, onChange, options = [], disabled = fals
     if (!open) return;
     const place = () => {
       const box = field.current.getBoundingClientRect();
+      if (!box.width || !box.height) { setOpen(false); return; }
       const below = innerHeight - box.bottom - 12, above = box.top - 12;
       const upward = below < 180 && above > below;
       const width = Math.min(Math.max(box.width, 210), innerWidth - 24);
       setPosition({ left: Math.max(12, Math.min(box.left, innerWidth - width - 12)), width, maxHeight: Math.max(60, Math.min(250, upward ? above : below)), ...(upward ? { bottom: innerHeight - box.top + 5 } : { top: box.bottom + 5 }) });
     };
     place();
+    const observer = new ResizeObserver(place); observer.observe(field.current);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+    return () => { observer.disconnect(); window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
   }, [open]);
   useEffect(() => {
     if (!open) return;

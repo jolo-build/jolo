@@ -107,7 +107,7 @@ function DesktopWorkspace() {
   const onBrowserOpen = useCallback((id) => { for (const [other, controller] of controllers.current) if (other !== id) controller.closeBrowser(); }, []);
   useEffect(() => window.jolo.onBrowserOpen(({ workspaceId, expiresAt }) => {
     if (Date.now() >= expiresAt) throw new Error('browser open request expired');
-    if (document.querySelector('dialog[open], .settings-page')) throw new Error('close the host dialog before opening the browser');
+    if (document.querySelector('dialog[open]:not(.mermaid-full-window), .settings-page')) throw new Error('close the host dialog before opening the browser');
     const [id, controller] = browserTarget(controllers.current, workspaceId, layoutRef.current.active);
     if (layoutRef.current.zoom && layoutRef.current.zoom !== id) dispatch({ type: 'zoom', id: layoutRef.current.zoom });
     dispatch({ type: 'focus', id });

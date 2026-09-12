@@ -14,9 +14,12 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
   assert(await evaluate("!document.querySelector('dialog[open]') && document.querySelector('.pane-canvas').inert"), 'settings must be a dedicated page with the workspace retained behind it');
   await waitFor("['Claude Code', 'Codex', 'Grok CLI'].every(name => [...document.querySelectorAll('.agent-model-row')].find(row => row.querySelector('h2')?.textContent === name)?.querySelector('.agent-model-note')?.textContent.includes('models available'))", 'installed agents load their models automatically', 20_000);
   assert(await evaluate("document.querySelector('.settings-savebar').textContent.includes('All changes saved')"), 'automatic model discovery must not change saved preferences');
-  await evaluate("document.querySelector('[aria-label=\"Choose effort for grok cli\"]').click()");
-  assert(await evaluate("['low', 'high'].every(value => document.querySelector('.combobox-options [data-value=\"' + value + '\"]'))"), 'reasoning efforts must load without clicking Refresh models');
-  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))");
+  assert(await evaluate("['low', 'high'].every(value => document.querySelector('[aria-label=\"Effort for Grok CLI\"] option[value=\"' + value + '\"]'))"), 'reasoning effort choices load automatically');
+  assert(await evaluate("document.querySelectorAll('.agent-preferences input').length === 0"), 'agent model and effort controls must be selection-only');
+  await evaluate("(() => {const select=document.querySelector('[aria-label=\"Model for Codex\"]');select.value='fake-large';select.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  assert(await evaluate("document.querySelector('[aria-label=\"Model for Codex\"]').selectedOptions[0].textContent === 'Fake Large'"), 'selected model shows its readable name');
+  await evaluate("document.querySelector('.settings-savebar button[type=submit]').click()");
+  await waitFor("window.__joloSmoke.hostedAgents().find(agent=>agent.id==='codex')?.model === 'fake-large'", 'selection-only model choice saved');
   report.checks.push('Settings automatically loaded every installed agent and its reasoning efforts without changing saved preferences');
   const themeBefore = nativeTheme.themeSource, sizeBefore = window.getSize();
   try {
@@ -56,7 +59,7 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
     await evaluate("[...document.querySelectorAll('.settings-provider-tabs button')].find(button => button.textContent === 'Smoke Model').click()");
     await evaluate("[...document.querySelectorAll('.settings-provider button')].find(button => button.textContent === 'Find models').click()");
     await waitFor("document.querySelector('.settings-provider [role=status]')?.textContent.includes('models available')", 'raw model discovery');
-    await evaluate("(() => { const input = document.querySelector('.settings-provider [role=combobox]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'test-model'); input.dispatchEvent(new Event('input', {bubbles:true})); })()");
+    await evaluate("(() => { const input = document.querySelector('.settings-provider [aria-label=\"Model for Jolo\"]'); input.value='test-model'; input.dispatchEvent(new Event('change', {bubbles:true})); })()");
     await evaluate("[...document.querySelectorAll('.settings-provider button')].find(button => button.textContent === 'Use as default').click()");
     await waitFor("document.querySelector('.settings-provider [role=status]')?.textContent.includes('Default model saved')", 'raw model saved');
     assert(await evaluate("window.jolo.call('settings.get', {}).then(r => r.ok && r.result.settings.model.preset === 'smoke-model' && r.result.settings.model.model === 'test-model' && r.result.settings.model.contextWindowTokens === null)"), 'model selection or automatic limits were not saved');

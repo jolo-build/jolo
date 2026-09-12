@@ -5,7 +5,7 @@ import { taskListPage, taskViewPage, taskFormPage, teamsPage, teamPage, labelsPa
 import { canManage, canWriteTask, canCommentTask } from './permissions.js';
 import { TaskError, value, optional, choice, revision, taskFields, commentBody, labelFields, inviteFields, uuid } from './validation.js';
 import { formValue, readForm, hashToken } from '../security.js';
-import { taskKey, TASK_STATES } from '../../../../packages/protocol/src/tasks.js';
+import { taskKey, taskPrefix, TASK_STATES } from '../../../../packages/protocol/src/tasks.js';
 import { deliverMail, invitationEmail, mailConfigured } from '../mail.js';
 
 const html = (body,status=200) => new Response(body,{status,headers:{'Content-Type':'text/html; charset=utf-8'}});
@@ -82,23 +82,23 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           return html(await taskForm(account,null,team,error.message,fields??formDraft(form)),error.status);
         }
       }
-      const scoped=/^\/(?:api\/)?tasks\/(accounts|teams)\/([a-f0-9-]{36})\/(JOLO-[1-9][0-9]{0,14})(?=\/|$)/i.exec(path);
+      const scoped=/^\/(?:api\/)?tasks\/(accounts|teams)\/([a-f0-9-]{36})\/([A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14})(?=\/|$)/i.exec(path);
       const routePath=scoped?path.replace(`/${scoped[1]}/${scoped[2]}/`, '/'):path;
       const findTask=async key => {
-        const number=Number(key.slice(5));
+        const [prefix,sequence]=key.split('-'),number=Number(sequence);
         if(scoped) {
           if(!uuid(scoped[2])) return null;
-          return repo.scopedTask(actor,number,scoped[1].toLowerCase(),scoped[2]);
+          const row=await repo.scopedTask(actor,number,scoped[1].toLowerCase(),scoped[2]);
+          // A legacy scoped JOLO link still identifies exactly one old workspace.
+          return row && (prefix==='JOLO' || row.prefix===prefix) ? row : null;
         }
-        // Old web links retain their original row identity; new links always carry a workspace.
-        if(!api) return repo.task(actor,number);
+        // Preserve old web URLs whose JOLO suffix was the global database row ID.
+        if(!api&&prefix==='JOLO') return repo.task(actor,number);
         const team=url.searchParams.get('team')??'';
         if(team&&team!=='personal') await selectedTeam(actor,team);
-        const matches=await repo.taskNumber(actor,number,team);
-        if(matches.length>1) fail(409,`${key} exists in more than one workspace. Select a workspace or use the task's full link.`);
-        return matches[0]??null;
+        return repo.prefixedTask(actor,prefix,number,team);
       };
-      const commentMatch=/^\/tasks\/(JOLO-[1-9][0-9]{0,14})\/comments(?:\/([1-9][0-9]{0,14})\/(edit|delete))?$/i.exec(routePath);
+      const commentMatch=/^\/tasks\/([A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14})\/comments(?:\/([1-9][0-9]{0,14})\/(edit|delete))?$/i.exec(routePath);
       if(commentMatch&&request.method==='POST') {
         const key=taskKey(commentMatch[1]),id=commentMatch[2]?Number(commentMatch[2]):null,action=commentMatch[3]?.toLowerCase();
         const task=key?await findTask(key):null;
@@ -130,7 +130,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           return html(await taskView(account,latest,await selectedTeam(actor,latest.team_id),error.message,{before:id?id+1:null,draft}),error.status);
         }
       }
-      const taskMatch=/^\/(?:api\/)?tasks\/(JOLO-[1-9][0-9]{0,14})(?:\/(edit|archive|restore))?$/i.exec(routePath);
+      const taskMatch=/^\/(?:api\/)?tasks\/([A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14})(?:\/(edit|archive|restore))?$/i.exec(routePath);
       if(taskMatch) {
         const key=taskKey(taskMatch[1]),action=taskMatch[2]?.toLowerCase();
         if(!key) fail(404,'Task not found.');
@@ -139,7 +139,7 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
         if(api) { if(task.archived_at||action) fail(404,'Task not found.'); return Response.json({task:await serialize(actor,task)}); }
         const team=await selectedTeam(actor,task.team_id);
         if(request.method==='GET') {
-          if(!scoped) return redirect(`${taskPath(task)}${action?'/'+action:''}${url.search}`);
+          if(!scoped || scoped[3]!==taskKeyOf(task)) return redirect(`${taskPath(task)}${action?'/'+action:''}${url.search}`);
           if(!action) {
             const before=url.searchParams.has('comments_before')?Number(url.searchParams.get('comments_before')):null;
             if(before!==null&&(!Number.isSafeInteger(before)||before<1)) fail(400,'Invalid comment page.');
@@ -172,8 +172,20 @@ export function taskRoutes({env,config,repository:auth,session,now,mailFetch}) {
           }
         }
       }
-      if(path==='/teams'&&request.method==='GET') return html(teamsPage(account,await repo.teams(actor),await repo.invitations(actor,account.email.toLowerCase())));
-      if(path==='/teams'&&request.method==='POST') { const team=changed(await repo.createTeam(actor,value(form,'name',100,true))); return redirect(`/teams/${team.id}`); }
+      if(path==='/teams'&&request.method==='GET') return html(teamsPage(account,await repo.teams(actor),await repo.invitations(actor,account.email.toLowerCase()),null,null,(await repo.personalPrefix(actor))?.prefix));
+      if(path==='/teams'&&request.method==='POST') {
+        let draft={name:'',prefix:''};
+        try {
+          draft={name:value(form,'name',100,true),prefix:optional(form,'prefix',24)??''};
+          if(draft.prefix&&!taskPrefix(draft.prefix)) fail(400,'Use 2–24 letters or digits for the prefix, starting with a letter.');
+          const team=await repo.createTeam(actor,draft.name,draft.prefix||null);
+          if(!team) fail(409,'Choose an available prefix. An account can own up to 50 teams.');
+          return redirect(`/teams/${team.id}`);
+        } catch(error) {
+          if(!(error instanceof TaskError)) throw error;
+          return html(teamsPage(account,await repo.teams(actor),await repo.invitations(actor,account.email.toLowerCase()),error.message,draft,(await repo.personalPrefix(actor))?.prefix),error.status);
+        }
+      }
       const accept=/^\/invitations\/([a-f0-9-]{36})\/accept$/.exec(path);
       if(accept&&request.method==='POST') {
         const member=await repo.accept(actor,accept[1],account.email.toLowerCase());

@@ -1,5 +1,8 @@
 // Small, static icon set. No icon runtime or font is loaded by the renderer.
 const paths = {
+  zoomIn: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6M10.5 7.5v6',
+  zoomOut: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6',
+  bolt: 'm13 2-9 12h7l-1 8 10-13h-7l1-7Z',
   circle: 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z', pause: 'M8 5v14M16 5v14',
   worktree: 'M12 3v7M5 14v-4h14v4M2 14h6v6H2ZM16 14h6v6h-6Z',
   archive: 'M3 3h18v5H3ZM5 8v13h14V8M10 12h4',

@@ -3,6 +3,7 @@ import { BrowserBroker } from '../../apps/engine/src/browser/broker.js';
 import { ToolDispatcher } from '../../apps/engine/src/tools/dispatcher.js';
 import { createBrowserOpener } from '../../apps/desktop/src/main/browser-opener.js';
 import { browserTarget } from '../../apps/desktop/src/renderer/browser-target.js';
+import { HostDialogs } from '../../apps/desktop/src/main/host-dialogs.js';
 import { createRpcHandlers } from '../../apps/engine/src/rpc/handlers.js';
 
 const connection = () => ({ closeHooks: new Set(), notifications: [], notify(method, params) { this.notifications.push({ method, params }); } });
@@ -45,18 +46,49 @@ test('cancel, closed workspace, timeout, and disconnect settle pending opens and
   }
 });
 
-function desktopFixture() {
+function desktopFixture(waitForDialog = false) {
   const calls = [], messages = [], listeners = new Set(), hosts = new Map();
-  let overlay = false;
+  const dialogs = new HostDialogs();
   const bridge = { async rawCall(method, params) { calls.push({ method, params }); return {}; } };
-  const opener = createBrowserOpener({ bridge, agent: { hosts, onRegistered(listener) { listeners.add(listener); } }, send: (method, params) => messages.push({ method, params }), isOverlayActive: () => overlay, log: { warn() {} } });
+  const opener = createBrowserOpener({ bridge, agent: { hosts, onRegistered(listener) { listeners.add(listener); } }, send: (method, params) => messages.push({ method, params }), isOverlayActive: () => dialogs.active, waitForOverlay: waitForDialog ? signal => dialogs.wait(signal) : null, log: { warn() {} } });
   const registerHost = (workspaceId = 'ws') => {
     hosts.set(1, { workspaceId, capabilityId: 'cap', guest: { isDestroyed: () => false } });
     for (const listener of listeners) listener();
   };
   opener.setWorkspaces({ workspaceIds: ['ws'] });
-  return { opener, calls, messages, registerHost, overlay: value => { overlay = value; } };
+  return { opener, calls, messages, registerHost, dialogs, overlay: value => dialogs.set(value) };
 }
+
+test('browser opening waits for approval UI and resumes once without changing the original lease', async () => {
+  const f = desktopFixture(true);
+  f.overlay(true);
+  f.opener.handleOpen({ invocationId:'approval', workspaceId:'ws', leaseMs:1000 });
+  expect(f.messages).toHaveLength(0);
+  expect(f.calls).toHaveLength(0);
+  expect(f.dialogs.listeners.size).toBe(1);
+  f.overlay(false);
+  await Promise.resolve();
+  expect(f.messages[0].method).toBe('jolo:browserOpen');
+  f.opener.acknowledge({ invocationId:'approval' });
+  f.registerHost();
+  expect(f.calls.at(-1).params).toEqual({invocationId:'approval',capabilityId:'cap'});
+  expect(f.dialogs.listeners.size).toBe(0);
+});
+
+test('cancel, expiry, workspace removal and disconnect prevent late opens after approval', async () => {
+  for (const action of ['cancel','expiry','workspace','disconnect']) {
+    const f = desktopFixture(true);
+    f.overlay(true);
+    f.opener.handleOpen({ invocationId:action, workspaceId:'ws', leaseMs:action==='expiry'?10:1000 });
+    if (action==='cancel') f.opener.handleCancel({invocationId:action});
+    if (action==='workspace') f.opener.setWorkspaces({workspaceIds:[]});
+    if (action==='disconnect') f.opener.onDisconnected();
+    if (action==='expiry') await Bun.sleep(25);
+    f.overlay(false); await Promise.resolve();
+    expect(f.messages.some(message=>message.method==='jolo:browserOpen')).toBe(false);
+    expect(f.dialogs.listeners.size).toBe(0);
+  }
+});
 
 test('run admission waits until the latest pane list is registered with the engine', async () => {
   const calls = [];

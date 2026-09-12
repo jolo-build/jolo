@@ -1,13 +1,16 @@
+import { ensureTaskPrefix } from './tasks/prefixes.js';
 export function createRepository(db, now = Date.now) {
   return {
     async account(identity, provider = 'github') {
       if (!['github', 'google'].includes(provider)) throw new Error('Unknown identity provider');
       // Link by immutable provider ID, never by a matching email address.
-      return db.prepare(`INSERT INTO accounts (id, provider_key, provider, email, name, created_at, updated_at)
+      const account = await db.prepare(`INSERT INTO accounts (id, provider_key, provider, email, name, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider_key) DO UPDATE SET
         email = excluded.email, name = excluded.name, updated_at = excluded.updated_at
         RETURNING id, email, name, created_at`)
         .bind(crypto.randomUUID(), `${provider}:${identity.id}`, provider, identity.email, identity.name, now(), now()).first();
+      await ensureTaskPrefix(db, {accountId:account.id, name:account.name});
+      return account;
     },
     async saveFlow(hash, challenge, expiresAt, returnTo = null) {
       await db.prepare('INSERT INTO login_flows (token_hash, state, verifier, expires_at, return_to, provider, nonce) VALUES (?, ?, ?, ?, ?, ?, ?)')

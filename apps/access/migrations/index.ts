@@ -4,6 +4,7 @@ import tasksTeams from './0003_tasks_teams.ts';
 import mailOutbox from './0004_mail_outbox.ts';
 import googleAuth from './0005_google_auth.ts';
 import taskComments from './0006_task_comments.ts';
+import taskPrefixes from './0008_task_prefixes.ts';
 import workspaceTaskNumbers from './0007_workspace_task_numbers.ts';
 
 export interface D1Migration {
@@ -20,4 +21,5 @@ export const migrations: readonly D1Migration[] = Object.freeze([
   { name: '0005_google_auth.sql', sql: googleAuth },
   { name: '0006_task_comments.sql', sql: taskComments },
   { name: '0007_workspace_task_numbers.sql', sql: workspaceTaskNumbers },
+  { name: '0008_task_prefixes.sql', sql: taskPrefixes },
 ]);

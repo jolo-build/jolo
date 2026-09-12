@@ -8,7 +8,7 @@ export function AccountPanel({ account, connected, busy, error, server, onServer
       <div className="settings-card-heading"><div><h2>{account.account.name}</h2><p>{account.account.email}</p></div><span className="hint">Signed in</span></div>
       <p className="hint">This profile is connected as {account.device.name}.</p>
       {account.source === 'session' && <p className="hint" role="status">Your OS keychain is unavailable. This sign-in lasts only while the engine runs.</p>}
-      <p className="hint">{account.device.scopes?.includes('tasks:read') ? 'Task access is connected. Type #JOLO- in chat to select a web task.' : 'Approve task access to reference your web tasks in chat.'}</p>
+      <p className="hint">{account.device.scopes?.includes('tasks:read') ? 'Task access is connected. Type # in chat to select a web task, or reference its ID, such as #CYPHO-2.' : 'Approve task access to reference your web tasks in chat.'}</p>
       <div className="account-actions">{account.device.scopes?.includes('tasks:read') ? <button type="button" onClick={() => onOpen(`${account.origin}/tasks`)}>Open tasks</button> : <button type="button" disabled={busy} onClick={onConnectTasks}>Connect tasks</button>}<button type="button" disabled={busy} onClick={() => onOpen(`${account.origin}/devices`)}>Manage devices</button><button type="button" disabled={busy} onClick={onRefresh}>Refresh account</button><button type="button" disabled={busy} onClick={onLogout}>Sign out</button></div>
     </> : pending ? <>
       <h2>Approve this device</h2><p>Sign in in your browser, then confirm that the code matches.</p>

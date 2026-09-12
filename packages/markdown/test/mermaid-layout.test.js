@@ -101,6 +101,29 @@ describe("laying a diagram out", () => {
     expect(laid.links.filter((link) => link.edge.from === "A" && link.edge.to === "A")).toHaveLength(0);
   });
 
+  test("mixed-size boxes keep connector labels in separate lanes outside the entire layer", () => {
+    for (const direction of ["TD", "BT", "LR", "RL"]) {
+      const laid = flow(`flowchart ${direction}
+        A[Short] -->|Version-matched WebSocket routes| D[Service]
+        B[General worker\\nPython / TypeScript / flows] -->|Claim and update jobs| D
+        C[Protected environment\\nmode 0600\\nConfiguration] -->|Bounded, authenticated calls| D`, { lane: 22 });
+      const labels = laid.links.filter(link => link.label).map(({label}) => ({
+        x: label.align === "end" ? label.x - label.text.length * 8 - 16 : label.x,
+        y: label.y - 8, w: label.text.length * 8 + 16, h: 16,
+      }));
+      expect(labels).toHaveLength(3);
+      for (let i = 0; i < labels.length; i++) {
+        for (const other of labels.slice(i + 1)) expect(overlap(labels[i], other)).toBe(false);
+        for (const node of laid.nodes) expect(overlap(labels[i], node)).toBe(false);
+      }
+      for (const link of laid.links) {
+        for (const node of laid.nodes.filter(node => node.id !== link.edge.from && node.id !== link.edge.to)) {
+          for (let i = 1; i < link.points.length; i++) expect(crosses(link.points[i - 1], link.points[i], node)).toBe(false);
+        }
+      }
+    }
+  });
+
   test("a sequence diagram becomes columns and a run of things that happen down the page", () => {
     const model = parseMermaid(`sequenceDiagram
       participant U as User

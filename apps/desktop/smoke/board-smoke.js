@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { nativeTheme } from 'electron';
+import { dialog, nativeTheme } from 'electron';
 
 export async function runBoardSmoke({ window, bridge, project, results, evaluate, waitFor, report }) {
   const alpha = await bridge.rawCall('project.open', { path: project });
@@ -95,4 +95,28 @@ export async function runBoardSmoke({ window, bridge, project, results, evaluate
   report.checks.push('workspace board renders in both themes and at narrow widths without overflow or nested buttons');
   const { runWorkspaceSidebarSmoke } = await import('./workspace-sidebar-smoke.js');
   await runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitFor, results, report, alpha, beta, worktree, made, other });
+  // Exercise the real button and IPC bridge; substitute only the OS folder picker.
+  const originalDialog = dialog.showOpenDialog;
+  try {
+    await evaluate('window.__joloSmoke.showBoard()');
+    await waitFor("document.querySelector('.board-add')", 'folder button available');
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [betaPath] });
+    await evaluate("document.querySelector('.board-add').click()");
+    await waitFor(`window.__joloSmoke.state().view === 'task' && window.__joloSmoke.state().workspaceId === ${JSON.stringify(beta.workspaceId)} && document.querySelector('.composer textarea')`, 'Open folder leaves Workspaces and shows the selected project');
+    const selected = await evaluate('window.__joloSmoke.state().projectId');
+    await evaluate('window.__joloSmoke.showBoard()');
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+    await evaluate("document.querySelector('.board-add').click()");
+    await evaluate('new Promise(resolve=>setTimeout(resolve,100))');
+    if (!(await evaluate(`window.__joloSmoke.state().view === 'board' && window.__joloSmoke.state().projectId === ${JSON.stringify(selected)}`))) throw new Error('Canceling folder selection changed the current view or project');
+    dialog.showOpenDialog = async () => { throw new Error('Folder picker unavailable'); };
+    await evaluate("document.querySelector('.board-add').click()");
+    await waitFor("document.querySelector('[role=alert]')?.textContent.includes('Folder picker unavailable')", 'folder picker errors are visible');
+    await evaluate("document.querySelector('[aria-label=\"Dismiss error\"]').click()");
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path.join(betaPath, 'missing-folder')] });
+    await evaluate("document.querySelector('.board-add').click()");
+    await waitFor("document.querySelector('[role=alert]') && window.__joloSmoke.state().view === 'board'", 'failed project open remains on the board with an error');
+    report.checks.push('Open folder navigates from Workspaces into the selected project; cancellation preserves the view and picker/project errors are visible');
+  } finally { dialog.showOpenDialog = originalDialog; }
+
 }

@@ -41,8 +41,8 @@ test('saved history exposes a load action, progress, and retryable errors', () =
 
 describe('conversation activity', () => {
   const agents = [
-    { id: 'codex', displayName: 'Codex', model: 'codex-model' },
-    { id: 'claude', displayName: 'Claude Code', model: 'claude-model' },
+    { id: 'codex', displayName: 'Codex', model: 'gpt-6-astra' },
+    { id: 'claude', displayName: 'Claude Code', model: 'claude-opus-4-6' },
   ];
   /**
    * Renders a conversation whose one run is still going, which is the only state these cases care
@@ -55,40 +55,40 @@ describe('conversation activity', () => {
   const renderWorking = (run = {}, messages = [reasoning({ runId: 'active', status: 'streaming' })], props = {}) => renderToStaticMarkup(<Conversation
     {...(/** @type {ConversationProps} */ ({
       projection: { ordered: () => messages, runs: new Map([['active', { id: 'active', state: 'model', ...run }]]) },
-      hasProject: true, changesCount: 0, assistantName: 'Codex', assistantAgentId: 'codex', providerModel: 'jolo-model', agents,
+      hasProject: true, changesCount: 0, assistantName: 'Codex', assistantAgentId: 'codex', providerModel: 'gpt-5.6-sol', agents,
     }))} {...props}
   />);
 
   test('a called-in agent and its model label one thinking indicator', () => {
     const html = renderWorking({ agentId: 'claude' });
-    expect(html).toContain('Thinking… · Claude Code · claude-model');
+    expect(html).toContain('Thinking… · Claude Code · Opus');
     expect(html.match(/role="status"/g)).toHaveLength(1);
     expect(html).not.toContain('Working · Codex');
   });
 
   test('saved run overrides identify the guest and model before its answer arrives', () => {
     const html = renderWorking({ execution: { agentId: 'claude', model: 'task-specific-model' } }, []);
-    expect(html).toContain('Working · Claude Code · task-specific-model');
-    expect(html).not.toContain('claude-model');
+    expect(html).toContain('Working · Claude Code · Task Specific Model');
+    expect(html).not.toContain('Opus');
   });
 
   test('tool activity uses the usual agent when no guest is called in', () => {
     const html = renderWorking({ state: 'tools' }, [{ id: 'tool', runId: 'active', role: 'tool', kind: 'tool', text: 'run_command bun test', status: 'streaming' }]);
     expect(html).toContain('Task activity · 1 action');
-    expect(html).toContain('Using tools · Codex · codex-model');
+    expect(html).toContain('Using tools · Codex · GPT 6 Astra');
     expect(html.match(/activity-spin/g)).toHaveLength(1);
   });
 
   test('calling Jolo into a hosted task uses Jolo’s provider model', () => {
     const html = renderWorking({ agentId: 'jolo' });
-    expect(html).toContain('Thinking… · Jolo · jolo-model');
-    expect(html).not.toContain('codex-model');
+    expect(html).toContain('Thinking… · Jolo · GPT 5.6 Sol');
+    expect(html).not.toContain('GPT 6 Astra');
   });
 
   test('an unknown model is labeled as the default without borrowing another provider’s model', () => {
     const html = renderWorking({ agentId: 'claude' }, undefined, { agents: [{ id: 'claude', displayName: 'Claude Code', model: null }] });
     expect(html).toContain('Thinking… · Claude Code · Default model');
-    expect(html).not.toContain('jolo-model');
+    expect(html).not.toContain('GPT 5.6 Sol');
   });
 
   test('neighboring activity from separate runs retains its own attribution', () => {
@@ -98,7 +98,7 @@ describe('conversation activity', () => {
     ]);
     expect(html.match(/class="activity-group"/g)).toHaveLength(2);
     expect(html).toContain('Task activity · Reasoning');
-    expect(html).toContain('Thinking… · Claude Code · claude-model');
+    expect(html).toContain('Thinking… · Claude Code · Opus');
   });
 
   test('background tools spanning commentary keep separate groups but one task progress indicator', () => {
@@ -110,7 +110,7 @@ describe('conversation activity', () => {
     expect(html.match(/class="activity-group"/g)).toHaveLength(2);
     expect(html.match(/Task activity · 1 action/g)).toHaveLength(2);
     expect(html.match(/activity-spin/g)).toHaveLength(1);
-    expect(html.match(/Using tools · Codex · codex-model/g)).toHaveLength(1);
+    expect(html.match(/Using tools · Codex · GPT 6 Astra/g)).toHaveLength(1);
     expect(html).not.toContain('Working ·');
     expect(html).toContain('command long-build');
     expect(html).toContain('command check-results');

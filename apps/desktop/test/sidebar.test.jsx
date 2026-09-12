@@ -37,7 +37,7 @@ test('nested chats show the latest answerer, progress and checkout details', () 
   expect(html).toContain('Fix parser');
   expect(html).toContain('Done');
   expect(html).toContain('Codex');
-  expect(html).toContain('>Codex · gpt-6-astra</span>');
+  expect(html).toContain('>Codex · GPT 6 Astra</span>');
   expect(html).toContain('aria-label="Done"');
   expect(html).toContain('>codex/parser</span>');
   expect(html).toContain('title="Worktree: /work/parser"');

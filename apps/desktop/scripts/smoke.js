@@ -6,9 +6,12 @@ import os from "node:os";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
 const splits = process.argv.includes("--splits");
+if (process.argv.includes('--mermaid')) process.env.JOLO_MERMAID_SMOKE = '1';
+if (process.argv.includes('--host-dialogs')) process.env.JOLO_HOST_DIALOG_SMOKE = '1';
 const chats = process.argv.includes('--chats');
 if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 if (process.argv.includes('--reload')) process.env.JOLO_RELOAD_SMOKE = '1';
+if (process.argv.includes('--zoom')) process.env.JOLO_ZOOM_SMOKE = '1';
 if (process.argv.includes('--panels')) process.env.JOLO_PANELS_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
@@ -17,6 +20,7 @@ const visualization = process.argv.includes('--visualization');
 if (visualization) process.env.JOLO_VISUALIZATION_SMOKE = '1';
 const workspaceBoard = process.argv.includes('--board');
 if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
+if (process.argv.includes('--model-controls')) process.env.JOLO_MODEL_CONTROLS_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
 if (process.argv.includes('--history')) process.env.JOLO_HISTORY_SMOKE = '1';
 const browserChat = process.argv.includes('--browser-chat');
@@ -90,6 +94,20 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const visualizationPath = path.join(realpathSync(project), 'preview.html');
+if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
+  'flowchart TD',
+  '  A[Workflow authors] -->|HTTPS after DNS is configured| D[Caddy reverse proxy\\nonly published entry point]',
+  '  B[Operator workstation] -->|SSH tunnel localhost:8080| E[General worker ×1\\nPython / TypeScript / flows]',
+  '  C[Protected environment\\nmode 0600] --> E',
+  '  A -->|Scoped token + HTTPS| D',
+  '  D -->|UI and API| F[Windmill server\\nUI + API]',
+  '  D -->|Version-matched WebSocket routes| F',
+  '  E -->|Claim and update jobs| F',
+  '  C -->|Bounded, authenticated calls| G[Approved external APIs\\nand internal services]',
+  '  F -->|Definitions, users, jobs and results| H[PostgreSQL\\nplatform state + job queue]',
+  '  H --> I[Daily backup job\\nquiesce → pg_dumpall → encrypt\\n→ checksum]',
+  '  I -->|Required for host-loss protection| J[Encrypted off-host storage]',
+].join('\n') + '\n```\n');
 if (visualization) writeFileSync(visualizationPath, `<div style="padding:20px"><h2>Interactive preview</h2><p>Local visualization fixture.</p><button id="increment" onclick="document.querySelector('#count').textContent=String(++window.count)">Increment</button><output id="count">0</output></div><script>window.count=0;</script>`);
 const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({path:visualizationPath,mode:'wide',title:'Interactive preview'})}\n\nAnd a missing file:\n\nvisualize${JSON.stringify({path:path.join(realpathSync(project),'missing-preview.html')})}`;
 const scriptPath = path.join(home, "script.json");

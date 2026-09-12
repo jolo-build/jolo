@@ -103,7 +103,7 @@ async function checkForms() {
   const fill = values => contents.executeJavaScript(`Object.entries(${JSON.stringify(values)}).forEach(([name,value]) => { document.querySelector('[name="'+name+'"]').value=value; })`);
   await window.loadURL(origin + '/teams');
   await fit('teams', ['form[action="/teams"] button']);
-  await fill({name:'Jolo Core'}); await submit('form[action="/teams"] button');
+  await fill({name:'Jolo Core',prefix:'CYPHO'}); await submit('form[action="/teams"] button');
   assert.match(await text(), /TEAM · owner/);
   const team = new URL(contents.getURL()).pathname.split('/').at(-1);
   await fit('team detail', ['form[action$="/invite"] button']);
@@ -130,7 +130,8 @@ async function checkForms() {
   await fill({title:'Preserve task drafts after sign-in',description:'When sign-in expires, preserve the task description and selected labels.\n\nVerify the browser flow and add a regression check.',project:'Jolo',priority:'high'});
   await contents.executeJavaScript('document.querySelector("[name=label]").checked=true');
   await submit('button[form="task-edit"]');
-  assert.match(await text(), /JOLO-1/);
+  assert.match(await text(), /CYPHO-1/);
+  assert.match(await text(), /@codex fix #CYPHO-1/);
   const taskPath=new URL(contents.getURL()).pathname;
   assert.equal(await contents.executeJavaScript('document.querySelector("#task-edit")'),null,'Creating a task should open its detail view');
   await submit(`a[href="${taskPath}/edit"]`);

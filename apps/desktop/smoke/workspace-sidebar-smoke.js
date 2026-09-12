@@ -65,14 +65,14 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
       return Math.abs(left('.sidebar-workspace-name') - x) < 1
         && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x) < 1
         && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-chat-details`)}) - x) < 1
-        && task.getBoundingClientRect().height === 50
+        && task.getBoundingClientRect().height === 42
         && task.querySelector('.sidebar-task-progress[aria-label="Ready"]');
     })()`);
     if (!aligned) throw new Error('sidebar icon/text columns or compact task row height are inconsistent');
     writeFileSync(path.join(results, 'workspace-sidebar-narrow.png'), (await window.webContents.capturePage()).toPNG());
   } finally { window.setSize(...size); nativeTheme.themeSource = theme; }
   const { run } = await bridge.rawCall('run.start', { sessionId: selectedNew, requestId: 'folder-animation', prompt: 'Show ongoing folder activity' });
-  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-progress.working`)}) && document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-answerer`)})?.textContent === 'Jolo · fake'`, 'working task shows progress and the captured model');
+  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-progress.working`)}) && document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-answerer`)})?.textContent === 'Jolo · Fake'`, 'working task shows progress and the captured model');
   await evaluate(`(() => { const button = document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle'); if (button.getAttribute('aria-expanded') === 'true') button.click(); })()`);
   await waitFor(`document.querySelector(${worktreeGroup}).querySelector('.workspace-folder.working') && !document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-chats')`, 'collapsed folder shows work with a status dot');
   const point = await evaluate(`(() => { const r = document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);

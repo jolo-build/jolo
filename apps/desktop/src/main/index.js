@@ -19,6 +19,7 @@ import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
 import { installReloadShortcuts } from './reload-shortcuts.js';
+import { HostDialogs } from './host-dialogs.js';
 
 protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }]);
 
@@ -66,7 +67,7 @@ class EngineBridge {
     this.agent = null; // browser agent, attached after construction
     this.browserOpener = null;
     this.attention = null; // notifications and the dock badge, attached after construction
-    this.overlayActive = false;
+    this.hostDialogs = new HostDialogs();
     this.paths = resolvePaths({ home: process.env.JOLO_HOME, profile: process.env.JOLO_PROFILE });
     this.client = null;
     this.connecting = null;
@@ -262,7 +263,7 @@ function registerIpc(window, bridge, visualizations, releases) {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) return shell.openExternal(url); } catch { /* ignore */ }
     return false;
   });
-  ipcMain.on("jolo:overlay", (event, active) => { if (trusted(event)) bridge.overlayActive = Boolean(active); });
+  ipcMain.on("jolo:overlay", (event, active) => { if (trusted(event)) bridge.hostDialogs.set(active); });
   ipcMain.handle("jolo:resync", (event) => {
     if (!trusted(event)) throw new Error("untrusted sender");
     bridge.relay.reset();
@@ -317,9 +318,11 @@ app.whenReady().then(async () => {
   releases?.start();
   window.once("closed", () => releases?.stop());
   registerIpc(window, bridge, visualizations, releases);
-  const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive: () => bridge.overlayActive });
+  const isOverlayActive = () => bridge.hostDialogs.active;
+  const waitForOverlay = signal => bridge.hostDialogs.wait(signal);
+  const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive, waitForOverlay });
   bridge.agent = agent;
-  bridge.browserOpener = createBrowserOpener({ bridge, agent, log, isOverlayActive: () => bridge.overlayActive,
+  bridge.browserOpener = createBrowserOpener({ bridge, agent, log, isOverlayActive, waitForOverlay,
     send: (channel, params) => { if (!window.isDestroyed()) window.webContents.send(channel, params); },
   });
   bridge.attention = createAttention({ bridge, window, log, smoke: SMOKE });

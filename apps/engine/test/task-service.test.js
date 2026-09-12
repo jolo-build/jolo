@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { taskReferences, taskLinkReferences, taskKey, taskContext } from '@jolo/protocol/tasks';
+import { taskReferences, taskLinkReferences, taskKey, taskPrefix, taskContext } from '@jolo/protocol/tasks';
 import { TaskService } from '../src/account/tasks.js';
 import { askedOf, recentHistory } from '../src/agents/history.js';
 import { createRpcHandlers } from '../src/rpc/handlers.js';
@@ -20,6 +20,51 @@ test('only explicit task IDs outside code, escapes and URLs are resolved, with s
   expect(taskReferences('word#JOLO-1 #JOLO-0 #JOLO-01 #JOLO-1x #JOLO-1234567890123456')).toEqual([]);
   expect(taskReferences('[link](#JOLO-1) file://local/(#JOLO-2) #JOLO-3')).toEqual(['JOLO-3']);
   expect(taskKey('../../secret')).toBeNull();
+});
+test('workspace prefixes normalize case and reject malformed or partial ticket IDs',()=>{
+  expect(taskPrefix(' cypho ')).toBe('CYPHO');
+  expect(taskKey('team2-123')).toBe('TEAM2-123');
+  expect(taskPrefix('A'.repeat(24))).toHaveLength(24);
+  for(const prefix of ['A','2TEAM','MY-TEAM','MY_TEAM','TEÅM','A'.repeat(25)]) expect(taskPrefix(prefix)).toBeNull();
+  expect(taskReferences('@codex #cypho-2 fix (#TEAM2-1), #CYPHO-2.')).toEqual(['CYPHO-2','TEAM2-1']);
+  expect(taskReferences('`#CYPHO-1` \\#CYPHO-2 https://example.com/#CYPHO-3\n```\n#TEAM-4\n```\n    #TEAM-5\n#TEAM-6')).toEqual(['TEAM-6']);
+  expect(taskReferences('word#TEAM-1 #T-1 #TEAM-0 #TEAM-01 #TEAM-1x #MY-TEAM-1 #TEAM_1 #'+ 'A'.repeat(25)+'-1')).toEqual([]);
+});
+test('short IDs from different workspaces resolve without a team hint and reject mismatched responses',async()=>{
+  const accountId=crypto.randomUUID(),teamId=crypto.randomUUID(),origin='https://access.example',paths=[];
+  const values=new Map([
+    ['CYPHO-1',{...task(),key:'CYPHO-1',team:{id:teamId,name:'Cypho'}}],
+    ['AHMAD-1',{...task(),key:'AHMAD-1'}],
+  ]);
+  const service=new TaskService({origin,async taskRequest(path) {
+    paths.push(path);
+    return {value:{task:values.get(path.split('/').at(-1))},origin,accountId,current:()=>true};
+  }});
+  const resolved=await service.resolve('@codex fix #cypho-1 and #ahmad-1');
+  expect(paths).toEqual(['/api/tasks/CYPHO-1','/api/tasks/AHMAD-1']);
+  expect(resolved.references.map(t=>t.url)).toEqual([`${origin}/tasks/teams/${teamId}/CYPHO-1`,`${origin}/tasks/accounts/${accountId}/AHMAD-1`]);
+  resolved.assertCurrent();
+  values.set('CYPHO-1',{...task(),key:'AHMAD-1'});
+  await expect(service.get({key:'CYPHO-1'})).rejects.toThrow('validate');
+});
+test('legacy scoped links accept a migrated prefix only for the same number and workspace',async()=>{
+  const accountId=crypto.randomUUID(),teamId=crypto.randomUUID(),otherId=crypto.randomUUID(),origin='https://access.example';
+  let value={...task(),key:'CYPHO-1',team:{id:teamId,name:'Cypho'}},responseOrigin=origin;
+  const service=new TaskService({origin,async taskRequest() {
+    return {value:{task:value},origin:responseOrigin,accountId,current:()=>true};
+  }});
+  const url=`${origin}/tasks/teams/${teamId}/JOLO-1`;
+  expect((await service.resolve(url)).references[0].url).toBe(`${origin}/tasks/teams/${teamId}/CYPHO-1`);
+  value={...value,key:'CYPHO-2'};
+  await expect(service.resolve(url)).rejects.toThrow('validate');
+  value={...value,key:'CYPHO-1',team:{id:otherId,name:'Other'}};
+  await expect(service.resolve(url)).rejects.toThrow('validate');
+  value={...value,team:{id:teamId,name:'Cypho'}};
+  responseOrigin='https://other.example';
+  await expect(service.resolve(url)).rejects.toThrow('validate');
+  responseOrigin=origin;
+  await expect(service.resolve(url.replace('JOLO-1','WRONG-1'))).rejects.toThrow('validate');
+  await expect(service.get({key:'JOLO-1'})).rejects.toThrow('validate');
 });
 test('references are bounded before requests, validated, and frozen as user data without changing routing',async()=>{
   const f=fixture();

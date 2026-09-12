@@ -1,3 +1,4 @@
+import { modelLabel } from '../model-options.js';
 import { relativeTime } from '@jolo/client/board';
 import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
@@ -19,7 +20,7 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
   const id = answerer?.id ?? (task.run?.execution?.preset ? 'jolo' : task.run?.execution?.agentId ?? task.agentId ?? 'jolo');
   const name = answerer?.displayName || (id === 'jolo' ? 'Jolo' : agentName(id));
   const model = answerer?.model ?? task.run?.execution?.model;
-  const identity = [name, model].filter(Boolean).join(' · ');
+  const identity = [name, modelLabel(model)].filter(Boolean).join(' · ');
   const branch = standalone ? null : target?.git?.branch ?? task.branch ?? target?.workspace?.branch;
   const worktree = !standalone && (task.mode ?? target?.workspace?.mode) === 'worktree';
   const workspacePath = target?.workspace?.path;

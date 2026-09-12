@@ -2,9 +2,15 @@ export const TASK_STATES = Object.freeze({ todo: 'Todo', in_progress: 'In progre
 export const TASK_PRIORITIES = Object.freeze(['low', 'normal', 'high', 'urgent']);
 export const LABEL_COLORS = Object.freeze(['gray', 'blue', 'green', 'yellow', 'red', 'purple']);
 export const TASK_LIMITS = Object.freeze({ references: 4, contextBytes: 32 * 1024, descriptionBytes: 8192, labels: 8 });
+export const TASK_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{1,23}$/i;
+export const TASK_KEY_PATTERN = /^[A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14}$/i;
+export function taskPrefix(value) {
+  const prefix = String(value ?? '').trim().toUpperCase();
+  return TASK_PREFIX_PATTERN.test(prefix) ? prefix : null;
+}
 export function taskKey(value) {
-  const match = /^JOLO-([1-9][0-9]{0,14})$/i.exec(String(value ?? ''));
-  return match && Number.isSafeInteger(Number(match[1])) ? `JOLO-${match[1]}` : null;
+  const key = String(value ?? '').toUpperCase();
+  return TASK_KEY_PATTERN.test(key) && Number.isSafeInteger(Number(key.split('-')[1])) ? key : null;
 }
 export function accountScopes(value = 'account:read') {
   if (typeof value !== 'string') return null;
@@ -26,10 +32,10 @@ function taskProse(prompt) {
 }
 export function taskReferences(prompt) {
   const prose = taskProse(prompt).replace(/\]\([^\n)]*\)/g, ']()').replace(/(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+/gi, '');
-  return [...new Set([...prose.matchAll(/(?:^|[\s(\[])#(JOLO-[1-9][0-9]{0,14})(?![\w-])/gi)].map(match => taskKey(match[1])).filter(Boolean))];
+  return [...new Set([...prose.matchAll(/(?:^|[\s(\[])#([A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14})(?![\w-])/gi)].map(match => taskKey(match[1])).filter(Boolean))];
 }
 
-// A full task link identifies its workspace even when several tasks share JOLO-1.
+// Scoped links also preserve the workspace identity of legacy JOLO references.
 // Only links to the connected account service are eligible for authenticated reads.
 export function taskLinkReferences(prompt, origin) {
   const links = new Map();
@@ -37,7 +43,7 @@ export function taskLinkReferences(prompt, origin) {
     let url;
     try { url = new URL(match[0].replace(/[.,;!?)\]]+$/, '')); } catch { continue; }
     if (url.origin !== origin || url.username || url.password) continue;
-    const parts = /^\/tasks\/(accounts|teams)\/([a-f0-9-]{36})\/(JOLO-[1-9][0-9]{0,14})$/i.exec(url.pathname);
+    const parts = /^\/tasks\/(accounts|teams)\/([a-f0-9-]{36})\/([A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14})$/i.exec(url.pathname);
     if (!parts || !taskKey(parts[3])) continue;
     const path = `/tasks/${parts[1].toLowerCase()}/${parts[2]}/${taskKey(parts[3])}`;
     links.set(path, { key: taskKey(parts[3]), kind: parts[1].toLowerCase(), scope: parts[2], path, origin });

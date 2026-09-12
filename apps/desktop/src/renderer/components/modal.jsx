@@ -9,9 +9,10 @@ import { useEffect, useRef } from 'react';
  *   onKeyDown?: import('react').KeyboardEventHandler<HTMLDialogElement>,
  *   initialFocus?: { current: HTMLElement | null },
  *   className?: string,
+ *   style?: import('react').CSSProperties,
  * }} props `onKeyDown` and `initialFocus` belong to dialogs with a primary action; most have neither.
  */
-export function Modal({ children, label, onClose, onKeyDown, initialFocus, className = '' }) {
+export function Modal({ children, label, onClose, onKeyDown, initialFocus, className = '', style }) {
   const dialog = useRef(null);
   const backdropPress = useRef(false);
   const close = useRef(onClose);
@@ -35,7 +36,7 @@ export function Modal({ children, label, onClose, onKeyDown, initialFocus, class
       if (previous?.isConnected) previous.focus();
     };
   }, []);
-  return <dialog ref={dialog} className={`modal ${className}`} aria-label={label}
+  return <dialog ref={dialog} className={`modal ${className}`} style={style} aria-label={label}
     onKeyDown={onKeyDown}
     onPointerDown={(event) => { backdropPress.current = event.button === 0 && isBackdrop(event); }}
     onPointerCancel={() => { backdropPress.current = false; }}

@@ -17,13 +17,14 @@ export class TaskService {
   /** @param {string} key @param {{team?:string,link?:ReturnType<typeof taskLinkReferences>[number]}} [options] */
   async read(key, {team, link} = {}) {
     const normalized=taskKey(key);
-    if(!normalized) throw new ProtocolError('invalid_params','Use a task ID such as JOLO-123.');
+    if(!normalized) throw new ProtocolError('invalid_params','Use a task ID such as CYPHO-123.');
     const result=await this.account.taskRequest(link ? `/api${link.path}` : `/api/tasks/${normalized}${team?'?team='+encodeURIComponent(team):''}`);
     let task;
     try {
       task=WebTaskSchema.parse(result.value.task);
       if ((team && (task.team?.id ?? 'personal') !== team) || (link && (result.origin !== link.origin || (link.kind === 'teams' ? task.team?.id !== link.scope : task.team !== null || result.accountId !== link.scope)))) throw new Error();
-      if(task.key!==normalized||task.archivedAt||Buffer.byteLength(task.description)>TASK_LIMITS.descriptionBytes) throw new Error();
+      const legacyLink = link && normalized.startsWith('JOLO-') && task.key.split('-')[1] === normalized.split('-')[1];
+      if((task.key!==normalized&&!legacyLink)||task.archivedAt||Buffer.byteLength(task.description)>TASK_LIMITS.descriptionBytes) throw new Error();
     } catch { throw new ProtocolError('unavailable',`Could not validate ${normalized}. Refresh the task and try again.`); }
     return {...result,task:{...task,url:`${result.origin}${webTaskPath(task,result.accountId)}`}};
   }

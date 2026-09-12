@@ -1,3 +1,4 @@
+import { modelLabel } from '../model-options.js';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { engineCall } from '../engine-context.jsx';
@@ -63,7 +64,7 @@ function UsageButton({ usage, answererName }) {
 }
 /** The agents a message can call in by name, matching what has been typed after "@" (§6.5). */
 function mentionable(agents, typed, answerer) {
-  const options = [{ id: "jolo", name: "Jolo", detail: "Jolo's own loop" }, ...agents.filter((entry) => entry.available && entry.transport !== "pty").map((entry) => ({ id: entry.id, name: entry.displayName, detail: entry.model ?? "" }))];
+  const options = [{ id: "jolo", name: "Jolo", detail: "Jolo's own loop" }, ...agents.filter((entry) => entry.available && entry.transport !== "pty").map((entry) => ({ id: entry.id, name: entry.displayName, detail: modelLabel(entry.model) }))];
   const query = typed.toLowerCase();
   return options.filter((option) => option.id !== (answerer ?? "jolo") && (option.id.startsWith(query) || option.name.toLowerCase().startsWith(query))).slice(0, 6);
 }
@@ -74,7 +75,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
+export function Composer({ standalone = false, disabled, autoFocusOnType = false, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
@@ -126,7 +127,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   const [highlight, setHighlight] = useState(0);
   const [listAt, setListAt] = useState(null);
   const typed = disabled ? null : typingMention(text, caret);
-  const taskMatch = !disabled && /(?:^|[\s(\[])#(JOLO-[0-9]*)$/i.exec(text.slice(0, caret));
+  const taskMatch = !disabled && /(?:^|[\s(\[])#([A-Z][A-Z0-9]{0,23}(?:-[0-9]{0,15})?|)$/i.exec(text.slice(0, caret));
   const taskQuery = taskMatch ? taskMatch[1].toUpperCase() : null;
   const [taskResults, setTaskResults] = useState({ query: null, tasks: [], error: '' });
   useEffect(() => {
@@ -151,7 +152,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     if (!option) return;
     if (option.task) {
       const start = caret - taskQuery.length - 1;
-      const insert = `${option.id} `;
+      const insert = `#${option.key} `;
       setText(text.slice(0, start) + insert + text.slice(caret));
       setCaret(0);
       requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + insert.length, start + insert.length); });
@@ -247,7 +248,7 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
       <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton usage={usage} answererName={answerer ?? answererName} />
-      <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button><span className="grow" />
+      {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}

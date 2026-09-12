@@ -1,3 +1,4 @@
+import { modelLabel } from '../model-options.js';
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./icon.jsx";
 
@@ -30,7 +31,7 @@ function answerer(task, plan, catalog) {
   const agentId = task.agentId ?? policy.agentId ?? null;
   const model = task.model ?? (task.agentId ? null : policy.model) ?? null;
   const name = agentId ? catalog.find((entry) => entry.id === agentId)?.displayName ?? agentId : "Jolo";
-  return [name, model].filter(Boolean).join(" · ");
+  return [name, modelLabel(model)].filter(Boolean).join(" · ");
 }
 
 function TaskRow({ plan, task, catalog, onCall, onOpen }) {
@@ -103,7 +104,7 @@ function NewPlan({ catalog, onCreate, onCancel }) {
       <label>Answered by
         <select value={agentId} onChange={(event) => setAgentId(event.target.value)} aria-label="Who answers these tasks">
           <option value="">Jolo</option>
-          {catalog.filter((entry) => entry.transport !== "pty" && entry.available).map((entry) => <option key={entry.id} value={entry.id}>{entry.displayName}{entry.model ? ` · ${entry.model}` : ""}</option>)}
+          {catalog.filter((entry) => entry.transport !== "pty" && entry.available).map((entry) => <option key={entry.id} value={entry.id}>{entry.displayName}{entry.model ? ` · ${modelLabel(entry.model)}` : ""}</option>)}
         </select>
       </label>
       <div className="plan-new-actions">

@@ -2,14 +2,15 @@ import { ProviderModels } from './provider-models.jsx';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
-import { Combobox } from './combobox.jsx';
+import { AgentLogo } from './brand.jsx';
 import { FONT_DEFAULTS, readFonts, saveFonts } from '../fonts.js';
+import { modelLabel, effortLabel } from '../model-options.js';
 import { AccountSettings } from './account-settings.jsx';
 
 
 const sections = [
   { id: 'account', label: 'Account', icon: 'shield', description: 'Connect your Jolo account and manage this device.' },
-  { id: 'agents', label: 'Coding agents', icon: 'agents', description: 'Choose how each installed agent answers your tasks.' },
+  { id: 'agents', label: 'Coding agents', icon: 'agents', description: 'Your agents, configured for the way you work.' },
   { id: 'provider', label: 'Models', icon: 'settings', description: 'Connect the model Jolo uses to answer your prompts.' },
   { id: 'appearance', label: 'Appearance', icon: 'board', description: 'Make your workspace comfortable to read.' },
   { id: 'about', label: 'About', icon: 'circleCheck', description: 'Which Jolo this is, and whether a newer one has been released.' },
@@ -71,25 +72,33 @@ function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
     }
   }, [agents, onDiscover, discover]);
   return <div className="settings-agent-list">
+    <div className="agent-list-summary"><span>Agent preferences</span><span>{configurable.filter(agent => agent.available).length} installed</span></div>
     {!configurable.length && <p className="hint">No configurable agents are available yet.</p>}
     {configurable.map(agent => {
       const entry = form[agent.id] ?? { model: '', effort: '' };
       const report = found[agent.id];
-      return <section key={agent.id} className="settings-card agent-model-row" aria-label={agent.displayName}>
-        <div className="settings-card-heading">
-          <div><h2>{agent.displayName}</h2><span className="hint">{agent.available ? 'Installed' : 'Not installed'}</span></div>
-          <button type="button" className="outline" disabled={disabled || !agent.available || asking[agent.id]} onClick={() => discover(agent.id, true)} title={`Refresh available models and reasoning efforts from ${agent.displayName}`}><Icon name="refresh" size={13} />{asking[agent.id] ? 'Loading…' : 'Refresh models'}</button>
+      return <section key={agent.id} className="agent-model-row" aria-label={agent.displayName}>
+        <div className="agent-identity">
+          <span className="agent-avatar" aria-hidden="true"><AgentLogo agentId={agent.id} /></span>
+          <div><h2>{agent.displayName}</h2><span className={`agent-install-state ${agent.available ? 'installed' : ''}`}><i />{agent.available ? 'Installed' : 'Not installed'}</span></div>
+          <button type="button" className="agent-refresh" aria-label={`Refresh models for ${agent.displayName}`} disabled={disabled || !agent.available || asking[agent.id]} onClick={() => discover(agent.id, true)} title={`Refresh models for ${agent.displayName}`}><Icon name="refresh" size={14} /></button>
         </div>
-        <div className="settings-field-grid">
-          {agent.supportsModel && <label>Model<Combobox label={`Model for ${agent.displayName}`} value={entry.model} disabled={disabled} onChange={model => onChange(agent.id, { ...entry, model })}
-            options={(report?.models ?? []).map(model => ({ value: model.id, label: model.displayName || model.id, description: model.displayName && model.displayName !== model.id ? model.id : undefined }))} /></label>}
-          {agent.supportsEffort && <label>Reasoning effort<Combobox label={`Effort for ${agent.displayName}`} value={entry.effort} disabled={disabled} onChange={effort => onChange(agent.id, { ...entry, effort })}
-            options={(report?.efforts ?? []).map(effort => ({ value: effort, label: effort }))} /></label>}
+        <div className="settings-field-grid agent-preferences">
+          {agent.supportsModel && <label>Model<Select aria-label={`Model for ${agent.displayName}`} value={entry.model} disabled={disabled} onChange={event => onChange(agent.id, { ...entry, model: event.target.value })}>
+            <option value="">Default</option>
+            {entry.model && !report?.models?.some(model => model.id === entry.model) && <option value={entry.model}>{modelLabel(entry.model)}</option>}
+            {(report?.models ?? []).map(model => <option key={model.id} value={model.id}>{modelLabel(model.displayName || model.id)}</option>)}
+          </Select></label>}
+          {agent.supportsEffort && <label>Reasoning effort<Select aria-label={`Effort for ${agent.displayName}`} value={entry.effort} disabled={disabled} onChange={event => onChange(agent.id, { ...entry, effort: event.target.value })}>
+            <option value="">Default</option>
+            {entry.effort && !report?.efforts?.includes(entry.effort) && <option value={entry.effort}>{effortLabel(entry.effort)}</option>}
+            {(report?.efforts ?? []).map(effort => <option key={effort} value={effort}>{effortLabel(effort)}</option>)}
+          </Select></label>}
         </div>
-        {(asking[agent.id] || report) && <p className="hint agent-model-note" role="status">{asking[agent.id] ? 'Loading models and reasoning efforts…' : report.note ?? `${report.models.length} model${report.models.length === 1 ? '' : 's'} available from ${agent.displayName}.`}</p>}
+        {(asking[agent.id] || report) && <p className="hint agent-model-note" role="status">{asking[agent.id] ? 'Loading models and reasoning efforts…' : report.note ?? `${report.models.length} model${report.models.length === 1 ? '' : 's'} available`}</p>}
       </section>;
     })}
-    <p className="hint">Choose Default to use the agent’s own settings. You can also enter a custom model or effort.</p>
+    <p className="hint agent-default-hint">Choose a model and effort level. Default follows each agent’s own settings.</p>
   </div>;
 }
 

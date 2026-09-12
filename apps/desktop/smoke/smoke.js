@@ -46,6 +46,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_MODEL_CONTROLS_SMOKE === '1') {
+    const { runModelControlsSmoke } = await import('./model-controls-smoke.js');
+    try {
+      await runModelControlsSmoke({window,bridge,evaluate,waitFor,report,results});
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_PANELS_SMOKE === '1') {
     const { runContextPanelsSmoke } = await import('./context-panels-smoke.js');
     try {
@@ -58,6 +66,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     const { runReloadSmoke } = await import('./reload-smoke.js');
     try {
       await runReloadSmoke({ window, bridge, browserHost, project, fixtureUrl, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_ZOOM_SMOKE === '1') {
+    const { runZoomSmoke } = await import('./zoom-smoke.js');
+    try {
+      await runZoomSmoke({ window, browserHost, fixtureUrl, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }
     return;
@@ -126,7 +142,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     return;
   }
   const { runSidebarSmoke } = await import('./sidebar-smoke.js');
-  await runSidebarSmoke({ window, results, project, evaluate, waitFor, report });
+  if (process.env.JOLO_MERMAID_SMOKE !== '1') await runSidebarSmoke({ window, results, project, evaluate, waitFor, report });
   await waitFor("window.__joloSmoke.state().projectId", 'project restored after sidebar reload');
   if (process.env.JOLO_SPLIT_SMOKE === "1") {
     const { runSplitSmoke } = await import("./split-smoke.js");
@@ -135,7 +151,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     return;
   }
   const { runSettingsSmoke } = await import('./settings-smoke.js');
-  await runSettingsSmoke({ window, results, evaluate, waitFor, report });
+  if (process.env.JOLO_MERMAID_SMOKE !== '1') await runSettingsSmoke({ window, results, evaluate, waitFor, report });
   if (process.env.JOLO_MODELS_SMOKE === '1') {
     writeFileSync(path.join(results, 'smoke.json'), `${JSON.stringify(report, null, 2)}\n`);
     fixture.close();
@@ -174,7 +190,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     }
     const emptyHeight = await evaluate("document.querySelector('.composer textarea').clientHeight");
     await setDraft(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
-    const grows = await evaluate(`(() => { const input = document.querySelector('.composer textarea'); return input.clientHeight > ${emptyHeight} && input.clientHeight <= 160 && input.scrollHeight > input.clientHeight; })()`);
+    const grows = await evaluate(`(() => { const input = document.querySelector('.composer textarea'); return input.clientHeight > ${emptyHeight} && input.clientHeight <= 240 && input.scrollHeight > input.clientHeight; })()`);
     if (!grows) throw new Error("draft did not grow to a bounded, scrollable textarea");
     await setDraft("");
     if (await evaluate("document.querySelector('.composer textarea').clientHeight") !== emptyHeight) throw new Error("cleared draft did not shrink");
@@ -218,6 +234,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     })()`);
     for (const word of ["User", "Jolo", "run task", "needs you", "loop retry", "again"]) if (!sequence.labels.includes(word)) throw new Error(`sequence diagram is missing ${word}: ${JSON.stringify(sequence.labels)}`);
     if (sequence.lifelines !== 2 || sequence.messages !== 3 || sequence.rails !== 1) throw new Error(`sequence diagram is not drawn as expected: ${JSON.stringify(sequence)}`);
+    if (await evaluate("Boolean(document.querySelector('.md-diagram .mermaid-zoom'))")) throw new Error('zoom controls must only appear in the full-window viewer');
     writeFileSync(path.join(results, "mermaid.png"), (await window.webContents.capturePage()).toPNG());
     // The same diagram in the other theme: it takes its colours from the app rather than baking them in.
     nativeTheme.themeSource = "dark";
@@ -228,6 +245,198 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor('document.querySelector(".md-diagram pre code")?.textContent.startsWith("flowchart LR")', "mermaid source view");
     await evaluate('document.querySelector(".md-diagram .md-embed-toggle").click()');
     report.checks.push("mermaid fences in the reply were drawn as SVG diagrams, a flowchart and a sequence diagram, in both themes and with their source one click away");
+
+    await waitFor("document.querySelector('.md-diagram [aria-label=\"Open full-window diagram\"]')", 'diagram restored after source view');
+    await evaluate("(() => {const button=document.querySelector('.md-diagram [aria-label=\"Open full-window diagram\"]');button.focus();button.click();})()");
+    await waitFor("document.querySelector('.mermaid-full-window[open] .mermaid-svg')?.getBoundingClientRect().width > 20", 'full-window viewer opens');
+    const fullWidth = await evaluate("document.querySelector('.mermaid-full-window .mermaid-svg').getBoundingClientRect().width");
+    const fullLayout = await evaluate("(() => {const dialog=document.querySelector('.mermaid-full-window'),canvas=dialog.querySelector('.mermaid-full-canvas'),svg=dialog.querySelector('svg.mermaid-svg'),r=dialog.getBoundingClientRect();return r.width===innerWidth && r.height===innerHeight && svg.getBoundingClientRect().width<=canvas.clientWidth && svg.getBoundingClientRect().height<=canvas.clientHeight;})()");
+    if (!fullLayout) throw new Error('full-window diagram does not fit the viewport');
+    await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Zoom in diagram\"]').click()");
+    await waitFor(`document.querySelector('.mermaid-full-window output').textContent === '125%' && document.querySelector('.mermaid-full-window .mermaid-svg').getBoundingClientRect().width > ${fullWidth * 1.2}`, 'full-window zoom controls work');
+    window.focus();
+    await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Zoom out diagram\"]').focus()");
+    window.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});
+    window.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '100%'", 'full-window keyboard zoom works');
+    await evaluate("(() => {const button=document.querySelector('.mermaid-full-window [aria-label=\"Zoom in diagram\"]');for(let i=0;i<15;i++) button.click();})()");
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '400%' && document.querySelector('.mermaid-full-window [aria-label=\"Zoom in diagram\"]').disabled", 'full-window zoom is bounded');
+    if (!(await evaluate("(() => {const canvas=document.querySelector('.mermaid-full-canvas');canvas.scrollLeft=100;return canvas.scrollWidth>canvas.clientWidth && canvas.scrollLeft>0;})()"))) throw new Error('zoomed diagram cannot scroll');
+    await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Fit diagram\"]').click()");
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '100%'", 'full-window fit restores scale');
+    await evaluate("(() => { const button=document.querySelector('.mermaid-full-window [aria-label=\"Zoom in diagram\"]'); for(let i=0;i<4;i++) button.click(); })()");
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '200%'", 'prepare trackpad zoom');
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    const pinchPoint = await evaluate(`(() => {
+      const canvas=document.querySelector('.mermaid-full-canvas'), svg=canvas.querySelector('svg');
+      const bounds=canvas.getBoundingClientRect(), diagram=svg.getBoundingClientRect();
+      const x=bounds.left+bounds.width/2, y=bounds.top+bounds.height/2;
+      const event=new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-Math.log(1.25)/.01,clientX:x,clientY:y});
+      canvas.dispatchEvent(event);
+      return {x,y,u:(x-diagram.left)/diagram.width,v:(y-diagram.top)/diagram.height,prevented:event.defaultPrevented};
+    })()`);
+    if (!pinchPoint.prevented) throw new Error('trackpad pinch allows the whole page to zoom');
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '250%'", 'trackpad pinch zooms in');
+    const pinchDrift = await evaluate(`(() => {
+      const point=${JSON.stringify(pinchPoint)}, rect=document.querySelector('.mermaid-full-window .mermaid-svg').getBoundingClientRect();
+      return Math.max(Math.abs(rect.left+point.u*rect.width-point.x),Math.abs(rect.top+point.v*rect.height-point.y));
+    })()`);
+    if (pinchDrift > 2) throw new Error(`trackpad pinch moved its anchor by ${pinchDrift}px`);
+    const scrollAllowed = await evaluate(`(() => {
+      const event=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:30});
+      document.querySelector('.mermaid-full-canvas').dispatchEvent(event);
+      return !event.defaultPrevented && document.querySelector('.mermaid-full-window output').textContent==='250%';
+    })()`);
+    if (!scrollAllowed) throw new Error('ordinary trackpad scrolling was intercepted as zoom');
+    for (const [deltaY, expected] of [[1000, '50%'], [-1000, '400%']]) {
+      await evaluate(`document.querySelector('.mermaid-full-canvas').dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:${deltaY}}))`);
+      await waitFor(`document.querySelector('.mermaid-full-window output').textContent === '${expected}'`, 'trackpad zoom respects bounds');
+    }
+    await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Fit diagram\"]').click()");
+    await waitFor("document.querySelector('.mermaid-full-window output').textContent === '100%'", 'fit resets trackpad zoom');
+    report.checks.push('Trackpad pinch events zoom around the pointer, prevent page zoom, respect bounds, and preserve ordinary two-finger scrolling');
+    writeFileSync(path.join(results, 'mermaid-full-window.png'), (await window.webContents.capturePage()).toPNG());
+    window.focus();
+    window.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});
+    window.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
+    await waitFor("!document.querySelector('.mermaid-full-window') && document.activeElement?.getAttribute('aria-label') === 'Open full-window diagram'", 'Escape closes viewer and restores focus');
+    await evaluate("document.querySelector('.md-diagram [aria-label=\"Open full-window diagram\"]').click()");
+    await waitFor("document.querySelector('.mermaid-full-window[open]')", 'viewer reopens');
+    await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Close diagram\"]').click()");
+    await waitFor("!document.querySelector('.mermaid-full-window')", 'close button dismisses viewer');
+    report.checks.push('Full-window diagram fits both axes, includes working zoom controls and fit, and closes with Escape or its close button while restoring focus');
+
+    if (process.env.JOLO_MERMAID_SMOKE === '1') {
+      const debug = window.webContents.debugger;
+      const attached = debug.isAttached();
+      if (!attached) debug.attach('1.3');
+      const originalZoom = window.webContents.getZoomFactor();
+      const originalSize = window.getSize();
+      try {
+        await evaluate("document.querySelectorAll('.md-diagram .mermaid-viewport')[2].scrollIntoView({block:'center'})");
+        await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+        for (const deltaY of [-140, 140]) {
+          const target = await evaluate(`(() => {
+            const chart=document.querySelectorAll('.md-diagram .mermaid-viewport')[2], chat=document.querySelector('.conversation');
+            const a=chart.getBoundingClientRect(), b=chat.getBoundingClientRect();
+            return {x:(Math.max(a.left,b.left)+Math.min(a.right,b.right))/2,y:(Math.max(a.top,b.top)+Math.min(a.bottom,b.bottom))/2,top:chat.scrollTop};
+          })()`);
+          await debug.sendCommand('Input.dispatchMouseEvent', {type:'mouseWheel',x:target.x,y:target.y,deltaX:0,deltaY});
+          await waitFor(`document.querySelector('.conversation').scrollTop ${deltaY < 0 ? '<' : '>'} ${target.top}`, 'wheel over inline chart scrolls the conversation');
+          if (await evaluate("document.querySelectorAll('.md-diagram .mermaid-viewport')[2].scrollTop !== 0")) throw new Error('inline diagram consumed the conversation scroll');
+        }
+        report.checks.push('Real wheel input over an inline diagram scrolls the chat in both directions without a nested scroll trap');
+        window.setSize(1216, 1019);
+        await window.webContents.setVisualZoomLevelLimits(1, 3);
+        for (const [pageZoom, pinchZoom] of [[1, 1], [1.2, 1], [1.44, 1], [1.728, 1], [2.0736, 1], [2.48832, 1], [1, 1.5], [1.25, 2]]) {
+          window.webContents.setZoomFactor(pageZoom);
+          await debug.sendCommand('Emulation.setPageScaleFactor', { pageScaleFactor: pinchZoom });
+          await evaluate("document.querySelectorAll('.md-diagram')[2].scrollIntoView({block:'center'})");
+          if (pinchZoom > 1) await debug.sendCommand('Input.synthesizeScrollGesture', { x: 200, y: 200, xDistance: -120, yDistance: -100, gestureSourceType: 'touch' });
+          const before = await evaluate('({x:visualViewport.offsetLeft,y:visualViewport.offsetTop,scale:visualViewport.scale})');
+          await evaluate("document.querySelectorAll('.md-diagram [aria-label=\"Open full-window diagram\"]')[2].click()");
+          await waitFor("document.querySelector('.mermaid-full-window[open]')", 'viewer opens over zoomed chat');
+          await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+          const visible = await evaluate(`(() => {
+            const vv=visualViewport, dialog=document.querySelector('.mermaid-full-window');
+            const bounds=dialog.getBoundingClientRect(), title=dialog.querySelector('.mermaid-full-heading > span');
+            const text=document.createRange(); text.selectNodeContents(title);
+            const titleBounds=text.getBoundingClientRect();
+            return {scale:vv.scale, width:vv.width, height:vv.height, dialogWidth:bounds.width, dialogHeight:bounds.height,
+              titleLeft:titleBounds.left-vv.offsetLeft, titleCenter:(titleBounds.left+titleBounds.right)/2-vv.offsetLeft,
+              fits:[title,dialog.querySelector('.mermaid-full-heading button'),dialog.querySelector('.mermaid-full-controls')].every(node=>{
+                const rect=node.getBoundingClientRect();
+                return rect.left>=vv.offsetLeft-1 && rect.top>=vv.offsetTop-1 && rect.right<=vv.offsetLeft+vv.width+1 && rect.bottom<=vv.offsetTop+vv.height+1;
+              })};
+          })()`);
+          if (Math.abs(visible.scale - pinchZoom) > .01) throw new Error('pinch zoom was not applied: '+JSON.stringify(visible));
+          if (!visible.fits) throw new Error('viewer controls clipped over zoomed chat: '+JSON.stringify(visible));
+          if (Math.abs(visible.titleCenter-visible.width/2)>1) throw new Error('diagram title is not centered in the visible window: '+JSON.stringify(visible));
+          if (process.platform==='darwin' && visible.titleLeft*pageZoom*pinchZoom<96) throw new Error('diagram title overlaps the Mac window controls: '+JSON.stringify(visible));
+          const samples = await evaluate(`(async () => {
+            const frames=[];
+            for(let i=0;i<30;i++) {
+              await new Promise(requestAnimationFrame);
+              const vv=visualViewport, dialog=document.querySelector('.mermaid-full-window'), canvas=dialog.querySelector('.mermaid-full-canvas'), r=dialog.getBoundingClientRect();
+              frames.push({x:r.x,y:r.y,w:r.width,h:r.height,vx:vv.offsetLeft,vy:vv.offsetTop,cw:canvas.clientWidth,ch:canvas.clientHeight,sw:canvas.scrollWidth,sh:canvas.scrollHeight});
+            }
+            return frames;
+          })()`);
+          writeFileSync(path.join(results, `mermaid-zoom-${pageZoom}-${pinchZoom}.json`), JSON.stringify({before,visible,samples},null,2));
+          if (samples.some(sample => sample.sw > sample.cw + 1 || sample.sh > sample.ch + 1)) throw new Error(`fitted diagram creates scrollbars at ${pageZoom}: `+JSON.stringify(samples.slice(0,4)));
+          if (samples.some(sample => JSON.stringify(sample) !== JSON.stringify(samples.at(-1)))) throw new Error(`fitted diagram layout is unstable at ${pageZoom}: `+JSON.stringify(samples.slice(0,4)));
+          if (pageZoom === 1.44) writeFileSync(path.join(results, 'mermaid-command-plus.png'), (await window.webContents.capturePage()).toPNG());
+          if (pageZoom === 1 && pinchZoom === 1.5) writeFileSync(path.join(results, 'mermaid-zoomed-chat.png'), (await window.webContents.capturePage()).toPNG());
+          await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Close diagram\"]').click()");
+          await waitFor("!document.querySelector('.mermaid-full-window')", 'zoomed viewer closes');
+          if (Math.abs(await evaluate('visualViewport.scale') - pinchZoom) > .01 || Math.abs(window.webContents.getZoomFactor() - pageZoom) > .01) throw new Error('closing the viewer changed chat zoom');
+        }
+      } finally {
+        await debug.sendCommand('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+        await window.webContents.setVisualZoomLevelLimits(1, 1);
+        window.webContents.setZoomFactor(originalZoom);
+        window.setSize(...originalSize);
+        if (!attached) debug.detach();
+      }
+      report.checks.push('Dense full-window diagrams remain stable without scrollbar oscillation at five Command-plus zoom levels (120–249%), and preserve chat zoom and panning on close');
+      await evaluate("document.querySelectorAll('.md-diagram [aria-label=\"Open full-window diagram\"]')[2].click()");
+      await waitFor("document.querySelector('.mermaid-full-window .mermaid-edge-text')?.textContent.includes('HTTPS') && document.querySelector('.mermaid-full-window .mermaid-svg').getBoundingClientRect().width > 200", 'dense diagram opens');
+      const labelCollisions = await evaluate(`(() => {
+        const svg = document.querySelector('.mermaid-full-window .mermaid-svg');
+        const boxes = [...svg.querySelectorAll('.mermaid-label-bg')].map(node => node.getBBox());
+        const nodes = [...svg.querySelectorAll('.mermaid-shape')].map(node => node.getBBox());
+        const overlaps = (a,b) => a.x < b.x+b.width && b.x < a.x+a.width && a.y < b.y+b.height && b.y < a.y+a.height;
+        return boxes.some((box,i) => boxes.slice(i+1).some(other => overlaps(box,other)) || nodes.some(node => overlaps(box,node)));
+      })()`);
+      if (labelCollisions) throw new Error('dense diagram labels overlap each other or a node');
+      const textFits = await evaluate(`(() => {
+        return [...document.querySelectorAll('.mermaid-full-window .mermaid-label-bg')].every(rect => {
+          const text = rect.nextElementSibling, box = rect.getBBox(), label = text.getBBox();
+          return Math.abs(Number(text.getAttribute('x')) - box.x - 4) < 0.1 && label.x >= box.x - 0.1 && label.x + label.width <= box.x + box.width + 0.1;
+        });
+      })()`);
+      if (!textFits) throw new Error('edge-label text has inconsistent padding or exceeds its background');
+      await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+      writeFileSync(path.join(results, 'mermaid-dense-full-window.png'), (await window.webContents.capturePage()).toPNG());
+      if (process.env.JOLO_HOST_DIALOG_SMOKE === '1') {
+        // A passive diagram preview may remain open while an agent uses its browser.
+        await evaluate("window.__joloSmoke.send('Open the inline browser and click the fixture button')");
+        await waitFor("window.__joloSmoke.state().assistantText.includes('Clicked the button.') && window.__joloSmoke.state().runState === 'completed'", 'agent works while diagram is open');
+        if (!(await evaluate("Boolean(document.querySelector('.mermaid-full-window[open]'))"))) throw new Error('browser work dismissed the diagram preview');
+        const guest = [...browserHost.guests.values()][0]?.guest;
+        if (!guest || await guest.executeJavaScript("document.querySelector('button')?.textContent") !== 'Clicked') throw new Error('browser was blocked by diagram preview');
+        report.checks.push('Agent opened, navigated, clicked and captured the real browser while the diagram preview stayed open');
+      }
+      await evaluate("document.querySelector('.mermaid-full-window [aria-label=\"Close diagram\"]').click()");
+      if (process.env.JOLO_HOST_DIALOG_SMOKE === '1') {
+        await evaluate("window.__joloSmoke.send('run a command')");
+        await waitFor("Boolean(document.querySelector('.permission-modal[open]'))", 'real command approval opens');
+        await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+        if (!bridge.hostDialogs.active) throw new Error('pending approval did not block browser input');
+        const host = [...bridge.agent.hosts.values()][0];
+        const rawCall = bridge.rawCall;
+        const replies = [];
+        bridge.rawCall = function(method, params) {
+          if (method === 'browser.result' && params.invocationId === 'smoke-approval-browser') { replies.push(params); return Promise.resolve({accepted:true}); }
+          return rawCall.call(this, method, params);
+        };
+        try {
+          const navigation = bridge.agent.handleExecute({invocationId:'smoke-approval-browser', capabilityId:host.capabilityId, navigationRevision:host.navigationRevision, operation:'navigate', arguments:{url:fixtureUrl+'approved'}, leaseMs:5000});
+          await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+          if (replies.length || host.guest.getURL().endsWith('/approved')) throw new Error('browser navigated before approval');
+          await evaluate("document.querySelector('.permission-modal .primary').click()");
+          await navigation;
+          if (replies.at(-1)?.status !== 'ok') throw new Error('browser did not resume after approval: '+JSON.stringify(replies));
+          await waitFor("!document.querySelector('.permission-modal[open]') && window.__joloSmoke.state().runState === 'completed'", 'approval finishes and browser resumes');
+          if (bridge.hostDialogs.active) throw new Error('approval left a stale host dialog');
+          report.checks.push('Browser navigation waited for a real command approval, then resumed automatically after Allow once');
+        } finally { bridge.rawCall = rawCall; }
+      }
+      report.checks.push('Dense flowchart connector labels remain separate from other labels and node boxes');
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+      fixture.close();
+      return;
+    }
 
     // What the task has cost, in front of the who-answers picker: a ring for how full the window is (§7.2).
     await waitFor("Boolean(document.querySelector('.usage-ring'))", "usage ring sits in the composer");
@@ -551,27 +760,10 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor("document.querySelectorAll('.agent-model-row').length >= 3", "settings offers a model for each hosted agent", 10_000);
     const rowFor = (agentId) => `[...document.querySelectorAll('.agent-model-row')].find((row) => row.querySelector('h2')?.textContent === ${JSON.stringify(agentId)})`;
     await waitFor(`${rowFor("Codex")}.querySelector('.agent-model-note')?.textContent.includes('2 models')`, "Codex models loaded automatically after reopening Settings", 20_000);
-    await evaluate(`${rowFor("Codex")}.querySelector('.combobox button').click()`);
-    await waitFor("Boolean(document.querySelector('.combobox-options'))", "model choices opened");
-    const offered = await evaluate("[...document.querySelectorAll('.combobox-options [role=option]')].map(option => option.dataset.value)");
-    if (!offered.includes("fake-large")) throw new Error(`the agent's own model list did not reach settings: ${JSON.stringify(offered)}`);
-    const settingsTheme = nativeTheme.themeSource;
-    try {
-      for (const theme of /** @type {const} */ (['light', 'dark'])) {
-        nativeTheme.themeSource = theme;
-        await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-        writeFileSync(path.join(results, `settings-model-options-${theme}.png`), (await window.webContents.capturePage()).toPNG());
-      }
-    } finally { nativeTheme.themeSource = settingsTheme; }
-    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
-    await waitFor("!document.querySelector('.combobox-options') && Boolean(document.querySelector('.settings-page'))", 'Escape closes the model list and keeps Settings open');
-    await evaluate(`${rowFor("Codex")}.querySelector('input').focus()`);
-    await window.webContents.insertText('fake-s');
-    await waitFor("document.querySelectorAll('.combobox-options [role=option]').length === 1", 'model search filters the list');
-    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
-    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
-    await waitFor(`${rowFor("Codex")}.querySelector('input').value === 'fake-small' && !document.querySelector('.combobox-options')`, 'Enter selects the matching model');
+    const offered = await evaluate(`${rowFor("Codex")}.querySelector('select').options.length`);
+    if (offered < 3) throw new Error('Agent model options did not reach Settings');
+    await evaluate(`(() => {const select=${rowFor("Codex")}.querySelector('select');select.value='fake-small';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await waitFor(`${rowFor("Codex")}.querySelector('select').value === 'fake-small'`, 'select chooses the model');
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "agent-models.png"), (await window.webContents.capturePage()).toPNG());
     await evaluate("[...document.querySelectorAll('.settings-savebar button')].find((button) => button.textContent === 'Save changes').click()");

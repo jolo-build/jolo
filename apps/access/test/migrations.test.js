@@ -71,3 +71,27 @@ test('Google migration preserves existing accounts, sessions, devices, teams and
     expect(db.query('PRAGMA foreign_key_check').all()).toEqual([]);
   } finally { db.close(); }
 });
+
+test('prefix migration preserves workspace numbers and upgrades existing tasks and audit subjects', () => {
+  const db = new Database(':memory:');
+  try {
+    for (const {sql} of migrations.slice(0,7)) db.exec(sql);
+    for (const id of ['alice','bob']) db.query('INSERT INTO accounts(id,provider_key,email,name,created_at,updated_at) VALUES (?,?,?,?,1,1)').run(id,'github:'+id,id+'@example.com',id);
+    db.exec("INSERT INTO teams(id,owner_id,name,created_at,updated_at) VALUES ('team','alice','Team',1,1)");
+    const insert=db.query('INSERT INTO tasks(account_id,team_id,title,request_id,mutation_id,created_at,updated_at) VALUES (?,?,?,?,?,1,1)');
+    for (const [owner,team] of [['alice',null],['bob',null],['alice','team'],['bob','team']]) insert.run(owner,team,'Task',crypto.randomUUID(),crypto.randomUUID());
+    db.exec("INSERT INTO task_comments(task_id,author_id,body,request_id,created_at,updated_at) VALUES (3,'bob','Keep comment','comment',1,1); UPDATE tasks SET archived_at=2 WHERE id=3; INSERT INTO task_audit(team_id,account_id,actor_id,action,subject,at) VALUES ('team','bob','bob','comment.created','JOLO-1',1)");
+    const before=db.query('SELECT id,account_id,team_id,number,revision,archived_at FROM tasks ORDER BY id').all();
+    db.exec(migrations[7].sql);
+    expect(db.query('SELECT id,account_id,team_id,number,revision,archived_at FROM tasks ORDER BY id').all()).toEqual(before);
+    expect(db.query('SELECT prefix,number FROM tasks ORDER BY id').all()).toEqual([{prefix:'PERSONAL1',number:1},{prefix:'PERSONAL2',number:1},{prefix:'TEAM1',number:1},{prefix:'TEAM1',number:2}]);
+    expect(db.query('SELECT subject FROM task_audit').get().subject).toBe('TEAM1-1');
+    expect(db.query('SELECT body FROM task_comments').get().body).toBe('Keep comment');
+    insert.run('bob','team','Next','next','next');
+    expect(db.query('SELECT prefix,number FROM tasks ORDER BY id DESC LIMIT 1').get()).toEqual({prefix:'TEAM1',number:3});
+    db.exec("INSERT INTO accounts(id,provider_key,email,name,created_at,updated_at) VALUES ('old-worker','github:old','old@example.com','Old',1,1)");
+    insert.run('old-worker',null,'Rollout','rollout','rollout');
+    expect(db.query("SELECT prefix FROM tasks WHERE account_id='old-worker'").get().prefix).toMatch(/^P[A-F0-9]{20}$/);
+    expect(db.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  } finally { db.close(); }
+});

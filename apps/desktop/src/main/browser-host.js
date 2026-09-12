@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { installReloadShortcuts } from './reload-shortcuts.js';
+import { installZoomShortcuts } from './zoom-shortcuts.js';
 // Inline browser host: trusted webview attachment, guest policy, white canvas.
 // Agent control is attached by browser-agent.js; this host enforces guest policy.
 
@@ -9,6 +10,13 @@ const ALLOWED_SCHEMES = new Set(["http:", "https:"]);
 export function installBrowserHost(window, { log, onGuest, sessionForPartition }) {
   const guests = new Map(); // webContents id -> { guest, partition }
   const workspaceBySession = new Map();
+  installZoomShortcuts(window.webContents, factor => {
+    // Electron propagates an embedder's zoom to its guests even in isolated mode.
+    // Preserve each page's own scale when zooming the surrounding interface.
+    const pageZooms = [...guests.values()].map(({ guest }) => [guest, guest.getZoomFactor()]);
+    window.webContents.setZoomFactor(factor);
+    for (const [guest, zoom] of pageZooms) if (!guest.isDestroyed()) guest.setZoomFactor(zoom);
+  });
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     let url;
@@ -41,6 +49,7 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
     const id = guest.id;
     guests.set(id, { guest });
     installReloadShortcuts(guest, window.webContents);
+    installZoomShortcuts(guest);
     // Let Chromium handle wheel/pinch input in this guest. Manual mode suppresses
     // that native path and does not turn keyboard shortcuts into zoom requests.
     guest.setZoomMode('isolated');
@@ -50,14 +59,6 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
     guest.on('ipc-message', (_event, channel, direction) => {
       if (channel !== 'jolo:browser:wheel-zoom' || !['in', 'out'].includes(direction)) return;
       const factor = guest.getZoomFactor() * (direction === 'in' ? 1.1 : 1 / 1.1);
-      guest.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
-    });
-    guest.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || input.alt || !(input.control || input.meta)) return;
-      const key = input.key;
-      if (!['+', '=', '-', '0'].includes(key)) return;
-      event.preventDefault();
-      const factor = key === '0' ? 1 : guest.getZoomFactor() * (key === '-' ? 1 / 1.2 : 1.2);
       guest.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
     });
     guest.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

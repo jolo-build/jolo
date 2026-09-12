@@ -8,7 +8,7 @@ const {unstable_splitSqlQuery:splitSQL}=require('wrangler');
 const {Miniflare,convertV4MiniflareOptions}=wranglerRequire('miniflare');
 const root=new URL('../src/tasks/',import.meta.url);
 const runtime=new Miniflare(convertV4MiniflareOptions({
-  name:'task-runtime',compatibilityDate:'2026-09-09',modulesRoot:fileURLToPath(root),d1Databases:{DB:'task-fixture'},
+  name:'task-runtime',compatibilityDate:'2026-09-09',modulesRoot:fileURLToPath(new URL('../../../../',root)),d1Databases:{DB:'task-fixture'},
   modules:[{type:'ESModule',path:fileURLToPath(new URL('runtime.js',root)),contents:`
     import { taskRepository } from './repository.js';
     import { commentRepository } from './comments.js';
@@ -43,7 +43,7 @@ const runtime=new Miniflare(convertV4MiniflareOptions({
       const personalOwner=await repo.createTask('owner',{...fields,team:null,labels:[],requestID:crypto.randomUUID()});
       const personalMember=await repo.createTask('member',{...fields,team:null,labels:[],requestID:crypto.randomUUID()});
       return Response.json({sequence,personalOwner,personalMember,revision:edited.revision,denied,stale,mail,comment,replay,revised,history,ownOnly,removedComment,deletedReplay,deniedComment,audit});
-    }};`},...['repository.js','permissions.js','comments.js'].map(name=>({type:'ESModule',path:fileURLToPath(new URL(name,root)),contents:readFileSync(new URL(name,root),'utf8')}))],
+    }};`},...['repository.js','permissions.js','comments.js','prefixes.js','../../../../packages/protocol/src/tasks.js'].map(name=>({type:'ESModule',path:fileURLToPath(new URL(name,root)),contents:readFileSync(new URL(name,root),'utf8')}))],
 }));
 try {
   const db=await runtime.getD1Database('DB');
@@ -59,7 +59,7 @@ try {
   assert.equal(result.sequence[0].id,result.sequence[1].id); assert.equal(new Set(result.sequence.map(t=>t.number)).size,2); assert(result.sequence.every(t=>t.number>1));
   assert.equal(result.personalOwner.number,1); assert.equal(result.personalMember.number,1);
   assert.equal(result.mail.state,'pending');assert.equal(JSON.parse(result.mail.payload).to[0],'member@example.com');
-  assert.equal(result.audit.length,10); assert(result.audit.some(a=>a.action==='task.created'&&a.subject==='JOLO-1'));
+  assert.equal(result.audit.length,10); assert(result.audit.some(a=>a.action==='task.created'&&a.subject==='RUNTIMETEAM-1'));
   assert.equal(result.comment.id,result.replay.id);assert.equal(result.revised.revision,2);assert.equal(result.history.comments[0].body,'Edited in D1');
   assert.equal(result.ownOnly,null);assert.equal(result.deniedComment,null);assert.equal(result.removedComment.body,'');assert.equal(result.deletedReplay.id,result.comment.id);assert(result.deletedReplay.deleted_at);
   console.log('D1 runtime checks passed: task and comment writes, idempotent posting, authorship, deletion, invitation acceptance, audit transactions, revocation, and stale-write rejection.');

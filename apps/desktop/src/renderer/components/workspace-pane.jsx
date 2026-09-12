@@ -1,7 +1,9 @@
+import { modelLabel } from '../model-options.js';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useEngine } from "../use-engine.js";
 import { Sidebar } from "./sidebar.jsx";
 import { Conversation } from "./conversation.jsx";
+import { ModelControls } from "./model-controls.jsx";
 import { Composer } from "./composer.jsx";
 import { BrowserPane } from "./browser-pane.jsx";
 import { SettingsPage } from "./settings.jsx";
@@ -66,6 +68,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const { setOverlay } = connection;
   const [pickerOpen, setPickerOpen] = useState(false);
   const [panelMenuOpen, setPanelMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const showSettings = settingsOpen;
   const [settingsSection, setSettingsSection] = useState('agents');
   const [taskDialog, setTaskDialog] = useState(null);
@@ -113,9 +116,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   }, [pane.id]);
 
   useEffect(() => {
-    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen || panelMenuOpen));
+    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen));
     return () => setOverlay(pane.id, false);
-  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen, panelMenuOpen]);
+  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen]);
   useEffect(() => { setContext(null); setBrowser(null); setTerminalOpen(false); setPlansOpen(false); void state.refreshAgents(); }, [workspaceId]); // panes belong to one checkout
   // Coming back to a task's window means its latest outcome was seen; a notification click lands on its task.
   useEffect(() => {
@@ -134,10 +137,12 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   }, [active, visible, view, workspaceId, sessionId, state.board, connection]);
 
   const reportError = (operation) => Promise.resolve().then(operation).catch((e) => state.setError(e.message));
-  const openFolder = async () => {
+  const openFolder = () => reportError(async () => {
     const path = await window.jolo.openFolder();
-    if (path) await state.openProject(path).catch((e) => state.setError(e.message));
-  };
+    if (!path) return;
+    await state.openProject(path);
+    showTask();
+  });
 
   useLayoutEffect(() => {
     register(pane.id, {
@@ -207,16 +212,22 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const providerLabel = (selectedModel?.preset === "fake" ? "Demo provider" : selectedModel?.model) ?? (settings?.demoProviderEnabled ? "Demo provider" : "Configure provider");
   const sessionAgentId = session?.agentId ?? null;
   const chosenAgentId = answerer === null ? sessionAgentId : answerer === "jolo" ? null : answerer;
-  const answererLabel = chosenAgentId ? agentName(chosenAgentId) : `Jolo · ${providerLabel}`;
-  const pickAnswerer = () => reportError(async () => {
-    const choice = await window.jolo.answererMenu({ items: [
-      { id: "jolo", label: "Jolo", checked: !chosenAgentId },
-      ...hostedAgents.map((entry) => ({ id: `agent:${entry.id}`, label: entry.available ? entry.displayName : `${entry.displayName} (not installed)`, checked: chosenAgentId === entry.id, enabled: entry.available })),
-    ] });
-    if (choice === "settings") setShowSettings(chosenAgentId ? "agents" : "provider");
-    else if (choice === "jolo") setAnswerer("jolo");
-    else if (choice?.startsWith("agent:")) setAnswerer(choice.slice(6));
-  });
+  const answererLabel = chosenAgentId ? agentName(chosenAgentId) : `Jolo · ${modelLabel(providerLabel)}`;
+  const saveModelChoice = async ({ agentId, preset, model, effort }) => {
+    if (agentId !== 'jolo') {
+      await state.call('settings.update', { agents: { [agentId]: { model, effort } } });
+      await Promise.all([state.refreshSettings(), state.refreshCatalog()]);
+      return;
+    }
+    const selection = { ...(selectedModel?.preset === preset && selectedModel?.model === model ? selectedModel : {}), preset, model, effort };
+    if (sessionId) {
+      const current = (await state.call('session.page', { sessionId })).session;
+      await state.call('session.setModel', { sessionId, model: selection, expectedRevision: current.revision });
+    } else {
+      await state.call('settings.update', { model: selection });
+      await state.refreshSettings();
+    }
+  };
   const taskMenu = (session) => reportError(async () => {
     const sessionWorkspace = workspaces.find((item) => item.id === session.workspaceId);
     const action = await window.jolo.taskMenu({ archived: session.state === "archived", worktree: Boolean(sessionWorkspace && sessionWorkspace.mode === "worktree" && sessionWorkspace.owned) });
@@ -274,7 +285,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} changesCount={changedFiles.length} verification={verification} onReview={() => setContext("changes")} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />
           <PermissionNotice request={pendingPermission} active={active} onReview={onActivate} />
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
-          {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen} running={Boolean(activeRun)} model={providerLabel} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} onPickAnswerer={pickAnswerer} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
+          {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} agents={hostedAgents} disabled={!project || !engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen && !modelMenuOpen} running={Boolean(activeRun)} model={modelLabel(providerLabel)} projectName={project?.standalone ? "Chat" : project ? basename(project.rootPath) : null} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => setContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usage={usage} modelControl={<ModelControls agentId={chosenAgentId ?? 'jolo'} agents={hostedAgents} nativeModel={selectedModel} hasSession={Boolean(sessionId)} disabled={!engine.connected || !active || !visible || showSettings || Boolean(pendingPermission || taskDialog || worktreeDialog)} onAgent={setAnswerer} onSave={saveModelChoice} call={state.call} onSettings={setShowSettings} onOpenChange={setModelMenuOpen} />} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}
           </>}
         </main>
         <aside id={`${pane.id}-context`} className="inspector" aria-label="Task context" hidden={!context || view === "board"}>

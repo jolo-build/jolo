@@ -1,8 +1,8 @@
+import { modelLabel } from '../model-options.js';
 import { useEffect, useRef, useState } from 'react';
 // The schemas subpath, not the package root: the root also re-exports the socket framing, which is
 // Node transport code the renderer never calls and must not carry into the browser bundle.
 import { modelFromFields, ProviderOverridesSchema } from '@jolo/protocol/schemas';
-import { Combobox } from './combobox.jsx';
 import { Select } from './select.jsx';
 
 export function ProviderModels({ settings, session, onPresets, onDiscover, onSaveConnection, onSaveDefault, onUseModel, onSetCredential }) {
@@ -64,7 +64,11 @@ export function ProviderModels({ settings, session, onPresets, onDiscover, onSav
         {preset?.protocol !== 'fake' && <>
           <label>Base URL<input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={preset?.baseUrl} spellCheck={false} /></label>
           <div><button type="button" onClick={discover} disabled={!onDiscover}>Find models</button></div>
-          <label>Model<Combobox label="Model for Jolo" allowDefault={false} placeholder="Choose or enter a model ID" value={form.model} onChange={model => setForm(v => ({ ...v, model, reasoningEffort: '' }))} options={(report?.models ?? []).map(m => ({ value: m.id, label: m.displayName, description: m.id }))} /></label>
+          <label>Model<Select aria-label="Model for Jolo" value={form.model} onChange={event => setForm(v => ({ ...v, model: event.target.value, reasoningEffort: '' }))}>
+            {!form.model && <option value="">Choose model</option>}
+            {form.model && !report?.models.some(m => m.id === form.model) && <option value={form.model}>{modelLabel(form.model)}</option>}
+            {(report?.models ?? []).map(m => <option key={m.id} value={m.id}>{modelLabel(m.displayName || m.id)}</option>)}
+          </Select></label>
           {found && <p className="hint">Context: {found.contextWindowTokens?.toLocaleString() ?? 'not reported'} · Maximum output: {found.maxOutputTokens?.toLocaleString() ?? 'not reported'}{found.supportsTools === false ? ' · Does not support tools' : ''}</p>}
           <label>Reasoning effort<Select value={form.reasoningEffort} onChange={change('reasoningEffort')}><option value="">Provider default</option>{(found?.efforts?.length ? ['none', ...found.efforts.filter(e => e !== 'none')] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).map(e => <option key={e} value={e}>{e}</option>)}</Select></label>
           <details className="settings-advanced"><summary>Token limit overrides</summary><div className="settings-field-grid">

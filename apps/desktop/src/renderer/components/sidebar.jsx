@@ -18,7 +18,7 @@ function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, o
     {rows.map(task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName} />)}
     {error && <div className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></div>}
     {!result && loading && <p className="sidebar-empty" role="status">Loading tasks…</p>}
-    {result && !rows.length && !loading && !error && <p className="sidebar-empty">{state === 'archived' ? 'No archived tasks.' : 'No tasks yet.'}</p>}
+    {state === 'archived' && result && !rows.length && !loading && !error && <p className="sidebar-empty">No archived tasks.</p>}
     {result?.hasMore && <button className="sidebar-load-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more tasks'}</button>}
   </div>;
 }
