@@ -109,7 +109,7 @@ export function createAccessApp(env, options = {}) {
         const registration = account.isNew && advertising && !flow.return_to ? crypto.randomUUID() : null;
         await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), now() + SESSION_SECONDS * 1000, registration);
         // Provider tokens never leave the server or become browser sessions.
-        const response = redirect(flow.return_to ?? (registration ? '/welcome' : '/account'));
+        const response = redirect(flow.return_to ?? (account.isNew ? '/welcome' : '/account'));
         setCookie(response, 'flow', '', 0);
         setCookie(response, 'session', sessionToken, SESSION_SECONDS);
         return response;

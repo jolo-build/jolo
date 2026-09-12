@@ -652,3 +652,48 @@ body .button.secondary:focus-visible { background:var(--tint); color:var(--fg); 
   .chats-heading { gap:10px; }
   .chats-heading p:last-child { max-width:210px; }
 }
+
+/* Registration shows a concrete workflow; examples never contain account data. */
+.registration-page { max-width:1060px; overflow:auto; }
+.registration-page .task-heading { max-width:760px; }
+.task-app .registration-page h1 { font-size:clamp(24px,3vw,34px); line-height:1.18; letter-spacing:-.035em; }
+.registration-page .access-two-column { flex:none; grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr); align-items:start; }
+.registration-page .access-panel { max-height:none; }
+.registration-page .access-panel-body { overflow:visible; }
+.registration-page .workflow-demo { background:var(--panel); border:1px solid var(--line); }
+.workflow-demo .eyebrow { font-size:10px; margin-bottom:10px; }
+.workflow-demo details { border-top:1px solid var(--line); }
+.workflow-demo summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px; min-height:44px; font-size:13px; font-weight:500; }
+.workflow-demo summary::-webkit-details-marker { display:none; }
+.workflow-demo summary::after { content:'+'; margin-left:auto; color:var(--muted); }
+.workflow-demo details[open] summary::after { content:'−'; }
+.workflow-demo summary > span { display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--line); border-radius:50%; color:var(--muted); font-size:11px; }
+.demo-example { padding:8px 12px 12px; margin:0 0 12px 32px; background:var(--surface); border-radius:6px; }
+.demo-example > code { display:block; margin-bottom:8px; color:var(--muted); }
+.demo-example strong { display:block; font-size:13px; font-weight:500; }
+.demo-example p { margin:8px 0 0; }
+.demo-example code,.task-connect-guide code { font:12px var(--mono); overflow-wrap:anywhere; }
+.workflow-demo .demo-footnote { margin:12px 0 0; }
+.workflow-demo summary:focus-visible,.task-connect-guide summary:focus-visible { outline:2px solid var(--muted); outline-offset:2px; border-radius:4px; }
+.welcome-page { max-width:760px; width:100%; align-self:center; }
+.welcome-page > .access-panel { flex-shrink:1; }
+.welcome-steps { padding-left:22px; margin:20px 0 0; }
+.welcome-steps li { padding-left:6px; margin-bottom:12px; font-size:13px; }
+.welcome-steps strong,.welcome-steps span { display:block; }
+.welcome-steps span { color:var(--muted); margin-top:3px; }
+.task-connect-guide { margin:0 0 20px; padding:12px 16px; border:1px solid var(--line); border-radius:8px; background:var(--surface); font-size:12px; }
+.task-connect-guide summary { cursor:pointer; font-weight:500; }
+.task-connect-guide p { margin:12px 0; font-size:12px; }
+@media(max-width:700px) {
+  .registration-page .access-two-column { display:flex; flex-direction:column; }
+  .registration-page .task-heading { margin-bottom:18px; }
+  .demo-example { margin-left:0; }
+  .welcome-page { overflow:auto; }
+  .welcome-page > .access-panel { max-height:none; flex-shrink:0; }
+  .welcome-page .access-panel-body { overflow:visible; }
+}
+@media(max-height:650px) and (min-width:701px) {
+  .registration-page { padding-top:14px; }
+  .registration-page .task-heading { margin-bottom:14px; }
+  .registration-page .access-panel-body { padding:16px; }
+}

@@ -52,7 +52,7 @@ test('Google uses code + PKCE + nonce, creates a session, and records the provid
   expect(url.searchParams.get('nonce')).toMatch(/^[a-f0-9]{64}$/);
   expect(url.searchParams.get('redirect_uri')).toBe(`${f.env.ACCESS_ORIGIN}/callback/google`);
   const response = await f.send(f.callback());
-  expect(response.headers.get('location')).toBe('/account');
+  expect(response.headers.get('location')).toBe('/welcome');
   expect(f.cookies.has('__Host-jolo_session')).toBe(true);
   expect(f.cookies.has('__Host-jolo_flow')).toBe(false);
   const account = (await (await f.send('/api/session')).json()).account;
