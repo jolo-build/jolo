@@ -22,44 +22,44 @@ test('only explicit task IDs outside code, escapes and URLs are resolved, with s
   expect(taskKey('../../secret')).toBeNull();
 });
 test('workspace prefixes normalize case and reject malformed or partial ticket IDs',()=>{
-  expect(taskPrefix(' cypho ')).toBe('CYPHO');
+  expect(taskPrefix(' jolo ')).toBe('JOLO');
   expect(taskKey('team2-123')).toBe('TEAM2-123');
   expect(taskPrefix('A'.repeat(24))).toHaveLength(24);
   for(const prefix of ['A','2TEAM','MY-TEAM','MY_TEAM','TEÅM','A'.repeat(25)]) expect(taskPrefix(prefix)).toBeNull();
-  expect(taskReferences('@codex #cypho-2 fix (#TEAM2-1), #CYPHO-2.')).toEqual(['CYPHO-2','TEAM2-1']);
-  expect(taskReferences('`#CYPHO-1` \\#CYPHO-2 https://example.com/#CYPHO-3\n```\n#TEAM-4\n```\n    #TEAM-5\n#TEAM-6')).toEqual(['TEAM-6']);
+  expect(taskReferences('@codex #jolo-2 fix (#TEAM2-1), #JOLO-2.')).toEqual(['JOLO-2','TEAM2-1']);
+  expect(taskReferences('`#JOLO-1` \\#JOLO-2 https://example.com/#JOLO-3\n```\n#TEAM-4\n```\n    #TEAM-5\n#TEAM-6')).toEqual(['TEAM-6']);
   expect(taskReferences('word#TEAM-1 #T-1 #TEAM-0 #TEAM-01 #TEAM-1x #MY-TEAM-1 #TEAM_1 #'+ 'A'.repeat(25)+'-1')).toEqual([]);
 });
 test('short IDs from different workspaces resolve without a team hint and reject mismatched responses',async()=>{
   const accountId=crypto.randomUUID(),teamId=crypto.randomUUID(),origin='https://access.example',paths=[];
   const values=new Map([
-    ['CYPHO-1',{...task(),key:'CYPHO-1',team:{id:teamId,name:'Cypho'}}],
+    ['JOLO-1',{...task(),key:'JOLO-1',team:{id:teamId,name:'JOLO'}}],
     ['AHMAD-1',{...task(),key:'AHMAD-1'}],
   ]);
   const service=new TaskService({origin,async taskRequest(path) {
     paths.push(path);
     return {value:{task:values.get(path.split('/').at(-1))},origin,accountId,current:()=>true};
   }});
-  const resolved=await service.resolve('@codex fix #cypho-1 and #ahmad-1');
-  expect(paths).toEqual(['/api/tasks/CYPHO-1','/api/tasks/AHMAD-1']);
-  expect(resolved.references.map(t=>t.url)).toEqual([`${origin}/tasks/teams/${teamId}/CYPHO-1`,`${origin}/tasks/accounts/${accountId}/AHMAD-1`]);
+  const resolved=await service.resolve('@codex fix #jolo-1 and #ahmad-1');
+  expect(paths).toEqual(['/api/tasks/JOLO-1','/api/tasks/AHMAD-1']);
+  expect(resolved.references.map(t=>t.url)).toEqual([`${origin}/tasks/teams/${teamId}/JOLO-1`,`${origin}/tasks/accounts/${accountId}/AHMAD-1`]);
   resolved.assertCurrent();
-  values.set('CYPHO-1',{...task(),key:'AHMAD-1'});
-  await expect(service.get({key:'CYPHO-1'})).rejects.toThrow('validate');
+  values.set('JOLO-1',{...task(),key:'AHMAD-1'});
+  await expect(service.get({key:'JOLO-1'})).rejects.toThrow('validate');
 });
 test('legacy scoped links accept a migrated prefix only for the same number and workspace',async()=>{
   const accountId=crypto.randomUUID(),teamId=crypto.randomUUID(),otherId=crypto.randomUUID(),origin='https://access.example';
-  let value={...task(),key:'CYPHO-1',team:{id:teamId,name:'Cypho'}},responseOrigin=origin;
+  let value={...task(),key:'TEAM-1',team:{id:teamId,name:'JOLO'}},responseOrigin=origin;
   const service=new TaskService({origin,async taskRequest() {
     return {value:{task:value},origin:responseOrigin,accountId,current:()=>true};
   }});
   const url=`${origin}/tasks/teams/${teamId}/JOLO-1`;
-  expect((await service.resolve(url)).references[0].url).toBe(`${origin}/tasks/teams/${teamId}/CYPHO-1`);
-  value={...value,key:'CYPHO-2'};
+  expect((await service.resolve(url)).references[0].url).toBe(`${origin}/tasks/teams/${teamId}/TEAM-1`);
+  value={...value,key:'TEAM-2'};
   await expect(service.resolve(url)).rejects.toThrow('validate');
-  value={...value,key:'CYPHO-1',team:{id:otherId,name:'Other'}};
+  value={...value,key:'TEAM-1',team:{id:otherId,name:'Other'}};
   await expect(service.resolve(url)).rejects.toThrow('validate');
-  value={...value,team:{id:teamId,name:'Cypho'}};
+  value={...value,team:{id:teamId,name:'JOLO'}};
   responseOrigin='https://other.example';
   await expect(service.resolve(url)).rejects.toThrow('validate');
   responseOrigin=origin;

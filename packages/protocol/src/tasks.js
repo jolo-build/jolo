@@ -15,8 +15,8 @@ export function taskKey(value) {
 export function accountScopes(value = 'account:read') {
   if (typeof value !== 'string') return null;
   const scopes = value.trim().split(/\s+/);
-  if (!scopes.includes('account:read') || scopes.some(s => !['account:read', 'tasks:read'].includes(s)) || new Set(scopes).size !== scopes.length) return null;
-  return scopes.includes('tasks:read') ? 'account:read tasks:read' : 'account:read';
+  if (!scopes.includes('account:read') || scopes.some(s => !['account:read', 'tasks:read', 'chats:sync'].includes(s)) || new Set(scopes).size !== scopes.length) return null;
+  return ['account:read', 'tasks:read', 'chats:sync'].filter(s => scopes.includes(s)).join(' ');
 }
 
 // Only explicit prose references attach tasks. Preserve offsets while masking

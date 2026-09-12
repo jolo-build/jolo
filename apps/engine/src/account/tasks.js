@@ -17,7 +17,7 @@ export class TaskService {
   /** @param {string} key @param {{team?:string,link?:ReturnType<typeof taskLinkReferences>[number]}} [options] */
   async read(key, {team, link} = {}) {
     const normalized=taskKey(key);
-    if(!normalized) throw new ProtocolError('invalid_params','Use a task ID such as CYPHO-123.');
+    if(!normalized) throw new ProtocolError('invalid_params','Use a task ID such as JOLO-123.');
     const result=await this.account.taskRequest(link ? `/api${link.path}` : `/api/tasks/${normalized}${team?'?team='+encodeURIComponent(team):''}`);
     let task;
     try {

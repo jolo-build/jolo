@@ -67,7 +67,7 @@ export function taskListPage({ tasks, teams, labels, filters, next }) {
   const activeFilters = [filters.state, filters.label, filters.project, filters.archived].filter(Boolean).length;
   return page('Tasks', `<div class="task-heading"><div><p class="eyebrow">YOUR WORK</p><h1>Tasks</h1></div><a class="button compact" href="/tasks/new${filters.team && filters.team !== 'personal' ? '?team=' + encodeURIComponent(filters.team) : ''}">New task</a></div>
     <form class="task-filters task-search" method="get" action="/tasks">
-      <label>Search${input('q', filters.q, 'search', 'maxlength="100" placeholder="Title or CYPHO-123"')}</label>
+      <label>Search${input('q', filters.q, 'search', 'maxlength="100" placeholder="Title or JOLO-123"')}</label>
       <label>Workspace${select('team', [['', 'All workspaces'], ['personal', 'Personal'], ...teams.map(t => [t.id, t.name])], filters.team)}</label>
       <details class="task-more-filters"><summary>Filters${activeFilters ? ` (${activeFilters})` : ''}</summary><div class="task-filter-options">
         <label>State${select('state', [['', 'All states'], ...Object.entries(TASK_STATES)], filters.state)}</label>
@@ -116,7 +116,7 @@ export function teamsPage(account, teams, invitations, error = null, draft = nul
     <div class="teams-layout">
       <section class="task-panel"><h2>Your teams</h2><div class="task-scroll" tabindex="0" aria-label="Your teams">${teams.length ? teams.map(t => `<a class="task-row" href="/teams/${e(t.id)}"><strong>${e(t.name)}</strong><span>${e(t.prefix)} · ${e(t.role)}</span></a>`).join('') : '<p class="fine">No teams yet. Your personal tasks remain private.</p>'}</div></section>
       <section class="task-panel"><h2>Invitations</h2><div class="task-scroll" tabindex="0" aria-label="Team invitations">${invitations.length ? invitations.map(i => `<article class="task-editor"><h3>${e(i.team_name)}</h3><p>Role: ${e(i.role)} · for ${e(i.email)}</p>${post(`/invitations/${e(i.id)}/accept`, account, button('Accept invitation'))}</article>`).join('') : '<p class="fine">No pending invitations for your verified email.</p>'}</div></section>
-      <section class="task-editor team-create"><h2>Create a team</h2>${post('/teams', account, `<label>Name${input('name', draft?.name ?? '', 'text', 'required maxlength="100"')}</label><label>Ticket prefix${input('prefix', draft?.prefix ?? '', 'text', 'maxlength="24" pattern="[A-Za-z][A-Za-z0-9]{1,23}" placeholder="CYPHO" aria-describedby="prefix-hint"')}</label><p class="fine" id="prefix-hint">For tickets like CYPHO-1. Use 2–24 letters or digits, starting with a letter, or leave blank to choose automatically. Prefixes are unique and stay fixed when a team is renamed.</p>${button('Create team')}<p class="fine">You will be its owner. Nobody else receives access automatically.</p>`)}</section>
+      <section class="task-editor team-create"><h2>Create a team</h2>${post('/teams', account, `<label>Name${input('name', draft?.name ?? '', 'text', 'required maxlength="100"')}</label><label>Ticket prefix${input('prefix', draft?.prefix ?? '', 'text', 'maxlength="24" pattern="[A-Za-z][A-Za-z0-9]{1,23}" placeholder="JOLO" aria-describedby="prefix-hint"')}</label><p class="fine" id="prefix-hint">For tickets like JOLO-1. Use 2–24 letters or digits, starting with a letter, or leave blank to choose automatically. Prefixes are unique and stay fixed when a team is renamed.</p>${button('Create team')}<p class="fine">You will be its owner. Nobody else receives access automatically.</p>`)}</section>
     </div>`, 'teams-page');
 }
 

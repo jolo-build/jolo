@@ -103,7 +103,7 @@ async function checkForms() {
   const fill = values => contents.executeJavaScript(`Object.entries(${JSON.stringify(values)}).forEach(([name,value]) => { document.querySelector('[name="'+name+'"]').value=value; })`);
   await window.loadURL(origin + '/teams');
   await fit('teams', ['form[action="/teams"] button']);
-  await fill({name:'Jolo Core',prefix:'CYPHO'}); await submit('form[action="/teams"] button');
+  await fill({name:'Jolo Core',prefix:'JOLO'}); await submit('form[action="/teams"] button');
   assert.match(await text(), /TEAM · owner/);
   const team = new URL(contents.getURL()).pathname.split('/').at(-1);
   await fit('team detail', ['form[action$="/invite"] button']);
@@ -134,8 +134,8 @@ async function checkForms() {
   assert.equal(await contents.executeJavaScript('document.querySelector("[name=description]").hidden'), false);
   await contents.executeJavaScript('document.querySelector("[name=label]").checked=true');
   await submit('button[form="task-edit"]');
-  assert.match(await text(), /CYPHO-1/);
-  assert.match(await text(), /@codex fix #CYPHO-1/);
+  assert.match(await text(), /JOLO-1/);
+  assert.match(await text(), /@codex fix #JOLO-1/);
   assert.equal(await contents.executeJavaScript('document.querySelector(".task-description strong").textContent'), 'Ready to ship');
   const taskPath=new URL(contents.getURL()).pathname;
   assert.equal(await contents.executeJavaScript('document.querySelector("#task-edit")'),null,'Creating a task should open its detail view');

@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { engineCall, useEngineConnection } from '../engine-context.jsx';
 
-export function AccountPanel({ account, connected, busy, error, server, onServer, onLogin, onConnectTasks, onCancel, onLogout, onRefresh, onOpen }) {
+export function AccountPanel({ account, connected, busy, error, server, onServer, onLogin, onConnectTasks, onSync = () => {}, onCancel, onLogout, onRefresh, onOpen }) {
   const pending = account?.pending;
   return <section className="settings-card account-settings" aria-label="Jolo account">
     {!connected ? <p role="status">Connect to the Jolo engine to manage your account.</p> : !account ? <p role="status">Loading your account…</p> : account.state === 'signed_in' ? <>
       <div className="settings-card-heading"><div><h2>{account.account.name}</h2><p>{account.account.email}</p></div><span className="hint">Signed in</span></div>
       <p className="hint">This profile is connected as {account.device.name}.</p>
       {account.source === 'session' && <p className="hint" role="status">Your OS keychain is unavailable. This sign-in lasts only while the engine runs.</p>}
-      <p className="hint">{account.device.scopes?.includes('tasks:read') ? 'Task access is connected. Type # in chat to select a web task, or reference its ID, such as #CYPHO-2.' : 'Approve task access to reference your web tasks in chat.'}</p>
+      <p className="hint">{account.device.scopes?.includes('tasks:read') ? 'Task access is connected. Type # in chat to select a web task, or reference its ID, such as #JOLO-2.' : 'Approve task access to reference your web tasks in chat.'}</p>
+      <p className="hint">Chat sync stores conversation text in your Jolo account and restores it on your other devices. Files, tool output, and credentials stay local.</p>
+      <div className="account-actions"><button type="button" disabled={busy} onClick={onSync}>{account.sync?.enabled ? 'Pause chat sync' : 'Enable chat sync'}</button><button type="button" onClick={() => onOpen(`${account.origin}/chats`)}>View synced chats</button></div>
+      {account.sync?.enabled && <p className="hint" role="status">{account.sync.error || (account.sync.lastSyncedAt ? 'Chat history is synced.' : 'Waiting to sync chat history…')}</p>}
       <div className="account-actions">{account.device.scopes?.includes('tasks:read') ? <button type="button" onClick={() => onOpen(`${account.origin}/tasks`)}>Open tasks</button> : <button type="button" disabled={busy} onClick={onConnectTasks}>Connect tasks</button>}<button type="button" disabled={busy} onClick={() => onOpen(`${account.origin}/devices`)}>Manage devices</button><button type="button" disabled={busy} onClick={onRefresh}>Refresh account</button><button type="button" disabled={busy} onClick={onLogout}>Sign out</button></div>
     </> : pending ? <>
       <h2>Approve this device</h2><p>Sign in in your browser, then confirm that the code matches.</p>
@@ -16,7 +19,7 @@ export function AccountPanel({ account, connected, busy, error, server, onServer
       <p className="hint" role="status">Waiting for approval from {account.origin}</p>
       <div className="account-actions"><button type="button" className="primary" disabled={busy} onClick={() => onOpen(pending.verificationUriComplete)}>Open sign-in page</button><button type="button" disabled={busy} onClick={onCancel}>Cancel sign-in</button></div>
     </> : <>
-      <h2>Your Jolo account</h2><p>Connect your account through GitHub. Jolo works locally without signing in.</p>
+      <h2>Your Jolo account</h2><p>Sign in through {server} in your browser using GitHub. Jolo works locally without signing in.</p>
       <button type="button" className="primary" disabled={busy} onClick={onLogin}>{busy ? 'Starting sign-in…' : 'Sign in to Jolo'}</button>
       <details className="settings-advanced"><summary>Account server</summary><label>Server URL<input type="url" value={server} onChange={event => onServer(event.target.value)} spellCheck={false} autoComplete="off" disabled={busy} /></label><p className="hint">Change this when using a self-hosted account service.</p></details>
     </>}
@@ -31,11 +34,11 @@ export function AccountSettings() {
   const [server, setServer] = useState('https://access.jolo.build');
   const mounted = useRef(true), reading = useRef(null);
   const generation = useRef(0);
-  const refresh = useCallback(async (force = false) => {
+  const refresh = useCallback(async (force = false, preserveError = false) => {
     if (reading.current) return reading.current;
     const current = generation.current;
     reading.current = engineCall('account.status', { refresh: force }).then(value => {
-      if (mounted.current && current === generation.current) { setAccount(value); setError(null); }
+      if (mounted.current && current === generation.current) { setAccount(value); if (!preserveError || value.pending) setError(null); }
       return value;
     }).catch(error => {
       if (mounted.current && current === generation.current) setError(error.code === 'unknown_method' ? 'Restart the engine to enable Jolo account sign-in.' : error.message);
@@ -67,8 +70,15 @@ export function AccountSettings() {
       const value = await engineCall(method, params);
       if (mounted.current) setAccount(value);
       if (method === 'account.login' && value.pending) await open(value.pending.verificationUriComplete);
-    } catch (error) { if (mounted.current) setError(error.message); }
+    } catch (error) {
+      if (mounted.current) setError(error.message === `timeout: ${method}`
+        ? 'The account connection timed out. Check your connection and try again. If this continues, restart Jolo.'
+        : error.message);
+      // A late device-code response may have succeeded after the client timed out.
+      // Recover its approval link instead of leaving the UI signed out indefinitely.
+      if (method === 'account.login') void refresh(false, true);
+    }
     finally { if (mounted.current) setBusy(false); }
   };
-  return <AccountPanel account={account} connected={engine.connected} busy={busy} error={error} server={server} onServer={setServer} onLogin={() => act('account.login', { origin: server.trim().replace(/\/$/, '') })} onConnectTasks={() => act('account.login', { tasks: true })} onCancel={() => act('account.cancel')} onLogout={() => act('account.logout')} onRefresh={() => refresh(true)} onOpen={open} />;
+  return <AccountPanel account={account} connected={engine.connected} busy={busy} error={error} server={server} onServer={setServer} onLogin={() => act('account.login', { origin: server.trim().replace(/\/$/, '') })} onConnectTasks={() => act('account.login', { tasks: true })} onSync={() => account?.device?.scopes.includes('chats:sync') ? act('account.sync', { enabled: !account.sync?.enabled }) : act('account.login', { chats: true })} onCancel={() => act('account.cancel')} onLogout={() => act('account.logout')} onRefresh={() => refresh(true)} onOpen={open} />;
 }

@@ -9,6 +9,7 @@ import { RunService } from "./runs/service.js";
 import { createAgentExecutor } from "./agent/loop.js";
 import { SettingsService } from "./settings.js";
 import { CredentialService } from "./credentials/index.js";
+import { ChatSync } from './account/chat-sync.js';
 import { AccountService } from './account/service.js';
 import { PermissionService } from "./permissions/service.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -87,6 +88,8 @@ export function createEngine(options) {
     credentials = new CredentialService({ log, env: options.env ?? process.env, catalog: providerCatalog });
     account = new AccountService({ storage, paths, lifetime, env: options.env ?? process.env, fetchImpl: options.accountFetchImpl, secrets: options.accountSecrets });
     permissions = new PermissionService({ storage });
+    account.chatSync = new ChatSync({ account, storage, paths, permissions });
+    void account.chatSync.run();
     const registry = new ToolRegistry();
     browser = new BrowserBroker({ storage, log });
     const toolEnv = resolveToolEnvironment(options.env ?? process.env);
@@ -149,7 +152,7 @@ export function createEngine(options) {
       };
       try {
         lifetime.stop();
-        if (account) await step('account', () => account.stop());
+        if (account) { await step('chat sync', () => account.chatSync.stop()); await step('account', () => account.stop()); }
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
         if (search) await step("search", () => search.close());

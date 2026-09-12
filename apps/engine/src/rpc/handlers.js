@@ -98,6 +98,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     'task.list': params => tasks.list(params),
     'task.get': params => tasks.get(params),
     'account.status': params => account.status(params),
+    'account.sync': (params, conn) => { requireInteractive(conn, 'Chat sync must be changed by an interactive client.'); return account.chatSync.configure(params.enabled); },
     'account.login': (params, conn) => { requireInteractive(conn, 'Account sign-in must be started by an interactive client.'); return account.login(params); },
     'account.cancel': (_params, conn) => { requireInteractive(conn); return account.cancel(); },
     'account.logout': (_params, conn) => { requireInteractive(conn); return account.logout(); },

@@ -205,3 +205,15 @@ test('sign-out during task fetch discards the response before it reaches an agen
   await ready; await f.service.logout(); release();
   expect((await request).message).toContain('connection changed');
 });
+
+test('chat sync scope requires browser approval and preserves existing task access on upgrade', async () => {
+  const f = setup();
+  await f.service.login({ tasks: true }); await f.approve(); await f.poll();
+  const pending = await f.service.login({ chats: true });
+  expect(pending.state).toBe('pending');
+  expect(pending.device.scopes).not.toContain('chats:sync');
+  const page = await f.web.send(`/device?user_code=${pending.pending.userCode}`);
+  expect(await page.text()).toContain('Chat sync: upload conversation text');
+  await f.approve(); await f.poll();
+  expect((await f.service.status()).device.scopes).toEqual(['account:read', 'tasks:read', 'chats:sync']);
+});

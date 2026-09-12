@@ -38,6 +38,7 @@ export class AccountService {
     this.now = now; this.setTimer = setTimer; this.clearTimer = clearTimer;
     try { this.origin = accountOrigin(storage.getPreference(PREFERENCE)?.origin ?? env.JOLO_ACCOUNT_ORIGIN ?? DEFAULT_ORIGIN); }
     catch { this.origin = DEFAULT_ORIGIN; }
+    this.chatSync = null;
     this.pending = null; this.record = null; this.credential = null; this.note = null; this.stopped = false;
     /** Tracks only when the last queued operation settled; its value is never read. @type {Promise<unknown>} */
     this.queue = Promise.resolve(); this.checkedAt = 0; this.checking = null;
@@ -72,6 +73,7 @@ export class AccountService {
       pending: this.pending ? { userCode: this.pending.userCode, verificationUri: this.pending.verificationUri, verificationUriComplete: this.pending.verificationUriComplete, expiresAt: new Date(this.pending.expiresAt).toISOString() } : null,
       source: this.record?.source ?? 'none',
       note: this.note,
+      sync: this.chatSync?.status(),
     };
   }
   changed() {
@@ -134,17 +136,17 @@ export class AccountService {
   /**
    * Start the device flow. The origin and device name default to the connected server and this
    * host; `tasks` additionally asks for the scope that lets runs read web tasks.
-   * @param {{ origin?: string, deviceName?: string, tasks?: boolean }} [options]
+   * @param {{ origin?: string, deviceName?: string, tasks?: boolean, chats?: boolean }} [options]
    */
-  async login({ origin, deviceName, tasks = false } = {}) {
+  async login({ origin, deviceName, tasks = false, chats = false } = {}) {
     await this.ready;
     return this.exclusive(async () => {
       if (this.stopped) throw new ProtocolError('unavailable', 'The engine is stopping.');
-      if (this.record && (!tasks || this.record.device.scopes.includes('tasks:read'))) throw new ProtocolError('conflict', 'Sign out before connecting another account.');
+      if (this.record && (!tasks || this.record.device.scopes.includes('tasks:read')) && (!chats || this.record.device.scopes.includes('chats:sync'))) throw new ProtocolError('conflict', 'Sign out before connecting another account.');
       if (this.record && origin && origin !== this.origin) throw new ProtocolError('conflict', 'Sign out before changing account servers.');
       if (this.pending) return this.snapshot();
       const nextOrigin = accountOrigin(origin ?? this.origin);
-      const scope = tasks ? 'account:read tasks:read' : 'account:read';
+      const scope = accountScopes(['account:read', ...(tasks || this.record?.device.scopes.includes('tasks:read') ? ['tasks:read'] : []), ...(chats || this.record?.device.scopes.includes('chats:sync') ? ['chats:sync'] : [])].join(' '));
       const name = (deviceName ?? `${os.hostname()} · ${this.paths.profile}`).trim().slice(0, 100);
       const response = await this.request(nextOrigin, '/device/code', { form: { client_id: 'jolo', device_name: name, scope } });
       const value = response.value;

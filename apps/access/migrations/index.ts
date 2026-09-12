@@ -1,3 +1,4 @@
+import chatSync from './0009_chat_sync.ts';
 import accounts from './0001_accounts.ts';
 import devices from './0002_devices.ts';
 import tasksTeams from './0003_tasks_teams.ts';
@@ -22,4 +23,5 @@ export const migrations: readonly D1Migration[] = Object.freeze([
   { name: '0006_task_comments.sql', sql: taskComments },
   { name: '0007_workspace_task_numbers.sql', sql: workspaceTaskNumbers },
   { name: '0008_task_prefixes.sql', sql: taskPrefixes },
+  { name: '0009_chat_sync.sql', sql: chatSync },
 ]);

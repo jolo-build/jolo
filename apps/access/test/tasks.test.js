@@ -276,25 +276,25 @@ test('unique workspace keys resolve directly while old scoped and global links p
 
 test('team prefixes are chosen at creation, globally unique, case insensitive, and stable across renames',async()=>{
   const {f,owner,outsider,repo}=await setup();
-  const created=await post(f,owner,'/teams',{name:'Cypho security',prefix:'cypho'});
+  const created=await post(f,owner,'/teams',{name:'JOLO security',prefix:'jolo'});
   expect(created.status).toBe(303);
   const team=await repo.team(owner.id,created.headers.get('location').split('/').at(-1));
-  expect(team.prefix).toBe('CYPHO');
+  expect(team.prefix).toBe('JOLO');
   const before=f.sqlite.query('SELECT count(*) n FROM teams').get().n;
-  for(const prefix of ['cypho','PERSON1']) {
+  for(const prefix of ['jolo','PERSON1']) {
     const duplicate=await post(f,outsider,'/teams',{name:'Keep my team draft',prefix});
     expect(duplicate.status).toBe(409); expect(await duplicate.text()).toContain('Keep my team draft');
   }
   for(const prefix of ['X','3TEAM','MY-TEAM','x'.repeat(25),'CYPHÖ']) expect((await post(f,owner,'/teams',{name:'Invalid',prefix})).status).toBe(400);
   expect(f.sqlite.query('SELECT count(*) n FROM teams').get().n).toBe(before);
   expect((await post(f,owner,`/teams/${team.id}/rename`,{name:'New name',revision:'1'})).status).toBe(303);
-  expect((await repo.team(owner.id,team.id)).prefix).toBe('CYPHO');
+  expect((await repo.team(owner.id,team.id)).prefix).toBe('JOLO');
   const results=await Promise.all([repo.createTeam(owner.id,'Race A','RACE'),repo.createTeam(outsider.id,'Race B','race')]);
   expect(results.filter(Boolean)).toHaveLength(1);
   expect(f.sqlite.query("SELECT count(*) n FROM teams WHERE name LIKE 'Race %'").get().n).toBe(1);
   const createdTask=await post(f,owner,'/tasks',fields({team:team.id}));
-  expect(createdTask.headers.get('location')).toEndWith('/CYPHO-1');
-  expect(await (await get(f,owner,createdTask.headers.get('location'))).text()).toContain('@codex fix #CYPHO-1');
+  expect(createdTask.headers.get('location')).toEndWith('/JOLO-1');
+  expect(await (await get(f,owner,createdTask.headers.get('location'))).text()).toContain('@codex fix #JOLO-1');
 });
 
 test('personal prefix assignment survives sign-in changes and concurrent name collisions',async()=>{

@@ -141,6 +141,10 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   report.checks.push('file input accepts PDF, drag-and-drop accepts source files, Codex opens uploaded bytes, and sent file cards persist');
 
   const fileSessionId = await evaluate('window.__joloSmoke.state().sessionId');
+  await evaluate("document.querySelector('[aria-label=\"Show sidebar\"]')?.click()");
+  await waitFor("Boolean(document.querySelector('[aria-label=\"Hide sidebar\"]')) && !document.querySelector('.task-rail') && !document.querySelector('.main.has-task-rail')", 'expanded sidebar hides rail and removes its gutter');
+  await evaluate("document.querySelector('[aria-label=\"Hide sidebar\"]').click()");
+
   await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${textSessionId}"]'))`, 'task rail lists another chat');
   await evaluate(`document.querySelector('.task-rail [data-task-id="${textSessionId}"]').click()`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(textSessionId)}`, 'task rail switches chats');

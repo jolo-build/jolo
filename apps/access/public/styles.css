@@ -463,6 +463,17 @@ body input:focus,body select:focus,body textarea:focus {
 }
 body .button:focus-visible { background:var(--button-hover); color:var(--bg); }
 body .button.secondary:focus-visible { background:var(--tint); color:var(--fg); }
+.task-compose-page .task-actions .button.secondary {
+  background:var(--surface);
+  color:var(--fg);
+  border-color:var(--control-line);
+}
+.task-compose-page .task-actions .button.secondary:hover { background:var(--hover); }
+.task-compose-page .task-actions .button.secondary:focus-visible {
+  background:var(--tint);
+  outline:2px solid var(--highlight);
+  outline-offset:2px;
+}
 .signin-providers .button:hover { border-color:transparent; }
 .task-more-filters[open] summary { border-color:transparent; background:var(--field); }
 @media(forced-colors:active) {
@@ -493,3 +504,10 @@ body .button.secondary:focus-visible { background:var(--tint); color:var(--fg); 
 .markdown-body a { color:var(--highlight); text-decoration:underline; }
 .md-table { overflow:auto; }.markdown-body table { border-collapse:collapse; width:100%; }.markdown-body :is(th,td) { border:1px solid var(--line); padding:6px 10px; text-align:left; }
 @media(max-width:500px) { .markdown-hint { display:none; } }
+
+/* Portable chat history uses a readable conversation width on every device. */
+.synced-chats-page { width:100%; max-width:860px; margin-inline:auto; }
+.synced-message { margin-top:16px; padding:20px; background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow-wrap:anywhere; }
+.synced-message > .fine { margin:0 0 8px; }
+.synced-message .markdown-body > :first-child { margin-top:0; }
+.synced-message .markdown-body > :last-child { margin-bottom:0; }
