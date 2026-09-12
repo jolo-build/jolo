@@ -110,9 +110,11 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
       if (!resolved) throw new ProtocolError("unavailable", `${manifest.displayName} is not installed: ${binary} was not found on the engine's PATH`);
       const chosen = configFor(manifest, { model, effort });
       const args = [];
-      if (chosen.model && chosen.support.model === "flag") args.push(...fill(manifest.modelArgs, "{model}", chosen.model));
+      const modelArgs = chosen.model && chosen.support.model === "flag" ? fill(manifest.modelArgs, "{model}", chosen.model) : [];
+      if (manifest.modelArgsPosition !== "after") args.push(...modelArgs);
       if (chosen.effort && chosen.support.effort === "flag") args.push(...fill(manifest.effortArgs, "{effort}", chosen.effort));
       args.push(...manifest.args);
+      if (manifest.modelArgsPosition === "after") args.push(...modelArgs);
       if (prompt && manifest.promptArgs) args.push(...fill(manifest.promptArgs, "{prompt}", prompt));
       return [resolved, ...args];
     },

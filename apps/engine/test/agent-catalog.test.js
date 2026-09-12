@@ -7,7 +7,7 @@ import { BUILTIN_MANIFESTS } from "../src/agents/manifests.js";
 
 // Stand-ins on a PATH of their own, so what this machine happens to have installed cannot change the result.
 const bin = mkdtempSync(path.join(os.tmpdir(), "jolo-bin-"));
-for (const name of ["claude", "codex", "grok", "gemini"]) {
+for (const name of ["claude", "codex", "grok", "gemini", "devin"]) {
   const file = path.join(bin, name);
   writeFileSync(file, "#!/bin/sh\nexit 0\n");
   chmodSync(file, 0o755);
@@ -62,4 +62,11 @@ describe("choosing a model for a hosted agent", () => {
     expect(modelSupport({ transport: "codex-app-server" })).toEqual({ model: "protocol", effort: "protocol" });
     expect(modelSupport({ transport: "pty", modelArgs: ["-m", "{model}"] })).toEqual({ model: "none", effort: "none" });
   });
+});
+
+test("Devin is a chat agent and its model flag belongs to the ACP subcommand", () => {
+  const catalog = catalogWith({ devin: { model: "adaptive", effort: "high" } });
+  expect(catalog.list().find(entry => entry.id === "devin")).toMatchObject({ available: true, transport: "acp", supportsModel: true, supportsEffort: false });
+  expect(argvFor(catalog, "devin")).toEqual(["acp", "--model", "adaptive"]);
+  expect(argvFor(catalog, "devin", { model: null })).toEqual(["acp"]);
 });

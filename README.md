@@ -2,7 +2,7 @@
 
 A desktop app and CLI for working with coding agents.
 
-Use Claude Code, Codex, Grok CLI, Gemini CLI, or your own API provider. Keep your chats, files, terminal, and browser in one workspace.
+Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider. Keep your chats, files, terminal, and browser in one workspace.
 
 [Download](https://github.com/jolo-build/jolo/releases/latest) · [Website](https://jolo.build) · [User guide](https://docs.jolo.build) · [Report a bug](https://github.com/jolo-build/jolo/issues)
 
@@ -43,6 +43,8 @@ This installs the CLI, not the desktop app. CLI packages are available for macOS
 4. Review the agent's work and continue the conversation.
 
 Install and sign in to your coding agent separately before using it in Jolo. You can also configure an API provider.
+
+For Devin, install the [Devin CLI](https://docs.devin.ai/cli/acp/zed) and sign in with `devin auth login`. Restart Jolo, then choose **Devin CLI** or mention `@devin` in chat. Jolo uses your existing local CLI login and reads the available models from Devin.
 
 Prefer the terminal? Open a project with:
 

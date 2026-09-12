@@ -308,6 +308,8 @@ export const AgentManifestSchema = z.object({
   /** How this CLI is told which model to use; {model} is replaced. Placed before args, since most CLIs want
    *  their own options before a subcommand. Omit when the transport carries the model itself, as Codex does. */
   modelArgs: z.array(z.string().max(200)).max(8).optional(),
+  /** Some subcommands (Devin ACP) own the model flag rather than the root command. */
+  modelArgsPosition: z.enum(["before", "after"]).default("before"),
   /** The same for reasoning effort; {effort} is replaced. */
   effortArgs: z.array(z.string().max(200)).max(8).optional(),
   transport: z.enum(AGENT_TRANSPORTS).default("pty"),
