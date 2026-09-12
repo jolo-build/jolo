@@ -20,7 +20,7 @@ const REQUIRED = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].flat
 function lookupLatest(fetchImpl) {
   return fetchImpl(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'jolo-release-installer', 'X-GitHub-Api-Version': '2022-11-28' },
-    signal: AbortSignal.timeout(10000), cf: { cacheEverything: true, cacheTtl: 300 },
+    signal: AbortSignal.timeout(10000), cf: { cacheEverything: true, cacheTtl: 60 },
   });
 }
 const stableVersion = release => release.draft === false && release.prerelease === false
@@ -33,7 +33,7 @@ const stableVersion = release => release.draft === false && release.prerelease =
  */
 export async function latestDesktopRelease(request, fetchImpl = fetch) {
   const respond = body => new Response(request.method === 'HEAD' ? null : JSON.stringify(body), {
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' },
   });
   try {
     const response = await lookupLatest(fetchImpl);
@@ -72,7 +72,7 @@ export async function latestRelease(request, env, fetchImpl = fetch) {
     const version = release.tag_name?.match(/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/)?.[1];
     if (!version || release.draft !== false || release.prerelease !== false || !Array.isArray(release.assets) ||
         !REQUIRED.every(name => release.assets.some(asset => asset.name === name && asset.state === 'uploaded' && asset.size > 0))) throw new Error('Incomplete stable release');
-    return new Response(request.method === 'HEAD' ? null : `${version}\n`, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=300' } });
+    return new Response(request.method === 'HEAD' ? null : `${version}\n`, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' } });
   } catch {
     // Never silently downgrade to 0.1.0 on rate limits, outages, or an incomplete newer release.
     return new Response('Release information is temporarily unavailable. Retry or use --version.\n', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });

@@ -134,18 +134,37 @@ function GettingStarted() {
   const [desktopError, setDesktopError] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/releases/latest.txt', { signal: controller.signal }).then(async response => {
-      if (!response.ok) return;
-      const latest = (await response.text()).trim();
-      if (!controller.signal.aborted && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(latest)) setVersion(latest);
-    }).catch(() => {});
-    fetch('/releases/desktop.json', { signal: controller.signal }).then(async response => {
-      if (!response.ok) throw new Error('Downloads unavailable');
-      const release = await response.json();
-      if (!Array.isArray(release.downloads)) throw new Error('Invalid desktop release');
-      if (!controller.signal.aborted) setDesktop(release);
-    }).catch(() => { if (!controller.signal.aborted) setDesktopError(true); });
-    return () => controller.abort();
+    let refreshing = false;
+    async function refresh() {
+      if (refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      /** @type {RequestInit} */
+      const options = { signal: controller.signal, cache: 'no-store' };
+      await Promise.allSettled([
+        fetch('/releases/latest.txt', options).then(async response => {
+          if (!response.ok) return;
+          const latest = (await response.text()).trim();
+          if (!controller.signal.aborted && /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(latest)) setVersion(latest);
+        }),
+        fetch('/releases/desktop.json', options).then(async response => {
+          if (!response.ok) throw new Error('Downloads unavailable');
+          const release = await response.json();
+          if (!Array.isArray(release.downloads)) throw new Error('Invalid desktop release');
+          if (!controller.signal.aborted) { setDesktop(release); setDesktopError(false); }
+        }).catch(() => { if (!controller.signal.aborted) setDesktopError(true); }),
+      ]);
+      refreshing = false;
+    }
+    void refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   }, []);
   const command = `curl -fsSL ${releases.origin}/install.sh | bash`;
   async function copyCommand() {

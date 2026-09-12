@@ -13,10 +13,12 @@ const dist = new URL('../dist/', import.meta.url);
 const headers = await Bun.file(new URL('_headers', dist)).text();
 const csp = headers.match(/Content-Security-Policy: (.+)/)?.[1];
 assert(csp, 'The production security policy must be present');
+let releaseVersion = '1.2.3';
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
   const pathname = new URL(request.url).pathname;
-  if (pathname === '/releases/latest.txt') return new Response('0.1.0');
-  if (pathname === '/releases/desktop.json') return Response.json({ version: '1.2.3', downloads: ['arm64', 'x64'].map(arch => ({ arch, url: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg`, checksum: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg.sha256` })) });
+  if (pathname === '/test/publish-release') { releaseVersion = '1.2.4'; return new Response('ok'); }
+  if (pathname === '/releases/latest.txt') return new Response(releaseVersion);
+  if (pathname === '/releases/desktop.json') return Response.json({ version: releaseVersion, downloads: ['arm64', 'x64'].map(arch => ({ arch, url: `/releases/${releaseVersion}/jolo-desktop-darwin-${arch}.dmg`, checksum: `/releases/${releaseVersion}/jolo-desktop-darwin-${arch}.dmg.sha256` })) });
   const file = Bun.file(new URL(pathname === '/' ? 'index.html' : pathname.slice(1), dist));
   return await file.exists() ? new Response(file, { headers: { 'Content-Security-Policy': csp } }) : new Response('Not found', { status: 404 });
 } });

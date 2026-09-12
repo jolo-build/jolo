@@ -206,6 +206,9 @@ async function checkLoading() {
     await until(() => evaluate("!document.getElementById('panel-desktop').hidden"), 'Preview keyboard navigation');
     await until(() => evaluate("document.querySelectorAll('.desktop-download').length === 2"), 'published desktop installers');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.desktop-download')].map(link => new URL(link.href).pathname)"), ['/releases/1.2.3/jolo-desktop-darwin-arm64.dmg', '/releases/1.2.3/jolo-desktop-darwin-x64.dmg']);
+    await evaluate("fetch('/test/publish-release').then(() => window.dispatchEvent(new Event('focus')))");
+    await until(() => evaluate("document.querySelector('.desktop-install .source-card-bottom').textContent.includes('v1.2.4') && document.querySelector('.release-note').textContent.includes('v1.2.4')"), 'Open page refreshes desktop and CLI releases on focus');
+    assert.equal(await evaluate("document.querySelector('.desktop-download').getAttribute('href')"), '/releases/1.2.4/jolo-desktop-darwin-arm64.dmg');
     assert.equal(await evaluate("document.querySelector('.cli-install .install-command code').textContent"), 'curl -fsSL https://jolo.build/install.sh | bash');
     await evaluate("document.querySelector('#get-jolo').scrollIntoView({behavior:'instant',block:'start'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     assert.equal(await evaluate("document.querySelector('#get-jolo').getBoundingClientRect().top < window.innerHeight"), true);
