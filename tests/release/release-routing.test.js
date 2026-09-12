@@ -26,7 +26,7 @@ test('desktop choices contain only complete published DMGs and fixed versioned U
 test('latest selects only a complete stable GitHub release', async () => {
   const response = await latestRelease(request, legacy, async url => { expect(url).toBe('https://api.github.com/repos/jolo-build/jolo/releases/latest'); return Response.json(release()); });
   expect(await response.text()).toBe('1.2.3\n');
-  expect(response.headers.get('cache-control')).toContain('max-age=300');
+  expect(response.headers.get('cache-control')).toBe('no-cache');
   const head = await latestRelease(new Request(request, { method: 'HEAD' }), legacy, async () => Response.json(release()));
   expect(await head.text()).toBe('');
   expect(head.status).toBe(200);
