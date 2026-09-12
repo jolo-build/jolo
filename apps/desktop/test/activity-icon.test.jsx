@@ -13,7 +13,7 @@ import { Conversation } from '../src/renderer/components/conversation.jsx';
 function summary(state, statuses) {
   const messages = statuses.map((status, index) => ({ id: `tool-${index}`, runId: 'run', kind: 'tool', role: 'tool', text: 'read file.js', status }));
   const projection = { ordered: () => messages, runs: new Map([['run', { id: 'run', state }]]) };
-  const props = /** @type {import('react').ComponentProps<typeof Conversation>} */ ({ projection, hasProject: true, changesCount: 0 });
+  const props = /** @type {import('react').ComponentProps<typeof Conversation>} */ ({ projection, hasProject: true, changedFiles: [] });
   const html = renderToStaticMarkup(<Conversation {...props} />);
   return html.match(/<details class="activity-group"><summary>(.*?)<span class="activity-label"/s)[1];
 }

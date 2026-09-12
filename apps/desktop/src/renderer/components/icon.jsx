@@ -28,6 +28,7 @@ const paths = {
   image: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 14 5-5 4 4 3-3 6 6M8 7h.01',
   folder: 'M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z',
   file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5',
+  fileDiff: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M9 12h6M12 9v6M9 18h6',
   changes: 'M7 20V5m0 0-3 3m3-3 3 3M17 4v15m0 0 3-3m-3 3-3-3',
   browser: 'M3 5h18v14H3ZM3 10h18', settings: 'M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-6 0v6',
   shield: 'm12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6', refresh: 'M20 7V3m0 4h-4M20 7a9 9 0 1 0 1 9',

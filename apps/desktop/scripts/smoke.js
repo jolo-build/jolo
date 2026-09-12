@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
 const splits = process.argv.includes("--splits");
+const changeSummary = process.argv.includes('--change-summary');
+if (changeSummary) process.env.JOLO_CHANGE_SUMMARY_SMOKE = '1';
 if (process.argv.includes('--mermaid')) process.env.JOLO_MERMAID_SMOKE = '1';
 if (process.argv.includes('--host-dialogs')) process.env.JOLO_HOST_DIALOG_SMOKE = '1';
 const chats = process.argv.includes('--chats');
@@ -37,8 +39,13 @@ const notes = "# Smoke notes\n\n- first item\n- second item\n";
 writeFileSync(path.join(project, "NOTES.md"), notes);
 const notesHash = `sha256:${new Bun.CryptoHasher("sha256").update(notes).digest("hex")}`;
 // A repository with one commit, so the worktree flow has a base to start from.
+if (changeSummary) {
+  mkdirSync(path.join(project, 'assets/icons'), { recursive: true });
+  for (const name of ['home', 'search', 'settings', 'star']) writeFileSync(path.join(project, `assets/icons/${name}.svg`), '<svg><!-- old --></svg>\n');
+}
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "smoke", GIT_AUTHOR_EMAIL: "smoke@example.com", GIT_COMMITTER_NAME: "smoke", GIT_COMMITTER_EMAIL: "smoke@example.com" };
 for (const args of [["init", "-q", "-b", "main"], ["add", "."], ["commit", "-q", "-m", "smoke fixture"]]) Bun.spawnSync(["git", ...args], { cwd: project, env: gitEnv });
+if (changeSummary) for (const name of ['home', 'search', 'settings', 'star', 'user', 'zoom']) writeFileSync(path.join(project, `assets/icons/${name}.svg`), '<svg><!-- updated --></svg>\n');
 // A stand-in for a vendor CLI, so the check does not depend on which agents this machine has installed.
 const agentsDir = path.join(home, "data", "default", "agents");
 mkdirSync(agentsDir, { recursive: true });
@@ -114,6 +121,7 @@ const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({p
 const scriptPath = path.join(home, "script.json");
 writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
+if (changeSummary) writeFileSync(scriptPath, JSON.stringify([{ text: ['Updated the icons.'] }, { text: [...Array.from({ length: 80 }, () => 'Checking the follow-up. '), 'Follow-up complete.'] }]));
 if (appIndex !== -1 && !process.argv[appIndex + 1]) throw new Error("--app requires the packaged desktop executable path");
 // Electron's types describe the API its own runtime exposes; required from Bun, the package exports the
 // path to the Electron executable instead.

@@ -1,11 +1,13 @@
 import { modelLabel } from '../model-options.js';
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
-import { runLabel, verificationLabel } from "../presentation.js";
+import { runLabel } from "../presentation.js";
+import { ChangeSummary } from './change-summary.jsx';
+import { readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
 import { TextAttachment } from './text-attachment.jsx';
 
@@ -134,11 +136,13 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, changesCount, verification, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, changedFiles = [], onLoadDiff, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
   const historyAnchor = useRef(null);
   const adjustedTop = useRef(null);
+  const [changeCards, setChangeCards] = useState(() => readChangeCards(sessionId));
+  const recordCounts = useCallback((runId, counts) => setChangeCards(cards => cards.map(card => card.runId === runId ? { ...card, counts } : card)), []);
   const messages = projection ? projection.ordered() : [];
   const runs = projection ? [...projection.runs.values()] : [];
   const captureAnchor = () => {
@@ -172,6 +176,12 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   // Queued messages (and ones removed before starting) have no transcript yet.
   // Their status must not replace the turn the conversation is displaying.
   const lastRun = activeRun ?? projection?.runs.get(messages.at(-1)?.runId) ?? runs.filter(run => ['failed', 'interrupted'].includes(run.state)).at(-1);
+  const filesSignature = JSON.stringify(changedFiles);
+  const finishedRunId = !activeRun && lastRun && ['completed', 'failed', 'cancelled', 'interrupted', 'paused'].includes(lastRun.state) ? lastRun.id : null;
+  useEffect(() => {
+    if (finishedRunId) setChangeCards(cards => updateChangeCards(cards, finishedRunId, JSON.parse(filesSignature)));
+  }, [finishedRunId, filesSignature]);
+  useEffect(() => { saveChangeCards(sessionId, changeCards); }, [sessionId, changeCards]);
   const identityFor = run => activityIdentity(run, { assistantName, assistantAgentId, providerModel, agents });
   const groups = [];
   for (const message of messages) {
@@ -182,6 +192,11 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
       if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
     } else groups.push({ type: "message", id: message.id, message });
+  }
+  if (lastRun && !["completed", "paused"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
+  for (const card of changeCards) {
+    const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
+    if (end >= 0) groups.splice(end + 1, 0, { type: 'changes', id: `changes:${card.runId}`, runId: card.runId });
   }
   return <div className="conversation" ref={container} onScroll={() => {
     const el = container.current;
@@ -196,6 +211,11 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
       </div>}
       {!messages.length && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
+        if (group.type === 'changes') {
+          const card = changeCards.find(card => card.runId === group.runId);
+          return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} frozen={group.runId !== finishedRunId || JSON.stringify(card.files) !== filesSignature} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={onLoadDiff} onReview={onReview} />;
+        }
+        if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;
@@ -211,8 +231,6 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
           {!message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={message.text} cacheKey={message.id} sessionId={projection?.runs.get(message.runId)?.sessionId ?? sessionId} streaming={message.status === "streaming"} /> : <div className="message-text">{message.text}</div>}
         </article>;
       })}
-      {lastRun && !["completed", "paused"].includes(lastRun.state) && <div className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>}
-      {changesCount > 0 && <div className="change-summary"><div><Icon name="changes" /><strong>Changes ready to inspect</strong><span className="grow" /><span className={verification?.status === "passed" ? "good" : "muted"}>{verificationLabel(verification)}</span></div><div><span className="muted">{changesCount} {changesCount === 1 ? "file changed" : "files changed"}</span><span className="grow" /><button onClick={onReview}>Review changes<Icon name="right" size={14} /></button></div></div>}
     </div>
   </div>;
 }
