@@ -3,9 +3,12 @@
 `Formula/jolo-cli.rb` and `Casks/jolo.rb` are the source files for the
 [jolo-build/homebrew-tap](https://github.com/jolo-build/homebrew-tap) repository.
 
-The `homebrew-tap` job in [cli-release.yml](../../.github/workflows/cli-release.yml) renders
-these with the checksums of each tagged release and pushes the result to the tap repository.
-Update them by editing the templates here — not in the tap repo, which is overwritten.
+The tap's `.github/workflows/update.yml` checks GitHub's latest stable Jolo release
+every 30 minutes and on manual dispatch. It downloads the published checksums and
+runs `scripts/update-homebrew-tap.js` from that release's tag to render the formula
+and cask. Unchanged versions are a no-op. GitHub may delay scheduled runs.
 
-The job needs a `TAP_GITHUB_TOKEN` repository secret: a fine-grained access token with
-contents read/write on `jolo-build/homebrew-tap`. Without the secret the job skips itself.
+The workflow runs in the tap repository with its own `GITHUB_TOKEN`; no personal
+access token or repository secret is needed. [update.yml](update.yml) is the source
+copy of that workflow. Copy changes to the tap's `.github/workflows/update.yml`.
+Edit the renderer script for formula/cask changes; generated files are overwritten.

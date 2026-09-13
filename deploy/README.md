@@ -22,6 +22,16 @@ Publishing validates all CLI archives, desktop DMGs, checksums, and manifests ag
 
 The desktop application is built as a drag-to-Applications DMG on macOS ARM64 and x64 and published as `jolo-desktop-<platform>-<arch>.dmg` with a checksum and manifest. Desktop bundles are optional but all-or-nothing: a release carries both architectures or neither, so an updater never finds a release that covers only some Macs. Release completeness for the installer is still judged on the four CLI archives alone, so a CLI-only release stays installable. The bundles are ad-hoc signed and not notarized; the application therefore reports a new release in Settings → About and leaves installing it to the user, because macOS will not hand an update to a signature it cannot attribute. Developer ID signing and notarization are what would unlock an in-application installer.
 
+After GitHub publication, the release workflow publishes `jolo-cli` to npm through
+OIDC trusted publishing. The npm package must authorize `jolo-build/jolo` and
+`cli-release.yml` with direct publishing enabled; no `NPM_TOKEN` is required.
+Prereleases use npm's `next` tag, keeping `latest` on the stable release.
+
+The [Homebrew tap workflow](homebrew/update.yml) runs in `jolo-build/homebrew-tap`
+every 30 minutes and on manual dispatch. It updates the CLI formula and desktop
+cask from the latest stable release using the tap's own `GITHUB_TOKEN`, without a
+cross-repository token. See [Homebrew automation](homebrew/README.md).
+
 The installer remains `curl -fsSL https://jolo.build/install.sh | bash`. The website Worker resolves `/releases/latest.txt` from GitHub's latest complete stable release, with a five-minute cache. Versioned archive and checksum URLs redirect to GitHub Releases when no original static asset exists.
 
 `jolo update` reads GitHub directly. It resolves the current version from `releases/latest/download/latest.txt`, an asset the publish step uploads, which avoids the GitHub API's unauthenticated rate limit. `scripts/install.sh` understands both asset layouts — GitHub's `releases/download/vVERSION/` and an origin's `releases/VERSION/` — chosen by `JOLO_INSTALL_LAYOUT` or inferred from the base URL. `JOLO_UPDATE_BASE_URL` points a client at a different origin for testing. Original static downloads remain unchanged. `--version 0.2.0-rc.1` installs a prerelease explicitly. Metadata outages return an error rather than silently choosing an older release.

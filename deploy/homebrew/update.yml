@@ -1,0 +1,64 @@
+name: Update Jolo releases
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-jolo-release
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: tap
+      - name: Find the latest published stable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api repos/jolo-build/jolo/releases/latest --jq 'select(.draft == false and .prerelease == false) | .tag_name')
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'Invalid stable release tag' >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: jolo-build/jolo
+          ref: ${{ steps.release.outputs.tag }}
+          path: source
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: source/.bun-version
+      - name: Download checksums and render formula and cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo jolo-build/jolo --pattern '*.sha256' --dir "$RUNNER_TEMP/release-assets"
+          bun source/scripts/update-homebrew-tap.js "${RELEASE_TAG#v}" "$RUNNER_TEMP/release-assets" --out tap
+          ruby -c tap/Formula/jolo-cli.rb
+          ruby -c tap/Casks/jolo.rb
+      - name: Commit and push changed versions
+        working-directory: tap
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git add Formula/jolo-cli.rb Casks/jolo.rb
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'Tap is already up to date.'
+            exit 0
+          fi
+          git -c user.name='jolo-release-bot' -c user.email='releases@jolo.build' commit -m "Jolo ${RELEASE_TAG}"
+          git push

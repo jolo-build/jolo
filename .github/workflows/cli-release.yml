@@ -140,87 +140,31 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: bun scripts/ci-release.js publish release-assets
 
-  homebrew-tap:
-    name: Update Homebrew tap
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
-    needs: [publish]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-    steps:
-      - name: Skip when no tap token is configured
-        id: gate
-        if: env.TAP_TOKEN == ''
-        run: echo '::notice::TAP_GITHUB_TOKEN is not set; skipping the Homebrew tap update.'
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: env.TAP_TOKEN != ''
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: env.TAP_TOKEN != ''
-        with:
-          repository: jolo-build/homebrew-tap
-          path: homebrew-tap
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: env.TAP_TOKEN != ''
-        with:
-          bun-version-file: .bun-version
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: env.TAP_TOKEN != ''
-        with:
-          pattern: 'cli-*'
-          path: release-assets
-          merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: env.TAP_TOKEN != ''
-        with:
-          pattern: 'desktop-*'
-          path: release-assets
-          merge-multiple: true
-      - name: Render and push the updated formula and cask
-        if: env.TAP_TOKEN != ''
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          bun scripts/update-homebrew-tap.js "${RELEASE_TAG#v}" release-assets --out homebrew-tap
-          cd homebrew-tap
-          if git diff --quiet && git diff --cached --quiet; then
-            echo 'Tap is already up to date.'
-            exit 0
-          fi
-          git add Formula Casks
-          git -c user.name='jolo-release-bot' -c user.email='releases@jolo.build' commit -m "Jolo ${RELEASE_TAG}"
-          git push
-
   npm-publish:
     name: Publish jolo-cli to npm
     if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
     needs: [publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Skip when no npm token is configured
-        if: env.NPM_TOKEN == ''
-        run: echo '::notice::NPM_TOKEN is not set; skipping the npm publish.'
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: env.NPM_TOKEN != ''
         with:
           persist-credentials: false
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
-        if: env.NPM_TOKEN != ''
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
       - name: Publish the installer package
-        if: env.NPM_TOKEN != ''
         working-directory: apps/cli/npm
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm version "${RELEASE_TAG#v}" --no-git-tag-version --allow-same-version
-          npm publish --access public
+          # Prereleases must not replace the default stable npm version.
+          dist_tag=latest
+          if [[ "$RELEASE_TAG" == *-* ]]; then dist_tag=next; fi
+          npm publish --access public --tag "$dist_tag"
