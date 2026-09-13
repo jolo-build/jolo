@@ -10,11 +10,13 @@ export function engineCommand({ engineDir, sourceEntry, extraArgs = [], env = pr
     if (!Array.isArray(command) || !command.length || command.some(value => typeof value !== 'string' || !value)) throw new Error('JOLO_ENGINE_CMD must be a non-empty JSON argv array');
     return [...command, ...extraArgs];
   }
-  const compiled = path.join(path.dirname(execPath), 'jolo-engine');
-  if (isBun && path.basename(execPath) !== 'bun' && existsSync(compiled)) return [compiled, 'serve', ...extraArgs];
+  const win32 = process.platform === 'win32';
+  const bunName = win32 ? 'bun.exe' : 'bun';
+  const compiled = path.join(path.dirname(execPath), win32 ? 'jolo-engine.exe' : 'jolo-engine');
+  if (isBun && path.basename(execPath) !== bunName && existsSync(compiled)) return [compiled, 'serve', ...extraArgs];
   const bundled = path.join(engineDir, 'engine.js');
   const entry = existsSync(bundled) ? bundled : typeof sourceEntry === 'function' ? sourceEntry() : sourceEntry;
-  const candidates = [env.JOLO_BUN, path.join(engineDir, 'bun'), ...(isBun ? [execPath] : []), ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, 'bun')), path.join(os.homedir(), '.bun/bin/bun')];
+  const candidates = [env.JOLO_BUN, path.join(engineDir, bunName), ...(isBun ? [execPath] : []), ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, bunName)), path.join(os.homedir(), '.bun/bin', bunName)];
   const runtime = candidates.find(candidate => candidate && existsSync(candidate));
   if (!runtime) throw new Error('Bun runtime not found; install the pinned runtime or set JOLO_BUN');
   if (!entry || !existsSync(entry)) throw new Error('Jolo engine entry not found; rebuild the application');

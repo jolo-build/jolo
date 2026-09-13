@@ -7,7 +7,7 @@ import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
 import { runLabel } from "../presentation.js";
 import { ChangeSummary } from './change-summary.jsx';
-import { readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
+import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
 import { TextAttachment } from './text-attachment.jsx';
 
@@ -136,13 +136,24 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
 }
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, changedFiles = [], onLoadDiff, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
   const historyAnchor = useRef(null);
   const adjustedTop = useRef(null);
   const [changeCards, setChangeCards] = useState(() => readChangeCards(sessionId));
   const recordCounts = useCallback((runId, counts) => setChangeCards(cards => cards.map(card => card.runId === runId ? { ...card, counts } : card)), []);
+  const loadRunDiff = useCallback(async (path, file) => {
+    if (!file?.diffArtifactIds?.length) return { source: 'none', diff: '', truncated: false };
+    let diff = '', truncated = false;
+    for (const artifactId of file.diffArtifactIds) {
+      const response = await window.jolo.call('artifact.read', { artifactId, length: 64 * 1024 });
+      if (!response.ok) throw new Error(response.error.message);
+      diff += fileDiffSections(response.result.text, path);
+      truncated ||= !response.result.eof || response.result.text.includes('…');
+    }
+    return { source: 'artifact', diff, truncated };
+  }, []);
   const messages = projection ? projection.ordered() : [];
   const runs = projection ? [...projection.runs.values()] : [];
   const captureAnchor = () => {
@@ -176,11 +187,10 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   // Queued messages (and ones removed before starting) have no transcript yet.
   // Their status must not replace the turn the conversation is displaying.
   const lastRun = activeRun ?? projection?.runs.get(messages.at(-1)?.runId) ?? runs.filter(run => ['failed', 'interrupted'].includes(run.state)).at(-1);
-  const filesSignature = JSON.stringify(changedFiles);
-  const finishedRunId = !activeRun && lastRun && ['completed', 'failed', 'cancelled', 'interrupted', 'paused'].includes(lastRun.state) ? lastRun.id : null;
+  const changesSignature = JSON.stringify(runs.map(({ id, state, changedPaths, changeEvents }) => ({ id, state, changedPaths, changeEvents })));
   useEffect(() => {
-    if (finishedRunId) setChangeCards(cards => updateChangeCards(cards, finishedRunId, JSON.parse(filesSignature)));
-  }, [finishedRunId, filesSignature]);
+    setChangeCards(cards => updateChangeCards(cards, JSON.parse(changesSignature)));
+  }, [changesSignature]);
   useEffect(() => { saveChangeCards(sessionId, changeCards); }, [sessionId, changeCards]);
   const identityFor = run => activityIdentity(run, { assistantName, assistantAgentId, providerModel, agents });
   const groups = [];
@@ -213,7 +223,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
       {groups.map((group) => {
         if (group.type === 'changes') {
           const card = changeCards.find(card => card.runId === group.runId);
-          return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} frozen={group.runId !== finishedRunId || JSON.stringify(card.files) !== filesSignature} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={onLoadDiff} onReview={onReview} />;
+          return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={loadRunDiff} onReview={onReview} />;
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;

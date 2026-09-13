@@ -16,6 +16,7 @@ const source = readFileSync(new URL('../src/preload/index.cjs', import.meta.url)
  *   homeDirectory: () => Promise<string | null>,
  *   prepareVisualization?: (params: { sessionId: string, path: string, [key: string]: unknown }) => Promise<unknown>,
  *   saveImage: (params: { artifactId: string, name: string, [key: string]: unknown }) => Promise<unknown>,
+ *   pickChatFile: (params: { sessionId: string, [key: string]: unknown }) => Promise<unknown>,
  * }} PreloadApi
  */
 
@@ -51,9 +52,11 @@ test('a current desktop exposes the new handlers through the narrow bridge', asy
   await api.homeDirectory();
   await api.prepareVisualization({ sessionId: 'chat', path: '/repo/preview.html', ignored: true });
   await api.saveImage({ artifactId: 'art_image', name: 'Generated image', path: '/ignored.png', data: 'ignored' });
+  await api.pickChatFile({ sessionId: 'chat', path: '/ignored', properties: ['openDirectory'] });
   expect(calls).toEqual([
     ['jolo:homeDirectory'],
     ['jolo:visualization:prepare', { sessionId: 'chat', path: '/repo/preview.html' }],
     ['jolo:image:save', { artifactId: 'art_image', name: 'Generated image' }],
+    ['jolo:pickChatFile', { sessionId: 'chat', projectId: undefined, workspaceId: undefined }],
   ]);
 });

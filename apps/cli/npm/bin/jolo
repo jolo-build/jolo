@@ -1,0 +1,17 @@
+#!/bin/sh
+# npm-installed shim: find the real Jolo inside this package's vendor directory.
+set -eu
+JOLO_SHIM=$0
+JOLO_HOPS=0
+while [ -L "$JOLO_SHIM" ]; do
+  JOLO_HOPS=$((JOLO_HOPS + 1))
+  [ "$JOLO_HOPS" -le 40 ] || { echo 'jolo: too many launcher symlinks' >&2; exit 1; }
+  JOLO_PARENT=$(CDPATH= cd -P "$(dirname "$JOLO_SHIM")" && pwd)
+  JOLO_LINK=$(readlink "$JOLO_SHIM")
+  case "$JOLO_LINK" in
+    /*) JOLO_SHIM=$JOLO_LINK ;;
+    *) JOLO_SHIM=$JOLO_PARENT/$JOLO_LINK ;;
+  esac
+done
+JOLO_PKG=$(CDPATH= cd -P "$(dirname "$JOLO_SHIM")/.." && pwd)
+exec "$JOLO_PKG/vendor/jolo/bin/jolo" "$@"

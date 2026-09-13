@@ -22,6 +22,7 @@ import { openChatFile } from './chat-files.js';
 import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
 import { saveArtifactImage } from './image-downloads.js';
 import { installReloadShortcuts } from './reload-shortcuts.js';
+import { installCloseShortcuts } from './close-shortcuts.js';
 import { HostDialogs } from './host-dialogs.js';
 
 protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }, { scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
@@ -50,7 +51,7 @@ const log = {
 
 /** Methods the renderer may invoke through the bridge; everything else fails closed. */
 const RENDERER_METHODS = new Set([
-  "engine.status", "project.open", "chat.create", "session.create", "session.list", "session.page",
+  "engine.status", "project.open", "project.linkFolder", "chat.create", "session.create", "session.list", "session.page",
   "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
@@ -193,6 +194,7 @@ function createWindow() {
   nativeTheme.on("updated", updateBackground);
   window.once("closed", () => nativeTheme.removeListener("updated", updateBackground));
   installReloadShortcuts(window.webContents);
+  installCloseShortcuts(window.webContents);
   window.webContents.setWindowOpenHandler(({ url }) => {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch { /* ignore */ }
     return { action: "deny" };
@@ -208,6 +210,7 @@ function createWindow() {
 function registerIpc(window, bridge, visualizations, releases, filePreviews) {
   // A closing renderer can still deliver IPC after the window is gone; never dereference a destroyed window.
   const trusted = (event) => !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+  ipcMain.on('jolo:quit', event => { if (trusted(event)) app.quit(); });
   ipcMain.handle('jolo:image:save', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try { return { ok: true, result: await saveArtifactImage((method, args) => bridge.rawCall(method, args), options => dialog.showSaveDialog(window, options), params) }; }
@@ -277,6 +280,13 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
     catch (error) { return { ok: false, error: String(error?.message ?? 'Could not preview this file.') }; }
   });
   ipcMain.handle('jolo:releaseChatFile', (event, url) => { if (!trusted(event)) throw new Error('untrusted sender'); filePreviews.release(url); });
+  ipcMain.handle('jolo:pickChatFile', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try {
+      const selection = await dialog.showOpenDialog(window, { properties: ['openFile'] });
+      return { ok: true, result: selection.canceled ? null : await filePreviews.prepare({ sessionId: params?.sessionId, projectId: params?.projectId, workspaceId: params?.workspaceId, path: selection.filePaths[0] }) };
+    } catch (error) { return { ok: false, error: String(error?.message ?? 'Could not open this file.') }; }
+  });
   ipcMain.handle("jolo:openExternal", (event, url) => {
     if (!trusted(event)) throw new Error("untrusted sender");
     try { if (["http:", "https:"].includes(new URL(url).protocol)) return shell.openExternal(url); } catch { /* ignore */ }

@@ -1,10 +1,38 @@
 import { test, expect } from 'bun:test';
-import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { openChatFile, previewChatFile } from '../src/main/chat-files.js';
 import { createFilePreviewStore } from '../src/main/file-preview-store.js';
 import { parseInline } from '@jolo/markdown';
+import { fileReference, webReference } from '@jolo/markdown/file-links';
+
+test('bare web addresses are not file references, while explicit paths remain files', () => {
+  for (const target of ['signals.cypho.io', 'cypho.io', 'example.com/docs/PLAN.md', 'signals.cypho.io:8443', 'www.example.com', 'example.ai', 'localhost:3000']) {
+    expect(webReference(target)).toMatch(/^https?:\/\//);
+    expect(fileReference(target)).toBeNull();
+    expect(fileReference(target, { explicit: true })).toBeNull();
+    expect(parseInline(`[Website](${target})`)[0]).toMatchObject({ type: 'link', href: webReference(target) });
+    expect(parseInline(`[Website](${target})`)[0].local).not.toBe(true);
+  }
+  for (const target of ['PLAN.md', 'app.js', 'main.go', 'schema.db', 'archive.gz', 'src/app.ts', './signals.cypho.io', '/tmp/signals.cypho.io']) {
+    expect(webReference(target)).toBeNull();
+    expect(fileReference(target)).toBe(target);
+  }
+  expect(fileReference('file:///tmp/signals.cypho.io')).toBe('/tmp/signals.cypho.io');
+  for (const target of ['javascript:alert(1)', 'data:text/html,test', 'user@example.com', 'src/test.py', 'https://']) expect(webReference(target)).toBeNull();
+});
+
+test('a domain in inline code renders as a website without the file-preview action', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { createElement } = await import('react');
+  const { Markdown } = await import('../src/renderer/components/markdown.jsx');
+  const html = renderToStaticMarkup(createElement(Markdown, { text: 'Configuration for `signals.cypho.io` and `PLAN.md`.', cacheKey: 'domain', sessionId: 's' }));
+  expect(html).toContain('href="https://signals.cypho.io/"');
+  expect(html).toContain('<code>signals.cypho.io</code>');
+  expect(html).not.toContain('Open signals.cypho.io');
+  expect(html).toContain('Open PLAN.md');
+});
 
 test('preserves local Markdown destinations and rejects executable URL schemes', () => {
   expect(parseInline('[Download](report.pdf)')[0]).toMatchObject({ type: 'link', local: true, href: 'report.pdf' });
@@ -78,4 +106,30 @@ test('file previews read Markdown and code, serve media privately, and keep unkn
     expect(store.response(new Request(url)).status).toBe(404);
     expect(store.response(new Request('jolo-file-preview://preview/PLAN.md')).status).toBe(404);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('bare filenames resolve uniquely inside the chat workspace without guessing explicit paths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jolo-basename-'));
+  const other = await mkdtemp(path.join(os.tmpdir(), 'jolo-other-workspace-'));
+  const call = async method => method === 'session.page' ? { session: { projectId: 'p', workspaceId: 'w' } } : { workspaces: [{ id: 'w', path: root, present: true }, { id: 'other', path: other, present: true }] };
+  try {
+    await mkdir(path.join(root, 'apps/cli/npm'), { recursive: true });
+    await mkdir(path.join(root, 'node_modules/dependency'), { recursive: true });
+    await writeFile(path.join(root, 'apps/cli/npm/install.js'), 'nested installer');
+    await writeFile(path.join(root, 'node_modules/dependency/install.js'), 'dependency');
+    await writeFile(path.join(other, 'install.js'), 'another workspace');
+    await writeFile(path.join(other, 'external.js'), 'outside');
+    await symlink(other, path.join(root, 'linked-directory'));
+    expect(await previewChatFile(call, { sessionId: 's', path: 'install.js:12' })).toMatchObject({ text: 'nested installer', kind: 'text' });
+    await expect(previewChatFile(call, { sessionId: 's', path: './install.js' })).rejects.toThrow('File not found');
+    await expect(previewChatFile(call, { sessionId: 's', path: 'wrong/install.js' })).rejects.toThrow('File not found');
+    await expect(previewChatFile(call, { sessionId: 's', path: 'external.js' })).rejects.toThrow('File not found');
+    await mkdir(path.join(root, 'scripts'));
+    await writeFile(path.join(root, 'scripts/install.js'), 'another installer');
+    await expect(previewChatFile(call, { sessionId: 's', path: 'install.js' })).rejects.toThrow('More than one file');
+    expect(await previewChatFile(call, { sessionId: 's', path: 'apps/cli/npm/install.js' })).toMatchObject({ text: 'nested installer' });
+    await writeFile(path.join(root, 'install.js'), 'root installer');
+    expect(await previewChatFile(call, { sessionId: 's', path: 'install.js' })).toMatchObject({ text: 'root installer' });
+  } finally { await rm(root, { recursive: true, force: true }); await rm(other, { recursive: true, force: true }); }
 });

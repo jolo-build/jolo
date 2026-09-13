@@ -23,11 +23,11 @@ import { Conversation } from '../src/renderer/components/conversation.jsx';
  */
 const reasoning = (overrides = {}) => ({ id: 'thinking', role: 'assistant', kind: 'reasoning', text: '', status: 'complete', renderedBytes: 0, committedBytes: 0, ...overrides });
 /** @param {PartialMessage[]} messages what the projection returns, newest last */
-const render = (...messages) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true, changedFiles: [] }))} />);
+const render = (...messages) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true }))} />);
 
 test('saved history exposes a load action, progress, and retryable errors', () => {
   const history = { hasOlder: true, loading: false };
-  const markup = () => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ history, hasProject: true, changedFiles: [] }))} />);
+  const markup = () => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ history, hasProject: true }))} />);
   expect(markup()).toContain('Load earlier messages');
   history.loading = true;
   expect(markup()).toContain('Loading earlier messages…');
@@ -55,7 +55,7 @@ describe('conversation activity', () => {
   const renderWorking = (run = {}, messages = [reasoning({ runId: 'active', status: 'streaming' })], props = {}) => renderToStaticMarkup(<Conversation
     {...(/** @type {ConversationProps} */ ({
       projection: { ordered: () => messages, runs: new Map([['active', { id: 'active', state: 'model', ...run }]]) },
-      hasProject: true, changedFiles: [], assistantName: 'Codex', assistantAgentId: 'codex', providerModel: 'gpt-5.6-sol', agents,
+      hasProject: true, assistantName: 'Codex', assistantAgentId: 'codex', providerModel: 'gpt-5.6-sol', agents,
     }))} {...props}
   />);
 
@@ -131,7 +131,7 @@ describe('conversation activity', () => {
     expect(render(reasoning({ kind: 'tool', committedBytes: 12 }))).toContain('Loading tool…');
   });
   test('removing a queued follow-up does not label the active conversation stopped', () => {
-    const html = renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [{ id: 'user', runId: 'active', role: 'user', kind: 'text', text: 'work', status: 'complete' }], runs: new Map([['active', { id: 'active', state: 'model' }], ['removed', { id: 'removed', state: 'cancelled' }]]) }, hasProject: true, changedFiles: [] }))} />);
+    const html = renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [{ id: 'user', runId: 'active', role: 'user', kind: 'text', text: 'work', status: 'complete' }], runs: new Map([['active', { id: 'active', state: 'model' }], ['removed', { id: 'removed', state: 'cancelled' }]]) }, hasProject: true }))} />);
     expect(html).not.toContain('Stopped');
     expect(html).toContain('Working');
   });

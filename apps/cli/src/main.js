@@ -8,6 +8,7 @@ import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema } 
 import { findProject, renderBoardDetail, renderBoardTable } from "./board.js";
 import { deleteSession, listSessions, restoreSession } from "./sessions.js";
 import { runAccountCommand } from './account.js';
+import { commandDemo } from './demo.js';
 import { backgroundCheck, commandUpdate, pendingUpdate } from './update.js';
 
 import { engineCommand as resolveEngineCommand } from "@jolo/launcher/executable";
@@ -64,6 +65,7 @@ const USAGE = `usage:
   jolo login [--tasks] [--no-open] [--server <url>] [--device-name <name>] [--json]
   jolo logout [--json]                  sign out of your Jolo account on this profile
   jolo whoami [--json]                  show your Jolo account
+  jolo demo [--fast]                     watch a scripted session — no agent or account needed
   jolo engine serve | stop [--cancel]
   jolo update [<version>] [--check] [--json]   install the newest published release
 `;
@@ -677,7 +679,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
+  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

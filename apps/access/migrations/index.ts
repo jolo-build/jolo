@@ -1,5 +1,6 @@
 import chatSync from './0009_chat_sync.ts';
 import registrationEvents from './0010_registration_events.ts';
+import chatShares from './0011_chat_shares.ts';
 import accounts from './0001_accounts.ts';
 import devices from './0002_devices.ts';
 import tasksTeams from './0003_tasks_teams.ts';
@@ -26,4 +27,5 @@ export const migrations: readonly D1Migration[] = Object.freeze([
   { name: '0008_task_prefixes.sql', sql: taskPrefixes },
   { name: '0009_chat_sync.sql', sql: chatSync },
   { name: '0010_registration_events.sql', sql: registrationEvents },
+  { name: '0011_chat_shares.sql', sql: chatShares },
 ]);

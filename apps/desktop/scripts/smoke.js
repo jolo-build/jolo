@@ -14,8 +14,11 @@ const chats = process.argv.includes('--chats');
 if (process.argv.includes('--onboarding')) process.env.JOLO_ONBOARDING_SMOKE = '1';
 if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 if (process.argv.includes('--reload')) process.env.JOLO_RELOAD_SMOKE = '1';
+if (process.argv.includes('--close-shortcuts')) process.env.JOLO_CLOSE_SHORTCUTS_SMOKE = '1';
 if (process.argv.includes('--zoom')) process.env.JOLO_ZOOM_SMOKE = '1';
 if (process.argv.includes('--panels')) process.env.JOLO_PANELS_SMOKE = '1';
+if (process.argv.includes('--panel-tabs')) process.env.JOLO_PANEL_TABS_SMOKE = '1';
+if (process.argv.includes('--chat-folders')) process.env.JOLO_CHAT_FOLDERS_SMOKE = '1';
 if (process.argv.includes('--file-previews')) process.env.JOLO_FILE_PREVIEWS_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
@@ -35,6 +38,20 @@ if (browserChat) process.env.JOLO_BROWSER_CHAT_SMOKE = '1';
 if (process.argv.includes('--attachments')) process.env.JOLO_ATTACHMENTS_SMOKE = '1';
 const home = mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "jolo-desktop-smoke-"));
 const project = path.join(home, "repo");
+if (process.env.JOLO_CHAT_FOLDERS_SMOKE === '1') {
+  const { Storage } = await import('../../engine/src/storage/index.js');
+  const { ChatSync } = await import('../../engine/src/account/chat-sync.js');
+  const { PermissionService } = await import('../../engine/src/permissions/service.js');
+  const { resolvePaths } = await import('../../../packages/launcher/src/paths.js');
+  const paths = resolvePaths({ home });
+  const storage = new Storage({ ...paths, bootId: 'boot_folder_smoke' });
+  const sync = new ChatSync({ storage, paths, permissions: new PermissionService({ storage }), account: { origin: 'https://sync.invalid', record: { account: { id: 'fixture' }, device: { scopes: [] } } } });
+  try {
+    const context = { project: { id: crypto.randomUUID(), name: 'Signals' }, workspace: { id: crypto.randomUUID(), name: 'Signals', mode: 'direct', branch: null } };
+    const id = sync.restore({ version: 2, title: 'Synced project task', context, messages: [{ role: 'user', text: 'Keep this conversation in Signals.' }, { role: 'assistant', text: 'Project history restored on this device.' }] });
+    process.env.JOLO_SMOKE_SYNC_ROOT = storage.getProject(storage.getSession(id).projectId).rootPath;
+  } finally { await sync.stop(); storage.close(); }
+}
 mkdirSync(path.join(project, "src"), { recursive: true });
 writeFileSync(path.join(project, "src/app.js"), "export const answer = 42;\n");
 const notes = "# Smoke notes\n\n- first item\n- second item\n";
@@ -103,7 +120,7 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const visualizationPath = path.join(realpathSync(project), 'preview.html');
-if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · [app.js](src/app.js) · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip)'];
+if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · `app.js` · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip) · `missing.js` needs a program.'];
 if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
   'flowchart TD',
   '  A[Workflow authors] -->|HTTPS after DNS is configured| D[Caddy reverse proxy\\nonly published entry point]',
@@ -124,7 +141,14 @@ const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({p
 const scriptPath = path.join(home, "script.json");
 writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
-if (changeSummary) writeFileSync(scriptPath, JSON.stringify([{ text: ['Updated the icons.'] }, { text: [...Array.from({ length: 80 }, () => 'Checking the follow-up. '), 'Follow-up complete.'] }]));
+if (changeSummary) writeFileSync(scriptPath, JSON.stringify([
+  { text: ['Inspected the icons. No files changed.'] },
+  { toolCalls: [{ name: 'apply_patch', arguments: { operations: ['home', 'search', 'settings', 'star', 'user', 'zoom'].map(name => ({ op: 'create', path: `run-icons/${name}.svg`, content: '<svg><!-- created --></svg>\n' })) } }] },
+  { text: ['Created six icons.'] },
+  { text: [...Array.from({ length: 80 }, () => 'Checking the follow-up. '), 'No edits needed.'] },
+  { toolCalls: [{ name: 'replace_exact', arguments: { path: 'run-icons/home.svg', expectedHash: `sha256:${new Bun.CryptoHasher('sha256').update('<svg><!-- created --></svg>\n').digest('hex')}`, oldText: '<svg><!-- created --></svg>', newText: '<svg><!-- revised --></svg>\n<!-- another line -->' } }] },
+  { text: ['Revised one icon.'] },
+]));
 if (appIndex !== -1 && !process.argv[appIndex + 1]) throw new Error("--app requires the packaged desktop executable path");
 // Electron's types describe the API its own runtime exposes; required from Bun, the package exports the
 // path to the Electron executable instead.

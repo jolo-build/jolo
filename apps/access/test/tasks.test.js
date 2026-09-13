@@ -18,6 +18,21 @@ function post(f,a,path,values={},origin=f.env.ACCESS_ORIGIN) {
 }
 const get=(f,a,path)=>f.send(path,{headers:{cookie:a.cookie}});
 const fields=(extra={})=>({title:'Fix the sign-in form',description:'Reproduce, fix, and test the browser flow.',project:'jolo',state:'todo',priority:'normal',team:'',assignee:'',request_id:crypto.randomUUID(),...extra});
+
+test('task connection guidance disappears only with active task access and returns after revocation', async()=>{
+  const f=fixture(),a=await actor(f,1),auth=createRepository(f.db,f.now);
+  const created=await post(f,a,'/tasks',fields());
+  const path=created.headers.get('location'),hint='Next: use this task with your coding agent';
+  expect(await (await get(f,a,path)).text()).toContain(hint);
+  const connect=async(id,scope,expires)=>auth.createDevice(id,await hashToken(randomToken()),a.id,'Fixture device',expires,scope);
+  await connect('identity','account:read',f.now()+60000);
+  await connect('expired','account:read tasks:read',f.now()-1);
+  expect(await (await get(f,a,path)).text()).toContain(hint);
+  await connect('tasks','account:read tasks:read',f.now()+60000);
+  expect(await (await get(f,a,path)).text()).not.toContain(hint);
+  await auth.revokeDevice('tasks',a.id);
+  expect(await (await get(f,a,path)).text()).toContain(hint);
+});
 async function setup() {
   const f=fixture(),owner=await actor(f,1),admin=await actor(f,2),member=await actor(f,3),viewer=await actor(f,4),outsider=await actor(f,5),repo=taskRepository(f.db,f.now);
   const team=await repo.createTeam(owner.id,'Core');

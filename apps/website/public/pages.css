@@ -1,0 +1,44 @@
+@font-face{font-family:'Inter';src:url('/fonts/Inter-latin.woff2') format('woff2');font-weight:100 900;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('/fonts/JetBrainsMono-latin.woff2') format('woff2');font-weight:100 800;font-display:swap}
+*{box-sizing:border-box}
+html{background:#fcfcfb}
+body{margin:0;background:#fcfcfb;color:#161616;font:1rem/1.65 'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+a:focus-visible{outline:2px solid #161616;outline-offset:4px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:1rem;max-width:68rem;margin:0 auto;padding:1.25rem 1.5rem}
+.top .brand{font-weight:700;text-decoration:none;letter-spacing:-.02em}
+.top nav{display:flex;gap:1.25rem;font-size:.92rem}
+.top nav a{color:#5a5a55;text-decoration:none}
+.top nav a:hover{color:#161616}
+.wrap{max-width:68rem;margin:0 auto;padding:0 1.5rem 4rem}
+header.page{padding:3.5rem 0 2rem;border-bottom:1px solid #e7e7e1}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:.8rem;letter-spacing:.06em;text-transform:uppercase;color:#8a8a83}
+h1{font-size:clamp(2rem,5vw,3rem);font-weight:650;line-height:1.12;letter-spacing:-.03em;margin:.6rem 0 .8rem}
+.lede{font-size:1.12rem;color:#5a5a55;max-width:44rem;margin:0}
+section{padding:2.25rem 0;border-bottom:1px solid #e7e7e1}
+section:last-of-type{border-bottom:0}
+h2{font-size:1.45rem;font-weight:650;letter-spacing:-.02em;margin:0 0 1rem}
+h3{font-size:1.05rem;font-weight:600;margin:1.5rem 0 .4rem}
+p{max-width:44rem}
+.muted{color:#5a5a55}
+ul{padding-left:1.2rem;max-width:44rem}
+li{margin:.3rem 0}
+table{width:100%;border-collapse:collapse;font-size:.95rem;margin:.5rem 0 1rem}
+caption{text-align:left;font-family:'JetBrains Mono',monospace;font-size:.78rem;color:#8a8a83;padding-bottom:.6rem;letter-spacing:.04em}
+th,td{text-align:left;padding:.6rem .9rem;border:1px solid #e7e7e1;vertical-align:top}
+th{background:#f4f4f0;font-weight:600;font-size:.85rem}
+td:first-child{font-weight:600;white-space:nowrap}
+.cta{display:inline-flex;align-items:center;gap:.5rem;border:1px solid #161616;background:#161616;color:#fcfcfb;text-decoration:none;padding:.75rem 1.4rem;font-weight:600;margin-top:.5rem}
+.cta:hover{background:#000}
+.cta.secondary{background:transparent;color:#161616}
+.cta.secondary:hover{background:#161616;color:#fcfcfb}
+.note{font-size:.85rem;color:#8a8a83}
+footer.site{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1.4rem;max-width:68rem;margin:0 auto;padding:2rem 1.5rem 3rem;border-top:1px solid #e7e7e1;font-size:.9rem;color:#5a5a55}
+footer.site a{color:#5a5a55;text-decoration:none}
+footer.site a:hover{color:#161616}
+footer.site .brand{color:#161616;font-weight:700}
+@media (max-width:640px){
+  table{font-size:.85rem}
+  th,td{padding:.5rem .6rem}
+  td:first-child{white-space:normal}
+}

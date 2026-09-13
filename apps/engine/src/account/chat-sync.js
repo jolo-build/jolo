@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { CHAT_BYTES, validChat } from '../../../../packages/protocol/src/chat-sync.js';
 import { ProtocolError } from '@jolo/protocol';
+import { exportChatContext, restoreChatContext, rememberChatContext } from './chat-context.js';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export class ChatSync {
@@ -41,6 +42,7 @@ export class ChatSync {
       catch { throw new Error('Chat sync is offline. It will retry automatically.'); }
       if (!current()) throw new Error('Chat sync paused.');
       if (response.status === 409) return null;
+      if (response.status === 400 && body?.chat?.version === 2) throw new Error('Update the Access service to enable project and folder sync.');
       if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Reconnect chat sync in Account settings.' : 'Chat sync is unavailable. It will retry automatically.');
       const reader = response.body.getReader(), chunks = []; let size = 0;
       while (true) { const {done,value} = await reader.read(); if(done) break; size += value.byteLength; if(size > CHAT_BYTES + 65536) { await reader.cancel(); throw new Error('Invalid chat sync response.'); } chunks.push(value); }
@@ -120,20 +122,28 @@ export class ChatSync {
       if (artifact.committedBytes > CHAT_BYTES) throw new Error('A message exceeds the 1 MB chat sync limit.');
       return { role: row.role, text: this.storage.artifacts.read(artifact.storageKey,0,CHAT_BYTES,artifact.committedBytes).buffer.toString('utf8') };
     });
-    return { version: 1, title: session.title, messages };
+    const context = exportChatContext(this.storage, this.identity(), session);
+    return context ? { version: 2, title: session.title, messages, context } : { version: 1, title: session.title, messages };
   }
   restore(chat, existing = null) {
     return this.storage.transaction(() => {
       let session = existing && this.storage.getSession(existing);
+      const destination = chat.version === 2 ? restoreChatContext(this.storage, this.paths, this.identity(), chat.context) : null;
+      if (session && destination) {
+        this.storage.db.query('UPDATE sessions SET project_id=?2,workspace_id=?3 WHERE id=?1').run(session.id, destination.projectId, destination.workspaceId);
+        if (session.workspaceId !== destination.workspaceId && this.storage.getProjectPreferences(session.projectId).standalone && !this.storage.countSessionsForWorkspace(session.workspaceId)) this.storage.markWorkspaceRemoved(session.workspaceId);
+      }
+      if (!session && destination) session = this.storage.createSession({ ...destination, title: chat.title });
       if (!session) {
         const base = path.join(this.paths.dataDir,'chats'); mkdirSync(base,{recursive:true,mode:0o700});
-        const root = mkdtempSync(path.join(base,'synced-'));
+        const root = realpathSync(mkdtempSync(path.join(base,'synced-')));
         const project = this.storage.upsertProject({identity:root,rootPath:root});
         this.storage.setProjectPreferences(project.id,{standalone:true});
         const workspace = this.storage.ensureDirectWorkspace(project.id,root);
         this.permissions.grantInspect(workspace.id);
         session = this.storage.createSession({projectId:project.id,workspaceId:workspace.id,title:chat.title});
       }
+      if (destination) rememberChatContext(this.storage, this.identity(), session.id, chat.context);
       const offset = this.export(session.id).messages.length;
       this.storage.db.query("UPDATE sessions SET title=?2,agent_state='{}',revision=revision+1,updated_at=?3 WHERE id=?1").run(session.id,chat.title,new Date().toISOString());
       for (const m of chat.messages.slice(offset)) {

@@ -1,0 +1,34 @@
+{
+  "name": "jolo-cli",
+  "version": "0.2.1",
+  "description": "Terminal CLI for working with coding agents — Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider.",
+  "homepage": "https://jolo.build",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jolo-build/jolo.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "jolo": "bin/jolo"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js",
+    "vendor/",
+    "README.md"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

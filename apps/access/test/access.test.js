@@ -14,7 +14,7 @@ test('sign-in uses GitHub code flow with PKCE and a fixed callback; the session 
   expect(start.searchParams.get('code_challenge_method')).toBe('S256');
   expect(start.searchParams.get('redirect_uri')).toBe(`${ORIGIN}/callback`);
   const response = await f.send(f.callback());
-  expect(response.headers.get('location')).toBe('/account');
+  expect(response.headers.get('location')).toBe('/welcome');
   const sessionCookie = response.headers.getSetCookie().find(value => value.startsWith('__Host-jolo_session='));
   expect(sessionCookie).toContain('HttpOnly; SameSite=Lax');
   expect(sessionCookie).toContain('; Secure');
@@ -61,7 +61,7 @@ test('a flow can be consumed only once, including simultaneous callbacks', async
   const cookie = `__Host-jolo_flow=${f.cookies.get('__Host-jolo_flow')}`;
   const request = () => new Request(`${ORIGIN}${f.callback()}`, { headers: { cookie } });
   const responses = await Promise.all([f.app.fetch(request()), f.app.fetch(request())]);
-  expect(responses.map(r => r.headers.get('location')).sort()).toEqual(['/?error=signin', '/account']);
+  expect(responses.map(r => r.headers.get('location')).sort()).toEqual(['/?error=signin', '/welcome']);
   expect(f.calls.filter(call => call.url.includes('access_token'))).toHaveLength(1);
   expect((await f.app.fetch(request())).headers.get('location')).toBe('/?error=signin');
 });

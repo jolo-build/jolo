@@ -1,17 +1,18 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { clean } from "./markdown.js";
+import { inputViewport } from "./input.js";
 
 /** Keep the padded composer and straight edge, using the terminal’s own light or dark palette. */
-export function Prompt({ value, model, columns }) {
-  const text = clean(value).replace(/\n/g, " ");
+export function Prompt({ value, cursor = value.length, model, columns }) {
+  const view = inputViewport(value, cursor, Math.max(1, columns - 5));
   return <Box flexDirection="column" width="100%">
     <Box flexDirection="column" width="100%">
       <Text>▎</Text>
       <Box height={1}>
         <Text>▎</Text><Text bold>❯ </Text>
         <Box flexGrow={1} minWidth={0} paddingRight={2}>
-          <Text wrap="truncate-start">{text}{text ? <Text inverse> </Text> : <><Text inverse> </Text><Text>Ask Jolo anything…</Text></>}</Text>
+          <Text wrap="truncate-end">{view.before}<Text inverse>{view.caret}</Text>{view.after}{!value && <Text>Ask Jolo anything…</Text>}</Text>
         </Box>
       </Box>
       <Text>▎</Text>

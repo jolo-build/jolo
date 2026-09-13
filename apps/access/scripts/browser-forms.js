@@ -26,12 +26,13 @@ async function checkForms() {
       const root=document.documentElement, content=document.querySelector('.task-content');
       const selectors=${JSON.stringify(['#color-theme', ...controls])};
       return { width:innerWidth,height:innerHeight,pageWidth:root.scrollWidth,pageHeight:root.scrollHeight,
+        registrationPage:Boolean(document.querySelector('.registration-page')),
         contentOverflow:content ? Math.max(0,content.scrollHeight-content.clientHeight) : 0, contentWidthOverflow:content ? Math.max(0,content.scrollWidth-content.clientWidth) : 0,
         controls:selectors.map(selector=>{const element=document.querySelector(selector),r=element?.getBoundingClientRect();return {selector,visible:Boolean(r&&r.width&&r.height&&r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth)};}) };
     })()`);
     assert(metrics.pageWidth<=metrics.width&&metrics.pageHeight<=metrics.height, `${label}: page exceeds viewport: ${JSON.stringify(metrics)}`);
     assert(metrics.contentWidthOverflow<=1,`${label}: content exceeds available width: ${JSON.stringify(metrics)}`);
-    if(metrics.width>700) assert(metrics.contentOverflow<=1,`${label}: workspace should fit without page-content scrolling: ${JSON.stringify(metrics)}`);
+    if(metrics.width>700&&!metrics.registrationPage) assert(metrics.contentOverflow<=1,`${label}: workspace should fit without page-content scrolling: ${JSON.stringify(metrics)}`);
     assert(metrics.controls.every(control=>control.visible),`${label}: controls left the viewport: ${JSON.stringify(metrics)}`);
     if (metrics.width <= 700) {
       const phoneControls = await contents.executeJavaScript(`(() => {

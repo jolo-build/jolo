@@ -1,5 +1,54 @@
 import { expect, test } from "bun:test";
-import { deletePreviousWord, editDraft } from "../src/tui/input.js";
+import { deletePreviousWord, editDraft, editInput, inputViewport } from "../src/tui/input.js";
+
+test("arrows move the insertion point and editing preserves text on both sides", () => {
+  let state = editInput("fix bug", 7, "", { leftArrow: true });
+  expect(state).toEqual({ value: "fix bug", cursor: 6 });
+  state = editInput(state.value, state.cursor, "i");
+  expect(state).toEqual({ value: "fix buig", cursor: 7 });
+  expect(editInput(state.value, state.cursor, "", { backspace: true })).toEqual({ value: "fix bug", cursor: 6 });
+  expect(editInput(state.value, state.cursor, "", { delete: true })).toEqual({ value: "fix bui", cursor: 7 });
+  expect(editInput("abc", 0, "", { leftArrow: true }).cursor).toBe(0);
+  expect(editInput("abc", 3, "", { rightArrow: true }).cursor).toBe(3);
+  expect(editInput("abc", 1, "", { rightArrow: true }).cursor).toBe(2);
+});
+
+test("Option arrows and Escape+b/f traverse words without changing the draft", () => {
+  for (const [chunk, key] of [["", { leftArrow: true, meta: true }], ["", { leftArrow: true, ctrl: true }], ["b", { meta: true }]]) {
+    expect(editInput("fix the bug  ", 13, chunk, key)).toEqual({ value: "fix the bug  ", cursor: 8 });
+  }
+  for (const [chunk, key] of [["", { rightArrow: true, meta: true }], ["", { rightArrow: true, ctrl: true }], ["f", { meta: true }]]) {
+    expect(editInput("fix the bug", 3, chunk, key)).toEqual({ value: "fix the bug", cursor: 7 });
+  }
+  expect(editInput("fix the bug", 8, "w", { ctrl: true })).toEqual({ value: "fix bug", cursor: 4 });
+  expect(editInput("fix the bug", 4, "", { backspace: true, meta: true })).toEqual({ value: "the bug", cursor: 0 });
+});
+
+test("cursor movement and deletion preserve emoji and combining characters", () => {
+  for (const character of ["🚀", "e\u0301", "👩‍💻", "🇦🇿"]) {
+    const value = `a${character}b`;
+    expect(editInput(value, 1, "", { rightArrow: true }).cursor).toBe(1 + character.length);
+    expect(editInput(value, 1 + character.length, "", { leftArrow: true }).cursor).toBe(1);
+    expect(editInput(value, 1 + character.length, "", { backspace: true })).toEqual({ value: "ab", cursor: 1 });
+    expect(editInput(value, 1, "", { delete: true })).toEqual({ value: "ab", cursor: 1 });
+  }
+});
+
+test("cursor editing ignores releases, sanitizes paste, and retains the suffix at the limit", () => {
+  expect(editInput("abc", 1, "", { leftArrow: true, eventType: "release" })).toEqual({ value: "abc", cursor: 1 });
+  expect(editInput("ab", 1, "\x1b[31mX\x1b[0m")).toEqual({ value: "aXb", cursor: 2 });
+  const value = "a".repeat(64 * 1024 - 2) + "z";
+  expect(editInput(value, 0, "XY")).toEqual({ value: "X" + value, cursor: 1 });
+  expect(editInput(value, 0, "🚀")).toEqual({ value, cursor: 0 });
+});
+
+test("the viewport keeps the caret visible when traversing long and wide input", () => {
+  expect(inputViewport("abcdefghij", 10, 5)).toEqual({ before: "ghij", caret: " ", after: "" });
+  expect(inputViewport("abcdefghij", 2, 5)).toEqual({ before: "ab", caret: "c", after: "de" });
+  expect(inputViewport("abcdefghij", 0, 5)).toEqual({ before: "", caret: "a", after: "bcde" });
+  expect(inputViewport("界🚀abc", 3, 5)).toEqual({ before: "界🚀", caret: "a", after: "" });
+  expect(inputViewport("", 0, 5)).toEqual({ before: "", caret: " ", after: "" });
+});
 
 test("word deletion preserves earlier words and their separating space", () => {
   expect(deletePreviousWord("fix the bug")).toBe("fix the ");

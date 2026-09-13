@@ -15,13 +15,14 @@ const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
  *   onRefresh?: () => unknown,
  *   view?: string,
  *   onSelectFile?: () => void,
+ *   onOpenFile?: (path: string) => void,
  *   onLoadDiff: (path: string) => Promise<any>,
  *   onLoadFile?: (path: string) => Promise<any>,
  *   onRevert: (invocationId: string, path: string) => Promise<any>,
  * }} props without `onLoadFile` there is nothing to render a markdown file from, so the preview tab
  *   is not offered at all.
  */
-export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFile, onLoadDiff, onLoadFile, onRevert }) {
+export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFile, onOpenFile, onLoadDiff, onLoadFile, onRevert }) {
   const [selected, setSelected] = useState(null);
   const [diff, setDiff] = useState(null);
   const [note, setNote] = useState(null);
@@ -48,7 +49,7 @@ export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFi
     load.catch((error) => { if (request.current === ticket) setNote(error.message); });
     return () => { request.current += 1; };
   }, [path, revision, visible, refresh, showPreview, onLoadDiff, onLoadFile]);
-  const select = (file) => { setSelected(file.newPath ?? file.path); onSelectFile?.(); };
+  const select = (file) => { if (view === 'files' && onOpenFile) { onOpenFile(file.newPath ?? file.path); return; } setSelected(file.newPath ?? file.path); onSelectFile?.(); };
   const revert = async () => {
     setReverting(true); setNote(null);
     try { await onRevert(active.invocationId, path); await onRefresh?.(); setNote(`Reverted ${path}`); setRefresh((value) => value + 1); }

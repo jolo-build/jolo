@@ -6,7 +6,7 @@ export const CONTEXT_PANELS = [
   ['terminal', 'Terminal', 'terminal'], ['plans', 'Plans', 'plan'], ['checks', 'Checks', 'circleCheck'],
 ];
 
-export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange }) {
+export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, compact = false }) {
   const trigger = useRef(null), menu = useRef(null);
   const menuId = useId();
   const [open, setOpen] = useState(false);
@@ -25,12 +25,12 @@ export function PanelMenu({ selected, panels, disabled, details, onSelect, onHid
   const dismiss = () => { menu.current.hidePopover(); trigger.current.focus(); };
   return <>
     {/* The native invoker toggles without light-dismiss reopening the menu on a second click. */}
-    <button ref={trigger} className={selected ? 'active' : ''} aria-label="Panels" title="Panels" aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={() => {
+    <button ref={trigger} className={compact ? 'panel-item-new' : selected ? 'active' : ''} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={() => {
       const rect = trigger.current.getBoundingClientRect();
       menu.current.style.top = `${rect.bottom + 6}px`;
       menu.current.style.left = `${Math.max(8, Math.min(innerWidth - 252, rect.right - 244))}px`;
-    }}><Icon name="sidebarRight" /><span className="header-action-label">Panels</span><Icon name="down" size={12} /></button>
-    <div ref={menu} id={menuId} className="panel-menu" popover="auto" role="menu" aria-label="Panels" onKeyDown={event => {
+    }}>{compact ? <Icon name="plus" size={15} /> : <><Icon name="sidebarRight" /><span className="header-action-label">Panels</span><Icon name="down" size={12} /></>}</button>
+    <div ref={menu} id={menuId} className="panel-menu" popover="auto" role="menu" aria-label={compact ? 'New panel tab' : 'Panels'} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
       if (event.key === 'Tab') { menu.current.hidePopover(); return; }
       const items = [...event.currentTarget.querySelectorAll('button')];

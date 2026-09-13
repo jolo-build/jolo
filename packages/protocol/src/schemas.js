@@ -105,6 +105,7 @@ export const WebTaskSchema = WebTaskSummarySchema.extend({description: z.string(
 export const TaskReferenceSummarySchema = WebTaskSummarySchema.extend({url:z.string().url().max(2048),origin:z.string().url().max(2048),accountId:Id});
 
 export const RunSchema = z.object({
+  changedPaths: z.array(z.string()).optional(),
   id: Id,
   sessionId: Id,
   requestId: Id,
@@ -141,6 +142,7 @@ export const SessionSchema = z.object({
 });
 
 export const WorkspaceSchema = z.object({
+  needsFolder: z.boolean().default(false),
   id: Id,
   projectId: Id,
   mode: z.enum(["direct", "worktree"]),
@@ -522,7 +524,11 @@ export const MethodSchemas = {
   "engine.reload": { params: z.object({}), result: z.object({ stopping: z.literal(true) }) },
   "project.open": {
     params: z.object({ path: z.string().min(1).max(4096) }),
-    result: z.object({ projectId: Id, workspaceId: Id, rootPath: z.string(), mode: z.enum(["direct", "worktree"]), preferredMode: z.enum(["direct", "worktree"]).default("direct"), standalone: z.boolean().default(false) }),
+    result: z.object({ projectId: Id, workspaceId: Id, rootPath: z.string(), mode: z.enum(["direct", "worktree"]), preferredMode: z.enum(["direct", "worktree"]).default("direct"), standalone: z.boolean().default(false), needsFolder: z.boolean().default(false) }),
+  },
+  'project.linkFolder': {
+    params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096) }),
+    result: z.object({ rootPath: z.string(), workspaceId: Id }),
   },
   "workspace.create": {
     params: z.object({ projectId: Id, mode: z.literal("worktree").default("worktree"), branch: z.string().trim().min(1).max(120).optional(), base: z.string().trim().min(1).max(120).optional(), title: z.string().max(200).default("") }),

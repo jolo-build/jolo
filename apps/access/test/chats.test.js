@@ -54,6 +54,44 @@ test('search covers all titles, treats wildcards literally, and escapes user con
   expect(await (await f.send('/chats?q=unmatched')).text()).toContain('No matching chats');
 });
 
+test('a chat can be shared publicly by token and unshared again', async () => {
+  const f = fixture(); await f.login();
+  const ORIGIN = 'https://access.jolo.build';
+  const csrf = f.sqlite.query('SELECT csrf FROM sessions').get().csrf;
+  seed(f);
+  const id = '00000000-0000-4000-8000-000000000001';
+  const page = await (await f.send(`/chats/${id}`)).text();
+  expect(page).toContain('Share a read-only link');
+  const post = (path, { origin = ORIGIN, value = csrf } = {}) =>
+    f.send(path, { method: 'POST', headers: { origin, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: value }) });
+  expect((await post(`/chats/${id}/share`, { origin: 'https://evil.example' })).status).toBe(403);
+  expect((await post(`/chats/${id}/share`, { value: 'wrong' })).status).toBe(403);
+  const shared = await post(`/chats/${id}/share`);
+  const location = shared.headers.get('location');
+  expect(location).toMatch(new RegExp(`^/chats/${id}\\?share=[a-f0-9]{64}$`));
+  const token = new URL(location, ORIGIN).searchParams.get('share');
+  // The database stores only the hash; the page shows the link once.
+  expect(f.sqlite.query('SELECT share_token FROM synced_chats WHERE id=?').get(id).share_token).not.toBe(token);
+  const once = await (await f.send(`/chats/${id}?share=${token}`)).text();
+  expect(once).toContain(`/shared/${token}`);
+  // Sharing twice keeps the same link.
+  expect((await post(`/chats/${id}/share`)).headers.get('location')).toBe(`/chats/${id}`);
+  // The public page needs no session.
+  const publicPage = await f.send(`/shared/${token}`, { headers: { cookie: '' } });
+  expect(publicPage.status).toBe(200);
+  const body = await publicPage.text();
+  expect(body).toContain('Hello');
+  expect(body).toContain('Made with');
+  expect(body).toContain('noindex');
+  // An unknown token and a malformed one both 404.
+  expect((await f.send(`/shared/${'0'.repeat(64)}`)).status).toBe(404);
+  expect((await f.send('/shared/not-a-token')).status).toBe(404);
+  // Unsharing revokes the link.
+  expect((await post(`/chats/${id}/unshare`)).headers.get('location')).toBe(`/chats/${id}`);
+  expect((await f.send(`/shared/${token}`)).status).toBe(404);
+  expect(await (await f.send(`/chats/${id}`)).text()).toContain('Share a read-only link');
+});
+
 test('empty history explains sync and chat links open readable conversations', async () => {
   const f = fixture();
   expect((await f.send('/chats')).status).toBe(303);

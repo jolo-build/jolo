@@ -18,7 +18,9 @@ function fixture(version = '1.2.3') {
 }
 function desktop(directory, version = '1.2.3') {
   for (const target of DESKTOP_TARGETS) {
-    const [platform, arch] = target.split('-'), name = `jolo-desktop-${target}.dmg`, bytes = Buffer.from(`desktop ${target}`);
+    const [platform, arch] = target.split('-');
+    const extension = platform === 'darwin' ? 'dmg' : platform === 'win32' ? 'zip' : 'tar.gz';
+    const name = `jolo-desktop-${target}.${extension}`, bytes = Buffer.from(`desktop ${target}`);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     writeFileSync(path.join(directory, name), bytes);
     writeFileSync(path.join(directory, `${name}.sha256`), `${sha256}  ${name}\n`);
@@ -55,8 +57,8 @@ test('missing platform artifacts or extra files prevent publishing', () => {
 
 test('desktop bundles publish as a complete set alongside the CLI, or not at all', () => {
   clean(desktop(fixture()), directory => {
-    // Four CLI platforms plus both macOS desktop bundles, each with a checksum and a manifest.
-    expect(verifyRelease(directory, '1.2.3')).toHaveLength(18);
+    // Four CLI platforms plus the five-target desktop matrix, each with a checksum and a manifest.
+    expect(verifyRelease(directory, '1.2.3')).toHaveLength(27);
     writeFileSync(path.join(directory, 'jolo-desktop-darwin-x64.dmg'), 'tampered');
     expect(() => verifyRelease(directory, '1.2.3')).toThrow('checksum/size mismatch');
   });

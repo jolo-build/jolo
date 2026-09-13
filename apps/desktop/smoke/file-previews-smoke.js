@@ -18,25 +18,27 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await waitFor("Array.from(document.querySelectorAll('.message.assistant a')).some(a => a.textContent === 'PLAN.md')", 'assistant file links');
     const click = async name => evaluate(`Array.from(document.querySelectorAll('.message.assistant a')).find(a => a.textContent === ${JSON.stringify(name)}).click()`);
     await click('PLAN.md');
-    await waitFor("document.querySelector('.file-preview-content h3')?.textContent === 'Project plan'", 'Markdown rendered in Files');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content h3')?.textContent === 'Project plan'", 'Markdown rendered in Files');
     await evaluate("Array.from(document.querySelectorAll('.file-heading [role=tab]')).find(b=>b.textContent==='Source').click()");
-    await waitFor("document.querySelector('.file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source toggle');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source toggle');
     await click('app.js');
-    await waitFor("document.querySelector('.file-preview-source')?.textContent.includes('export const answer = 42')", 'code opens internally');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('export const answer = 42')", 'code opens internally');
+    await click('missing.js');
+    await waitFor("Array.from(document.querySelectorAll('.file-link-error')).some(e => e.textContent.includes('File not found: missing.js') && getComputedStyle(e).display === 'inline')", 'missing file error stays inline');
     await click('image.png');
-    await waitFor("document.querySelector('.file-preview-content img')?.naturalWidth === 1", 'image loads through the private preview URL');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content img')?.naturalWidth === 1", 'image loads through the private preview URL');
     await click('report.pdf');
-    await waitFor("Boolean(document.querySelector('.file-preview-content embed'))", 'PDF viewer opens');
+    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) .file-preview-content embed'))", 'PDF viewer opens');
     await new Promise(resolve => setTimeout(resolve, 2500));
     const pdfFrame = window.webContents.mainFrame.framesInSubtree.find(frame => frame.url === 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html');
     if (!pdfFrame || !await pdfFrame.executeJavaScript("Boolean(document.querySelector('pdf-viewer')?.shadowRoot?.querySelector('viewer-toolbar:not([loading_])'))")) throw new Error('PDF document did not finish loading');
     writeFileSync(path.join(results, 'file-preview-pdf.png'), (await window.webContents.capturePage()).toPNG());
     await click('archive.zip');
-    await waitFor("document.querySelector('.file-preview-content')?.textContent.includes('A visual preview is not available')", 'unknown binary remains inside Jolo');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content')?.textContent.includes('A visual preview is not available')", 'unknown binary remains inside Jolo');
     await click('PLAN.md');
-    await waitFor("document.querySelector('.file-preview-content h3')?.textContent === 'Project plan'", 'Markdown reopens');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source view retained');
     writeFileSync(path.join(results, 'file-preview-markdown.png'), (await window.webContents.capturePage()).toPNG());
     if (external.length) throw new Error(`File links escaped Jolo: ${external.join(', ')}`);
-    report.checks.push('Markdown, source code, images, PDFs, and unknown file formats open in Jolo without invoking external apps');
+    report.checks.push('Markdown, source code, images, PDFs, and unknown file formats open in Jolo without invoking external apps; bare filenames resolve nested files and missing file errors stay inline');
   } finally { shell.openPath = originalOpen; shell.showItemInFolder = originalReveal; }
 }

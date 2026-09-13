@@ -46,8 +46,10 @@ test('a malformed version is an error, never silently equal', () => {
 test('asset names and URLs follow the published GitHub release layout', () => {
   expect(assetName({ product: 'cli', platform: 'linux', arch: 'x64' })).toBe('jolo-cli-linux-x64.tar.gz');
   expect(assetName({ product: 'desktop', platform: 'darwin', arch: 'arm64' })).toBe('jolo-desktop-darwin-arm64.dmg');
-  expect(() => assetName({ product: 'desktop', platform: 'linux', arch: 'x64' })).toThrow('No Jolo desktop release');
-  expect(() => assetName({ product: 'desktop', platform: 'win32', arch: 'x64' })).toThrow();
+  expect(assetName({ product: 'desktop', platform: 'linux', arch: 'x64' })).toBe('jolo-desktop-linux-x64.tar.gz');
+  expect(assetName({ product: 'desktop', platform: 'win32', arch: 'x64' })).toBe('jolo-desktop-win32-x64.zip');
+  expect(() => assetName({ product: 'desktop', platform: 'win32', arch: 'arm64' })).toThrow('No Jolo desktop release');
+  expect(() => assetName({ product: 'cli', platform: 'win32', arch: 'x64' })).toThrow();
   expect(() => assetName({ product: 'installer', platform: 'darwin', arch: 'arm64' })).toThrow();
   expect(latestVersionUrl()).toBe('https://github.com/jolo-build/jolo/releases/latest/download/latest.txt');
   expect(assetUrl('0.2.0', 'a.tar.gz')).toBe('https://github.com/jolo-build/jolo/releases/download/v0.2.0/a.tar.gz');

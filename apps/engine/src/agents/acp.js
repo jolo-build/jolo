@@ -90,6 +90,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 1, contextUsed: null, contextWindow: null }, // ACP reports context, not tokens
       };
       const pending = new Map();
+      let transportClosed = false;
       const toolCalls = new Map();
       let nextId = 1;
       let link;
@@ -107,7 +108,14 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
-      const request = (method, params) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); link.write({ jsonrpc: "2.0", id, method, params }); });
+      const request = (method, params) => new Promise((resolve, reject) => {
+        // Restore/model fallback can issue another RPC after the reader has stopped.
+        // Reject it immediately: no response can ever arrive on a closed transport.
+        if (signal.aborted || transportClosed) return reject(new Error(`${manifest.displayName} ${signal.aborted ? "cancelled" : "exited"}`));
+        const id = nextId++;
+        pending.set(id, { resolve, reject });
+        link.write({ jsonrpc: "2.0", id, method, params });
+      });
       const respond = (id, result) => link.write({ jsonrpc: "2.0", id, result });
       const refuse = (id, message, code = RPC.METHOD_NOT_FOUND) => link.write({ jsonrpc: "2.0", id, error: { code, message } });
       const closeTurn = () => { state.done = true; link.end(); link.terminate(); };
@@ -260,7 +268,10 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         if (remembered && init.agentCapabilities?.loadSession) {
           state.loading = true;
           try { loaded = await request("session/load", { sessionId: remembered, cwd: workspace.path, mcpServers }); state.sessionId = remembered; resumed = true; }
-          catch (error) { log.warn("acp session could not be loaded; starting a new one", { agentId: manifest.id, error: String(error?.message ?? error) }); }
+          catch (error) {
+            if (signal.aborted || transportClosed) throw error;
+            log.warn("acp session could not be loaded; starting a new one", { agentId: manifest.id, error: String(error?.message ?? error) });
+          }
           finally { state.loading = false; }
         }
         let configOptions = loaded?.configOptions ?? null;
@@ -299,6 +310,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       } catch (error) {
         state.failure ??= String(error?.message ?? error).slice(0, 500);
       }
+      transportClosed = true;
       for (const waiter of pending.values()) waiter.reject(new Error(`${manifest.displayName} exited`));
       pending.clear();
       await driver;

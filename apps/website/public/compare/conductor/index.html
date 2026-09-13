@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jolo vs Conductor — coding agent workspaces compared</title>
+    <meta name="description" content="Comparing Jolo and Conductor: two desktop workspaces for running coding agents. Agent support, worktrees, platforms, browser, terminal, and price — side by side." />
+    <link rel="canonical" href="https://jolo.build/compare/conductor/" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Jolo vs Conductor — coding agent workspaces compared" />
+    <meta property="og:description" content="Two macOS workspaces for running coding agents, compared honestly: agents, worktrees, browser, terminal, and price." />
+    <meta property="og:image" content="https://jolo.build/brand/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href="/brand/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
+    <link rel="stylesheet" href="/pages.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "Jolo vs Conductor — coding agent workspaces compared",
+        "description": "Comparing Jolo and Conductor: two desktop workspaces for running coding agents.",
+        "author": { "@type": "Organization", "name": "Jolo", "url": "https://jolo.build/" },
+        "mainEntityOfPage": "https://jolo.build/compare/conductor/"
+      }
+    </script>
+  </head>
+  <body>
+    <div class="top">
+      <a class="brand" href="/">jolo</a>
+      <nav><a href="/#get-jolo">Download</a><a href="https://docs.jolo.build">Docs</a><a href="https://github.com/jolo-build/jolo">GitHub</a></nav>
+    </div>
+    <main class="wrap">
+      <header class="page">
+        <span class="eyebrow">Compare</span>
+        <h1>Jolo vs Conductor</h1>
+        <p class="lede">Both are desktop workspaces for coding agents. Conductor centers on running Claude Code across parallel Git worktrees on macOS; Jolo runs on macOS, Windows, and Linux and is a workspace for several different agents, with a browser, terminal, and task plans built in.</p>
+      </header>
+
+      <section>
+        <h2>At a glance</h2>
+        <table>
+          <caption>Feature comparison — verify each product’s current state, both move quickly.</caption>
+          <tr><th></th><th>Jolo</th><th>Conductor</th></tr>
+          <tr><td>Agents</td><td>Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider</td><td>Focused on Claude Code</td></tr>
+          <tr><td>Interface</td><td>Desktop app plus a terminal CLI</td><td>Desktop app</td></tr>
+          <tr><td>Platforms</td><td>macOS, Windows, Linux</td><td>macOS</td></tr>
+          <tr><td>Isolation</td><td>Separate Git worktrees per task</td><td>Separate Git worktrees per agent</td></tr>
+          <tr><td>Browser</td><td>Inline browser the agent can navigate and inspect</td><td>—</td></tr>
+          <tr><td>Terminal</td><td>Built in, beside the conversation</td><td>Uses your editor/terminal</td></tr>
+          <tr><td>Plans</td><td>Built-in orchestrator: ordered tasks, one agent per step</td><td>Parallel agent sessions</td></tr>
+          <tr><td>Sync</td><td>Optional Jolo Access account for tasks and synced chats</td><td>—</td></tr>
+          <tr><td>License</td><td>MIT, open source</td><td>Proprietary</td></tr>
+          <tr><td>Price</td><td>Free</td><td>Free tier, paid plans for heavier use</td></tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>Where Conductor fits</h2>
+        <p class="muted">If your workflow is several Claude Code sessions running at once — each on its own branch, reviewed in a diff view — Conductor is built around exactly that. It is a focused tool and does that job well.</p>
+      </section>
+
+      <section>
+        <h2>Where Jolo is different</h2>
+        <ul class="muted">
+          <li><strong>More than one agent.</strong> Switch between Claude Code, Codex, Devin, Grok, Gemini, or a configured API provider — even inside one conversation, or across steps of a plan.</li>
+          <li><strong>The browser is part of the workspace.</strong> Agents can open pages, fill forms, and check their own work without leaving the app.</li>
+          <li><strong>Terminal and files beside the chat.</strong> Review diffs, run checks, and browse the tree without switching windows.</li>
+          <li><strong>A CLI, not just a GUI.</strong> <code>jolo /path/to/project</code> or <code>jolo run --agent claude "task"</code> works from any terminal.</li>
+          <li><strong>Tasks follow you.</strong> An optional Jolo Access account keeps tasks and synced chats available in the browser and between devices.</li>
+          <li><strong>Open source.</strong> MIT licensed — read the code, run it from source, or contribute.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Try Jolo</h2>
+        <p class="muted">Jolo is in early development — the macOS app is not yet notarized, and the Windows and Linux builds are unsigned. The CLI installs in one line and works on macOS and Linux.</p>
+        <a class="cta" href="/#get-jolo">Get Jolo</a>
+        <a class="cta secondary" href="https://docs.jolo.build">Read the guide</a>
+        <p class="note">Compared September 2026. Something wrong or outdated? <a href="https://github.com/jolo-build/jolo/issues">Tell us</a>.</p>
+      </section>
+    </main>
+    <footer class="site">
+      <a class="brand" href="/">jolo</a>
+      <a href="/compare/vibe-kanban/">vs Vibe Kanban</a>
+      <a href="/changelog/">Changelog</a>
+      <a href="https://docs.jolo.build">Documentation</a>
+      <a href="https://github.com/jolo-build/jolo">GitHub</a>
+    </footer>
+  </body>
+</html>

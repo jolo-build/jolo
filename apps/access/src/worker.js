@@ -29,7 +29,7 @@ export function createAccessApp(env, options = {}) {
     const token = readToken(request, 'session', config.secure);
     return token && repository ? repository.getSession(await hashToken(token)) : null;
   };
-  const handleChats = chatRoutes({ env, repository, session });
+  const handleChats = chatRoutes({ env, config, repository, session });
   const handleDevices = deviceRoutes({ env, config, repository, session, now });
   const handleTasks = taskRoutes({ env, config, repository, session, now, mailFetch: options.mailFetch });
   const failedSignIn = error => {
@@ -109,7 +109,7 @@ export function createAccessApp(env, options = {}) {
         const registration = account.isNew && advertising && !flow.return_to ? crypto.randomUUID() : null;
         await repository.saveSession(await hashToken(sessionToken), account.id, randomToken(), now() + SESSION_SECONDS * 1000, registration);
         // Provider tokens never leave the server or become browser sessions.
-        const response = redirect(flow.return_to ?? (registration ? '/welcome' : '/account'));
+        const response = redirect(flow.return_to ?? (account.isNew ? '/welcome' : '/account'));
         setCookie(response, 'flow', '', 0);
         setCookie(response, 'session', sessionToken, SESSION_SECONDS);
         return response;

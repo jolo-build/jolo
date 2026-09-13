@@ -4,6 +4,21 @@ import { createPromptState, promptReducer, MAX_PROMPT_HISTORY, MAX_PROMPT_HISTOR
 const step = (state, type, values = {}) => promptReducer(state, { type, ...values });
 const seeded = (...prompts) => step(createPromptState(), "seed", { prompts });
 
+test("recall puts the cursor at the end and restores the unsent draft's cursor", () => {
+  let state = step(seeded("old prompt"), "edit", { chunk: "my draft" });
+  state = step(state, "edit", { chunk: "", key: { leftArrow: true, meta: true } });
+  expect(state.cursor).toBe(3);
+  state = step(state, "previous");
+  expect(state.cursor).toBe(10);
+  state = step(state, "edit", { chunk: "", key: { leftArrow: true } });
+  state = step(state, "edit", { chunk: "X" });
+  expect(state.value).toBe("old prompXt");
+  state = step(state, "next");
+  expect(state).toMatchObject({ value: "my draft", cursor: 3 });
+  expect(step(state, "submit", { prompt: state.value }).cursor).toBe(0);
+  expect(step(state, "clear").cursor).toBe(0);
+});
+
 test("Up walks newest to oldest; Down walks forward and restores the unsent draft", () => {
   let state = step(seeded("first", "second", "third"), "edit", { chunk: "unfinished draft" });
   for (const expected of ["third", "second", "first", "first"]) {

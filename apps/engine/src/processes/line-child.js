@@ -30,14 +30,19 @@ export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId,
     try { child.stdin.write(`${JSON.stringify(message)}\n`); child.stdin.flush?.(); }
     catch { /* exited children are observed by the reader */ }
   };
-  const onAbort = () => { let graceful = false; try { graceful = onCancel?.() === true; } catch {} terminate({ graceful }); };
+  const notify = () => { const waiting = wake; wake = null; waiting?.(); };
+  const onAbort = () => {
+    let graceful = false;
+    try { graceful = onCancel?.() === true; } catch {}
+    terminate({ graceful });
+    notify(); // A silent child (or inherited pipe) must not hold the message iterator open on abort.
+  };
   signal.addEventListener('abort', onAbort, { once: true });
   if (signal.aborted) onAbort();
   const stderr = (async () => {
     const decoder = new TextDecoder();
     for await (const chunk of child.stderr) diagnostics = (diagnostics + decoder.decode(chunk, { stream: true })).slice(-8192);
   })().catch(() => {});
-  const notify = () => { const waiting = wake; wake = null; waiting?.(); };
   const stdout = (async () => {
     let pieces = [], bytes = 0;
     const line = () => {

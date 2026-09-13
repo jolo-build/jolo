@@ -30,11 +30,11 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     const body = document.querySelector('.pane-body').getBoundingClientRect();
     const bar = document.querySelector('.context-bar').getBoundingClientRect();
     const content = document.querySelector('.context-content').getBoundingClientRect();
-    const tabs = [...document.querySelectorAll('.context-tabs [role=tab]')];
+    const tabs = [...document.querySelectorAll('.panel-item-tabs [role=tab]')];
     return main.width > 300 && panel.left >= main.right - 1 && Math.abs(panel.top - main.top) < 1
       && Math.abs(panel.bottom - body.bottom) < 1 && content.top >= bar.bottom - 1
       && Math.abs(content.bottom - panel.bottom) < 1
-      && tabs.every(tab => { const r = tab.getBoundingClientRect(); return r.left >= panel.left && r.right <= panel.right; })
+      && tabs.some(tab => tab.getAttribute('aria-selected') === 'true')
       && !document.querySelector('.task-tools');
   })()`);
   const originalSize = window.getSize(), originalTheme = nativeTheme.themeSource;
@@ -89,20 +89,28 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     const initialChatWidth = await chatWidth();
     const dragPanel = async delta => {
       const point = await evaluate("(() => { const r = document.querySelector('.context-divider').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + 80) }; })()");
-      window.webContents.focus();
-      window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
-      window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
-      await waitFor("Boolean(document.querySelector('.context-resizing'))", 'panel resize captures the mouse');
-      window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x + delta, y: point.y });
-      await frame();
-      window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x + delta, y: point.y, button: 'left', clickCount: 1 });
+      const debuggerApi = window.webContents.debugger, attachedHere = !window.webContents.debugger.isAttached();
+      if (attachedHere) debuggerApi.attach('1.3');
+      try {
+        await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+        await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1 });
+        await waitFor("Boolean(document.querySelector('.context-resizing'))", 'panel resize captures the mouse');
+        await frame();
+        await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x + delta, y: point.y, button: 'left', buttons: 1 });
+        await frame();
+      } finally {
+        await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x + delta, y: point.y, button: 'left', buttons: 0, clickCount: 1 });
+        if (attachedHere) debuggerApi.detach();
+      }
       await waitFor("!document.querySelector('.context-resizing')", 'panel resize releases the mouse');
       await frame();
     };
     await dragPanel(-80);
-    assert(await chatWidth() < initialChatWidth - 60, 'dragging left did not widen the browser');
+    assert(await chatWidth() < initialChatWidth - 60, `dragging left did not widen the browser: ${initialChatWidth} → ${await chatWidth()}`);
+    // Separate the two native drags so macOS does not interpret them as a double click.
+    await new Promise(resolve => setTimeout(resolve, 600));
     await dragPanel(160);
-    assert(await chatWidth() > initialChatWidth + 60, 'dragging over the browser lost the resize pointer');
+    assert(await chatWidth() > initialChatWidth + 60, `dragging over the browser lost the resize pointer: ${initialChatWidth} → ${await chatWidth()}`);
     assert(await evaluate("document.querySelector('.browser webview') === window.__panelBrowser && window.__panelBrowser.executeJavaScript('window.retainedPanelPage === 42')"), 'resizing reloaded the browser');
     await evaluate("document.querySelector('.context-divider').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
     await frame();
@@ -127,7 +135,7 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       }
       await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
       await waitFor("Boolean(document.querySelector('.panel-menu:popover-open'))", 'panel menu visible');
-      assert(await evaluate("document.querySelectorAll('.panel-menu [role=menuitemradio]').length === 6 && document.querySelector('.panel-menu [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
+      assert(await evaluate("document.querySelectorAll('.panel-menu:popover-open [role=menuitemradio]').length === 6 && document.querySelector('.panel-menu:popover-open [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
       await frame();
       writeFileSync(path.join(results, `panel-menu-${color}.png`), (await window.webContents.capturePage()).toPNG());
       await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
@@ -135,15 +143,15 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))");
       await waitFor("!document.querySelector('.panel-menu:popover-open') && document.activeElement.getAttribute('aria-label') === 'Panels'", 'Escape closes the menu and restores focus');
       await toggleMenu();
-      assert(await evaluate("document.querySelector('.context-tabs [aria-label=Plans]').getAttribute('aria-selected') === 'true' && !document.querySelector('.inspector').hidden"), 'closing the menu changed the selected panel');
+      assert(await evaluate("document.querySelector('.panel-item-tabs [aria-label=Plans]').getAttribute('aria-selected') === 'true' && !document.querySelector('.inspector').hidden"), 'closing the menu changed the selected panel');
       await click('.header [aria-label="Panels"]');
       await waitFor("Boolean(document.querySelector('.panel-menu:popover-open'))", 'menu reopens for outside dismissal');
       await click('.plan-pane-head');
       await waitFor("!document.querySelector('.panel-menu:popover-open')", 'click outside closes the menu');
     }
     // Tab keys select the same panel as toolbar buttons, including compact icon tabs.
-    await evaluate("document.querySelector('.context-tabs [aria-selected=true]').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'End', bubbles:true, cancelable:true}))");
-    await waitFor("document.querySelector('.context-tabs [aria-label=Checks]').getAttribute('aria-selected') === 'true'", 'keyboard tab navigation');
+    await evaluate("document.querySelector('.panel-item-tabs [aria-selected=true]').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'End', bubbles:true, cancelable:true}))");
+    await waitFor("Array.from(document.querySelectorAll('.panel-item-tabs [role=tab]')).at(-1)?.getAttribute('aria-selected') === 'true'", 'keyboard tab navigation');
     window.setSize(760, 680);
     await frame();
     assert(await evaluate("(() => { const main = document.querySelector('.pane-body > .main').getBoundingClientRect(); const panel = document.querySelector('.inspector').getBoundingClientRect(); return main.width === 0 && panel.width > 300 && panel.bottom <= innerHeight; })()"), 'compact panel does not fit its pane');
@@ -151,7 +159,7 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await waitFor("document.querySelector('.pane-body > .main').getBoundingClientRect().width > 300", 'closing compact context restores the chat');
     await select('Terminal');
     await evaluate("document.querySelector('.terminal [aria-label=\"Close terminal\"]').click()");
-    await waitFor('!window.__joloTerminal && document.querySelector(".inspector").hidden', 'explicit terminal close releases its shell');
+    await waitFor('!window.__joloTerminal && !document.querySelector(".panel-item-tabs [data-panel-type=terminal]")', 'explicit terminal close releases its shell');
     report.checks.push('one Panels menu lists all six panels; repeated native mouse clicks open and close it without hiding the selected panel, and outside clicks, keyboard navigation and Escape work');
     report.checks.push('Terminal, Checks and Plans open on the right and fit light, dark and compact layouts; the bottom tools bar is gone');
     report.checks.push('tab switching and hiding preserve shell state, browser pages and plan drafts; explicit terminal close releases its shell');

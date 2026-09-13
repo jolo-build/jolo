@@ -1,5 +1,5 @@
 import { createContext, useContext, lazy, Suspense, useMemo, useState } from "react";
-import { fileReference } from '@jolo/markdown/file-links';
+import { fileReference, webReference } from '@jolo/markdown/file-links';
 import { parseDocument } from "@jolo/markdown";
 import { MermaidDiagram } from "./mermaid.jsx";
 import { Visualization } from './visualization.jsx';
@@ -12,6 +12,9 @@ import { FilePreviewContext } from '../file-preview-context.js';
 const SyntaxCode = lazy(/** @type {() => Promise<{ default: SyntaxCodeComponent }>} */ (() => import("./syntax-code.jsx").catch(() => ({ default: ({ text }) => <code>{text}</code> }))));
 
 const ChatSession = createContext(null);
+function WebLink({ href, children }) {
+  return <a href={href} title={href} onClick={event => { event.preventDefault(); event.stopPropagation(); window.jolo.openExternal(href); }}>{children}</a>;
+}
 function FileLink({ reference, children }) {
   const sessionId = useContext(ChatSession);
   const showPreview = useContext(FilePreviewContext);
@@ -47,10 +50,11 @@ function Inline({ nodes, linkify = true }) {
       // A span the model wrapped across lines is a block of code: keep its breaks so it stays copyable.
       case "code": return node.text.includes("\n")
         ? <code key={i} className="md-code-lines">{node.text.replace(/^\n+|\n+$/g, "")}</code>
+        : linkify && webReference(node.text) ? <WebLink key={i} href={webReference(node.text)}><code>{node.text}</code></WebLink>
         : linkify && fileReference(node.text) ? <FileLink key={i} reference={node.text}><code>{node.text}</code></FileLink> : <code key={i}>{node.text}</code>;
       case "strong": return <strong key={i}><Inline nodes={node.children} linkify={linkify} /></strong>;
       case "em": return <em key={i}><Inline nodes={node.children} linkify={linkify} /></em>;
-      case "link": return node.local ? <FileLink key={i} reference={node.href}><Inline nodes={node.children} linkify={false} /></FileLink> : <a key={i} href="#" title={node.href} onClick={(e) => { e.preventDefault(); window.jolo.openExternal(node.href); }}><Inline nodes={node.children} linkify={false} /></a>;
+      case "link": return node.local ? <FileLink key={i} reference={node.href}><Inline nodes={node.children} linkify={false} /></FileLink> : <WebLink key={i} href={node.href}><Inline nodes={node.children} linkify={false} /></WebLink>;
       default: return null;
     }
   });

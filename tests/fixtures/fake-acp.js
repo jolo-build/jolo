@@ -205,6 +205,11 @@ async function handle(message) {
       return reply({ sessionId, configOptions: configOptions() });
     }
     case "session/load": {
+      if (stateDir && existsSync(path.join(stateDir, 'exit-load'))) process.exit(1);
+      if (stateDir && existsSync(path.join(stateDir, 'hold-load'))) {
+        writeFileSync(path.join(stateDir, 'loading'), params.sessionId);
+        return; // Cancellation during a slow history restore must release the conversation queue.
+      }
       browserServer = configuredBrowser(params);
       const file = stateFile(params.sessionId);
       if (!file || !existsSync(file)) return fail(-32602, "unknown session");

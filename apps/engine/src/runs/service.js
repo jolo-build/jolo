@@ -161,6 +161,7 @@ export class RunService {
   checkWorkspace(session) {
     if (this.workspaceBusy(session.workspaceId)) throw new ProtocolError("conflict", "workspace removal is in progress");
     const workspace = this.storage.getWorkspace(session.workspaceId);
+    if (workspace?.needsFolder) throw new ProtocolError('conflict', 'Link this synced folder to a local folder before starting a task.');
     let available = false;
     try { available = workspace && !workspace.removedAt && statSync(workspace.path).isDirectory(); } catch { /* report unavailable below */ }
     if (!available) throw new ProtocolError("conflict", "this task's workspace is unavailable; restore its directory or choose another workspace");

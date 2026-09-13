@@ -10,7 +10,7 @@ function LineCounts({ added, removed, truncated = false }) {
   </span>;
 }
 
-/** Reuse the review panel's bounded diffs; cache counts until a file's revision changes. */
+/** Counts come from the run's saved tool diffs, independent of later workspace edits. */
 export function ChangeSummary({ files, onLoadDiff, onReview, frozen = false, initialCounts = [], onCounts = null, runId = null }) {
   const [expanded, setExpanded] = useState(false);
   const [counts, setCounts] = useState(() => new Map(initialCounts));
@@ -32,7 +32,7 @@ export function ChangeSummary({ files, onLoadDiff, onReview, frozen = false, ini
         const [path, key] = queue.shift();
         let result;
         try {
-          const diff = await onLoadDiff(path);
+          const diff = await onLoadDiff(path, files.find(file => (file.newPath ?? file.path) === path));
           result = diff.source === 'none' ? { unavailable: true }
             : { ...diffSummary(diff.diff), binary: /^Binary files? /m.test(diff.diff), truncated: diff.truncated };
         } catch { result = { unavailable: true }; }

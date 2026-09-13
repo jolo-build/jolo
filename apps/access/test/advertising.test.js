@@ -69,6 +69,8 @@ test('missing or invalid advertising configuration disables tracking without bre
     expect(advertisingConfig(config)).toBeNull();
     const f = fixture(config);
     expect(await (await f.send('/')).text()).not.toContain('/x-pixel.js');
+    expect((await f.login()).headers.get('location')).toBe('/welcome');
+    expect(await (await f.send('/welcome')).text()).not.toContain('/x-pixel.js');
     expect((await f.login()).headers.get('location')).toBe('/account');
   }
 });

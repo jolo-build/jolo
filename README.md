@@ -1,5 +1,9 @@
 # Jolo
 
+[![Release](https://img.shields.io/github/v/release/jolo-build/jolo?label=release)](https://github.com/jolo-build/jolo/releases/latest)
+[![Typecheck](https://github.com/jolo-build/jolo/actions/workflows/typecheck.yml/badge.svg)](https://github.com/jolo-build/jolo/actions/workflows/typecheck.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A desktop app and CLI for working with coding agents.
 
 Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider. Keep your chats, files, terminal, and browser in one workspace.
@@ -23,9 +27,13 @@ Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provide
 
 ## Install
 
-**Desktop:** Download the `.dmg` for your Mac from [GitHub Releases](https://github.com/jolo-build/jolo/releases/latest). Open it and drag Jolo into Applications. Apple Silicon and Intel versions are available.
+**Desktop:** Download the archive for your platform from [GitHub Releases](https://github.com/jolo-build/jolo/releases/latest):
 
-Jolo is in early development. The macOS app is not yet notarized, and automatic updates are not available.
+- **macOS** (`.dmg`, Apple Silicon and Intel): open it and drag Jolo into Applications. With Homebrew: `brew install --cask jolo-build/tap/jolo`.
+- **Windows** (`.zip`, x64): unpack it and run `Jolo.exe` inside.
+- **Linux** (`.tar.gz`, x64 and ARM64): unpack it and run `./Jolo-linux-*/Jolo`.
+
+Jolo is in early development. The macOS app is not yet notarized, Windows and Linux builds are unsigned, and automatic updates are not available.
 
 **CLI:** Run this in your terminal:
 
@@ -33,7 +41,13 @@ Jolo is in early development. The macOS app is not yet notarized, and automatic 
 curl -fsSL https://jolo.build/install.sh | bash
 ```
 
+Or with Homebrew: `brew install jolo-build/tap/jolo-cli`.
+
 This installs the CLI, not the desktop app. CLI packages are available for macOS and Linux, on ARM64 and x64.
+
+Want a look first? `jolo demo` plays a scripted session — no agent or account needed:
+
+<img alt="A scripted Jolo session: the agent explains the project layout, adds a saved-searches filter, and reports passing tests" src="assets/brand/demo.svg">
 
 ## Start a task
 
@@ -84,6 +98,12 @@ For the CLI, use `bun run jolo`.
 ## Contribute
 
 Bug reports and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and checks, or [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## Community
+
+- [GitHub Discussions](https://github.com/jolo-build/jolo/discussions) — questions, ideas, and show-and-tell.
+- [ROADMAP.md](ROADMAP.md) — where the project is heading.
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release.
 
 ## License
 

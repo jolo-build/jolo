@@ -8,7 +8,7 @@ export function FilePreview({ file, onClose }) {
   return <>
     <div className="file-heading"><code title={file.path}>{file.path.split('/').at(-1)}</code>
       {file.kind === 'markdown' && <div className="file-modes" role="tablist" aria-label="File view"><button role="tab" aria-selected={!source} onClick={() => setSource(false)}>Preview</button><button role="tab" aria-selected={source} onClick={() => setSource(true)}>Source</button></div>}
-      <button aria-label="Close file preview" title="Close file preview" onClick={onClose}><Icon name="close" size={14} /></button>
+      {onClose && <button aria-label="Close file preview" title="Close file preview" onClick={onClose}><Icon name="close" size={14} /></button>}
     </div>
     <div className={`file-preview-content${text ? ' md-preview' : ''}`} aria-label={`Preview of ${file.path}`}>
       {text && (source || file.kind === 'text' ? <pre className="file-preview-source"><code>{file.text}</code></pre> : <Markdown text={file.text} cacheKey={file.text} sessionId={file.sessionId} />)}

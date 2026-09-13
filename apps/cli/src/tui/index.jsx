@@ -6,6 +6,7 @@ import { render, Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { SessionProjection } from "@jolo/client/projection";
 import { clean } from "./markdown.js";
 import { createPromptState, promptReducer } from "./prompt-history.js";
+import { editInput } from "./input.js";
 import { supportsKittyKeyboard } from "./keyboard.js";
 import { terminalLayout } from "./layout.js";
 import { Progress } from "./progress.jsx";
@@ -158,7 +159,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       leave();
       return;
     }
-    if (key.pageUp || key.pageDown || key.home || key.end) return;
+    if (key.pageUp || key.pageDown) return;
     // A late keyboard capability reply is terminal metadata, never draft text.
     if (/^\[\?\d+u$/.test(chunk)) return;
     if (permission) {
@@ -171,7 +172,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     if (key.return) { submit(input); return; }
     if (chunk && /[\r\n]/.test(chunk)) { // pasted or bulk input: text before the first newline is submitted
       const [head] = chunk.split(/[\r\n]/);
-      submit(input + head);
+      submit(editInput(input, promptState.cursor, head).value);
       return;
     }
     if (key.tab || chunk === "\t") { setShowTools((v) => !v); return; }
@@ -212,7 +213,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
-      <Prompt value={input} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
+      <Prompt value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}

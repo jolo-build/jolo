@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { installReloadShortcuts } from './reload-shortcuts.js';
+import { installCloseShortcuts } from './close-shortcuts.js';
 import { installZoomShortcuts } from './zoom-shortcuts.js';
-// Inline browser host: trusted webview attachment, guest policy, white canvas.
+// Inline browser host: trusted webview attachment, guest policy, white page canvas.
 // Agent control is attached by browser-agent.js; this host enforces guest policy.
 
 const PARTITION_PATTERN = /^jolo-browser-[A-Za-z0-9_-]{1,64}$/;
@@ -49,6 +50,7 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
     const id = guest.id;
     guests.set(id, { guest });
     installReloadShortcuts(guest, window.webContents);
+    installCloseShortcuts(guest, window.webContents);
     installZoomShortcuts(guest);
     // Let Chromium handle wheel/pinch input in this guest. Manual mode suppresses
     // that native path and does not turn keyboard shortcuts into zoom requests.
@@ -75,7 +77,8 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
       try { parsed = new URL(url); } catch { event.preventDefault(); return; }
       if (!ALLOWED_SCHEMES.has(parsed.protocol)) event.preventDefault();
     });
-    // Pages without a background stay readable: explicit white default canvas (probe-verified path).
+    // Keep unstyled pages readable. The renderer hides this page canvas before
+    // navigation and after errors so those surfaces use the app's theme instead.
     try {
       guest.debugger.attach("1.3");
       guest.debugger.sendCommand("Emulation.setDefaultBackgroundColorOverride", { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});

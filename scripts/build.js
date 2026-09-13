@@ -62,8 +62,9 @@ const chunks = readdirSync(lib).filter((name) => name.startsWith("chunk-"));
 log(`cli bundle: jolo.js + ${chunks.length} chunk(s) (interactive client and engine serve are lazy)`);
 
 // 2. Pinned runtime and launcher script.
-cpSync(process.execPath, path.join(lib, "bun"));
-chmodSync(path.join(lib, "bun"), 0o755);
+const bunExe = process.platform === 'win32' ? 'bun.exe' : 'bun';
+cpSync(process.execPath, path.join(lib, bunExe));
+chmodSync(path.join(lib, bunExe), 0o755);
 mkdirSync(path.join(DIST, "cli", "bin"), { recursive: true });
 cpSync(path.join(ROOT, "scripts/cli-launcher.sh"), path.join(DIST, "cli", "bin", "jolo"));
 chmodSync(path.join(DIST, "cli", "bin", "jolo"), 0o755);
@@ -99,8 +100,8 @@ if (!cliOnly) {
   cpSync(path.join(ROOT, "apps/desktop/src/main/browser-zoom-preload.cjs"), path.join(app, "browser-zoom-preload.cjs"));
   cpSync(path.join(ROOT, "apps/desktop/src/preload/index.cjs"), path.join(app, "preload", "index.cjs"));
   cpSync(path.join(lib, "engine.js"), path.join(app, "engine", "engine.js"));
-  cpSync(path.join(lib, "bun"), path.join(app, "engine", "bun"));
-  chmodSync(path.join(app, "engine", "bun"), 0o755);
+  cpSync(path.join(lib, bunExe), path.join(app, "engine", bunExe));
+  chmodSync(path.join(app, "engine", bunExe), 0o755);
   bundleSearch(path.join(app, 'engine'));
   writeFileSync(path.join(app, "package.json"), JSON.stringify({ name: "jolo", productName: "Jolo", version, main: "main.js", type: "module", private: true }, null, 2));
   log("desktop app directory prepared (dist/desktop-app)");

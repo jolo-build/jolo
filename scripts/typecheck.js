@@ -19,6 +19,7 @@ const PROGRAMS = [
   "packages/updates",
   "apps/engine",
   "apps/cli",
+  "apps/cli/npm",
   "apps/desktop/src/main",
   "apps/desktop/src/preload",
   "apps/desktop/src/renderer",

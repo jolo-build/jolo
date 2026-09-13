@@ -7,7 +7,7 @@ import { Icon } from './icon.jsx';
 const progress = {
   queued: ['clock', 'Queued'], preparing: ['spinner', 'Working'], model: ['spinner', 'Working'], tools: ['spinner', 'Working'],
   cancelling: ['spinner', 'Stopping'], awaiting_permission: ['shield', 'Needs approval'], paused: ['pause', 'Paused'],
-  completed: ['check', 'Done'], failed: ['alert', 'Failed'], interrupted: ['alert', 'Interrupted'], cancelled: ['stop', 'Stopped'],
+  completed: ['check', 'Done'], failed: ['alert', 'Failed'], interrupted: ['alert', 'Interrupted'], cancelled: ['circleSlash', 'Stopped'],
 };
 
 /** One navigation row for both workspace tasks and standalone conversations. */

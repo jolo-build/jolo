@@ -35,7 +35,7 @@ export async function runReloadSmoke({ window, bridge, browserHost, project, fix
           await waitFor('document.querySelector(".changes-host")?.hidden === false', 'Changes visible');
           // Retain guest focus to exercise the stale focus that used to survive tab switching.
           if (panel === 'changes') {
-            await evaluate('document.querySelector(".context-tabs [role=tab][aria-selected=true]").focus()');
+            await evaluate('document.querySelector(".panel-item-tabs [role=tab][aria-selected=true]").focus()');
             window.webContents.focus();
           }
         }

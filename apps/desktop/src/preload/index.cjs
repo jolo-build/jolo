@@ -8,6 +8,7 @@ const engineListeners = new Set();
 const focusListeners = new Set();
 const noticeListeners = new Set();
 const browserOpenListeners = new Set();
+const closeListeners = new Set();
 const browserOpens = new Set();
 
 ipcRenderer.on("jolo:events", (_event, batch) => {
@@ -19,6 +20,7 @@ ipcRenderer.on("jolo:events", (_event, batch) => {
 ipcRenderer.on("jolo:engine", (_event, state) => { for (const listener of engineListeners) listener(state); });
 ipcRenderer.on("jolo:focus", (_event, payload) => { for (const listener of focusListeners) listener(payload); }); // a notification was clicked
 ipcRenderer.on("jolo:notice", (_event, payload) => { for (const listener of noticeListeners) listener(payload); }); // news for a window the user is looking at
+ipcRenderer.on('jolo:closeRequest', (_event, payload) => { for (const listener of closeListeners) listener(payload); });
 ipcRenderer.on('jolo:browserOpenCancel', (_event, { invocationId }) => browserOpens.delete(invocationId));
 ipcRenderer.on('jolo:browserOpen', (_event, payload) => {
   browserOpens.add(payload.invocationId);
@@ -44,13 +46,16 @@ contextBridge.exposeInMainWorld("jolo", {
   onEngine: (listener) => { engineListeners.add(listener); return () => engineListeners.delete(listener); },
   onFocusRequest: (listener) => { focusListeners.add(listener); return () => focusListeners.delete(listener); },
   onNotice: (listener) => { noticeListeners.add(listener); return () => noticeListeners.delete(listener); },
+  onCloseRequest: listener => { closeListeners.add(listener); return () => closeListeners.delete(listener); },
+  quit: () => ipcRenderer.send('jolo:quit'),
   onBrowserOpen: listener => { browserOpenListeners.add(listener); return () => browserOpenListeners.delete(listener); },
   setBrowserWorkspaces: workspaceIds => ipcRenderer.send('jolo:browserWorkspaces', { workspaceIds }),
   openFolder: () => ipcRenderer.invoke("jolo:dialog:openFolder"),
   answererMenu: (options) => ipcRenderer.invoke("jolo:answererMenu", { items: (options?.items ?? []).map((item) => ({ id: String(item.id), label: String(item.label), checked: Boolean(item.checked), enabled: item.enabled !== false })) }),
   taskMenu: (options) => ipcRenderer.invoke("jolo:taskMenu", typeof options === "boolean" ? { archived: options } : { archived: Boolean(options?.archived), worktree: Boolean(options?.worktree) }),
   openChatFile: (params) => ipcRenderer.invoke('jolo:openChatFile', { sessionId: params.sessionId, path: params.path }),
-  previewChatFile: (params) => ipcRenderer.invoke('jolo:previewChatFile', { sessionId: params.sessionId, path: params.path }),
+  previewChatFile: (params) => ipcRenderer.invoke('jolo:previewChatFile', { sessionId: params.sessionId, projectId: params.projectId, workspaceId: params.workspaceId, path: params.path }),
+  pickChatFile: (params) => ipcRenderer.invoke('jolo:pickChatFile', { sessionId: params.sessionId, projectId: params.projectId, workspaceId: params.workspaceId }),
   releaseChatFile: (url) => ipcRenderer.invoke('jolo:releaseChatFile', url),
   saveImage: params => ipcRenderer.invoke('jolo:image:save', { artifactId: params.artifactId, name: params.name }),
   openExternal: (url) => ipcRenderer.invoke("jolo:openExternal", url),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
@@ -58,6 +58,43 @@ async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test("saved run changes belong to the editing chat, not another chat in its workspace", async () => {
+    const { client, events, project, repo, session, runTo } = await boot();
+    const changed = await runTo("own-edit", `write ${path.join(repo, "owned.txt")} hello`);
+    expect(changed.changedPaths).toEqual(["owned.txt"]);
+    const { session: other } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "read only", agentId: "fixture-acp" });
+    const { run } = await client.call("run.start", { sessionId: other.id, requestId: "other-read", prompt: `read ${path.join(repo, "owned.txt")}` });
+    await waitFor(() => events.some(e => e.type === "run.state" && e.runId === run.id && e.payload.state === "completed"));
+    const ownPage = await client.call("session.page", { sessionId: session.id });
+    const otherPage = await client.call("session.page", { sessionId: other.id });
+    expect(ownPage.runs.find(r => r.id === changed.id).changedPaths).toEqual(["owned.txt"]);
+    expect(otherPage.runs.find(r => r.id === run.id).changedPaths).toEqual([]);
+    expect((await client.call("run.snapshot", { runId: run.id })).run.changedPaths).toEqual([]);
+  }, 30_000);
+
+  test("an agent exiting during restore fails instead of waiting for a fallback response", async () => {
+    const { home, runTo } = await boot();
+    await runTo("seed-exit", "hello");
+    writeFileSync(path.join(home, "acp-state", "exit-load"), "");
+    const run = await runTo("exiting-restore", "continue");
+    expect(run.state).toBe("failed");
+    expect(run.failure).toContain("exited");
+  }, 30_000);
+
+  test("cancelling during session restore releases the next queued message", async () => {
+    const { client, events, home, session, runTo } = await boot();
+    await runTo("seed-restore", "hello");
+    const stateDir = path.join(home, "acp-state");
+    writeFileSync(path.join(stateDir, "hold-load"), "");
+    const { run } = await client.call("run.start", { sessionId: session.id, requestId: "cancel-restore", prompt: "continue" });
+    await waitFor(() => existsSync(path.join(stateDir, "loading")), { label: "restoring agent session" });
+    const { run: queued } = await client.call("run.start", { sessionId: session.id, requestId: "after-restore", prompt: "next" });
+    unlinkSync(path.join(stateDir, "hold-load"));
+    await client.call("run.cancel", { runId: run.id });
+    await waitFor(() => events.some(e => e.type === "run.state" && e.runId === run.id && e.payload.state === "cancelled"), { label: "restore cancelled", timeoutMs: 10_000 });
+    await waitFor(() => events.some(e => e.type === "run.state" && e.runId === queued.id && e.payload.state === "completed"), { label: "queued follow-up completed", timeoutMs: 10_000 });
+  }, 30_000);
+
   test('partial permission requests preserve tool details and resolve the execution directory across reloads', async () => {
     const { client, events, repo, session } = await boot();
     for (const prompt of ['permission-partial', 'permission-title']) {

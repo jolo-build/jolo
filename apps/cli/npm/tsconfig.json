@@ -1,0 +1,7 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // The published installer is a plain CommonJS postinstall run by Node inside npm's lifecycle;
+  // it uses only Node builtins, which the Bun types also declare.
+  "compilerOptions": { "types": ["bun"], "moduleDetection": "legacy" },
+  "include": ["."]
+}

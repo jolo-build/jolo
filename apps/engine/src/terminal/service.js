@@ -63,6 +63,7 @@ export class TerminalService {
     if (this.terminals.size >= 32 || this.list(workspaceId).length >= 8) throw new ProtocolError("limit_exceeded", "terminal limit reached; close an existing terminal first");
     const workspace = this.storage.getWorkspace(workspaceId);
     if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+    if (workspace.needsFolder) throw new ProtocolError('conflict', 'Link this synced folder to a local folder before opening a terminal.');
     const shell = this.shell ?? this.supervisor.baseEnv.SHELL ?? "/bin/sh";
     const argv = command ?? [shell];
     const id = newId("term");

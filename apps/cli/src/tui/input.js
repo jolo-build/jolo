@@ -1,4 +1,6 @@
 import { sanitizeText } from "@jolo/markdown/text";
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const MAX_DRAFT_CHARS = 64 * 1024;
 // Draft editing for the interactive client. Pure text transforms: no terminal writes,
 // no engine calls, and nothing a paste can carry reaches the draft as a control sequence.
 /** Delete the last word and any trailing whitespace, retaining the separator before it. */
@@ -18,4 +20,68 @@ export function editDraft(value, chunk, key = {}) {
   // Pasted terminal output carries escape sequences; Ink may already have consumed the escape byte itself.
   const printable = sanitizeText(chunk, { multiline: false, tab: "", consumedEscape: true });
   return (value + printable).slice(0, 64 * 1024);
+}
+
+/** Cursor offsets are UTF-16 indices; movement and deletion keep graphemes intact. */
+export function editInput(value, cursor, chunk, key = {}) {
+  cursor = Math.max(0, Math.min(cursor, value.length));
+  const unchanged = { value, cursor };
+  if (key.eventType === "release") return unchanged;
+  const segments = graphemes.segment(value);
+  const previous = () => cursor > 0 ? segments.containing(cursor - 1).index : 0;
+  const next = () => cursor < value.length ? segments.containing(cursor).index + segments.containing(cursor).segment.length : value.length;
+  const wordLeft = () => deletePreviousWord(value.slice(0, cursor)).length;
+  const wordRight = () => {
+    let end = cursor;
+    while (end < value.length && /\s/u.test(value[end])) end++;
+    while (end < value.length && !/\s/u.test(value[end])) end++;
+    return end;
+  };
+  // macOS terminals send either modified arrows or Escape+b/f for Option+arrows.
+  if (key.leftArrow || (key.meta && chunk === "b")) return { value, cursor: key.meta || key.ctrl ? wordLeft() : previous() };
+  if (key.rightArrow || (key.meta && chunk === "f")) return { value, cursor: key.meta || key.ctrl ? wordRight() : next() };
+  if (key.home || (key.ctrl && chunk === "a")) return { value, cursor: 0 };
+  if (key.end || (key.ctrl && chunk === "e")) return { value, cursor: value.length };
+  if (key.backspace || (key.ctrl && chunk === "w")) {
+    const start = key.ctrl || key.meta ? wordLeft() : previous();
+    return { value: value.slice(0, start) + value.slice(cursor), cursor: start };
+  }
+  if (key.delete) {
+    const end = key.ctrl || key.meta ? wordRight() : next();
+    return { value: value.slice(0, cursor) + value.slice(end), cursor };
+  }
+  if (key.ctrl || key.meta || key.super || key.escape || key.return || key.tab || key.upArrow || key.downArrow || key.pageUp || key.pageDown) return unchanged;
+  const printable = sanitizeText(chunk, { multiline: false, tab: "", consumedEscape: true });
+  // Keep the suffix intact when pasting at the limit, and never split a grapheme.
+  const room = MAX_DRAFT_CHARS - value.length;
+  let inserted = "";
+  for (const { segment } of graphemes.segment(printable)) {
+    if (inserted.length + segment.length > room) break;
+    inserted += segment;
+  }
+  return { value: value.slice(0, cursor) + inserted + value.slice(cursor), cursor: cursor + inserted.length };
+}
+
+/** A single-line viewport that always includes the cursor, measured in terminal cells. */
+export function inputViewport(value, cursor, columns) {
+  const display = (text) => sanitizeText(text).replace(/\n/g, " ");
+  const before = Array.from(graphemes.segment(value.slice(0, cursor)), ({ segment }) => display(segment));
+  const after = Array.from(graphemes.segment(value.slice(cursor)), ({ segment }) => display(segment));
+  const caret = after.shift() || " ";
+  let remaining = Math.max(0, columns - Bun.stringWidth(caret));
+  let left = "";
+  for (let i = before.length - 1; i >= 0; i--) {
+    const width = Bun.stringWidth(before[i]);
+    if (width > remaining) break;
+    left = before[i] + left;
+    remaining -= width;
+  }
+  let right = "";
+  for (const segment of after) {
+    const width = Bun.stringWidth(segment);
+    if (width > remaining) break;
+    right += segment;
+    remaining -= width;
+  }
+  return { before: left, caret, after: right };
 }

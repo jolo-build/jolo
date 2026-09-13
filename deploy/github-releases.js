@@ -2,9 +2,9 @@
 // Keep the repository fixed so a request cannot turn this into an arbitrary redirect.
 const REPOSITORY = 'jolo-build/jolo';
 const VERSION = '(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?';
-// The desktop application publishes macOS bundles alongside the CLI archives; both are served
+// The desktop application publishes platform archives alongside the CLI packages; both are served
 // from the same versioned path so one installer URL scheme covers everything Jolo ships.
-const ASSET_PATH = new RegExp(`^/releases/(${VERSION})/(jolo-cli-(?:darwin|linux)-(?:arm64|x64)\\.tar\\.gz(?:\\.sha256)?|jolo-desktop-darwin-(?:arm64|x64)\\.(?:dmg|zip)(?:\\.sha256)?)$`);
+const ASSET_PATH = new RegExp(`^/releases/(${VERSION})/(jolo-cli-(?:darwin|linux)-(?:arm64|x64)\\.tar\\.gz(?:\\.sha256)?|jolo-desktop-(?:darwin-(?:arm64|x64)\\.dmg|linux-(?:arm64|x64)\\.tar\\.gz|win32-x64\\.zip)(?:\\.sha256)?)$`);
 // Completeness is judged on the CLI alone: the installer depends on it, and a release that
 // published only the CLI must still be installable.
 const REQUIRED = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].flatMap(target => [`jolo-cli-${target}.tar.gz`, `jolo-cli-${target}.tar.gz.sha256`]);
@@ -27,7 +27,8 @@ const stableVersion = release => release.draft === false && release.prerelease =
   ? release.tag_name?.match(/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/)?.[1] : null;
 
 /**
- * Advertise desktop links only when both DMGs and their checksums are published.
+ * Advertise desktop links only when the whole matrix and its checksums are published; a release
+ * either offers every platform or none, matching the all-or-none rule in scripts/ci-release.js.
  * @param {Request} request
  * @param {FetchLike} [fetchImpl]
  */
@@ -41,10 +42,16 @@ export async function latestDesktopRelease(request, fetchImpl = fetch) {
     if (!response.ok) throw new Error('Release lookup failed');
     const release = await response.json(), version = stableVersion(release);
     if (!version || !Array.isArray(release.assets)) throw new Error('Invalid stable release');
-    const names = ['arm64', 'x64'].map(arch => ({ arch, name: `jolo-desktop-darwin-${arch}.dmg` }));
+    const names = [
+      { platform: 'macOS', arch: 'arm64', label: 'Apple Silicon', name: 'jolo-desktop-darwin-arm64.dmg' },
+      { platform: 'macOS', arch: 'x64', label: 'Intel Mac', name: 'jolo-desktop-darwin-x64.dmg' },
+      { platform: 'Windows', arch: 'x64', label: 'Windows x64', name: 'jolo-desktop-win32-x64.zip' },
+      { platform: 'Linux', arch: 'x64', label: 'Linux x64', name: 'jolo-desktop-linux-x64.tar.gz' },
+      { platform: 'Linux', arch: 'arm64', label: 'Linux ARM64', name: 'jolo-desktop-linux-arm64.tar.gz' },
+    ];
     const present = name => release.assets.some(asset => asset.name === name && asset.state === 'uploaded' && asset.size > 0);
     if (!names.every(({ name }) => present(name) && present(`${name}.sha256`))) return respond({ version: null, downloads: [] });
-    return respond({ version, downloads: names.map(({ arch, name }) => ({ arch, url: `/releases/${version}/${name}`, checksum: `/releases/${version}/${name}.sha256` })) });
+    return respond({ version, downloads: names.map(({ name, ...info }) => ({ ...info, url: `/releases/${version}/${name}`, checksum: `/releases/${version}/${name}.sha256` })) });
   } catch {
     return new Response(null, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } });
   }

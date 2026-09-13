@@ -1,17 +1,49 @@
 import path from 'node:path';
-import { open, realpath, stat } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { fileReference } from '@jolo/markdown/file-links';
 
 const DOCUMENTS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.txt', '.md', '.csv', '.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp', '.rtf']);
-async function resolveChatFile(call, { sessionId, path: reference }) {
+const SEARCH_SKIP = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', '.next', '.cache', '.codex', '.agents']);
+
+/** Agents often mention only a basename. Resolve it only when the workspace has one match. */
+async function findNamedFile(root, name) {
+  const directories = [root];
+  const matches = [];
+  let inspected = 0;
+  while (directories.length) {
+    const directory = directories.pop();
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); }
+    catch { throw new Error(`Could not search this workspace. Use the full relative path for ${name}.`); }
+    for (const entry of entries) {
+      if (++inspected > 20_000) throw new Error(`Workspace search limit reached. Use the full relative path for ${name}.`);
+      const candidate = path.join(directory, entry.name);
+      // Never follow directory symlinks into dependencies or another workspace.
+      if (entry.isDirectory() && !SEARCH_SKIP.has(entry.name)) directories.push(candidate);
+      else if (entry.isFile() && entry.name === name) {
+        matches.push(candidate);
+        if (matches.length > 1) throw new Error(`More than one file is named ${name}. Use a full relative path, such as ${matches.map(file => path.relative(root, file)).join(' or ')}.`);
+      }
+    }
+  }
+  return matches[0] ?? null;
+}
+
+async function resolveChatFile(call, { sessionId, projectId, workspaceId, path: reference }) {
   let requested = fileReference(reference, { explicit: true });
-  if (!sessionId || !requested) throw new Error('This is not a supported file reference.');
+  if ((!sessionId && (!projectId || !workspaceId)) || !requested) throw new Error('This is not a supported file reference.');
   requested = requested.replace(/:\d+(?::\d+)?$/, '');
-  const { session } = await call('session.page', { sessionId, limit: 1 });
+  const session = sessionId ? (await call('session.page', { sessionId, limit: 1 })).session : { projectId, workspaceId };
   const { workspaces } = await call('workspace.list', { projectId: session.projectId });
   const workspace = workspaces.find(item => item.id === session.workspaceId && !item.removedAt && item.present);
   if (!workspace) throw new Error('This chat’s workspace is unavailable.');
-  const resolved = path.isAbsolute(requested) ? requested : path.resolve(workspace.path, requested);
+  let resolved = path.isAbsolute(requested) ? requested : path.resolve(workspace.path, requested);
+  try { await stat(resolved); }
+  catch (error) {
+    if (error.code === 'ENOENT' && path.basename(requested) === requested) {
+      resolved = await findNamedFile(workspace.path, requested) ?? resolved;
+    }
+  }
   let target;
   try { target = await realpath(resolved); if (!(await stat(target)).isFile()) throw new Error(); }
   catch { throw new Error(`File not found: ${requested}`); }

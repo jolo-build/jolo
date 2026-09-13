@@ -113,7 +113,7 @@ export class SessionProjection {
     // A stored run keeps its answerer under `execution`; live events carry it as `agentId`. Read as one.
     for (const run of runs) {
       if (cursor && BigInt(this.runSeq.get(run.id) ?? "0") > BigInt(cursor)) continue;
-      this.runs.set(run.id, { ...run, agentId: run.agentId ?? run.execution?.agentId ?? null });
+      this.runs.set(run.id, { ...this.runs.get(run.id), ...run, agentId: run.agentId ?? run.execution?.agentId ?? null });
       if (cursor) this.runSeq.set(run.id, cursor);
     }
     if (advanceCursor && cursor && BigInt(cursor) > BigInt(this.lastSeq)) this.lastSeq = cursor;
@@ -155,6 +155,14 @@ export class SessionProjection {
         break;
       }
       case "files.changed": {
+        const run = this.runs.get(event.runId) ?? { id: event.runId, sessionId: event.sessionId };
+        const paths = new Set(run.changedPaths ?? []);
+        for (const change of p.changes) {
+          if (change.newPath) paths.delete(change.path);
+          paths.add(change.newPath ?? change.path);
+        }
+        this.runs.set(event.runId, { ...run, changedPaths: [...paths], changeEvents: [...(run.changeEvents ?? []), p].slice(-200) });
+        this.runSeq.set(event.runId, event.eventSeq);
         const message = p.messageId ? this.messages.get(p.messageId) : null;
         if (message) { message.changes = [...(message.changes ?? []), ...p.changes]; message.diffArtifactId = p.diffArtifactId ?? message.diffArtifactId ?? null; }
         break;

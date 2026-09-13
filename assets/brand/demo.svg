@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="760" height="452" viewBox="0 0 760 452" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .frame { fill: #191a1c; stroke: #33353a; }
+      .dot1 { fill: #ff5f57; } .dot2 { fill: #febc2e; } .dot3 { fill: #28c840; }
+      .title { fill: #8a8d91; font-size: 12px; }
+      .t { font-size: 13.5px; }
+      .dim { fill: #8a8d91; }
+      .text { fill: #d7d8da; }
+      .prompt { fill: #7da7e3; }
+      .accent { fill: #7dc785; }
+      .muted { fill: #6e7074; }
+      /* The overlay uncovers the transcript top to bottom in discrete steps, then resets. */
+      @keyframes reveal {
+        0% { transform: translateY(0); }
+        84% { transform: translateY(-452px); }
+        95% { transform: translateY(-452px); }
+        100% { transform: translateY(-452px); }
+      }
+      .overlay { fill: #191a1c; animation: reveal 15s steps(17, jump-none) infinite; }
+    </style>
+  </defs>
+
+  <rect class="frame" x="0.5" y="0.5" width="759" height="451" rx="10"/>
+  <circle class="dot1" cx="22" cy="20" r="5"/>
+  <circle class="dot2" cx="40" cy="20" r="5"/>
+  <circle class="dot3" cx="58" cy="20" r="5"/>
+  <text class="title" x="380" y="24" text-anchor="middle">jolo demo</text>
+  <line x1="1" y1="36" x2="759" y2="36" stroke="#33353a"/>
+
+  <g class="t">
+    <text x="24" y="66"><tspan class="dim">$ </tspan><tspan class="text">jolo .</tspan></text>
+    <text x="24" y="92"><tspan class="prompt">❯ </tspan><tspan class="text">Explain how this project is organized.</tspan></text>
+    <text x="24" y="118"><tspan class="text">Jolo</tspan></text>
+    <text x="40" y="140"><tspan class="muted">Read package.json · listed apps/ · searched packages/</tspan></text>
+    <text x="40" y="164"><tspan class="text">The project has three main parts:</tspan></text>
+    <text x="56" y="186"><tspan class="accent">apps/      </tspan><tspan class="dim">application entry points</tspan></text>
+    <text x="56" y="208"><tspan class="accent">packages/  </tspan><tspan class="dim">shared components and tools</tspan></text>
+    <text x="56" y="230"><tspan class="accent">tests/     </tspan><tspan class="dim">checks for expected behavior</tspan></text>
+    <text x="40" y="252"><tspan class="muted">No files changed.</tspan></text>
+    <text x="24" y="280"><tspan class="prompt">❯ </tspan><tspan class="text">Add a saved-searches filter and cover it with a test.</tspan></text>
+    <text x="24" y="306"><tspan class="text">Jolo</tspan></text>
+    <text x="40" y="328"><tspan class="muted">wrote searches.ts · extended dashboard.test.js</tspan></text>
+    <text x="40" y="352"><tspan class="accent">+42 −3</tspan><tspan class="dim"> in 2 files — changes stay in the conversation until you review them</tspan></text>
+    <text x="40" y="376"><tspan class="accent">✓ 4 tests passed · typecheck clean</tspan></text>
+    <text x="24" y="404"><tspan class="prompt">❯ </tspan></text>
+  </g>
+
+  <!-- Covers everything below the header; slides up one line at a time. -->
+  <rect class="overlay" x="0" y="38" width="760" height="452"/>
+</svg>

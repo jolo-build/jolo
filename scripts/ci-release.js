@@ -6,14 +6,18 @@ import path from 'node:path';
 import { MAX_RELEASE_BYTES } from './release-assets.js';
 
 export const TARGETS = Object.freeze(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']);
-// The desktop application ships for macOS only; Linux desktop support is not validated yet.
-export const DESKTOP_TARGETS = Object.freeze(['darwin-arm64', 'darwin-x64']);
+// The desktop application ships for macOS, Linux, and Windows. Windows ARM64 is not built yet;
+// x64 runs under Prism emulation there.
+export const DESKTOP_TARGETS = Object.freeze(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']);
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/;
 const root = path.resolve(import.meta.dir, '..');
 const json = file => JSON.parse(readFileSync(file, 'utf8'));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const targetsFor = product => product === 'desktop' ? DESKTOP_TARGETS : TARGETS;
-const archiveName = (target, product = 'cli') => product === 'desktop' ? `jolo-desktop-${target}.dmg` : `jolo-cli-${target}.tar.gz`;
+// The desktop archive format follows the platform: DMG on macOS, zip on Windows, tar.gz on Linux.
+const archiveName = (target, product = 'cli') => product === 'desktop'
+  ? `jolo-desktop-${target}.${target.startsWith('darwin') ? 'dmg' : target.startsWith('win32') ? 'zip' : 'tar.gz'}`
+  : `jolo-cli-${target}.tar.gz`;
 const manifestName = (target, product = 'cli') => product === 'desktop' ? `manifest-desktop-${target}.json` : `manifest-${target}.json`;
 
 export function validateTag(tag, version, legacyVersions = []) {
@@ -43,8 +47,8 @@ export function prepareBuild(directory, output, target = `${process.platform}-${
 }
 /**
  * Every published file is verified before anything is uploaded. The CLI's four platforms are
- * always required. Desktop archives are optional as a set: a release either carries both macOS
- * builds or none, so an updater never sees a release with one architecture missing.
+ * always required. Desktop archives are optional as a set: a release either carries the whole
+ * desktop matrix or none of it, so an updater never sees a release with one platform missing.
  */
 export function verifyRelease(directory, version) {
   if (!VERSION.test(version)) throw new Error('Invalid release version');
@@ -85,7 +89,7 @@ export function publishRelease(directory, { version = releaseVersion(), repo = p
   }
   const desktop = files.some(file => file.startsWith('jolo-desktop-'));
   const notes = path.join(directory, 'release-notes.md');
-  writeFileSync(notes, `CLI packages for macOS and Linux (ARM64 and x64), including the pinned Bun runtime and native search.${desktop ? '\n\nDesktop DMG installers for macOS (Apple Silicon and Intel). Open the DMG and drag Jolo to Applications.' : ''}\n\nInstall the CLI only: \`curl -fsSL https://jolo.build/install.sh | bash\`\n\nInstall this CLI version: \`curl -fsSL https://jolo.build/install.sh | bash -s -- --version ${version}\`\n\nUpdate an existing install with \`jolo update\`.${desktop ? ' The desktop application reports a new release in Settings → About.' : ''}\n\nEach archive has a SHA-256 checksum and a platform build manifest.${desktop ? ' Desktop DMGs are ad-hoc signed and have not been notarized.' : ' Desktop apps are not included.'}\n`);
+  writeFileSync(notes, `CLI packages for macOS and Linux (ARM64 and x64), including the pinned Bun runtime and native search.${desktop ? '\n\nDesktop downloads for macOS (DMG, Apple Silicon and Intel), Windows (x64 zip), and Linux (tar.gz, x64 and ARM64). On macOS, open the DMG and drag Jolo to Applications.' : ''}\n\nInstall the CLI only: \`curl -fsSL https://jolo.build/install.sh | bash\`\n\nInstall this CLI version: \`curl -fsSL https://jolo.build/install.sh | bash -s -- --version ${version}\`\n\nUpdate an existing install with \`jolo update\`.${desktop ? ' The desktop application reports a new release in Settings → About.' : ''}\n\nEach archive has a SHA-256 checksum and a platform build manifest.${desktop ? ' macOS DMGs are ad-hoc signed and have not been notarized; Windows and Linux builds are unsigned archives.' : ' Desktop apps are not included.'}\n`);
   if (!current) ghImpl(['release', 'create', tag, '--repo', repo, '--verify-tag', '--draft', '--title', `Jolo ${version}`, '--notes-file', notes, ...(prerelease ? ['--prerelease'] : [])]);
   // Published only after every matrix job and every upload succeeded. Failed uploads remain a draft.
   writeFileSync(path.join(directory, 'latest.txt'), `${version}\n`);

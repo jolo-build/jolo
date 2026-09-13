@@ -11,6 +11,7 @@ import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
+import { linkChatFolder } from '../account/chat-context.js';
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
@@ -87,13 +88,22 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         throw new ProtocolError("not_found", "project path is not an existing directory");
       }
       return storage.transaction(() => {
-        const project = storage.upsertProject({ identity: root, rootPath: root });
-        const workspace = storage.ensureDirectWorkspace(project.id, root);
-        const { grant, created } = permissions.grantInspect(workspace.id); // user selected the project (§10.1)
-        if (created) storage.appendEvent({ type: "grant.created", payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
+        let project = storage.listProjects().find(p => p.rootPath === root) ?? storage.upsertProject({ identity: root, rootPath: root });
+        const preferences = storage.getProjectPreferences(project.id);
+        if (preferences.redirectProjectId) project = storage.getProject(preferences.redirectProjectId);
+        const workspace = storage.getProjectPreferences(project.id).syncPlaceholder ? storage.listWorkspaces(project.id)[0] : storage.ensureDirectWorkspace(project.id, project.rootPath);
+        const needsFolder = storage.getWorkspace(workspace.id).needsFolder;
+        if (!needsFolder) {
+          const { grant, created } = permissions.grantInspect(workspace.id); // user selected the project (§10.1)
+          if (created) storage.appendEvent({ type: "grant.created", payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
+        }
         const preferredMode = storage.getProjectPreferences(project.id).workspaceMode === "worktree" ? "worktree" : "direct";
-        return { projectId: project.id, workspaceId: workspace.id, rootPath: root, mode: "direct", preferredMode, standalone: storage.getProjectPreferences(project.id).standalone === true };
+        return { projectId: project.id, workspaceId: workspace.id, rootPath: project.rootPath, mode: workspace.mode, preferredMode, needsFolder, standalone: storage.getProjectPreferences(project.id).standalone === true };
       });
+    },
+    'project.linkFolder': ({ workspaceId, path }, conn) => {
+      requireInteractive(conn, 'Choose a local folder in Jolo to link this synced project.');
+      return linkChatFolder({ storage, permissions, workspaceId, folder: path });
     },
     "settings.get": () => ({ settings: settingsService.get() }),
     'task.list': params => tasks.list(params),
@@ -191,7 +201,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit });
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
-      return { session, messages, runs: storage.listRunsForSession(sessionId), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
+      return { session, messages, runs: storage.listRunsForSession(sessionId).map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
     "run.start": async (params) => {
       const existing = storage.findRunByRequest(params.sessionId, params.requestId);
@@ -213,7 +223,10 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     },
     "run.cancel": (params) => ({ run: runs.cancel(params) }),
     "run.sendNow": (params, conn) => { requireInteractive(conn); return { run: runs.sendNow(params) }; },
-    "run.snapshot": ({ runId }) => runs.snapshot(runId),
+    "run.snapshot": ({ runId }) => {
+      const snapshot = runs.snapshot(runId);
+      return { ...snapshot, run: { ...snapshot.run, changedPaths: storage.changedPathsForRun(runId) } };
+    },
     'attachment.create': (params, conn) => { requireInteractive(conn); return createImageUpload(storage, params); },
     'attachment.write': (params, conn) => { requireInteractive(conn); return writeImageUpload(storage, params); },
     "artifact.read": ({ artifactId, offset, length, encoding }) => {

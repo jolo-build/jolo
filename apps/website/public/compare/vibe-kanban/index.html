@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jolo vs Vibe Kanban — coding agent tools compared</title>
+    <meta name="description" content="Comparing Jolo and Vibe Kanban: a desktop workspace and CLI vs a browser-based kanban board for orchestrating coding agents." />
+    <link rel="canonical" href="https://jolo.build/compare/vibe-kanban/" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Jolo vs Vibe Kanban — coding agent tools compared" />
+    <meta property="og:description" content="A desktop workspace and CLI vs a browser-based kanban board for coding agents — compared honestly." />
+    <meta property="og:image" content="https://jolo.build/brand/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href="/brand/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
+    <link rel="stylesheet" href="/pages.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "Jolo vs Vibe Kanban — coding agent tools compared",
+        "description": "Comparing Jolo and Vibe Kanban: a desktop workspace and CLI vs a browser-based kanban board for orchestrating coding agents.",
+        "author": { "@type": "Organization", "name": "Jolo", "url": "https://jolo.build/" },
+        "mainEntityOfPage": "https://jolo.build/compare/vibe-kanban/"
+      }
+    </script>
+  </head>
+  <body>
+    <div class="top">
+      <a class="brand" href="/">jolo</a>
+      <nav><a href="/#get-jolo">Download</a><a href="https://docs.jolo.build">Docs</a><a href="https://github.com/jolo-build/jolo">GitHub</a></nav>
+    </div>
+    <main class="wrap">
+      <header class="page">
+        <span class="eyebrow">Compare</span>
+        <h1>Jolo vs Vibe Kanban</h1>
+        <p class="lede">Vibe Kanban is an open-source kanban board for running coding agents in parallel. Jolo is a desktop app and CLI that keeps the whole working context — chat, files, terminal, and browser — in one place.</p>
+      </header>
+
+      <section>
+        <h2>At a glance</h2>
+        <table>
+          <caption>Feature comparison — verify each product’s current state, both move quickly.</caption>
+          <tr><th></th><th>Jolo</th><th>Vibe Kanban</th></tr>
+          <tr><td>Model</td><td>Desktop app and terminal CLI</td><td>Local server with a browser-based kanban UI</td></tr>
+          <tr><td>Platforms</td><td>macOS, Windows, Linux</td><td>Wherever its server runs</td></tr>
+          <tr><td>Agents</td><td>Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider</td><td>Several agent CLIs supported</td></tr>
+          <tr><td>Center of gravity</td><td>The conversation, with changes and tools beside it</td><td>The board: cards move through columns as agents work</td></tr>
+          <tr><td>Isolation</td><td>Separate Git worktrees per task</td><td>Git worktrees per task</td></tr>
+          <tr><td>Browser</td><td>Inline browser the agent can navigate and inspect</td><td>—</td></tr>
+          <tr><td>Terminal</td><td>Built in, beside the conversation</td><td>—</td></tr>
+          <tr><td>Plans</td><td>Built-in orchestrator: ordered tasks, one agent per step</td><td>Board columns track progress</td></tr>
+          <tr><td>Sync</td><td>Optional Jolo Access account for tasks and synced chats</td><td>—</td></tr>
+          <tr><td>License</td><td>MIT, open source</td><td>Apache 2.0, open source</td></tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>Where Vibe Kanban fits</h2>
+        <p class="muted">If you think in tickets and want a board of agent-run tasks moving left to right — with several agents running in parallel — Vibe Kanban is a solid, open-source choice. It runs wherever its server does, so it is not tied to a single machine’s GUI.</p>
+      </section>
+
+      <section>
+        <h2>Where Jolo is different</h2>
+        <ul class="muted">
+          <li><strong>Built around the conversation.</strong> Each task is a chat with its own history; diffs, checks, and files stay attached to it rather than to a card.</li>
+          <li><strong>A real desktop app.</strong> Native windows, split views, and a browser pane — no separate server or browser tab to manage.</li>
+          <li><strong>The agent can use a browser.</strong> Open localhost previews, fill forms, and verify flows inline.</li>
+          <li><strong>A CLI too.</strong> <code>jolo run --agent claude "Explain this repository"</code> works from any terminal.</li>
+          <li><strong>Optional cloud sync.</strong> Jolo Access keeps tasks and synced chats in the browser and across devices — and an account is never required to work locally.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Try Jolo</h2>
+        <p class="muted">Jolo is in early development — the macOS app is not yet notarized, and the Windows and Linux builds are unsigned. The CLI installs in one line and works on macOS and Linux.</p>
+        <a class="cta" href="/#get-jolo">Get Jolo</a>
+        <a class="cta secondary" href="https://docs.jolo.build">Read the guide</a>
+        <p class="note">Compared September 2026. Something wrong or outdated? <a href="https://github.com/jolo-build/jolo/issues">Tell us</a>.</p>
+      </section>
+    </main>
+    <footer class="site">
+      <a class="brand" href="/">jolo</a>
+      <a href="/compare/conductor/">vs Conductor</a>
+      <a href="/changelog/">Changelog</a>
+      <a href="https://docs.jolo.build">Documentation</a>
+      <a href="https://github.com/jolo-build/jolo">GitHub</a>
+    </footer>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-import { fileReference } from './file-links.js';
+import { fileReference, webReference } from './file-links.js';
 // Constrained markdown → document model. No HTML is ever produced or
 // interpreted; renderers map blocks to React DOM elements or terminal text. Streaming callers parse
 // completed segments once and re-parse only the unfinished tail.
@@ -109,12 +109,7 @@ export function parseInline(text) {
 }
 
 function safeHref(raw) {
-  try {
-    const url = new URL(raw);
-    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
-  } catch {
-    return null;
-  }
+  return webReference(raw);
 }
 
 function parseTable(lines) {

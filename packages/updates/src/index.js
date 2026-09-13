@@ -22,11 +22,13 @@ const MAX_METADATA_BYTES = 4096;
  * @typedef {(input: any, init?: any) => Promise<Response>} FetchLike
  */
 
-const PRODUCTS = Object.freeze({ cli: "tar.gz", desktop: "dmg" });
-const PLATFORMS = Object.freeze(["darwin", "linux"]);
-const ARCHITECTURES = Object.freeze(["arm64", "x64"]);
+// The published matrix, matching scripts/ci-release.js: CLI targets ship as tar.gz, and the
+// desktop's archive format follows its platform (DMG, zip, tar.gz).
+const CLI_TARGETS = Object.freeze(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
+const DESKTOP_TARGETS = Object.freeze(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
+const DESKTOP_EXTENSIONS = Object.freeze({ darwin: "dmg", linux: "tar.gz", win32: "zip" });
 // The only names the network functions will fetch; a caller cannot turn them into a path walk.
-const ASSET_NAME = /^jolo-(?:cli|desktop)-(?:darwin|linux)-(?:arm64|x64)\.(?:tar\.gz|dmg)$/;
+const ASSET_NAME = /^jolo-(?:cli-(?:darwin|linux)-(?:arm64|x64)\.tar\.gz|desktop-darwin-(?:arm64|x64)\.dmg|desktop-linux-(?:arm64|x64)\.tar\.gz|desktop-win32-x64\.zip)$/;
 function requireAssetName(name) {
   if (!ASSET_NAME.test(name ?? "")) throw new Error(`Not a Jolo release asset: ${String(name).slice(0, 80)}`);
   return name;
@@ -74,10 +76,10 @@ export const isNewer = (candidate, current) => compareVersions(candidate, curren
  * @param {{ product?: string, platform?: string, arch?: string }} [target]
  */
 export function assetName({ product = "cli", platform = process.platform, arch = process.arch } = {}) {
-  if (!PRODUCTS[product] || !PLATFORMS.includes(platform) || !ARCHITECTURES.includes(arch) || product === 'desktop' && platform !== 'darwin') {
-    throw new Error(`No Jolo ${product} release is published for ${platform}-${arch}.`);
-  }
-  return `jolo-${product}-${platform}-${arch}.${PRODUCTS[product]}`;
+  const target = `${platform}-${arch}`;
+  if (product === "cli" && CLI_TARGETS.includes(target)) return `jolo-cli-${target}.tar.gz`;
+  if (product === "desktop" && DESKTOP_TARGETS.includes(target)) return `jolo-desktop-${target}.${DESKTOP_EXTENSIONS[platform]}`;
+  throw new Error(`No Jolo ${product} release is published for ${platform}-${arch}.`);
 }
 
 function base(baseUrl) {

@@ -207,7 +207,7 @@ export class Storage {
 
   /** Live workspaces of a project: the direct checkout first, then worktrees in creation order. */
   listWorkspaces(projectId) {
-    return this.db.query("SELECT * FROM workspaces WHERE project_id = ?1 AND removed_at IS NULL ORDER BY CASE mode WHEN 'direct' THEN 0 ELSE 1 END, created_at").all(projectId).map(mapWorkspace);
+    return this.db.query("SELECT * FROM workspaces WHERE project_id = ?1 AND removed_at IS NULL ORDER BY CASE mode WHEN 'direct' THEN 0 ELSE 1 END, created_at").all(projectId).map(row => this.getWorkspace(row.id));
   }
 
   /** Any workspace ever recorded at this path, removed ones included: proof that a checkout was handed over. */
@@ -460,7 +460,8 @@ export class Storage {
   }
 
   getWorkspace(id) {
-    return mapWorkspace(this.db.query("SELECT * FROM workspaces WHERE id = ?1").get(id));
+    const workspace = mapWorkspace(this.db.query("SELECT * FROM workspaces WHERE id = ?1").get(id));
+    return workspace ? { ...workspace, needsFolder: this.getPreference(`chat-sync-folder:${id}`)?.needsFolder === true } : null;
   }
 
   // ---- preferences ----------------------------------------------------------------------------

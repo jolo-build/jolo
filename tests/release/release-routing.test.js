@@ -6,11 +6,19 @@ const request = new Request('https://jolo.build/releases/latest.txt');
 const legacy = { ASSETS: { fetch: async () => new Response('0.1.0\n') } };
 const release = () => ({ tag_name: 'v1.2.3', draft: false, prerelease: false, assets: ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].flatMap(target => ['', '.sha256'].map(suffix => ({ name: `jolo-cli-${target}.tar.gz${suffix}`, state: 'uploaded', size: 123 }))) });
 
-test('desktop choices contain only complete published DMGs and fixed versioned URLs', async () => {
+const DESKTOP_DOWNLOADS = [
+  { platform: 'macOS', arch: 'arm64', label: 'Apple Silicon', file: 'jolo-desktop-darwin-arm64.dmg' },
+  { platform: 'macOS', arch: 'x64', label: 'Intel Mac', file: 'jolo-desktop-darwin-x64.dmg' },
+  { platform: 'Windows', arch: 'x64', label: 'Windows x64', file: 'jolo-desktop-win32-x64.zip' },
+  { platform: 'Linux', arch: 'x64', label: 'Linux x64', file: 'jolo-desktop-linux-x64.tar.gz' },
+  { platform: 'Linux', arch: 'arm64', label: 'Linux ARM64', file: 'jolo-desktop-linux-arm64.tar.gz' },
+];
+
+test('desktop choices contain only complete published archives and fixed versioned URLs', async () => {
   const published = release();
-  published.assets.push(...['arm64', 'x64'].flatMap(arch => ['', '.sha256'].map(suffix => ({ name: `jolo-desktop-darwin-${arch}.dmg${suffix}`, state: 'uploaded', size: 123 }))));
+  published.assets.push(...DESKTOP_DOWNLOADS.flatMap(({ file }) => ['', '.sha256'].map(suffix => ({ name: `${file}${suffix}`, state: 'uploaded', size: 123 }))));
   const response = await latestDesktopRelease(request, async () => Response.json(published));
-  expect(await response.json()).toEqual({ version: '1.2.3', downloads: ['arm64', 'x64'].map(arch => ({ arch, url: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg`, checksum: `/releases/1.2.3/jolo-desktop-darwin-${arch}.dmg.sha256` })) });
+  expect(await response.json()).toEqual({ version: '1.2.3', downloads: DESKTOP_DOWNLOADS.map(({ file, ...info }) => ({ ...info, url: `/releases/1.2.3/${file}`, checksum: `/releases/1.2.3/${file}.sha256` })) });
   expect(await (await latestDesktopRelease(new Request(request, { method: 'HEAD' }), async () => Response.json(published))).text()).toBe('');
   for (const assets of [release().assets, published.assets.slice(0, -1), published.assets.map(asset => ({ ...asset, state: 'new' }))]) {
     expect(await (await latestDesktopRelease(request, async () => Response.json({ ...published, assets }))).json()).toEqual({ version: null, downloads: [] });
@@ -56,12 +64,12 @@ test('only supported versioned download paths redirect to the fixed GitHub repos
   for (const url of ['/releases/../../evil', '/releases/bogus/jolo-cli-linux-x64.tar.gz', '/releases/1.2.3/jolo-cli-windows-x64.tar.gz', '/releases/1.2.3/evil.sh']) expect(githubAssetRedirect(url)).toBeNull();
 });
 
-test('desktop bundles download through the same versioned path, macOS only', () => {
-  for (const arch of ['arm64', 'x64']) for (const suffix of ['', '.sha256']) {
-    const name = `jolo-desktop-darwin-${arch}.dmg${suffix}`;
+test('desktop archives download through the same versioned path on every platform', () => {
+  for (const { file } of DESKTOP_DOWNLOADS) for (const suffix of ['', '.sha256']) {
+    const name = `${file}${suffix}`;
     expect(githubAssetRedirect(`/releases/1.2.3/${name}`).headers.get('location')).toBe(`https://github.com/jolo-build/jolo/releases/download/v1.2.3/${name}`);
   }
-  for (const url of ['/releases/1.2.3/jolo-desktop-linux-x64.dmg', '/releases/1.2.3/jolo-desktop-darwin-arm64.tar.gz', '/releases/1.2.3/jolo-desktop-darwin-arm64.dmg.sig']) expect(githubAssetRedirect(url)).toBeNull();
+  for (const url of ['/releases/1.2.3/jolo-desktop-linux-x64.dmg', '/releases/1.2.3/jolo-desktop-darwin-arm64.tar.gz', '/releases/1.2.3/jolo-desktop-win32-arm64.zip', '/releases/1.2.3/jolo-desktop-darwin-arm64.dmg.sig']) expect(githubAssetRedirect(url)).toBeNull();
 });
 
 test('a release that published only the CLI still resolves as the latest installable version', async () => {

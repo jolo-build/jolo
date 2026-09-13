@@ -6,14 +6,15 @@ import { initialLayout, MAX_PANES, paneRects, paneReducer } from "./pane-layout.
 import { browserTarget } from './browser-target.js';
 import { TaskDragContext, TASK_DRAG_TYPE, taskDropSide } from './task-drag.jsx';
 import { readSidebar, sidebarWidth, sidebarLimit, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_KEY } from './sidebar-layout.js';
+import { useDragCleanup } from './use-drag-cleanup.js';
 
 function SidebarDivider({ width, maximum, onResize, onDragging }) {
   const drag = useRef(null);
-  const finish = () => { drag.current = null; onDragging(false); };
+  const { capture, end: finish, enter, leave } = useDragCleanup(() => { if (!drag.current) return; drag.current = null; onDragging(false); });
   return <div className="sidebar-divider" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN} aria-valuemax={maximum} aria-valuenow={width} tabIndex={0}
-    onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); drag.current = { x: event.clientX, width }; onDragging(true); event.currentTarget.setPointerCapture(event.pointerId); }}
+    onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); drag.current = { x: event.clientX, width }; onDragging(true); capture(event); }}
     onPointerMove={event => { if (drag.current) onResize(drag.current.width + event.clientX - drag.current.x); }}
-    onPointerUp={event => { finish(); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+    onPointerEnter={enter} onPointerLeave={leave} onPointerUp={finish}
     onPointerCancel={finish} onLostPointerCapture={finish} onDoubleClick={() => onResize(SIDEBAR_DEFAULT)}
     onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -23,6 +24,7 @@ function SidebarDivider({ width, maximum, onResize, onDragging }) {
 
 function Divider({ divider, canvas, onResize }) {
   const drag = useRef(null);
+  const { capture, end: finish, enter, leave } = useDragCleanup(() => { drag.current = null; });
   const horizontal = divider.axis === "x";
   const { rect } = divider;
   const update = (event) => {
@@ -36,8 +38,8 @@ function Divider({ divider, canvas, onResize }) {
   };
   return <div className={`pane-divider ${horizontal ? "vertical" : "horizontal"}`} role="separator" aria-label={horizontal ? "Resize columns" : "Resize rows"} aria-orientation={horizontal ? "vertical" : "horizontal"} aria-valuemin={15} aria-valuemax={85} aria-valuenow={Math.round(divider.ratio * 100)} tabIndex={0}
     style={horizontal ? { left: `${divider.position}%`, top: `${rect.y}%`, height: `${rect.height}%` } : { top: `${divider.position}%`, left: `${rect.x}%`, width: `${rect.width}%` }}
-    onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); drag.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
-    onPointerMove={update} onPointerUp={(event) => { update(event); drag.current = null; event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; }}
+    onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); drag.current = true; capture(event); }}
+    onPointerEnter={enter} onPointerLeave={leave} onPointerMove={update} onPointerUp={(event) => { update(event); finish(); }} onPointerCancel={finish} onLostPointerCapture={finish}
     onDoubleClick={() => onResize(divider.id, .5)}
     onKeyDown={(event) => {
       const backward = horizontal ? "ArrowLeft" : "ArrowUp", forward = horizontal ? "ArrowRight" : "ArrowDown";
@@ -105,6 +107,15 @@ function DesktopWorkspace() {
   const resize = useCallback((id, ratio) => dispatch({ type: "resize", id, ratio }), []);
   // Browser guests are expensive; retain the existing one-live-browser policy across splits.
   const onBrowserOpen = useCallback((id) => { for (const [other, controller] of controllers.current) if (other !== id) controller.closeBrowser(); }, []);
+  useEffect(() => window.jolo.onCloseRequest?.(({ fromBrowser }) => {
+    const browser = fromBrowser && [...controllers.current.entries()].find(([, controller]) => controller.hasBrowser);
+    const id = browser ? browser[0] : layoutRef.current.active;
+    if (controllers.current.get(id)?.closePanelItem()) return;
+    for (const [other, controller] of controllers.current) {
+      if (other !== id && controller.closePanelItem()) { dispatch({ type: 'focus', id: other }); return; }
+    }
+    window.jolo.quit();
+  }), []);
   useEffect(() => window.jolo.onBrowserOpen(({ workspaceId, expiresAt }) => {
     if (Date.now() >= expiresAt) throw new Error('browser open request expired');
     if (document.querySelector('dialog[open]:not(.mermaid-full-window), .settings-page')) throw new Error('close the host dialog before opening the browser');

@@ -186,14 +186,14 @@ function GettingStarted() {
   return <section className="getting-started section-width" id="get-jolo">
     <header className="install-heading"><div><span className="eyebrow">Get Jolo</span><h2>At home on your desktop. Or in your terminal.</h2></div><p>Desktop or terminal.<br />Install each separately.</p></header>
     <div className="source-card desktop-install">
-      <div className="source-card-top"><Icon name="panels" size={20} /><h3>Jolo Desktop</h3><span className="install-format">.dmg</span></div>
-      <p>Your chats, browser, and changes in one app. Open the disk image and drag Jolo into Applications.</p>
+      <div className="source-card-top"><Icon name="panels" size={20} /><h3>Jolo Desktop</h3><span className="install-format">.dmg · .zip · .tar.gz</span></div>
+      <p>Your chats, browser, and changes in one app. On macOS, open the disk image and drag Jolo into Applications; elsewhere, unpack the archive.</p>
       <div className="desktop-downloads">
-        {desktop?.downloads?.length ? desktop.downloads.map(download => <a className="desktop-download" key={download.arch} href={download.url}><span>Download for {download.arch === 'arm64' ? 'Apple Silicon' : 'Intel Mac'}</span><Icon name="arrow" size={16} /></a>)
-          : <p role="status" className="desktop-availability">{desktopError ? 'Desktop downloads are temporarily unavailable.' : desktop === null ? 'Checking desktop downloads…' : 'The first desktop DMG release is coming soon.'}</p>}
+        {desktop?.downloads?.length ? desktop.downloads.map(download => <a className="desktop-download" key={`${download.platform}-${download.arch}`} href={download.url}><span>Download for {download.label}</span><Icon name="arrow" size={16} /></a>)
+          : <p role="status" className="desktop-availability">{desktopError ? 'Desktop downloads are temporarily unavailable.' : desktop === null ? 'Checking desktop downloads…' : 'The first desktop release is coming soon.'}</p>}
       </div>
-      <div className="source-card-bottom"><span>macOS · Apple Silicon · Intel</span>{desktop?.version && <span>v{desktop.version}</span>}</div>
-      {desktop?.downloads?.length > 0 && <div className="release-links">{desktop.downloads.map(download => <a key={download.arch} href={download.checksum}>{download.arch === 'arm64' ? 'Apple Silicon' : 'Intel'} SHA-256</a>)}</div>}
+      <div className="source-card-bottom"><span>macOS · Windows · Linux</span>{desktop?.version && <span>v{desktop.version}</span>}</div>
+      {desktop?.downloads?.length > 0 && <div className="release-links">{desktop.downloads.map(download => <a key={`${download.platform}-${download.arch}`} href={download.checksum}>{download.label} SHA-256</a>)}</div>}
     </div>
     <div className="source-card cli-install">
       <div className="source-card-top"><Icon name="terminal" size={20} /><h3>Jolo CLI</h3><span className="install-format">bash</span></div>
@@ -219,5 +219,5 @@ export default function App() {
       ['code','Changes you can follow','See edits, check results, and review the diff in context. Pick up the conversation with your next instruction.']
     ].map(([icon,title,text]) => <article className="feature" key={title}><span className="feature-icon"><Icon name={icon} size={21} /></span><h3>{title}</h3><p>{text}</p></article>)}</div></section>
     <section className="continuity section-width"><div className="continuity-copy"><span className="eyebrow">Jolo Access</span><h2>Keep your work<br />connected.</h2><p>A shared place for tasks, teams, and updates. Connect your desktop or CLI and carry the details with you.</p><a className="text-link" href="https://access.jolo.build">Open Access <Icon name="arrow" size={16} /></a></div><div className="board-example" aria-label="Illustrative Access task list"><div className="board-title"><strong>Tasks</strong><span>Personal workspace</span></div>{[['JOLO-3','Refine workspace navigation','In progress'],['JOLO-2','Add comments to web tasks','Done'],['JOLO-1','Plan the next release','Todo']].map(([id,title,status]) => <div className="board-row" key={id}><span className={status === 'In progress' ? 'working-ring' : 'done-ring'}>{status === 'Done' && <Icon name="check" size={11} />}</span><div><small>{id}</small><strong>{title}</strong></div><span className={`board-state ${status === 'In progress' ? 'state-working' : ''}`}>{status}</span></div>)}<div className="board-caption">Illustrative example</div></div></section>
-    <GettingStarted /></main><footer className="site-footer section-width"><Brand footer /><p>Your agents. Your workspace.</p><a href="https://docs.jolo.build">Documentation <Icon name="diagonal" size={13} /></a><a href="https://github.com/jolo-build/jolo">GitHub <Icon name="diagonal" size={13} /></a><a href="#top">Back to top <Icon name="arrow" size={13} /></a></footer></>;
+    <GettingStarted /></main><footer className="site-footer section-width"><Brand footer /><p>Your agents. Your workspace.</p><a href="/changelog/">Changelog <Icon name="arrow" size={13} /></a><a href="/compare/conductor/">vs Conductor <Icon name="arrow" size={13} /></a><a href="/compare/vibe-kanban/">vs Vibe Kanban <Icon name="arrow" size={13} /></a><a href="https://docs.jolo.build">Documentation <Icon name="diagonal" size={13} /></a><a href="https://github.com/jolo-build/jolo">GitHub <Icon name="diagonal" size={13} /></a><a href="#top">Back to top <Icon name="arrow" size={13} /></a></footer></>;
 }

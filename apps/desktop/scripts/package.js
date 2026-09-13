@@ -23,7 +23,10 @@ const out = await packager({
   name: "Jolo",
   executableName: "Jolo",
   appBundleId: "dev.jolo.desktop",
-  icon: platform === "darwin" ? path.join(root, "assets", "brand", "jolo.icns") : platform === "linux" ? path.join(root, "assets", "brand", "jolo-app.png") : undefined,
+  icon: platform === "darwin" ? path.join(root, "assets", "brand", "jolo.icns")
+    : platform === "linux" ? path.join(root, "assets", "brand", "jolo-app.png")
+    : platform === "win32" ? path.join(root, "assets", "brand", "jolo.ico")
+    : undefined,
   platform,
   arch,
   electronVersion,
@@ -33,7 +36,11 @@ const out = await packager({
   ignore: [],
   quiet: true,
 });
-const bundle = out.map((directory) => path.join(directory, "Jolo.app")).find((candidate) => existsSync(candidate)) ?? null;
+// On macOS the thing that ships is the bundle inside the packager directory; elsewhere the
+// directory itself is the distributable unit (Jolo-linux-x64/, Jolo-win32-x64/).
+const bundle = platform === "darwin"
+  ? out.map((directory) => path.join(directory, "Jolo.app")).find((candidate) => existsSync(candidate)) ?? null
+  : out.find((candidate) => existsSync(candidate)) ?? null;
 
 /** Sign the bundle under its own identifier, so the system knows which application is asking. */
 function sign(target) {
@@ -47,25 +54,34 @@ let signed = null;
 if (platform === "darwin" && bundle) signed = sign(bundle);
 
 /**
- * Produce a drag-to-Applications disk image, with the checksum and build manifest
- * used by the release pipeline and desktop update notices.
+ * Produce the platform's release archive — a drag-to-Applications disk image on macOS, a zip on
+ * Windows, a tar.gz on Linux — with the checksum and build manifest used by the release pipeline
+ * and desktop update notices.
  */
 function archive(target) {
-  if (platform !== "darwin" || process.platform !== "darwin") throw new Error("DMG creation requires macOS");
-  const name = `jolo-desktop-${platform}-${arch}.dmg`;
+  const extension = platform === "darwin" ? "dmg" : platform === "win32" ? "zip" : "tar.gz";
+  const name = `jolo-desktop-${platform}-${arch}.${extension}`;
   const file = path.join(root, "dist", "desktop", name);
   rmSync(file, { force: true });
-  const staging = mkdtempSync(path.join(tmpdir(), 'jolo-dmg-'));
   const run = argv => {
     const result = Bun.spawnSync(argv, { stdout: 'pipe', stderr: 'pipe' });
     if (result.exitCode !== 0) throw new Error(`${argv[0]} failed: ${result.stderr.toString().trim().slice(0, 300)}`);
   };
-  try {
-    run(['ditto', target, path.join(staging, 'Jolo.app')]);
-    symlinkSync('/Applications', path.join(staging, 'Applications'));
-    run(['hdiutil', 'create', '-volname', 'Jolo', '-srcfolder', staging, '-format', 'UDZO', '-fs', 'HFS+', '-ov', file]);
-    run(['hdiutil', 'verify', file]);
-  } finally { rmSync(staging, { recursive: true, force: true }); }
+  if (platform === "darwin") {
+    if (process.platform !== "darwin") throw new Error("DMG creation requires macOS");
+    const staging = mkdtempSync(path.join(tmpdir(), 'jolo-dmg-'));
+    try {
+      run(['ditto', target, path.join(staging, 'Jolo.app')]);
+      symlinkSync('/Applications', path.join(staging, 'Applications'));
+      run(['hdiutil', 'create', '-volname', 'Jolo', '-srcfolder', staging, '-format', 'UDZO', '-fs', 'HFS+', '-ov', file]);
+      run(['hdiutil', 'verify', file]);
+    } finally { rmSync(staging, { recursive: true, force: true }); }
+  } else if (platform === "win32") {
+    // bsdtar infers the zip format from the suffix; it ships with Windows and libarchive everywhere else.
+    run(['tar', '-a', '-cf', file, '-C', path.dirname(target), path.basename(target)]);
+  } else {
+    run(['tar', '-czf', file, '-C', path.dirname(target), path.basename(target)]);
+  }
   const bytes = readFileSync(file);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   writeFileSync(`${file}.sha256`, `${sha256}  ${name}\n`);
@@ -77,7 +93,8 @@ function archive(target) {
 
 let packaged = null;
 if (process.argv.includes("--dmg") || process.argv.includes("--archive")) {
-  if (!bundle) throw new Error("--dmg is for macOS bundles");
+  if (!bundle) throw new Error("the packager produced nothing to archive");
+  if (process.argv.includes("--dmg") && platform !== "darwin") throw new Error("--dmg is for macOS bundles; use --archive elsewhere");
   packaged = archive(bundle);
 }
 
@@ -95,4 +112,4 @@ if (process.argv.includes("--install")) {
 console.log(`[package] ${out.join(", ")} (electron ${electronVersion}, ${signed ? `signed ${signed}` : "unsigned"})`);
 if (packaged) console.log(`[package] ${packaged.name} (${(packaged.size / 1048576).toFixed(1)} MiB, sha256 ${packaged.sha256.slice(0, 12)}…)`);
 if (installed) console.log(`[package] installed ${installed} — open it once and allow notifications when asked`);
-else if (bundle) console.log("[package] pass --install to copy it into ~/Applications, where the system will let it raise notifications");
+else if (bundle && platform === "darwin") console.log("[package] pass --install to copy it into ~/Applications, where the system will let it raise notifications");

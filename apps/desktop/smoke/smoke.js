@@ -58,6 +58,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_CHAT_FOLDERS_SMOKE === '1') {
+    const { runChatFoldersSmoke } = await import('./chat-folders-smoke.js');
+    try {
+      await runChatFoldersSmoke({ window, bridge, project, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_CHANGE_SUMMARY_SMOKE === '1') {
     const { runChangeSummarySmoke } = await import('./change-summary-smoke.js');
     try {
@@ -78,6 +86,22 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     const { runContextPanelsSmoke } = await import('./context-panels-smoke.js');
     try {
       await runContextPanelsSmoke({ window, bridge, fixtureUrl, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_PANEL_TABS_SMOKE === '1') {
+    const { runPanelTabsSmoke } = await import('./panel-tabs-smoke.js');
+    try {
+      await runPanelTabsSmoke({ window, bridge, browserHost, project, fixtureUrl, evaluate, waitFor, results, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_CLOSE_SHORTCUTS_SMOKE === '1') {
+    const { runCloseShortcutsSmoke } = await import('./close-shortcuts-smoke.js');
+    try {
+      await runCloseShortcutsSmoke({ window, browserHost, fixtureUrl, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }
     return;

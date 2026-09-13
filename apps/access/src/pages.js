@@ -25,23 +25,33 @@ const csrf = account => `<input type="hidden" name="csrf" value="${e(account.csr
  */
 export function signInPage({ providers = {}, error = false, userCode = null }) {
   const query = userCode ? `?user_code=${encodeURIComponent(userCode)}` : '';
-  return appPage('Sign in', `${heading(userCode ? 'Connect your Jolo account.' : 'Your tasks, connected to your coding agents.', userCode ? 'Sign in to review your device connection.' : 'Manage personal and team tasks in your browser. Reference them from Jolo desktop or CLI.')}
+  return appPage('Sign in', `${heading(userCode ? 'Connect your Jolo account.' : 'Stop copying requirements into every agent chat.', userCode ? 'Sign in to review your device connection.' : 'Write your task once. Reference it from Jolo desktop or CLI to give your coding agent the context.')}
     <div class="access-grid access-two-column">
-      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">${userCode ? 'Sign in to your account' : 'Get started with Jolo Access'}</h2><p>${userCode ? 'Sign in to review your device connection.' : 'Create your account or sign in with a provider below.'}</p>
+      <section class="access-panel" aria-labelledby="signin-title"><div class="access-panel-body"><h2 id="signin-title">${userCode ? 'Sign in to your account' : 'Start with your first task'}</h2><p>${userCode ? 'Sign in to review your device connection.' : 'Create an account with Google or GitHub. Then add something you want to build or fix.'}</p>
         ${error ? `<p class="notice" role="alert">${error === 'email' ? 'Your account needs a verified email to sign in. Verify it with your sign-in provider, then try again. GitHub requires a verified primary email.' : 'We couldn’t complete sign-in. Please start again. If this keeps happening, contact the service administrator.'}</p>` : ''}
         <div class="signin-providers">${providers.google ? `<a class="button secondary" href="/login/google${query}">Continue with Google <span aria-hidden="true">↗</span></a>` : ''}
         ${providers.github ? `<a class="button secondary" href="/login${query}">Continue with GitHub <span aria-hidden="true">↗</span></a>` : ''}</div>
         ${!providers.google && !providers.github ? '<p class="notice" role="status">Sign-in is not available yet. Please check back soon.</p>' : ''}
         <p class="fine">We request only your profile and verified email. Use the same sign-in provider each time to access your tasks and teams.</p>
       </div></section>
-      <section class="access-panel" aria-labelledby="workspace-title"><div class="access-panel-body"><h2 id="workspace-title">From task to coding workspace</h2><p>Keep requirements, priorities, and discussion with each task. Share work with your team, then reference a task in Jolo desktop or CLI to give your agent the context.</p><p class="fine">The Jolo desktop and CLI can still be used without an account.</p></div><div class="access-panel-actions"><a class="button secondary" href="/device">Connect a device</a></div></section>
-    </div>`, { kind: 'access-page signin-page', active: 'signin', publicPage: true });
+      ${userCode ? '<section class="access-panel"><div class="access-panel-body"><h2>Connect your coding workspace</h2><p>After sign-in, review the device and the access it requests. Return to Jolo to finish connecting.</p></div></section>' : taskDemo()}
+    </div>`, { kind: `access-page signin-page${userCode ? '' : ' registration-page'}`, active: 'signin', publicPage: true });
+}
+
+// A fictional example, with no account data or external scripts. Works without JavaScript.
+function taskDemo() {
+  return `<section class="access-panel workflow-demo" aria-labelledby="demo-title"><div class="access-panel-body"><p class="eyebrow">SEE HOW IT WORKS · EXAMPLE</p><h2 id="demo-title">One task. Context for your agent.</h2>
+    <details open><summary><span>1</span> Write the task</summary><div class="demo-example"><code>JOLO-123</code><strong>Add a password visibility toggle</strong><p>Let people show or hide their password. Keep keyboard focus on the toggle. Add a test for both states.</p></div></details>
+    <details><summary><span>2</span> Connect your workspace</summary><div class="demo-example"><p>In Jolo desktop: Settings → Account → Connect tasks. Sign in with the same provider and approve task access.</p><p>Using the CLI? Run <code>jolo login --tasks</code>.</p></div></details>
+    <details><summary><span>3</span> Reference it in chat</summary><div class="demo-example"><code>@codex implement #JOLO-123</code><p>Jolo includes the referenced task description in your agent’s context. Open the project you want the agent to work in before sending.</p></div></details>
+    <p class="fine demo-footnote">Use your own task ID. New to Jolo? <a href="https://jolo.build">Get the desktop app or CLI</a>.</p>
+    </div></section>`;
 }
 
 export function welcomePage() {
   // Intentionally contains no account details or task data: this is the only
   // signed-in page on which a registration conversion can be measured.
-  return layout('Account created', `<section class="task-app"><div class="task-content access-page">${heading('Your account is ready.', 'Create your first task and keep the context with your work.')}<section class="access-panel"><div class="access-panel-body"><h2>Start with one task</h2><p>Add what you want to build or fix. You can organize tasks in your browser and reference them from Jolo desktop or CLI.</p></div><div class="access-panel-actions"><a class="button" href="/tasks/new">Create your first task</a><a class="button secondary" href="/tasks">Open tasks</a></div></section></div></section>`);
+  return layout('Account created', `<section class="task-app"><div class="task-content access-page welcome-page">${heading('Your account is ready.', 'Turn one thing you want to build into a task your agent can use.')}<section class="access-panel"><div class="access-panel-body"><p class="eyebrow">NEXT: CREATE YOUR FIRST TASK</p><h2>What do you want to build or fix?</h2><p>Give it a clear title, add the requirements, and describe what done looks like. Your task gets its own ID to reference in Jolo.</p><ol class="welcome-steps"><li><strong>Create a task</strong><span>Start in your browser. You don’t need the desktop app yet.</span></li><li><strong>Connect Jolo</strong><span>Approve task access from the desktop app or CLI.</span></li><li><strong>Give your agent the context</strong><span>Reference your task ID in a chat in the correct project.</span></li></ol></div><div class="access-panel-actions"><a class="button" href="/tasks/new">Create your first task</a><a href="/tasks">Open tasks</a></div></section></div></section>`);
 }
 
 export function accountPage(account) {
