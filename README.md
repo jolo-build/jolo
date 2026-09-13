@@ -47,7 +47,11 @@ This installs the CLI, not the desktop app. CLI packages are available for macOS
 
 Want a look first? `jolo demo` plays a scripted session — no agent or account needed:
 
-<img alt="A scripted Jolo session: the agent explains the project layout, adds a saved-searches filter, and reports passing tests" src="assets/brand/demo.svg">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/demo.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/demo-light.svg">
+  <img alt="A scripted Jolo session: the agent explains the project layout, adds a saved-searches filter, and reports passing tests" src="assets/brand/demo-light.svg">
+</picture>
 
 ## Start a task
 

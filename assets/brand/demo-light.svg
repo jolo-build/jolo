@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="760" height="452" viewBox="0 0 760 452" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .frame { fill: #ffffff; stroke: #d0d7de; }
+      .dot1 { fill: #ff5f57; } .dot2 { fill: #febc2e; } .dot3 { fill: #28c840; }
+      .title { fill: #57606a; font-size: 12px; }
+      .t { font-size: 13.5px; }
+      .dim { fill: #57606a; }
+      .text { fill: #1f2328; }
+      .prompt { fill: #0969da; }
+      .accent { fill: #1a7f37; }
+      .muted { fill: #656d76; }
+      /* Reveal whole lines without ever covering the window frame or title. */
+      @keyframes reveal {
+        0% { height: 38px; }
+        5% { height: 64px; }
+        10% { height: 90px; }
+        14% { height: 112px; }
+        19% { height: 136px; }
+        23% { height: 158px; }
+        27% { height: 180px; }
+        31% { height: 202px; }
+        35% { height: 226px; }
+        43% { height: 252px; }
+        48% { height: 278px; }
+        53% { height: 300px; }
+        60% { height: 324px; }
+        66% { height: 348px; }
+        72%, 100% { height: 414px; }
+      }
+      .reveal { height: 414px; animation: reveal 16s step-end infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .reveal { animation: none; }
+      }
+    </style>
+    <clipPath id="transcript">
+      <rect class="reveal" x="0" y="38" width="760" height="414"/>
+    </clipPath>
+  </defs>
+
+  <rect class="frame" x="0.5" y="0.5" width="759" height="451" rx="10"/>
+  <circle class="dot1" cx="22" cy="20" r="5"/>
+  <circle class="dot2" cx="40" cy="20" r="5"/>
+  <circle class="dot3" cx="58" cy="20" r="5"/>
+  <text class="title" x="380" y="24" text-anchor="middle">jolo demo</text>
+  <line x1="1" y1="36" x2="759" y2="36" stroke="#d0d7de"/>
+
+  <g class="t" clip-path="url(#transcript)">
+    <text x="24" y="66"><tspan class="dim">$ </tspan><tspan class="text">jolo .</tspan></text>
+    <text x="24" y="92"><tspan class="prompt">❯ </tspan><tspan class="text">Explain how this project is organized.</tspan></text>
+    <text x="24" y="118"><tspan class="text">Jolo</tspan></text>
+    <text x="40" y="140"><tspan class="muted">Read package.json · listed apps/ · searched packages/</tspan></text>
+    <text x="40" y="164"><tspan class="text">The project has three main parts:</tspan></text>
+    <text x="56" y="186"><tspan class="accent">apps/</tspan><tspan class="dim" x="160">application entry points</tspan></text>
+    <text x="56" y="208"><tspan class="accent">packages/</tspan><tspan class="dim" x="160">shared components and tools</tspan></text>
+    <text x="56" y="230"><tspan class="accent">tests/</tspan><tspan class="dim" x="160">checks for expected behavior</tspan></text>
+    <text x="40" y="252"><tspan class="muted">No files changed.</tspan></text>
+    <text x="24" y="280"><tspan class="prompt">❯ </tspan><tspan class="text">Add a saved-searches filter and cover it with a test.</tspan></text>
+    <text x="24" y="306"><tspan class="text">Jolo</tspan></text>
+    <text x="40" y="328"><tspan class="muted">wrote searches.ts · extended dashboard.test.js</tspan></text>
+    <text x="40" y="352"><tspan class="accent">+42 −3</tspan><tspan class="dim"> in 2 files — changes stay in the conversation until you review them</tspan></text>
+    <text x="40" y="376"><tspan class="accent">✓ 4 tests passed · typecheck clean</tspan></text>
+    <text x="24" y="404"><tspan class="prompt">❯ </tspan></text>
+  </g>
+
+</svg>
