@@ -15,16 +15,16 @@ const MAX_EMBED_DEPTH = 2;
 /**
  * How a run of text is drawn. Ink takes these straight as `<Text>` props, so every member is
  * optional and leaving one out means "inherit from the surrounding text".
- * @typedef {{ color?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean, code?: boolean }} SpanStyle
+ * @typedef {{ color?: string, themeRole?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean, code?: boolean }} SpanStyle
  */
 
 /** @type {Array<[string[], SpanStyle]>} */
 const TOKEN_STYLES = [
   [["comment", "prolog", "doctype", "cdata"], { dim: true }],
   [["keyword", "atrule", "important"], { color: "magenta" }],
-  [["string", "attr-value", "char", "inserted", "code-snippet"], { color: "green" }],
+  [["string", "attr-value", "char", "inserted", "code-snippet"], { color: "green", themeRole: "string" }],
   [["function", "class-name", "tag", "url"], { color: "blue" }],
-  [["number", "boolean", "constant", "symbol"], { color: "yellow" }],
+  [["number", "boolean", "constant", "symbol"], { color: "yellow", themeRole: "number" }],
   [["property", "attr-name", "builtin", "variable"], { color: "cyan" }],
   [["deleted"], { color: "red" }],
   [["title", "bold"], { bold: true }],
@@ -163,7 +163,7 @@ function tableLines(block, width) {
  * @param {string} text markdown from the model
  * @param {{ width?: number, depth?: number }} [options] `depth` counts the markdown fences this
  *   render is already nested inside; only the recursive call below passes it.
- * @returns {{ lines: Array<{ spans: Array<{ text: string, color?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean }> }>, truncated: boolean }}
+ * @returns {{ lines: Array<{ spans: Array<{ text: string, color?: string, themeRole?: string, bold?: boolean, dim?: boolean, italic?: boolean, underline?: boolean }> }>, truncated: boolean }}
  */
 export function renderMarkdown(text, { width = 80, depth = 0 } = {}) {
   const w = Math.max(20, width);

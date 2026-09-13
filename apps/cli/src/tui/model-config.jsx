@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { useInput } from "ink";
+import { Box, Text } from "./theme.jsx";
 import { clean } from "./markdown.js";
 import { editDraft } from "./input.js";
 import { modelFields, modelForm, modelTargets, modelSettingsPatch, saveModelConfig, selectedAgent } from "./model-config.js";

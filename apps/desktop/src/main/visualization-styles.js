@@ -30,7 +30,7 @@ h1,h2,h3,h4 { line-height: 1.25; font-weight: 600; }
 h1 { font-size: 24px; } h2 { font-size: 20px; } h3 { font-size: 16px; }
 body > :first-child, body > div > :first-child { margin-top: 0; }
 button,input,select,textarea { font: inherit; }
-button { cursor: pointer; }
+button,a[href],summary { cursor: default; }
 [hidden] { display: none !important; }
 img,svg,canvas { max-width: 100%; }
 .text-muted,.text-small { color: var(--muted-foreground); }

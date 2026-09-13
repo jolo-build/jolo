@@ -25,12 +25,13 @@ declare global {
     onFocusRequest: (listener: (payload: any) => void) => () => void;
     onNotice: (listener: (payload: any) => void) => () => void;
     onBrowserOpen: (listener: (payload: { invocationId: string, workspaceId: string, expiresAt: number }) => unknown) => () => void;
+    onBrowserCursor?: (listener: (payload: { guestId: number, visible: boolean, x?: number, y?: number, action?: string, busy?: boolean }) => void) => () => void;
     setBrowserWorkspaces: (workspaceIds: string[]) => void;
     openFolder: () => Promise<string | null>;
     answererMenu: (options: { items: { id: string, label: string, checked?: boolean, enabled?: boolean }[] }) => Promise<string | null>;
     taskMenu: (options: { archived?: boolean, worktree?: boolean }) => Promise<string | null>;
-    openChatFile?: (params: { sessionId: string, path: string }) => Promise<{ ok: boolean, error?: string }>;
-    previewChatFile?: (params: { sessionId: string | null, projectId?: string, workspaceId?: string, path: string }) => Promise<{ ok: boolean, result?: any, error?: string }>;
+    openChatFile?: (params: { sessionId: string, path: string, urlEncoded?: boolean }) => Promise<{ ok: boolean, error?: string, code?: string }>;
+    previewChatFile?: (params: { sessionId: string | null, projectId?: string, workspaceId?: string, path: string, urlEncoded?: boolean }) => Promise<{ ok: boolean, result?: any, error?: string, code?: string }>;
     pickChatFile?: (params: { sessionId: string | null, projectId: string, workspaceId: string }) => Promise<{ ok: boolean, result?: any, error?: string }>;
     releaseChatFile?: (url: string) => Promise<unknown>;
     saveImage?: (params: { artifactId: string, name: string }) => Promise<{ ok: boolean, result?: { canceled: boolean }, error?: string }>;

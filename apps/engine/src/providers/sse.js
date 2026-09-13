@@ -35,11 +35,11 @@ export function createSseParser(onEvent, { maxEventBytes = EVENT_MAX_BYTES } = {
         if (field === "event") eventName = value;
         else if (field === "data") {
           dataBytes += value.length;
-          if (dataBytes > maxEventBytes) throw Object.assign(new Error("SSE event exceeds size limit"), { code: "limit_exceeded" });
+          if (dataBytes > maxEventBytes) throw Object.assign(new Error("SSE event exceeds size limit"), { code: "limit_exceeded", category: "limit" });
           data.push(value);
         }
       }
-      if (buffer.length > maxEventBytes) throw Object.assign(new Error("SSE line exceeds size limit"), { code: "limit_exceeded" });
+      if (buffer.length > maxEventBytes) throw Object.assign(new Error("SSE line exceeds size limit"), { code: "limit_exceeded", category: "limit" });
     },
     end() {
       if (buffer.length) { this.push("\n"); buffer = ""; }

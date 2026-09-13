@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Static, Text, useApp } from "ink";
+import { Static, useApp } from "ink";
+import { Box, Text, useTheme } from "./theme.jsx";
 import { clean, line, plainTextLines, renderMarkdown } from "./markdown.js";
 import { Welcome } from "./welcome.jsx";
 
@@ -8,7 +9,7 @@ const MAX_REASONING_LINES = 24;
 /** One message as terminal lines. Every kind is bounded: scrollback is the terminal's, but the writing is ours. */
 export function messageLines(message, width, showTools, detailsOnly = false) {
   if (message.evicted) return [line("[older text released]", { dim: true })];
-  if (message.role === "user") return [...plainTextLines(`› ${message.text}`, width, { color: "cyan", bold: true }), line(" ")];
+  if (message.role === "user") return [...plainTextLines(`› ${message.text}`, width, { color: "cyan", themeRole: "accent", bold: true }), line(" ")];
   if (message.kind === "reasoning") {
     const body = plainTextLines(message.text, width, { dim: true });
     const shown = body.slice(0, MAX_REASONING_LINES);
@@ -23,7 +24,8 @@ export function messageLines(message, width, showTools, detailsOnly = false) {
 }
 
 export function TranscriptLines({ lines }) {
-  return lines.map((entry, i) => <Text key={i} wrap="truncate-end">{entry.spans.map((span, j) => <Text key={j} color={span.color} bold={span.bold} dimColor={span.dim} italic={span.italic} underline={span.underline}>{span.text}</Text>)}</Text>);
+  const { theme } = useTheme();
+  return lines.map((entry, i) => <Text key={i} wrap="truncate-end">{entry.spans.map((span, j) => <Text key={j} color={theme.id === 'terminal' ? span.color : span.themeRole ?? span.color} bold={span.bold} dimColor={span.dim} italic={span.italic} underline={span.underline}>{span.text}</Text>)}</Text>);
 }
 
 // Completed messages belong to the terminal's scrollback, not a virtual viewport.
@@ -92,8 +94,17 @@ export function useNativeTranscript({ projection, revision, opened, width, showT
   return { batch, live };
 }
 
-export function NativeTranscript({ batch, project, columns, restored = false, sessionTitle, update = null }) {
-  return <Static key={batch.id} items={batch.items}>{(item) => <Box key={item.id} flexDirection="column">
-    {item.welcome ? <><Text bold>Jolo <Text dimColor>{clean(project)}</Text></Text>{restored ? <Text bold>{sessionTitle ? `Restored: ${clean(sessionTitle)}` : "New session"}</Text> : <Welcome height={12} columns={columns} update={update} />}<Text> </Text></> : <TranscriptLines lines={item.lines} />}
-  </Box>}</Static>;
+export function NativeTranscript({ batch, project, columns, restored = false, sessionTitle, update = null, welcomeOpen = false, welcomeHeight = 12 }) {
+  const intro = (height) => <Box flexDirection="column" width="100%">
+    <Text bold>Jolo <Text dimColor>{clean(project)}</Text></Text>
+    {restored ? <Text bold>{sessionTitle ? `Restored: ${clean(sessionTitle)}` : "New session"}</Text> : <Welcome height={height} columns={columns} update={update} />}<Text> </Text>
+  </Box>;
+  // The welcome stays live until the first prompt, so changing themes can repaint
+  // it. Once the conversation starts it joins the terminal's native scrollback.
+  return <>
+    <Static key={batch.id} items={welcomeOpen ? batch.items.filter((item) => !item.welcome) : batch.items}>{(item) => <Box key={item.id} flexDirection="column">
+      {item.welcome ? intro(12) : <TranscriptLines lines={item.lines} />}
+    </Box>}</Static>
+    {welcomeOpen && welcomeHeight > 0 && intro(welcomeHeight)}
+  </>;
 }

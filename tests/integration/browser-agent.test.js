@@ -21,7 +21,7 @@ import { HostDialogs } from '../../apps/desktop/src/main/host-dialogs.js';
  *   does not handle itself, which is how a case stalls or redirects one command.
  */
 async function fixture(send = async () => ({}), dialogs = null) {
-  const calls = [], replies = [];
+  const calls = [], replies = [], cursors = [];
   let overlay = false;
   /** @type {FakeGuest} */
   const guest = Object.assign(new EventEmitter(), { id: 1, getURL: () => 'http://fixture/', getTitle: () => 'Fixture', isDestroyed: () => false });
@@ -32,7 +32,7 @@ async function fixture(send = async () => ({}), dialogs = null) {
     return send(method, args);
   } });
   // No case here takes a screenshot, so the dependency bag deliberately leaves out `nativeImage`.
-  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => dialogs ? dialogs.active : overlay, waitForOverlay: dialogs ? signal => dialogs.wait(signal) : null }));
+  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ onCursor: payload => cursors.push(payload), bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => dialogs ? dialogs.active : overlay, waitForOverlay: dialogs ? signal => dialogs.wait(signal) : null }));
   const host = agent.attach(guest, 'ws');
   await Promise.resolve();
   let sequence = 0;
@@ -40,8 +40,27 @@ async function fixture(send = async () => ({}), dialogs = null) {
     const invocationId = `i${++sequence}`;
     return { invocationId, done: agent.handleExecute({ invocationId, capabilityId: 'cap', navigationRevision: host.navigationRevision, operation, arguments: args, leaseMs }) };
   };
-  return { calls, replies, guest, host, agent, execute, overlay: value => { overlay = value; } };
+  return { calls, replies, cursors, guest, host, agent, execute, overlay: value => { overlay = value; } };
 }
+
+test('read-only browser work shows a busy cursor before any pointer input and clears on cancellation', async () => {
+  for (const cancel of [false, true]) {
+    /** @type {(value?: any) => void} */
+    let release;
+    const f = await fixture(async method => method === 'Accessibility.enable' ? new Promise(resolve => { release = resolve; }) : {});
+    const call = f.execute('snapshot');
+    for (let i = 0; !release && i < 100; i++) await Bun.sleep(1);
+    expect(release).toBeDefined();
+    expect(f.cursors.at(-1)).toMatchObject({ guestId: 1, visible: true, busy: true, action: 'inspect' });
+    expect(f.calls.some(call => call.method.startsWith('Input.'))).toBe(false);
+    if (cancel) f.agent.handleCancel(call);
+    release({});
+    await call.done;
+    expect(f.cursors.at(-1)).toMatchObject(cancel ? { visible: false } : { visible: true, busy: false, action: 'inspect' });
+    f.agent.onDisconnected();
+    expect(f.cursors.at(-1).visible).toBe(false);
+  }
+});
 
 test('browser input waits for approval, resumes on close, and cancelled input never resumes', async () => {
   for (const cancel of [false, true]) {

@@ -90,7 +90,7 @@ for (const color of [false, true]) test(`native scrollback, prompt recall, progr
   const fitted = () => {
     const all = lines();
     const prompt = all.findLastIndex((row) => row.startsWith("▎❯ "));
-    return all[prompt - 2]?.includes("Completed") && all[prompt - 1] === "▎" && all[prompt + 1] === "▎" && all[prompt + 2]?.includes("/model");
+    return all[prompt - 2]?.includes("Completed") && all[prompt - 1] === "▎" && all[prompt + 1] === "▎" && Boolean(all[prompt + 2]?.trim());
   };
   try {
     await waitFor(() => text().includes("Welcome to Jolo") && draft(), { label: "native welcome", timeoutMs: 20_000 });
@@ -178,8 +178,8 @@ for (const [signal, code] of /** @type {[NodeJS.Signals, number][]} */ ([["SIGTE
   const home = tempHome(); homes.push(home);
   const screen = new Terminal({ cols: 100, rows: 30, allowProposedApi: true });
   let output = "";
-  const child = Bun.spawn([process.execPath, CLI_ENTRY, home, "--home", home], {
-    env: { ...process.env, JOLO_IDLE_MS: "2000", CI: "0" },
+  const child = Bun.spawn([process.execPath, CLI_ENTRY, home, "--home", home, "--theme", "github-dark"], {
+    env: { ...process.env, JOLO_IDLE_MS: "2000", CI: "0", FORCE_COLOR: '3' },
     terminal: { cols: 100, rows: 30, data(_terminal, data) { output += new TextDecoder().decode(data); screen.write(data); } },
   });
   const visible = () => Array.from({ length: screen.rows }, (_, i) => screen.buffer.active.getLine(screen.buffer.active.baseY + i)?.translateToString(true) ?? "").join("\n");
@@ -195,6 +195,8 @@ for (const [signal, code] of /** @type {[NodeJS.Signals, number][]} */ ([["SIGTE
     expect(screen.buffer.active.cursorX).toBe(0);
     expect(screen.buffer.active.cursorY).toBe(0);
     expect(output.split("\x1b[2J\x1b[H")).toHaveLength(2); // Cleanup is idempotent.
+    expect(output).toContain('\x1b]11;#0d1117\x1b\\');
+    expect(output).toContain('\x1b]110\x1b\\\x1b]111\x1b\\');
   } finally {
     if (child.exitCode === null) child.kill();
     await child.exited; child.terminal?.close(); screen.dispose();

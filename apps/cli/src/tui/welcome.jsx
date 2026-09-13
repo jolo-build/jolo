@@ -1,7 +1,7 @@
 // First-run panel for the interactive client: the shortcuts a new user needs,
 // degrading by height so a short terminal still shows something useful.
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text } from "./theme.jsx";
 
 const LOGO = [
   "     _       _       ",
@@ -21,13 +21,13 @@ export function Welcome({ height, columns, hasHistory, update = null }) {
   // A new release is news, not an interruption: one line, and only where there is room for it.
   const release = update?.latest && /^[0-9A-Za-z.-]{1,64}$/.test(update.latest) ? update.latest : null;
   return <Box flexDirection="column" height={height} justifyContent="center" alignItems="center" overflow="hidden">
-    {roomy && <Box flexDirection="column" marginBottom={1}>{LOGO.map((row, i) => <Text bold key={i}>{row}</Text>)}</Box>}
+    {roomy && <Box flexDirection="column" marginBottom={1}>{LOGO.map((row, i) => <Text bold color="accent" key={i}>{row}</Text>)}</Box>}
     {height > 0 && <Text bold wrap="truncate-end">Welcome to Jolo</Text>}
     {height > 2 && <Text wrap="truncate-end">{columns >= 60 ? "Build something. Fix a bug. Explore your project." : "What would you like to build?"}</Text>}
     {roomy && <Box flexDirection="column" marginTop={1} alignItems="center">
       <Text wrap="truncate-end">{hasHistory ? <>Type <Text>a task</Text>  ·  Enter <Text>view chat</Text></> : <>Enter <Text>send</Text>  ·  Tab <Text>tool output</Text></>}</Text>
       <Text wrap="truncate-end">↑/↓ <Text>prompts</Text>  ·  Ctrl+C <Text>exit</Text></Text>
-      <Text wrap="truncate-end">/model <Text>configure</Text>  ·  /sessions <Text>saved chats</Text></Text>
+      <Text wrap="truncate-end">Type / for commands</Text>
       {release && <Text wrap="truncate-end">Jolo {release} available  ·  <Text>jolo update</Text></Text>}
     </Box>}
   </Box>;

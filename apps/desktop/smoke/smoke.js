@@ -156,7 +156,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   }
   if (process.env.JOLO_BROWSER_CHAT_SMOKE === '1') {
     try {
-      await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report });
+      await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report, window, results });
       await runBrowserContentionSmoke({ browserHost, project, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'browser-chat.png'), (await window.webContents.capturePage()).toPNG());
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
@@ -553,7 +553,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   }
   report.relay = bridge.relay.stats;
   if (process.env.JOLO_FAKE_SCRIPT) {
-    await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report });
+    await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report, window, results });
 
     const before = await evaluate("window.__joloSmoke.state().runCount");
     await evaluate("window.__joloSmoke.send('run a command')");

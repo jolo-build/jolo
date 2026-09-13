@@ -1,4 +1,4 @@
-import { fileReference, webReference } from './file-links.js';
+import { classifyReference } from './file-links.js';
 // Constrained markdown → document model. No HTML is ever produced or
 // interpreted; renderers map blocks to React DOM elements or terminal text. Streaming callers parse
 // completed segments once and re-parse only the unfinished tail.
@@ -90,17 +90,18 @@ export function parseInline(text) {
     if ((match = rest.match(/^\*\*([^*]+?)\*\*/)) || (underscoreBoundary && (match = rest.match(/^__([^_]+?)__(?![\p{L}\p{N}_])/u)))) { push({ type: "strong", children: parseInline(match[1]) }); i += match[0].length; continue; }
     if ((match = rest.match(/^\*([^*\n]+?)\*/)) || (underscoreBoundary && (match = rest.match(/^_([^_\n]+?)_(?![\p{L}\p{N}_])/u)))) { push({ type: "em", children: parseInline(match[1]) }); i += match[0].length; continue; }
     if ((match = rest.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/))) {
-      const href = safeHref(match[2]);
+      const target = classifyReference(match[2], { explicit: true });
+      const href = target.kind === 'web' ? target.href : null;
       if (rest.startsWith('!') && /^jolo-artifact:[A-Za-z0-9_-]{1,128}$/.test(match[2])) push({ type: 'image', artifactId: match[2].slice('jolo-artifact:'.length), alt: match[1] || 'Generated image' });
       else if (rest.startsWith("!")) push({ type: "text", text: `[image: ${match[1] || href || "image"}]` });
-      else if (href) push({ type: "link", href, children: parseInline(match[1] || href) });
-      else if (fileReference(match[2], { explicit: true })) push({ type: "link", href: fileReference(match[2], { explicit: true }), local: true, children: parseInline(match[1] || match[2]) });
+      else if (href) push({ type: "link", href, rawHref: match[2], children: parseInline(match[1] || href) });
+      else if (target.kind === 'file' || target.kind === 'ambiguous') push({ type: 'link', href: match[2], rawHref: match[2], local: target.kind === 'file', ambiguous: target.kind === 'ambiguous', children: parseInline(match[1] || match[2]) });
       else push({ type: "text", text: match[1] });
       i += match[0].length; continue;
     }
     if ((match = rest.match(/^<(https?:\/\/[^>\s]+)>/))) { push({ type: "link", href: match[1], children: [{ type: "text", text: match[1] }] }); i += match[0].length; continue; }
     if ((match = rest.match(/^https?:\/\/[^\s<>)]+/))) { push({ type: "link", href: match[0], children: [{ type: "text", text: match[0] }] }); i += match[0].length; continue; }
-    if (rest.startsWith("\\") && rest.length > 1) { buffer += rest[1]; i += 2; continue; }
+    if (/^\\[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]/.test(rest)) { buffer += rest[1]; i += 2; continue; }
     buffer += text[i];
     i += 1;
   }
@@ -108,15 +109,51 @@ export function parseInline(text) {
   return nodes;
 }
 
-function safeHref(raw) {
-  return webReference(raw);
+function tableCells(line) {
+  const text = line.trim();
+  // Precompute matching backtick runs so an unfinished span stays literal and
+  // cannot swallow the remaining cells. Longer delimiters may contain `.
+  const runs = [...text.matchAll(/`+/g)];
+  const next = new Map(), closing = new Map();
+  for (let r = runs.length - 1; r >= 0; r--) {
+    const run = runs[r], length = run[0].length;
+    if (next.has(length)) closing.set(run.index, next.get(length));
+    next.set(length, run.index);
+  }
+  const cells = [];
+  let cell = '', codeEnd = -1, lastSeparator = -1;
+  for (let i = 0; i < text.length;) {
+    const char = text[i];
+    if (char === '\\' && i + 1 < text.length) {
+      // Table escapes apply even inside code spans; other escapes are left for
+      // inline parsing. A pair of backslashes does not escape the following |.
+      if (text[i + 1] === '|') { cell += '|'; i += 2; continue; }
+      if (codeEnd < 0 || text[i + 1] === '\\') { cell += text.slice(i, i + 2); i += 2; continue; }
+    }
+    if (char === '`') {
+      let end = i + 1;
+      while (text[end] === '`') end++;
+      if (i === codeEnd) codeEnd = -1;
+      else if (codeEnd < 0 && closing.has(i)) codeEnd = closing.get(i);
+      cell += text.slice(i, end); i = end; continue;
+    }
+    if (char === '|' && codeEnd < 0) { cells.push(cell.trim()); cell = ''; lastSeparator = i; }
+    else cell += char;
+    i++;
+  }
+  cells.push(cell.trim());
+  if (text.startsWith('|')) cells.shift();
+  if (lastSeparator === text.length - 1) cells.pop();
+  return cells;
 }
 
 function parseTable(lines) {
-  const rows = lines.map((line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()));
-  if (rows.length < 2 || !rows[1].every((cell) => /^:?-{3,}:?$/.test(cell))) return null;
+  const rows = lines.map(tableCells);
+  if (rows.length < 2 || !rows[0].length || rows[0].length !== rows[1].length || !rows[1].every((cell) => /^:?-{3,}:?$/.test(cell))) return null;
   const align = rows[1].map((cell) => (cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : "left"));
-  return { type: "table", align, header: rows[0].map(parseInline), rows: rows.slice(2).map((row) => row.map(parseInline)) };
+  // Body rows follow the header's schema: fill missing cells and discard excess
+  // cells instead of allowing one malformed row to create extra columns.
+  return { type: "table", align, header: rows[0].map(parseInline), rows: rows.slice(2).map((row) => rows[0].map((_, column) => parseInline(row[column] ?? ''))) };
 }
 
 function parseList(lines) {

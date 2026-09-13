@@ -59,7 +59,9 @@ export function createAgentExecutor(deps) {
       const repoInstructions = readRepoInstructions(workspace.path);
 
       permissions?.grantEdit(workspace.id, run.id); // starting an editing task permits structured edits for it (§10.1)
-      const existingItems = providerItems(storage, session.id);
+      // Resume is judged on the durable transcript, not the provider-facing tail: a compaction inside
+      // this run can summarize its user message away, and the run is still the same one (§6.2).
+      const existingItems = storage.listItems(session.id);
       const resuming = existingItems.some((item) => item.runId === run.id && item.kind === "user_message");
       if (!resuming) {
         // The user's request is both a displayable message and the first transcript item of this run.
@@ -72,6 +74,9 @@ export function createAgentExecutor(deps) {
       }
 
       const usage = { inputTokens: 0, outputTokens: 0, attempts: 0, iterations: 0, contextUsed: null, contextWindow: null, ...(resuming ? run.usage ?? {} : {}) };
+      // The iteration budget bounds one attempt the way the active-time budget does; a resume starts a
+      // fresh count, so resuming a budget-paused run does not instantly re-pause (§6.4).
+      if (resuming) usage.iterations = 0;
       const startedMs = Date.now();
       let waitedMs = 0; // permission waits do not spend the active-time budget (§6.4)
       const checks = [];

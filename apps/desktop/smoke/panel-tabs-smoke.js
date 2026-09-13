@@ -12,6 +12,8 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await evaluate(`document.querySelector('.panel-menu:popover-open [aria-label="${label}"]').click()`);
   };
   await evaluate('window.__joloSmoke.showTask()');
+  await evaluate('window.__joloSmoke.newTask()');
+  const firstSession = await evaluate('window.__joloSmoke.state().sessionId');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
   await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'first browser page');
   const loadingServer = createServer((request, response) => {
@@ -48,6 +50,8 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await navigate(`${loadingUrl}/fail`);
     await waitFor("Boolean(document.querySelector('.browser [role=alert]'))", 'failed navigation reports an error');
     await waitFor(idle, 'failed navigation clears loading');
+    assert(await evaluate("document.querySelector('.browser-content [role=alert] h2')?.textContent === 'Couldn’t load this page' && !document.querySelector('.browser-content').textContent.includes('Your app, right here.')"), 'failed page must show one centered error instead of the welcome message');
+    writeFileSync(path.join(results, 'browser-load-error.png'), (await window.webContents.capturePage()).toPNG());
     await navigate(fixtureUrl);
     await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'original page restored');
     await waitFor(idle, 'original page finished');
@@ -162,9 +166,31 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await evaluate("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'Jolo smoke page'", 'item tabs support keyboard selection');
   } finally { dialog.showOpenDialog = originalDialog; }
+  const firstTabs = await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).map(tab => tab.textContent)");
+  const firstUrl = await evaluate("document.querySelector('webview').getURL()");
+  await evaluate('window.__joloSmoke.newTask()');
+  const secondSession = await evaluate('window.__joloSmoke.state().sessionId');
+  assert(firstSession !== secondSession, 'new task did not create another chat');
+  await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('[aria-label=\"Panel tabs\"] [role=tab]') && !document.querySelector('webview')", 'new chat in the same workspace starts without panels');
+  await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(`${fixtureUrl}?second-chat`)})`);
+  await waitFor("document.querySelector('webview')?.getURL().includes('second-chat')", 'second chat owns a different browser');
+  await selectPanel(evaluate, waitFor, 'Terminal');
+  await waitFor('window.__joloTerminals.size === 2 && window.__joloTerminal.ready', 'second chat owns a separate shell');
+  await evaluate("window.__secondChatShell = window.__joloTerminal; document.querySelector('[aria-label=\"Close Terminal 1\"]').click()");
+  await waitFor('window.__joloTerminals.size === 1', 'closing second chat shell preserves first chat shell');
+  await evaluate("document.querySelector('.context-close').click()");
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(firstSession)})`);
+  await waitFor("!document.querySelector('.inspector').hidden && window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'first chat restores its open panel');
+  assert(JSON.stringify(await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).map(tab => tab.textContent)")) === JSON.stringify(firstTabs), 'first chat tab list changed');
+  await waitFor(`document.querySelector('webview')?.getURL() === ${JSON.stringify(firstUrl)}`, 'first chat restores its own browser URL');
+  await selectPanel(evaluate, waitFor, 'Terminal');
+  await evaluate("window.__firstShell.input('echo $JOLO_TAB_MARKER\\n')");
+  await waitFor("window.__firstShell.text().split('\\n').filter(line => line.trim() === 'retained').length >= 2", 'first chat shell environment survives switching chats');
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(secondSession)})`);
+  await waitFor("document.querySelector('.inspector').hidden && document.querySelector('webview')?.getURL().includes('second-chat')", 'second chat restores its hidden panel and own URL');
   await evaluate('window.__joloSmoke.newChat()');
-  await waitFor("!document.querySelector('webview') && !window.__joloTerminals?.size && !document.querySelector('.file-preview-content')", 'switching workspaces releases the previous tabs');
-  report.checks.push('One tab row holds browser pages, files and terminals; create, switch, close and workspace cleanup preserve the other items');
+  await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('webview') && !document.querySelector('[aria-label=\"Panel tabs\"] [role=tab]')", 'standalone chat starts with clean panels');
+  report.checks.push('Chats in the same workspace retain separate tab lists, browser URLs and panel visibility; terminal processes survive chat switches, and new chats start clean');
   report.checks.push('Resize cleanup releases pointer capture on mouse release, idle movement and focus loss; a real browser menu click works after dragging the panel');
   report.checks.push('Native parent cursor resets after resizing and stays reset through page navigation; re-entering a divider restores its resize cursor');
 }

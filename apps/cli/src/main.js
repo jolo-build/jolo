@@ -8,6 +8,8 @@ import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema } 
 import { findProject, renderBoardDetail, renderBoardTable } from "./board.js";
 import { deleteSession, listSessions, restoreSession } from "./sessions.js";
 import { runAccountCommand } from './account.js';
+import { commandTheme } from "./themes/commands.js";
+import { createThemeStore } from "./themes/store.js";
 import { commandDemo } from './demo.js';
 import { backgroundCheck, commandUpdate, pendingUpdate } from './update.js';
 
@@ -25,7 +27,7 @@ export { EXIT } from "./exit-codes.js";
 import { followRun } from "./follow-run.js";
 
 const USAGE = `usage:
-  jolo [<dir>]                       interactive terminal client (needs a TTY)
+  jolo [<dir>] [--theme <id>]                       interactive terminal client (needs a TTY)
   jolo run "<task>" [--json] [--path <dir>] [--agent claude] [--worktree [--branch <name>] [--base <ref>]]
   jolo attach <run-id> [--json]
   jolo cancel <run-id>
@@ -65,6 +67,10 @@ const USAGE = `usage:
   jolo login [--tasks] [--no-open] [--server <url>] [--device-name <name>] [--json]
   jolo logout [--json]                  sign out of your Jolo account on this profile
   jolo whoami [--json]                  show your Jolo account
+  jolo theme list | show [id] | use <id>
+  jolo theme create <id> [--from <id>] [--set color=#RRGGBB] [--use]
+  jolo theme install <file-or-https-url> [--force] [--use]
+  jolo theme remove <id>
   jolo demo [--fast]                     watch a scripted session — no agent or account needed
   jolo engine serve | stop [--cancel]
   jolo update [<version>] [--check] [--json]   install the newest published release
@@ -615,6 +621,9 @@ async function commandInteractive({ positional, flags }) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { err("interactive mode needs a terminal; use `jolo run` for headless use"); err(USAGE); return EXIT.usage; }
   const dir = positional[0] ?? flags.path ?? process.cwd();
   const paths = resolvePaths({ home: flags.home, profile: flags.profile });
+  const themeStore = createThemeStore(paths);
+  const themeId = flags.theme ?? process.env.JOLO_THEME;
+  if (themeId !== undefined) themeStore.load(themeId);
   // Advisory only: show what the last check found and refresh it in the background, so opening
   // the client never waits on the network and never installs anything by itself.
   const update = pendingUpdate({ paths, build: BUILD });
@@ -644,7 +653,7 @@ async function commandInteractive({ positional, flags }) {
     const status = await client.call("engine.status", {});
     await client.subscribe({ after: status.cursor });
     const { startTui } = await import("./tui/index.jsx");
-    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update });
+    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update, themeStore, themeId });
   } finally {
     await client.close();
   }
@@ -679,7 +688,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
+  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

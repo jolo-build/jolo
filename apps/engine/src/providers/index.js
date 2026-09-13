@@ -21,7 +21,7 @@ export function resolveModelRef(config, session = {}, execution = {}) {
   if (!samePreset && !execution.model) throw new ProtocolError('invalid_params', 'A provider override requires a model ID');
   const sameModel = samePreset && (!execution?.model || execution.model === base.model);
   return ModelRefSchema.parse({ ...(sameModel ? base : { preset: execution?.preset ?? base.preset, model: execution?.model }),
-    ...(execution?.model ? { model: execution.model } : {}), ...(execution?.effort != null ? { effort: execution.effort } : {}) });
+    ...(execution?.effort != null ? { effort: execution.effort } : {}) });
 }
 export function resolveCapabilities(ref, reported, preset, learned) {
   const contextWindowTokens = ref.contextWindowTokens ?? learned ?? reported?.contextWindowTokens ?? preset.defaults.contextWindowTokens;

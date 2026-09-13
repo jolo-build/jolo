@@ -55,8 +55,8 @@ export function createAnthropicProvider(options) {
           const entry = blocks.get(index);
           if (!entry) { yield { type: 'error', category: 'invalid_response', retryable: false, message: 'delta for unknown content block' }; return; }
           const delta = d.delta;
-          if (delta.type === 'text_delta') { entry.block.text += delta.text; yield { type: 'text_delta', itemId: String(index), text: delta.text }; }
-          else if (delta.type === 'thinking_delta') { entry.block.thinking += delta.thinking; yield { type: 'reasoning_delta', itemId: String(index), blockId: String(index), kind: 'summary', text: delta.thinking }; }
+          if (delta.type === 'text_delta') { entry.block.text = (entry.block.text ?? '') + delta.text; yield { type: 'text_delta', itemId: String(index), text: delta.text }; }
+          else if (delta.type === 'thinking_delta') { entry.block.thinking = (entry.block.thinking ?? '') + delta.thinking; yield { type: 'reasoning_delta', itemId: String(index), blockId: String(index), kind: 'summary', text: delta.thinking }; }
           else if (delta.type === 'signature_delta') entry.block.signature = (entry.block.signature ?? '') + delta.signature;
           else if (delta.type === 'input_json_delta') { entry.json += delta.partial_json; yield { type: 'tool_call_delta', callId: entry.block.id, fragment: delta.partial_json }; }
         } else if (e.event === 'content_block_stop') {

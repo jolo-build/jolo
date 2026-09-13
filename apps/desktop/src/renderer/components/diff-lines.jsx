@@ -15,5 +15,5 @@ const HighlightedDiff = lazy(() => import('./syntax-diff.jsx').catch(() => ({ de
 
 // `path` only chooses the grammar; a diff without one is still shown.
 export const DiffLines = memo(function DiffLines(/** @type {DiffLinesProps} */ props) {
-  return <Suspense fallback={<PlainDiff {...props} />}><HighlightedDiff {...props} /></Suspense>;
+  return <div className="diff-lines"><Suspense fallback={<PlainDiff {...props} />}><HighlightedDiff {...props} /></Suspense></div>;
 });

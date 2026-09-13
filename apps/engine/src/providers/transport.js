@@ -74,7 +74,7 @@ export async function* streamSse(options, url, body, signal) {
   try {
     const response = await bounded((options.fetchImpl ?? fetch)(url, { method: 'POST', headers: requestHeaders(options), body: JSON.stringify(body), signal: controller.signal, redirect: 'error' }));
     if (!response.ok) {
-      const text = await boundedText(response, ERROR_BODY_MAX_BYTES, { truncate: true });
+      const text = await bounded(boundedText(response, ERROR_BODY_MAX_BYTES, { truncate: true }));
       yield { error: providerError(response.status, `provider returned HTTP ${response.status}: ${text}`, options.apiKey) }; return;
     }
     if (!response.body) throw new Error('empty provider response');
@@ -97,7 +97,7 @@ export async function* streamSse(options, url, body, signal) {
       if (done) break;
     }
   } catch (error) {
-    const category = signal?.aborted ? 'cancelled' : idle ? 'network' : error.category ?? (/exceed|limit/i.test(error.message) ? 'limit' : 'network');
+    const category = signal?.aborted ? 'cancelled' : idle ? 'network' : error.category ?? 'network';
     const message = idle ? `provider sent nothing for ${Math.round(idleMs / 1000)} seconds` : error.message;
     yield { error: { type: 'error', category, retryable: category === 'network', message: redact(message, options.apiKey) } };
   } finally {

@@ -5,6 +5,7 @@ import { BROWSER_OPERATIONS, FRAME_MAX_BYTES } from '@jolo/protocol';
 
 const OPERATIONS = BROWSER_OPERATIONS;
 const INPUT_OPERATIONS = new Set(['click', 'type', 'fill', 'press', 'scroll', 'hover', 'select']);
+const CURSOR_ACTIONS = { navigate: 'navigate', history: 'navigate', snapshot: 'inspect', screenshot: 'screenshot', network: 'network' };
 const NETWORK_RING = 200;
 const SCREENSHOT_MAX_WIDTH = 1280;
 const SCREENSHOT_MAX_HEIGHT = 800;
@@ -13,11 +14,39 @@ const SCREENSHOT_MAX_BYTES = Math.min(1024 * 1024, Math.floor((FRAME_MAX_BYTES -
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverlay = null, nativeImage }) {
+export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverlay = null, nativeImage, onCursor = null }) {
   /** @type {Map<number, any>} guest webContents id -> host record */
   const hosts = new Map();
   const inflight = new Map(); // invocationId -> { controller, host }
   const registeredListeners = new Set();
+
+  function clearCursor(host) {
+    host.cursor = null;
+    try { onCursor?.({ guestId: host.guest.id, visible: false }); } catch { /* visual feedback is best effort */ }
+  }
+
+  function publishCursor(host, action = host.cursor?.action ?? 'working') {
+    if (!onCursor || host.guest.isDestroyed() || host.signal?.aborted || isOverlayActive()) return;
+    // Park the indicator near the top left until an operation has a real pointer target.
+    host.cursor = { x: .08, y: .08, ...host.cursor, action };
+    try { onCursor({ guestId: host.guest.id, visible: true, ...host.cursor, busy: Boolean(host.cursorOperation) }); } catch { /* visual feedback is best effort */ }
+  }
+
+  async function showCursor(host, point, action) {
+    if (!onCursor) return;
+    try {
+      const { cssVisualViewport: viewport } = await cdp(host, 'Page.getLayoutMetrics');
+      if (isOverlayActive() || host.expectedRevision !== host.navigationRevision) return;
+      // Fractions align the host overlay with the guest even when their zoom levels differ.
+      host.cursor = { x: point.x / viewport.clientWidth, y: point.y / viewport.clientHeight, action };
+      publishCursor(host);
+    } catch { /* cursor feedback must never fail an otherwise valid input operation */ }
+  }
+
+  async function showNodeCursor(host, backendNodeId, action) {
+    if (!onCursor) return;
+    try { await showCursor(host, await targetPoint(host, backendNodeId), action); } catch { /* some editable nodes have no visible quad */ }
+  }
 
   const cdp = async (host, method, params = {}) => {
     host.signal?.throwIfAborted();
@@ -81,12 +110,14 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
       }
     });
     cdp(host, "Network.enable", { maxTotalBufferSize: 0, maxResourceBufferSize: 0 }).catch((error) => log.warn("network observation unavailable", { error: String(error?.message ?? error) }));
-    const navigated = () => { host.navigationRevision += 1; host.snapshots = []; host.network = []; host.requests.clear(); void update(host); };
+    const navigated = () => { clearCursor(host); host.navigationRevision += 1; host.snapshots = []; host.network = []; host.requests.clear(); if (host.cursorOperation) publishCursor(host, CURSOR_ACTIONS[host.cursorOperation] ?? 'working'); void update(host); };
+    guest.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) clearCursor(host); });
     guest.on("did-navigate", navigated);
     guest.on("did-navigate-in-page", (_event, _url, isMainFrame) => { if (isMainFrame) navigated(); });
     guest.on("page-title-updated", () => void update(host));
     guest.on("render-process-gone", () => { navigated(); for (const entry of inflight.values()) if (entry.host === host) entry.controller.abort(); });
     guest.on("destroyed", () => {
+      clearCursor(host);
       hosts.delete(guest.id);
       for (const entry of inflight.values()) if (entry.host === host) entry.controller.abort();
       if (host.capabilityId) bridge.rawCall("browser.unregister", { capabilityId: host.capabilityId }).catch(() => {});
@@ -142,6 +173,7 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
         if (resolved.stale) return { stale: true, message: "the page changed since that snapshot; take a new snapshot" };
         if (resolved.missing) throw Object.assign(new Error(`unknown reference ${args.ref}`), { code: "unknown_reference" });
         const point = await targetPoint(host, resolved.backendNodeId);
+        await showCursor(host, point, 'move');
         await cdp(host, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
         const hit = await cdp(host, "DOM.getNodeForLocation", { x: point.x, y: point.y, ignorePointerEventsNone: false });
         if (!(await contains(host, resolved.backendNodeId, hit.backendNodeId))) throw Object.assign(new Error("the target is obscured by another element"), { code: "obscured" });
@@ -149,6 +181,7 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
         if (isOverlayActive()) throw Object.assign(new Error("a host dialog opened; browser input is suspended"), { code: "host_overlay" });
         await cdp(host, "Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1 });
         await host.guest.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1 });
+        await showCursor(host, point, 'click');
         await sleep(100);
         return { result: { ref: args.ref, x: point.x, y: point.y, navigationRevision: host.navigationRevision, url: host.guest.getURL() } };
       }
@@ -163,6 +196,7 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
           if (this.disabled || this.readOnly || !(this.isContentEditable || this instanceof HTMLTextAreaElement || (this instanceof HTMLInputElement && ['text','search','email','url','tel','password','number'].includes(this.type)))) throw new Error('target is not an enabled editable field');
           this.focus();
         });
+        await showNodeCursor(host, resolved.backendNodeId, 'type');
         if (operation === 'fill') await pressKey(host, 'a', [process.platform === 'darwin' ? 'Meta' : 'Control']);
         if (args.text) await cdp(host, "Input.insertText", { text: args.text });
         else if (operation === 'fill') await pressKey(host, 'Backspace', []);
@@ -186,14 +220,17 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
           if (backendNodeId) {
             await cdp(host, 'DOM.scrollIntoViewIfNeeded', { backendNodeId });
             await cdp(host, 'DOM.focus', { backendNodeId });
+            await showNodeCursor(host, backendNodeId, 'type');
           }
           await pressKey(host, args.key, args.modifiers ?? []);
         } else if (operation === 'scroll') {
           const { cssVisualViewport: viewport } = await cdp(host, 'Page.getLayoutMetrics');
           const point = backendNodeId ? await targetPoint(host, backendNodeId) : { x: Math.floor(viewport.clientWidth / 2), y: Math.floor(viewport.clientHeight / 2) };
+          await showCursor(host, point, 'scroll');
           await cdp(host, 'Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: args.deltaX ?? 0, deltaY: args.deltaY ?? 0 });
         } else {
           await cdp(host, 'DOM.scrollIntoViewIfNeeded', { backendNodeId });
+          await showNodeCursor(host, backendNodeId, 'click');
           await nodeCall(host, backendNodeId, function(values) {
             if (!(this instanceof HTMLSelectElement) || this.disabled) throw new Error('target is not an enabled native select');
             if (!this.multiple && values.length !== 1) throw new Error('select accepts only one value');
@@ -342,6 +379,7 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
     const gate = new Promise(resolve => { unlock = resolve; });
     host.queue = previous.then(() => gate);
     let acquired = false;
+    let completed = false;
     try {
       await previous;
       controller.signal.throwIfAborted();
@@ -355,11 +393,15 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
       }
       if (host.inputOperation && params.navigationRevision !== host.navigationRevision) return reply({ status: 'stale', error: { code: 'stale_reference', message: 'the page navigated since the engine admitted this action' }, navigationRevision: host.navigationRevision });
       if (isOverlayActive() && (host.inputOperation || ['navigate', 'history'].includes(params.operation))) throw Object.assign(new Error('a host dialog is open; browser control is suspended'), { code: 'host_overlay' });
+      host.cursorOperation = params.operation;
+      publishCursor(host, CURSOR_ACTIONS[params.operation] ?? 'working');
       const outcome = await operate(host, params.operation, params.arguments, controller.signal);
       controller.signal.throwIfAborted();
       if (outcome.stale) return reply({ status: "stale", error: { code: "stale_reference", message: outcome.message }, navigationRevision: host.navigationRevision });
+      completed = true;
       return reply({ status: "ok", result: outcome.result, navigationRevision: host.navigationRevision, ...(outcome.screenshot ? { screenshot: outcome.screenshot } : {}) });
     } catch (error) {
+      if (acquired) clearCursor(host);
       if (controller.signal.aborted) return reply({ status: "cancelled", error: { code: "cancelled", message: "operation cancelled or lease expired" }, navigationRevision: host.navigationRevision });
       if (error?.code === 'stale_reference') return reply({ status: 'stale', error: { code: 'stale_reference', message: error.message }, navigationRevision: host.navigationRevision });
       log.warn("browser operation failed", { operation: params.operation, error: String(error?.message ?? error) });
@@ -367,13 +409,18 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
     } finally {
       clearTimeout(lease);
       inflight.delete(params.invocationId);
-      if (acquired) { host.signal = null; host.inputOperation = false; }
+      if (acquired) {
+        host.cursorOperation = null;
+        if (completed) publishCursor(host); else clearCursor(host);
+        host.signal = null; host.inputOperation = false;
+      }
       unlock();
     }
   }
 
   function handleCancel(params) {
-    inflight.get(params.invocationId)?.controller.abort();
+    const entry = inflight.get(params.invocationId);
+    if (entry) { entry.controller.abort(); clearCursor(entry.host); }
   }
 
   return {
@@ -382,7 +429,7 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
     handleCancel,
     onRegistered(listener) { registeredListeners.add(listener); return () => registeredListeners.delete(listener); },
     async onConnected() { for (const host of hosts.values()) await register(host); },
-    onDisconnected() { for (const entry of inflight.values()) entry.controller.abort(); for (const host of hosts.values()) host.capabilityId = null; },
+    onDisconnected() { for (const entry of inflight.values()) entry.controller.abort(); for (const host of hosts.values()) { host.capabilityId = null; clearCursor(host); } },
     get hosts() { return hosts; },
   };
 }

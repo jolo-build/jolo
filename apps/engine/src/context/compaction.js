@@ -42,7 +42,7 @@ function transcript(items) {
       case "assistant_message": return `ASSISTANT: ${item.payload.text}`;
       case "tool_call": return `TOOL CALL ${item.payload.name} ${JSON.stringify(item.payload.arguments)}`;
       case "tool_result": return `TOOL RESULT: ${String(item.payload.output).slice(0, 4_000)}`;
-      case "system_note": return `NOTE: ${item.payload.text}`;
+      case "system_note": return item.payload.checkpointId ? "" : `NOTE: ${item.payload.text}`;
       default: return "";
     }
   }).filter(Boolean).join("\n");
@@ -97,8 +97,15 @@ function readSummary(storage, checkpoint) {
   return storage.readArtifact(artifact, 0, artifact.committedBytes, artifact.committedBytes).buffer.toString("utf8");
 }
 
-/** Provider-facing items: everything after the latest checkpoint (the note itself is the first item). */
+/** Provider-facing items: everything after the latest checkpoint, led by its note (§7.2). */
 export function providerItems(storage, sessionId) {
   const checkpoint = storage.latestCheckpoint(sessionId);
-  return checkpoint ? storage.listItems(sessionId, { afterOrdinal: checkpoint.throughOrdinal }) : storage.listItems(sessionId);
+  const items = checkpoint ? storage.listItems(sessionId, { afterOrdinal: checkpoint.throughOrdinal }) : storage.listItems(sessionId);
+  // The note is appended after the kept tail when it is written; provider-facing it leads the window
+  // it describes. Older notes keep their place: the next compaction folds them into a new checkpoint.
+  if (checkpoint) {
+    const index = items.findIndex((item) => item.payload?.checkpointId === checkpoint.id);
+    if (index > 0) items.unshift(items.splice(index, 1)[0]);
+  }
+  return items;
 }

@@ -42,7 +42,8 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const projection = useRef(null);
   const history = useRef(null);
   const sessionRef = useRef(null);
-  const draftSession = useRef({ id: null });
+  const draftSession = useRef({ id: null, panelScope: crypto.randomUUID() });
+  const sessionPanelScopes = useRef(new Map());
   const projectRef = useRef(null);
   const workspaceRef = useRef(null);
   const historyRef = useRef("open");
@@ -112,7 +113,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const markViewed = useCallback(async (workspaceId) => { if (!workspaceId) return; try { await call("board.viewed", { workspaceId }); } catch { /* the workspace may be gone */ } }, []);
 
   const selectSession = useCallback(async (id) => {
-    draftSession.current = { id: null };
+    draftSession.current = { id: null, panelScope: crypto.randomUUID() };
     sessionRef.current = id;
     setSessionId(id);
     const requests = new PendingPermissions();
@@ -238,6 +239,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const session = queue && sessionRef.current ? { id: sessionRef.current } : await sessionForSend({ call, sessionId: sessionRef.current ?? draft.id, agentId, prompt, newSession: async (title, options) => {
       const created = await newSession(title, { ...options, deferSelection: true });
       draft.id = created.id; // Retry the same draft in the same task after an interrupted upload.
+      sessionPanelScopes.current.set(created.id, draft.panelScope);
       return created;
     } });
     if (session.revision !== undefined) {
@@ -390,6 +392,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     runState: projection.current ? [...projection.current.runs.values()].filter(run => TERMINAL.has(run.state)).map(run => `${run.id}:${run.state}`).join(',') : '' });
   return {
     engine, project, restoringProject, sessions, sessionId, settings, error, relayNote, setError, historyState, setHistory, manageSession,
+    panelScope: sessionId ? sessionPanelScopes.current.get(sessionId) ?? sessionId : draftSession.current.panelScope,
     workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree,
     agents, agentCatalog, refreshAgents, refreshCatalog, startAgent, stopAgent,
     projection: projection.current,

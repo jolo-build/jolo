@@ -1,7 +1,7 @@
 {
   "name": "jolo",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "workspaces": [
     "apps/*",
@@ -14,6 +14,7 @@
     "security:audit": "bun audit",
     "engine": "bun apps/engine/src/main.js serve",
     "jolo": "bun apps/cli/src/main.js",
+    "cli": "bun apps/cli/src/main.js",
     "desktop": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/start.js",
     "desktop:smoke": "bun apps/desktop/scripts/build.js && bun apps/desktop/scripts/smoke.js",
     "desktop:browser-smoke": "bun apps/desktop/scripts/browser-smoke.js",

@@ -29,7 +29,7 @@ export async function runRealBrowserAgentSmoke({ window, bridge, browserHost, fi
   }
 }
 
-export async function runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report }) {
+export async function runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report, window, results }) {
   if (browserHost.guests.size || await evaluate("Boolean(document.querySelector('webview'))")) throw new Error('browser must start closed for the chat-opening test');
   const runsBefore = await evaluate('window.__joloSmoke.state().runCount');
   await evaluate(`window.__joloSmoke.send(${JSON.stringify(`Open ${fixtureUrl} in the inline browser, click the button, and take a screenshot.`)})`);
@@ -46,6 +46,22 @@ export async function runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, eva
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   if (buttonText !== 'Clicked') throw new Error(`agent click did not reach the page: ${buttonText}`);
+  await waitFor("!!document.querySelector('.browser-agent-cursor')", 'agent cursor rendered over the inline browser');
+  const cursor = await evaluate(`(() => {
+    const cursor = document.querySelector('.browser-agent-cursor');
+    return { x: parseFloat(cursor.style.left) / 100, y: parseFloat(cursor.style.top) / 100,
+      pointerEvents: getComputedStyle(cursor).pointerEvents, label: cursor.textContent };
+  })()`);
+  const target = await guest.executeJavaScript(`(() => {
+    const rect = document.querySelector('button').getBoundingClientRect();
+    return { left: rect.left / innerWidth, right: rect.right / innerWidth, top: rect.top / innerHeight, bottom: rect.bottom / innerHeight };
+  })()`);
+  // Clicking changes the label and width from “Click” to “Clicked”; the cursor stays at the click location.
+  if (cursor.x < target.left || cursor.x > target.right || cursor.y < target.top || cursor.y > target.bottom || cursor.pointerEvents !== 'none' || !cursor.label.includes('Jolo')) throw new Error(`invalid agent cursor: ${JSON.stringify({ cursor, target })}`);
+  if (!cursor.label.includes('Checking network')) throw new Error(`read-only browser work did not update the cursor: ${cursor.label}`);
+  writeFileSync(path.join(results, 'browser-cursor.png'), (await window.webContents.capturePage()).toPNG());
+  await waitFor("document.querySelector('.browser-agent-cursor')?.dataset.visible === 'false'", 'idle agent cursor fades');
+  report.checks.push('Agent cursor follows the clicked target, passes through input, and fades when idle');
   if (!state.toolText.includes('"artifactId"') || !state.toolText.includes('browser_screenshot')) throw new Error('screenshot tool result missing');
   if (!state.toolText.includes('browser_network') || !state.toolText.includes(`"url":"${fixtureUrl}"`)) throw new Error(`network observation missing: ${state.toolText.slice(-600)}`);
   if (![...bridge.agent.hosts.values()].some(host => host.capabilityId)) throw new Error('browser host did not register');

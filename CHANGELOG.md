@@ -2,6 +2,14 @@
 
 All notable changes to Jolo are documented here. This project uses [semantic versioning](https://semver.org/) for tagged releases.
 
+## [0.2.5] — 2026-09-14
+
+- Added terminal themes to the CLI: a `/themes` picker, `jolo theme` management commands, and custom JSON themes that reload live.
+- Added slash-command suggestions: type `/` to browse, filter, and complete composer commands.
+- Kept desktop side-panel tabs per workspace, added file-link previews and a browser activity cursor, and made chat file errors clearer.
+- Added Markdown table rendering and richer file-reference links in chat.
+- Fixed the model harness restarting a run as new when a compaction happened inside it, moved checkpoint notes to the head of the retained context, made the iteration budget per attempt, and hardened provider stream limits.
+
 ## [0.2.4] — 2026-09-13
 
 - Closing the last panel tab now closes the panel, including with the keyboard shortcut.
@@ -62,6 +70,7 @@ All notable changes to Jolo are documented here. This project uses [semantic ver
 
 - Initial open-source release: desktop app, terminal CLI, local engine, and Jolo Access.
 
+[0.2.5]: https://github.com/jolo-build/jolo/releases/tag/v0.2.5
 [0.2.4]: https://github.com/jolo-build/jolo/releases/tag/v0.2.4
 [0.2.3]: https://github.com/jolo-build/jolo/releases/tag/v0.2.3
 [0.2.1]: https://github.com/jolo-build/jolo/releases/tag/v0.2.1

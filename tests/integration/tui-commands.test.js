@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { CLI_ENTRY, ROOT, startEngine, tempHome, removeHome, waitFor } from "./helpers.js";
@@ -9,7 +9,7 @@ const DOWN = "\x1b[B", UP = "\x1b[A", ESC = "\x1b", ENTER = "\r";
 const interactiveCommand = process.env.JOLO_TEST_CLI ? [process.env.JOLO_TEST_CLI] : [process.execPath, "run", "jolo"];
 const headlessCommand = process.env.JOLO_TEST_CLI ? [process.env.JOLO_TEST_CLI] : [process.execPath, CLI_ENTRY];
 
-async function boot() {
+async function boot({ env = {} } = {}) {
   const home = tempHome();
   const repo = path.join(home, "repo"); mkdirSync(repo);
   const agents = path.join(home, "data", "t", "agents"); mkdirSync(agents, { recursive: true });
@@ -27,7 +27,7 @@ async function boot() {
   const screen = new Terminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
   let output = "";
   const child = Bun.spawn([...interactiveCommand, repo, "--home", home, "--profile", "t"], {
-    cwd: ROOT, env: { ...process.env, CI: "0", TERM: "xterm-256color" },
+    cwd: ROOT, env: { ...process.env, CI: "0", TERM: "xterm-256color", ...env },
     terminal: { cols: 100, rows: 30, data(_terminal, data) { output += new TextDecoder().decode(data); screen.write(data); } },
   });
   const allLines = () => Array.from({ length: screen.buffer.active.length }, (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? "");
@@ -51,7 +51,7 @@ async function boot() {
     type(ENTER); await seen("Enter edit/save");
   };
   const prompt = async (value) => { type(value); await seen(`❯ ${value}`); type(ENTER); };
-  const ready = () => seen("· /model · /sessions");
+  const ready = () => waitFor(() => lines().some((line) => line.startsWith("▎❯ ")), { label: "prompt ready", timeoutMs: 15000 });
   return { home, repo, engine, client, project, screen, child, text, selected, type, seen, select, edit, prompt, ready, output: () => output, allLines,
     async close() {
       if (child.exitCode === null) child.kill();
@@ -93,7 +93,7 @@ test("/model configures the shared provider and hosted models without sending co
     t.screen.resize(100, 30); t.child.terminal.resize(100, 30); await t.ready();
     await t.prompt("/model jolo"); await t.seen("Models / Jolo provider");
     await t.select("Provider"); t.type("\x1b[D"); await t.seen("Provider  fake");
-    await t.select("Save"); t.type(ENTER); await t.seen("Demo provider · /model");
+    await t.select("Save"); t.type(ENTER); await t.ready(); await t.seen("Demo provider");
     await t.prompt("actual task"); await t.seen("done: actual task");
     const sessions = (await t.client.call("session.list", { projectId: t.project.projectId })).sessions;
     expect(sessions).toHaveLength(1);
@@ -113,7 +113,7 @@ test("/model switches agents and models in place, preserving the chat and carryi
     const original = (await savedSessions())[0];
     await t.client.call("settings.update", { agents: { claude: { model: "fable", effort: "high" } } });
     await t.prompt("/model"); await t.seen("Enter use");
-    await t.select("Claude Code"); t.type(ENTER); await t.seen("claude · fable · /model");
+    await t.select("Claude Code"); t.type(ENTER); await t.seen("claude · fable");
     expect(await savedSessions()).toHaveLength(1);
     expect((await savedSessions())[0]).toMatchObject({ id: original.id, agentId: "claude", title: "before switching" });
     expect(t.allLines().filter((line) => line.includes("done: before switching"))).toHaveLength(1); // No remount or transcript replay.
@@ -124,7 +124,7 @@ test("/model switches agents and models in place, preserving the chat and carryi
     expect((await t.client.call("session.page", { sessionId: original.id })).runs.map((run) => run.prompt)).toEqual(["before switching", "model?"]);
 
     await t.prompt("/model claude"); await t.seen("Models / Claude Code");
-    await t.edit("Model", "haiku"); await t.select("Save"); t.type(ENTER); await t.seen("claude · haiku · /model");
+    await t.edit("Model", "haiku"); await t.select("Save"); t.type(ENTER); await t.seen("claude · haiku");
     await t.prompt("model again"); await t.seen("Running haiku at high.");
     expect((await t.client.call("session.page", { sessionId: claude.id })).runs).toHaveLength(3);
     expect(await savedSessions()).toHaveLength(1);
@@ -132,20 +132,20 @@ test("/model switches agents and models in place, preserving the chat and carryi
     await t.prompt("/model"); await t.seen("Enter use"); await t.select("Codex"); t.type("e"); await t.seen("Models / Codex");
     await t.select("Find models"); t.type(ENTER); await t.seen("Fake Small");
     await t.select("Fake Small"); t.type(ENTER); await t.seen("Model  fake-small");
-    await t.edit("Effort", "low"); await t.select("Save"); t.type(ENTER); await t.seen("codex · fake-small · /model");
+    await t.edit("Effort", "low"); await t.select("Save"); t.type(ENTER); await t.seen("codex · fake-small");
     await t.prompt("model?"); await t.seen("Running fake-small at low.");
     expect((await savedSessions())[0]).toMatchObject({ id: original.id, agentId: "codex" });
     await t.prompt("history"); await t.seen("Resumed context: history"); // Same-agent turns use the native continuation.
 
     await t.prompt("/model"); await t.seen("Enter use"); await t.select("Absent Agent"); t.type(ENTER); await t.seen("not installed or is unavailable");
-    t.type(ESC); await t.ready(); expect(t.text()).toContain("codex · fake-small · /model");
-    await t.prompt("/model"); await t.seen("Enter use"); await t.select("Jolo provider"); t.type(ENTER); await t.seen("Demo provider · /model");
+    t.type(ESC); await t.ready(); expect(t.text()).toContain("codex · fake-small");
+    await t.prompt("/model"); await t.seen("Enter use"); await t.select("Jolo provider"); t.type(ENTER); await t.ready(); await t.seen("Demo provider");
     await t.prompt("back to jolo"); await t.seen("done: back to jolo");
     expect(await savedSessions()).toHaveLength(1);
     expect((await savedSessions())[0]).toMatchObject({ id: original.id, agentId: null });
     // Returning to Claude must start its native context from the shared chat,
     // not resume a stale vendor conversation that missed the Codex/Jolo turns.
-    await t.prompt("/model"); await t.seen("Enter use"); await t.select("Claude Code"); t.type(ENTER); await t.seen("claude · haiku · /model");
+    await t.prompt("/model"); await t.seen("Enter use"); await t.select("Claude Code"); t.type(ENTER); await t.seen("claude · haiku");
     await t.prompt("history"); await t.seen("Fresh agent context:");
     await waitFor(async () => (await t.client.call("session.page", { sessionId: original.id })).runs.every((run) => run.state === "completed"));
     const page = await t.client.call("session.page", { sessionId: original.id });
@@ -156,7 +156,7 @@ test("/model switches agents and models in place, preserving the chat and carryi
     expect(context).toContain("done: back to jolo");
     await t.prompt(`/session restore ${original.id}`);
     await waitFor(() => t.allLines().some((line) => line.includes("Restored: before switching")));
-    await t.seen("claude · haiku · /model");
+    await t.seen("claude · haiku");
     await t.prompt("model restored");
     await waitFor(async () => (await t.client.call("session.page", { sessionId: original.id })).runs.filter((run) => run.state === "completed").length === 8);
     expect(await savedSessions()).toHaveLength(1);
@@ -238,6 +238,143 @@ test("a known session ID restores even when it is older than the recent list", a
     await t.prompt(`/session delete ${session.id}`); await t.seen("Delete “Older conversation”?");
     t.type(ENTER); await t.seen("New session");
     await expect(t.client.call("session.page", { sessionId: session.id })).rejects.toMatchObject({ code: "not_found" });
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 30000);
+
+test('themes switch live, discover installs, and recover from an invalid edit without creating tasks', async () => {
+  const t = await boot({ env: { COLORTERM: 'truecolor', FORCE_COLOR: '3', JOLO_THEME: 'catppuccin-mocha' } });
+  const directory = path.join(t.home, 'data', 't', 'themes');
+  const promptCell = (column = 0) => {
+    const row = t.allLines().findLastIndex((line) => line.startsWith('▎❯ '));
+    return row < 0 ? null : t.screen.buffer.active.getLine(row)?.getCell(column);
+  };
+  const color = (hex) => waitFor(() => promptCell()?.getFgColor() === parseInt(hex, 16), { label: `prompt color ${hex}` });
+  try {
+    await t.ready(); await color('89b4fa');
+    expect(t.output()).toContain('\x1b]11;#1e1e2e\x1b\\');
+    await t.prompt('/themes'); await t.seen('Themes');
+    expect(t.text()).toContain('Catppuccin Mocha · current');
+    await t.select('GitHub Light'); t.type(ENTER); await t.ready();
+    await color('0969da');
+    expect(t.output()).toContain('\x1b]11;#ffffff\x1b\\');
+    const welcomeRow = t.allLines().findLastIndex((line) => line.includes('Welcome to Jolo'));
+    const welcomeLine = t.screen.buffer.active.getLine(welcomeRow);
+    expect(welcomeLine.getCell(welcomeLine.translateToString().indexOf('Welcome')).getFgColor()).toBe(-1);
+    expect(t.output()).toContain('\x1b]10;#1f2328\x1b\\');
+    expect(promptCell(20).getBgColor()).toBe(0xf6f8fa);
+    expect(JSON.parse(readFileSync(path.join(directory, '.selected.json'), 'utf8')).id).toBe('github-light');
+
+    await t.prompt('/theme create ocean --from github-dark --set accent=#123456 --use');
+    await color('123456');
+    const file = path.join(directory, 'ocean.json');
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    data.colors.accent = '#abcdef'; writeFileSync(file, JSON.stringify(data));
+    await color('abcdef');
+    writeFileSync(file, JSON.stringify({ ...data, colors: { accent: 'bad' } }));
+    await t.seen('Theme color accent must be #RRGGBB');
+    expect(promptCell().getFgColor()).toBe(0xabcdef);
+    data.colors.accent = '#654321'; writeFileSync(file, JSON.stringify(data));
+    await color('654321');
+    await waitFor(() => !t.text().includes('Theme color accent must be'), { label: 'theme edit recovered' });
+
+    await t.prompt('/themes'); await t.seen('Themes');
+    const imported = { version: 1, id: 'z-new', name: 'New palette', extends: 'catppuccin-latte', colors: { accent: '#aabbcc' } };
+    writeFileSync(path.join(directory, 'z-new.json'), JSON.stringify(imported));
+    await t.seen('New palette');
+    await t.select('New palette'); t.type(ENTER); await t.ready(); await color('aabbcc');
+    await t.prompt('/theme remove z-new'); await t.seen('Removed theme z-new.');
+    await waitFor(() => promptCell()?.getBgColor() === -1, { label: 'terminal colors restored' });
+
+    const source = path.join(t.home, 'theme source.json');
+    writeFileSync(source, JSON.stringify({ ...imported, id: 'downloaded' }));
+    t.type(`/theme install "${source}" --use`); await t.seen('source.json" --use'); t.type(ENTER); await color('aabbcc');
+    // An external CLI selection reaches the running UI through the saved profile setting.
+    const child = Bun.spawn([...headlessCommand, 'theme', 'use', 'github-dark', '--home', t.home, '--profile', 't'], { stdout: 'pipe', stderr: 'pipe' });
+    expect(await child.exited).toBe(0); await color('2f81f7');
+    expect((await t.client.call('session.list', { projectId: t.project.projectId })).sessions).toHaveLength(0);
+    t.type('\x03'); await waitFor(() => t.child.exitCode !== null);
+    expect(await t.child.exited).toBe(0);
+    expect(t.output()).toContain('\x1b[0m');
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 30000);
+
+test('slash command suggestions replace footer shortcuts and support filtering, navigation, and completion', async () => {
+  const t = await boot();
+  try {
+    await t.ready();
+    const promptRow = t.allLines().findLastIndex((line) => line.startsWith('▎❯ '));
+    expect(t.allLines()[promptRow + 2]).not.toContain('/');
+    t.type('/'); await t.seen('Choose a color theme');
+    t.type(DOWN); await t.seen('› /sessions');
+    t.type(DOWN); await t.seen('› /themes');
+    t.type(ENTER); await t.seen('Themes');
+    t.type(ESC); await t.ready();
+    t.type('/th'); await t.seen('› /themes');
+    t.type(ESC);
+    await waitFor(() => !t.text().includes('Choose a color theme'), { label: 'suggestions dismissed' });
+    expect(t.text()).toContain('❯ /th');
+    t.type('\x17'); await t.seen('Ask Jolo anything');
+    t.type('/'); await t.seen('Choose a color theme');
+    t.type('\x17'); await t.seen('Ask Jolo anything');
+    t.type('/theme c'); await t.seen('› /theme create');
+    t.type('\t'); await t.seen('❯ /theme create');
+    await waitFor(() => !t.text().includes('Create a custom theme'), { label: 'completion starts arguments' });
+    t.type('fresh --from github-dark --use'); t.type(ENTER); await t.seen('Created fresh:');
+    expect(JSON.parse(readFileSync(path.join(t.home, 'data', 't', 'themes', 'fresh.json'), 'utf8')).extends).toBe('github-dark');
+    expect((await t.client.call('session.list', { projectId: t.project.projectId })).sessions).toHaveLength(0);
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 30000);
+
+test('existing transcript backgrounds follow theme changes after chatting and resizing', async () => {
+  const t = await boot({ env: { COLORTERM: 'truecolor', FORCE_COLOR: '3', JOLO_THEME: 'catppuccin-frappe' } });
+  const expectUnpaintedTranscript = () => {
+    const rows = t.allLines();
+    const prompt = rows.findLastIndex((line) => line.startsWith('▎❯ '));
+    expect(prompt).toBeGreaterThan(0);
+    const first = rows.findIndex((line) => line.startsWith('Jolo '));
+    const backgrounds = new Set();
+    for (let y = first; y < prompt - 1; y++) {
+      const line = t.screen.buffer.active.getLine(y);
+      for (let x = 0; x < t.screen.cols; x++) backgrounds.add(line.getCell(x).getBgColor());
+    }
+    expect([...backgrounds]).toEqual([-1]);
+  };
+  const switchTheme = async (id, background) => {
+    const from = t.output().length;
+    await t.prompt(`/theme use ${id}`);
+    await waitFor(() => t.output().slice(from).includes(`\x1b]11;${background}\x1b\\`), { label: `canvas ${id}` });
+    await t.ready();
+    await new Promise((resolve) => t.screen.write('', resolve));
+  };
+  try {
+    await t.ready();
+    await t.prompt('first message with a wider line');
+    await t.seen('done: first message with a wider line'); await t.seen('Completed');
+    expectUnpaintedTranscript();
+    await switchTheme('catppuccin-mocha', '#1e1e2e');
+    expectUnpaintedTranscript();
+    await t.prompt('second message');
+    await t.seen('done: second message'); await t.seen('Completed');
+    expectUnpaintedTranscript();
+    await switchTheme('github-light', '#ffffff');
+    expectUnpaintedTranscript();
+    for (const cols of [54, 120]) {
+      t.screen.resize(cols, 30); t.child.terminal.resize(cols, 30);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await t.ready();
+      expectUnpaintedTranscript();
+    }
+    await switchTheme('catppuccin-frappe', '#303446');
+    expectUnpaintedTranscript();
+    for (const message of ['done: first message with a wider line', 'done: second message']) {
+      expect(t.allLines().filter((line) => line.includes(message))).toHaveLength(1);
+    }
+    const rows = t.allLines();
+    const prompt = rows.findLastIndex((line) => line.startsWith('▎❯ '));
+    expect(t.screen.buffer.active.getLine(prompt).getCell(20).getBgColor()).toBe(0x292c3c);
   } catch (error) { console.error(t.text()); throw error; }
   finally { await t.close(); }
 }, 30000);

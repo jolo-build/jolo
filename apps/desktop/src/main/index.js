@@ -18,7 +18,7 @@ import { newestSourceTime } from "./staleness.js";
 import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
-import { openChatFile } from './chat-files.js';
+import { openChatFile, fileErrorResult } from './chat-files.js';
 import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
 import { saveArtifactImage } from './image-downloads.js';
 import { installReloadShortcuts } from './reload-shortcuts.js';
@@ -272,20 +272,20 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
   ipcMain.handle('jolo:openChatFile', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try { await openChatFile((method, args) => bridge.rawCall(method, args), shell, params ?? {}); return { ok: true }; }
-    catch (error) { return { ok: false, error: String(error?.message ?? 'Could not open this file.') }; }
+    catch (error) { return fileErrorResult(error); }
   });
   ipcMain.handle('jolo:previewChatFile', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try { return { ok: true, result: await filePreviews.prepare(params ?? {}) }; }
-    catch (error) { return { ok: false, error: String(error?.message ?? 'Could not preview this file.') }; }
+    catch (error) { return fileErrorResult(error, 'Could not preview this file.'); }
   });
   ipcMain.handle('jolo:releaseChatFile', (event, url) => { if (!trusted(event)) throw new Error('untrusted sender'); filePreviews.release(url); });
   ipcMain.handle('jolo:pickChatFile', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try {
       const selection = await dialog.showOpenDialog(window, { properties: ['openFile'] });
-      return { ok: true, result: selection.canceled ? null : await filePreviews.prepare({ sessionId: params?.sessionId, projectId: params?.projectId, workspaceId: params?.workspaceId, path: selection.filePaths[0] }) };
-    } catch (error) { return { ok: false, error: String(error?.message ?? 'Could not open this file.') }; }
+      return { ok: true, result: selection.canceled ? null : await filePreviews.prepare({ sessionId: params?.sessionId, projectId: params?.projectId, workspaceId: params?.workspaceId, path: selection.filePaths[0], nativePath: true }) };
+    } catch (error) { return fileErrorResult(error); }
   });
   ipcMain.handle("jolo:openExternal", (event, url) => {
     if (!trusted(event)) throw new Error("untrusted sender");
@@ -354,7 +354,9 @@ app.whenReady().then(async () => {
   registerIpc(window, bridge, visualizations, releases, filePreviews);
   const isOverlayActive = () => bridge.hostDialogs.active;
   const waitForOverlay = signal => bridge.hostDialogs.wait(signal);
-  const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive, waitForOverlay });
+  const agent = createBrowserAgent({ bridge, log, nativeImage, isOverlayActive, waitForOverlay,
+    onCursor: payload => { if (!window.isDestroyed()) window.webContents.send('jolo:browserCursor', payload); },
+  });
   bridge.agent = agent;
   bridge.browserOpener = createBrowserOpener({ bridge, agent, log, isOverlayActive, waitForOverlay,
     send: (channel, params) => { if (!window.isDestroyed()) window.webContents.send(channel, params); },

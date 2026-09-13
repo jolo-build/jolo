@@ -126,6 +126,43 @@ for (const protocol of PROTOCOLS) describe(`${protocol} harness conformance`, ()
     if (protocol === 'gemini') expect(request.url).toContain('/models/queued-model:'); else expect(request.body.model).toBe('queued-model');
     await finish(active);
   });
+  test('the checkpoint note leads the retained context', async () => {
+    const { mock, start, finish, home } = await setup(protocol, { turns: [
+      { tool: true, toolName: 'read_file', args: { path: 'big.txt' } },
+      { tool: true, toolName: 'read_file', args: { path: 'small.txt' } },
+      { text: 'Summary of previous work.' },
+      { text: 'final answer' },
+    ], failures: [null, null, { status: 400, message: 'maximum context length is 60000 tokens' }] });
+    writeFileSync(path.join(home, 'big.txt'), 'x'.repeat(24000));
+    writeFileSync(path.join(home, 'small.txt'), 'UNIQUEKEPTTOKEN');
+    await finish(await start());
+    await finish(await start('later'));
+    const body = JSON.stringify(mock.requests.at(-1).body);
+    expect(body.indexOf('UNIQUEKEPTTOKEN')).toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('Checkpoint of earlier work')).toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('Checkpoint of earlier work')).toBeLessThan(body.indexOf('UNIQUEKEPTTOKEN'));
+  });
+  test('resume after an in-run compaction continues the same run', async () => {
+    const { client, start, finish, events, home } = await setup(protocol, { turns: [
+      { tool: true, toolName: 'read_file', args: { path: 'big.txt' } },
+      { tool: true, toolName: 'read_file', args: { path: 'small.txt' } },
+      { text: 'Summary of previous work.' },
+      { tool: true },
+      { text: 'after resume' },
+    ], failures: [null, null, { status: 400, message: 'maximum context length is 60000 tokens' }] });
+    writeFileSync(path.join(home, 'big.txt'), 'x'.repeat(24000));
+    writeFileSync(path.join(home, 'small.txt'), 'UNIQUEKEPTTOKEN');
+    await client.call('settings.update', { budgets: { maxIterations: 3 } });
+    const run = await start();
+    const paused = await finish(run);
+    expect(paused.run.state).toBe('paused');
+    expect(paused.run.pauseReason).toBe('budget');
+    expect(events.some(e => e.type === 'context.compacted')).toBe(true);
+    await client.call('run.resume', { runId: run.id });
+    const done = await finish(run);
+    expect(done.run.state).toBe('completed');
+    expect(done.messages.filter(m => m.role === 'user' && m.kind === 'text')).toHaveLength(1);
+  });
   test('a paused run keeps its endpoint and model after session and default changes', async () => {
     const { client, mock, session, start, finish } = await setup(protocol, { turns: [{ tool: true }, {}] });
     await client.call('settings.update', { budgets: { maxIterations: 1 } });

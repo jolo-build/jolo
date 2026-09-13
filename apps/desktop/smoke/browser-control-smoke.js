@@ -24,8 +24,10 @@ const window = new BrowserWindow({ width: 900, height: 700, show: false, webPref
 const guest = window.webContents;
 guest.debugger.attach('1.3');
 const replies = new Map();
+const cursors = [];
 let sequence = 0;
 const agent = createBrowserAgent({ nativeImage, log: { info() {}, warn(...args) { console.error(...args); } }, isOverlayActive: () => false,
+  onCursor: payload => cursors.push(payload),
   bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.set(params.invocationId, params); return { capabilityId: 'cap_smoke' }; } } });
 const host = agent.attach(guest, 'ws_smoke');
 const execute = async (operation, args = {}) => {
@@ -39,9 +41,16 @@ const inspect = script => guest.executeJavaScript(script);
 const timer = setTimeout(() => { console.error('browser controls smoke timed out'); app.exit(1); }, 40_000);
 try {
   await execute('navigate', { url: `${url}/form` });
+  assert.equal(cursors.at(-1)?.visible, true);
+  assert.equal(cursors.at(-1)?.action, 'navigate');
   const snapshot = (await execute('snapshot')).result;
+  assert.equal(cursors.at(-1)?.action, 'inspect');
+  assert.equal(cursors.at(-1)?.busy, false);
+  assert.ok(cursors.some(cursor => cursor.action === 'inspect' && cursor.busy));
   const target = name => { const node = snapshot.nodes.find(node => node.name === name); assert.ok(node, `missing ${name}`); return { ref: node.ref, snapshotId: snapshot.snapshotId }; };
   await execute('fill', { ...target('Name'), text: 'Ada' });
+  assert.equal(cursors.at(-1)?.action, 'type');
+  assert.equal(cursors.at(-1)?.guestId, guest.id);
   await execute('type', { ...target('Name'), text: ' Lovelace' });
   assert.equal(await inspect("document.querySelector('input').value"), 'Ada Lovelace');
   await execute('fill', { ...target('Name'), text: '' });
@@ -52,13 +61,22 @@ try {
   await execute('select', { ...target('Color'), values: ['blue'] });
   assert.equal(await inspect('window.changed'), 'blue');
   await execute('click', target('Agree'));
+  assert.equal(cursors.at(-1)?.action, 'click');
   assert.equal(await inspect("document.querySelector('[type=checkbox]').checked"), true);
   await execute('hover', target('Hover me'));
+  assert.equal(cursors.at(-1)?.action, 'move');
+  const expectedCursor = await inspect("(() => { const r = document.querySelector('#hover').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2) / innerWidth, y: Math.round(r.y + r.height / 2) / innerHeight }; })()");
+  assert.ok(Math.abs(cursors.at(-1).x - expectedCursor.x) < .005);
+  assert.ok(Math.abs(cursors.at(-1).y - expectedCursor.y) < .005);
   assert.equal(await inspect("getComputedStyle(document.querySelector('#tip')).display"), 'block');
   await execute('scroll', { ...target('Scrollable'), deltaY: 400 });
+  assert.equal(cursors.at(-1)?.action, 'scroll');
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.ok(await inspect("document.querySelector('#scroll').scrollTop > 0"));
   const image = (await execute('screenshot')).screenshot;
+  assert.equal(cursors.at(-1)?.action, 'screenshot');
+  await execute('network');
+  assert.equal(cursors.at(-1)?.action, 'network');
   assert.ok(image.width > 0 && image.height > 0 && Buffer.from(image.base64, 'base64').length <= 1024 * 1024);
   // High-entropy pixels exercise the encoded wire limit, not just a tiny page image.
   await inspect(`(() => {
@@ -73,6 +91,8 @@ try {
   assert.ok(Buffer.byteLength(JSON.stringify(noisy)) < FRAME_MAX_BYTES);
   assert.ok(noisy.screenshot.width < image.width);
   await execute('navigate', { url: `${url}/second` });
+  assert.equal(cursors.at(-1)?.visible, true);
+  assert.equal(cursors.at(-1)?.action, 'navigate');
   await execute('history', { action: 'back' }); assert.equal(guest.getURL(), `${url}/form`);
   await execute('history', { action: 'forward' }); assert.equal(guest.getURL(), `${url}/second`);
   await execute('history', { action: 'reload' }); assert.equal(guest.getURL(), `${url}/second`);

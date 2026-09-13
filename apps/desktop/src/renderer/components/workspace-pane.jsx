@@ -71,10 +71,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const root = useRef(null);
   const [view, setView] = useState(pane.id === "pane-1" ? "board" : "task");
   useLayoutEffect(() => { onViewChange(pane.id, view); }, [onViewChange, pane.id, view]);
-  const [context, setContext] = useState(null);
+  const [watchChanges, setWatchChanges] = useState(false);
   const previewSession = useRef(null);
   const previewWorkspace = useRef(null);
-  const state = useEngine({ restoreLastProject: pane.id === "pane-1", initialProject: pane.path, initialTask: pane.task, initialNewChat: pane.newChat, visible: visible && view === "task", watchChanges: context === 'changes' || context === 'files' });
+  const state = useEngine({ restoreLastProject: pane.id === "pane-1", initialProject: pane.path, initialTask: pane.task, initialNewChat: pane.newChat, visible: visible && view === "task", watchChanges });
   const connection = useEngineConnection();
   const [onboarding, setOnboarding] = useState(readOnboardingState);
   const [firstTaskDraft, setFirstTaskDraft] = useState(null);
@@ -95,20 +95,22 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     if (open) setSettingsSection(typeof open === 'string' ? open : 'agents');
     onSettingsChange(open ? pane.id : null);
   };
-  const [plansOpen, setPlansOpen] = useState(false);
   const [worktreeDialog, setWorktreeDialog] = useState(false);
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const { engine, project, sessions, sessionId, settings, error, relayNote, projection, activeRun, usage, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
-  const panelTabs = usePanelTabs(workspaceId, (file, remaining) => {
+  const panelScope = state.panelScope;
+  const panelTabs = usePanelTabs(panelScope, (file, remaining) => {
     if (file.panelType === 'file' && file.url && !remaining.some(item => item.url === file.url)) void window.jolo.releaseChatFile?.(file.url);
   });
+  const { context, setContext } = panelTabs;
+  const plansOpen = panelTabs.items.some(tab => tab.id === 'plans');
+  useLayoutEffect(() => { setWatchChanges(context === 'changes' || context === 'files'); }, [context]);
   const contextFor = tab => tab?.panelType === 'file' ? 'files' : tab?.panelType ?? null;
   const selectTab = id => { panelTabs.select(id); setContext(contextFor(panelTabs.items.find(tab => tab.id === id))); };
   const closeTab = id => {
     const remaining = panelTabs.items.filter(tab => tab.id !== id);
     if (!remaining.length) setContext(null);
     else if (panelTabs.activeId === id) setContext(contextFor(remaining[Math.min(panelTabs.items.findIndex(tab => tab.id === id), remaining.length - 1)]));
-    if (id === 'plans') setPlansOpen(false);
     panelTabs.close(id);
   };
   const tabsFor = panelType => {
@@ -162,15 +164,13 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const verification = lastRun?.verification;
   const newBrowser = (url = '') => { onBrowserOpen(pane.id); browserTabs.add({ id: crypto.randomUUID(), title: 'New tab', url, icon: 'browser' }); setContext('browser'); };
   const openBrowser = (url = undefined) => { if (!browser || (url !== undefined && url !== browser.url)) newBrowser(url); else { onBrowserOpen(pane.id); selectTab(browser.id); } };
-  const newTerminal = () => { const id = crypto.randomUUID(); terminalTabs.add({ id, hookId: terminalTabs.items.length ? `${pane.id}:${id}` : pane.id, title: `Terminal ${++terminalNumber.current}`, icon: 'terminal' }); setContext('terminal'); };
-  const terminalNumber = useRef(0);
+  const newTerminal = () => { const id = crypto.randomUUID(); const number = Math.max(0, ...terminalTabs.items.map(tab => tab.number ?? 0)) + 1; terminalTabs.add({ id, number, workspaceId, hookId: panelTabs.retained.some(({ item }) => item.panelType === 'terminal') ? `${pane.id}:${id}` : pane.id, title: `Terminal ${number}`, icon: 'terminal' }); setContext('terminal'); };
   const openTerminal = () => { if (!terminalTabs.items.length) newTerminal(); else selectTab(terminalTabs.active.id); };
   const closeTerminal = () => { if (terminalTabs.active) closeTab(terminalTabs.active.id); };
   const closeContext = () => setContext(null);
   const selectContext = (id) => {
     if (id === 'browser') return openBrowser();
     if (id === 'terminal') return openTerminal();
-    if (id === 'plans') setPlansOpen(true);
     const [, title, icon] = CONTEXT_PANELS.find(([key]) => key === id);
     if (!panelTabs.items.some(tab => tab.id === id)) panelTabs.add({ id, panelType: id, title, icon });
     else panelTabs.select(id);
@@ -188,7 +188,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen));
     return () => setOverlay(pane.id, false);
   }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen]);
-  useEffect(() => { setContext(null); setPlansOpen(false); terminalNumber.current = 0; void state.refreshAgents(); }, [workspaceId]); // panes belong to one checkout
+  useEffect(() => { void state.refreshAgents(); }, [workspaceId]);
   // Coming back to a task's window means its latest outcome was seen; a notification click lands on its task.
   useEffect(() => {
     const onFocus = () => { if (visible && view === "task" && workspaceId) void state.markViewed(workspaceId); };
@@ -400,15 +400,15 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           <div id={`${pane.id}-context-content`} className="context-content" role="tabpanel" aria-labelledby={panelTabs.activeId ? `${pane.id}-item-${encodeURIComponent(panelTabs.activeId)}` : undefined} aria-label={panelTabs.activeId ? undefined : 'Empty panel'}>
             <div className="changes-host" hidden={context !== "changes" && context !== "files"}>
               <div className="panel-item-content" hidden={context === 'files' && Boolean(fileTabs.active)}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
-              {fileTabs.items.map(file => <div className="panel-item-content" key={file.id} hidden={context !== 'files' || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} /></div>)}
+              {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || context !== 'files' || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} /></div>)}
             </div>
             <div className="browser-host" hidden={context !== 'browser'}>
-              {workspaceId && browserTabs.items.map(tab => <div className="panel-item-content" key={tab.id} hidden={browserTabs.activeId !== tab.id}><BrowserPane workspaceId={workspaceId} initialUrl={tab.url} onTitle={title => browserTabs.update(tab.id, { title: title || 'New tab' })} onNavigate={url => browserTabs.update(tab.id, { url })} /></div>)}
+              {workspaceId && browserTabs.items.map(tab => <div className="panel-item-content" key={tab.id} hidden={browserTabs.activeId !== tab.id}><BrowserPane workspaceId={workspaceId} working={Boolean(activeRun)} cursorKey={lastRun?.id ?? sessionId} initialUrl={tab.url} onTitle={title => browserTabs.update(tab.id, { title: title || 'New tab' })} onNavigate={url => browserTabs.update(tab.id, { url })} /></div>)}
               {!browserTabs.items.length && <div className="panel-empty"><Icon name="browser" size={26} /><h2>No open tabs</h2><button onClick={() => newBrowser()}>New browser tab</button></div>}
             </div>
             <div className="tool-panel" id={`${pane.id}-checks-panel`} hidden={context !== "checks"}><ChecksPanel verification={verification} /></div>
             <div className="tool-panel" id={`${pane.id}-terminal-panel`} hidden={context !== "terminal"}>
-              {workspaceId && terminalTabs.items.map(tab => <div className="panel-item-content" key={tab.id} hidden={terminalTabs.activeId !== tab.id}><TerminalPane workspaceId={workspaceId} paneId={tab.hookId} onClose={() => terminalTabs.close(tab.id)} /></div>)}
+              {panelTabs.retained.filter(({ item }) => item.panelType === 'terminal').map(({ scope, item: tab }) => <div className="panel-item-content" key={tab.id} hidden={scope !== panelScope || terminalTabs.activeId !== tab.id}><TerminalPane workspaceId={tab.workspaceId} paneId={tab.hookId} onClose={() => terminalTabs.close(tab.id)} /></div>)}
               {!terminalTabs.items.length && <div className="panel-empty"><Icon name="terminal" size={26} /><h2>No open terminals</h2><button onClick={newTerminal}>New terminal tab</button></div>}
             </div>
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); showTask(); }} />}</div>

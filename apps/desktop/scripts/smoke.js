@@ -102,6 +102,11 @@ const modelFixture = mockProvider('openai-responses');
 const providerDir = path.join(home, 'data', 'default', 'providers');
 mkdirSync(providerDir, { recursive: true });
 writeFileSync(path.join(providerDir, 'smoke-model.json'), JSON.stringify({ id: 'smoke-model', displayName: 'Smoke Model', protocol: 'openai-responses', baseUrl: modelFixture.baseUrl, auth: { kind: 'none' }, listing: 'openai', defaults: { contextWindowTokens: 64000, maxOutputTokens: 4096 } }));
+if (process.argv.includes('--file-previews')) {
+  const fixtureBuild = await Bun.build({ entrypoints: [path.join(root, 'test/fixtures/file-links-browser.jsx')], outdir: path.join(home, 'file-link-fixture'), target: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"' } });
+  if (!fixtureBuild.success) throw new Error(fixtureBuild.logs.join('\n'));
+  process.env.JOLO_FILE_LINKS_FIXTURE = fixtureBuild.outputs[0].path;
+}
 const results = path.join(root, "smoke-results");
 mkdirSync(results, { recursive: true });
 const browserFixture = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response("<!doctype html><title>Jolo smoke page</title><h1>Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>", { headers: { 'content-type': 'text/html' } }) });
@@ -120,7 +125,7 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const visualizationPath = path.join(realpathSync(project), 'preview.html');
-if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · `app.js` · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip) · `missing.js` needs a program.'];
+if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · [app.js](app.js) · [location.js](location.js:120:82) · [My report](My%20Report.txt) · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip) · [missing.js](missing.js). Website assets: `/install.sh`, `releases/latest.txt`, `desktop.json`.'];
 if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
   'flowchart TD',
   '  A[Workflow authors] -->|HTTPS after DNS is configured| D[Caddy reverse proxy\\nonly published entry point]',
