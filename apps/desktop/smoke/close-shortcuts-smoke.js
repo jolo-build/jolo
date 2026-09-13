@@ -31,26 +31,30 @@ export async function runCloseShortcutsSmoke({ window, browserHost, fixtureUrl, 
     await waitFor("document.querySelectorAll('.panel-item-tabs [role=tab]').length === 1 && !document.querySelector('.xterm-helper-textarea')", 'terminal tab closed');
     assert(quits === 0, 'terminal shortcut did not quit');
     pressClose();
-    await waitFor("document.querySelectorAll('.panel-item-tabs [role=tab]').length === 0 && !document.querySelector('.inspector').hidden && document.querySelector('.panel-empty')?.textContent.includes('No open tabs')", 'last tab leaves the empty panel open');
+    await waitFor("document.querySelectorAll('.panel-item-tabs [role=tab]').length === 0 && document.querySelector('.inspector').hidden && !document.querySelector('.context-divider')", 'last tab closes the panel and releases its space');
     assert(quits === 0, 'last tab did not quit');
-    pressClose();
-    await waitFor("document.querySelector('.inspector').hidden", 'empty panel closed');
-    assert(quits === 0, 'closing the panel did not quit');
+    await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
+    await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'sole browser loaded');
+    pressClose([...browserHost.guests.values()][0].guest);
+    await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('webview')", 'sole native browser closes the panel');
+    assert(quits === 0, 'sole browser shortcut did not quit');
+    await selectPanel(evaluate, waitFor, 'Files');
+    await evaluate("document.querySelector('.panel-item-close').click()");
+    await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('.context-divider')", 'last tab close button also closes panel');
     await selectPanel(evaluate, waitFor, 'Files');
     const first = await evaluate('window.__joloSmoke.layout().active');
     await evaluate("window.__joloSmoke.split('x')");
     await waitFor('window.__joloSmoke.panes().length === 2 && window.__joloSmoke.panes().every(pane => pane.projectId)', 'second workspace ready');
     assert(await evaluate(`window.__joloSmoke.layout().active !== ${JSON.stringify(first)}`), 'new pane is active');
     pressClose();
-    await waitFor(`window.__joloSmoke.layout().active === ${JSON.stringify(first)} && document.querySelectorAll('.panel-item-tabs [role=tab]').length === 0 && !document.querySelector('.pane-slot.focused .inspector').hidden`, 'open panel in the other split handled before quit');
+    await waitFor(`window.__joloSmoke.layout().active === ${JSON.stringify(first)} && document.querySelectorAll('.panel-item-tabs [role=tab]').length === 0 && document.querySelector('.pane-slot.focused .inspector').hidden`, 'last tab in the other split closes its panel before quit');
     assert(quits === 0, 'another open panel prevents quitting');
-    pressClose();
     await waitFor("[...document.querySelectorAll('.inspector')].every(panel => panel.hidden)", 'all panels closed');
     pressClose();
     const deadline = Date.now() + 3000;
     while (!quits && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     assert(quits === 1, 'no panel routes exactly one app quit');
-    report.checks.push('Cmd/Ctrl+W closes terminal and file tabs, then the empty panel, then quits the desktop exactly once');
+    report.checks.push('Closing the last tab by shortcut or close button collapses the panel immediately; the next close quits the desktop exactly once');
     report.checks.push('An open panel in another split is handled before the app can quit');
   } finally { app.quit = quit; }
 }

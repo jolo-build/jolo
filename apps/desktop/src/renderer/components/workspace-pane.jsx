@@ -106,7 +106,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const selectTab = id => { panelTabs.select(id); setContext(contextFor(panelTabs.items.find(tab => tab.id === id))); };
   const closeTab = id => {
     const remaining = panelTabs.items.filter(tab => tab.id !== id);
-    if (panelTabs.activeId === id) setContext(contextFor(remaining[Math.min(panelTabs.items.findIndex(tab => tab.id === id), remaining.length - 1)]));
+    if (!remaining.length) setContext(null);
+    else if (panelTabs.activeId === id) setContext(contextFor(remaining[Math.min(panelTabs.items.findIndex(tab => tab.id === id), remaining.length - 1)]));
     if (id === 'plans') setPlansOpen(false);
     panelTabs.close(id);
   };
@@ -236,7 +237,6 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
         if (!visible || showSettings || view !== 'task' || !context) return false;
         if (panelTabs.items.length) {
           closeTab(panelTabs.activeId ?? panelTabs.items.at(-1).id);
-          if (panelTabs.items.length === 1) setContext('empty');
         } else setContext(null);
         return true;
       },
@@ -398,7 +398,6 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <button className="context-close" onClick={closeContext} aria-label="Close context panel" title="Hide panel"><Icon name="close" size={15} /></button>
           </div>
           <div id={`${pane.id}-context-content`} className="context-content" role="tabpanel" aria-labelledby={panelTabs.activeId ? `${pane.id}-item-${encodeURIComponent(panelTabs.activeId)}` : undefined} aria-label={panelTabs.activeId ? undefined : 'Empty panel'}>
-            {context === 'empty' && <div className="panel-empty"><Icon name="plus" size={26} /><h2>No open tabs</h2><p>Use + to open a tab.</p></div>}
             <div className="changes-host" hidden={context !== "changes" && context !== "files"}>
               <div className="panel-item-content" hidden={context === 'files' && Boolean(fileTabs.active)}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
               {fileTabs.items.map(file => <div className="panel-item-content" key={file.id} hidden={context !== 'files' || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} /></div>)}
