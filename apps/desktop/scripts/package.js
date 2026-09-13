@@ -77,8 +77,10 @@ function archive(target) {
       run(['hdiutil', 'verify', file]);
     } finally { rmSync(staging, { recursive: true, force: true }); }
   } else if (platform === "win32") {
-    // bsdtar infers the zip format from the suffix; it ships with Windows and libarchive everywhere else.
-    run(['tar', '-a', '-cf', file, '-C', path.dirname(target), path.basename(target)]);
+    // Git Bash shadows Windows bsdtar with GNU tar, which treats drive letters as remote hosts
+    // and cannot create ZIP files. Select the native archive tool explicitly on Windows.
+    const tar = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+    run([tar, '-a', '-cf', file, '-C', path.dirname(target), path.basename(target)]);
   } else {
     run(['tar', '-czf', file, '-C', path.dirname(target), path.basename(target)]);
   }

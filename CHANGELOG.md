@@ -2,7 +2,7 @@
 
 All notable changes to Jolo are documented here. This project uses [semantic versioning](https://semver.org/) for tagged releases.
 
-## [0.2.2] — 2026-09-13
+## [0.2.3] — 2026-09-13
 
 - Added Windows and Linux desktop release builds, npm CLI distribution, and Homebrew tap automation.
 - Added shareable Access chats and improved chat synchronization.
@@ -55,7 +55,7 @@ All notable changes to Jolo are documented here. This project uses [semantic ver
 
 - Initial open-source release: desktop app, terminal CLI, local engine, and Jolo Access.
 
-[0.2.2]: https://github.com/jolo-build/jolo/releases/tag/v0.2.2
+[0.2.3]: https://github.com/jolo-build/jolo/releases/tag/v0.2.3
 [0.2.1]: https://github.com/jolo-build/jolo/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jolo-build/jolo/releases/tag/v0.2.0
 [0.1.4]: https://github.com/jolo-build/jolo/releases/tag/v0.1.4
