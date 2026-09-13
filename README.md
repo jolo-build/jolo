@@ -105,7 +105,7 @@ Bug reports and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## Community
 
-- [GitHub Discussions](https://github.com/jolo-build/jolo/discussions) — questions, ideas, and show-and-tell.
+- [GitHub issues](https://github.com/jolo-build/jolo/issues) — questions, ideas, and bug reports.
 - [ROADMAP.md](ROADMAP.md) — where the project is heading.
 - [CHANGELOG.md](CHANGELOG.md) — what changed in each release.
 

@@ -15,6 +15,10 @@ export { OwnershipError, SchemaError } from "./db.js";
 export { newId } from "./records.js";
 import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInvocation, mapWorkspace, mapArtifact } from "./records.js";
 
+// A live turn owns the chat until it settles; otherwise its newest prompt owns the status.
+const SESSION_ACTIVITY_RUN = `SELECT id FROM runs WHERE session_id = s.id
+  ORDER BY CASE WHEN state IN ('preparing','model','tools','awaiting_permission','cancelling') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1`;
+
 export class Storage {
   /**
    * Without a migrations directory the schema comes from the list embedded in this build, which is
@@ -234,13 +238,14 @@ export class Storage {
     return Boolean(this.db.query("SELECT 1 FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.workspace_id = ?1 AND r.state NOT IN ('completed', 'failed', 'cancelled', 'interrupted') LIMIT 1").get(workspaceId));
   }
 
-  /** Newest run in any open, non-deleted session of a workspace; null when nothing ran there. */
   /**
-   * The run a board row speaks for: one still holding a question for the user, oldest first, else the newest.
+   * Pick each chat's current run before prioritizing questions across the workspace.
+   * A paused turn superseded by another prompt must no longer keep the folder red.
    * A newer task must not hide an older one that cannot move until someone answers it.
    */
   boardRunForWorkspace(workspaceId) {
-    const open = "FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.workspace_id = ?1 AND s.deleted_at IS NULL AND s.state = 'open'";
+    const open = `FROM sessions s JOIN runs r ON r.id = (${SESSION_ACTIVITY_RUN})
+      WHERE s.workspace_id = ?1 AND s.deleted_at IS NULL AND s.state = 'open'`;
     const waiting = this.db.query(`SELECT r.*, s.title AS session_title ${open} AND r.state IN ('awaiting_permission', 'paused') ORDER BY r.created_at LIMIT 1`).get(workspaceId);
     const r = waiting ?? this.db.query(`SELECT r.*, s.title AS session_title ${open}
       ORDER BY CASE WHEN r.state IN ('preparing','model','tools','cancelling') THEN 0 ELSE 1 END, r.created_at DESC, r.id DESC LIMIT 1`).get(workspaceId);
@@ -314,8 +319,7 @@ export class Storage {
       FROM sessions s
       JOIN projects p ON p.id = s.project_id
       JOIN workspaces w ON w.id = s.workspace_id
-      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE session_id = s.id
-        ORDER BY CASE WHEN state IN ('preparing','model','tools','awaiting_permission','cancelling') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1)
+      LEFT JOIN runs r ON r.id = (${SESSION_ACTIVITY_RUN})
       WHERE s.deleted_at IS NULL AND s.state = ?1 AND w.removed_at IS NULL
         AND (?3 IS NULL OR s.workspace_id = ?3)
         AND (?6 IS NULL OR COALESCE(json_extract(p.preferences, '$.standalone'), 0) = ?6)

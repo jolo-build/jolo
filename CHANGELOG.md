@@ -2,6 +2,13 @@
 
 All notable changes to Jolo are documented here. This project uses [semantic versioning](https://semver.org/) for tagged releases.
 
+## [0.2.4] — 2026-09-13
+
+- Closing the last panel tab now closes the panel, including with the keyboard shortcut.
+- Task and folder attention now follows the current prompt instead of superseded paused or failed runs.
+- Fixed the README terminal animation and added matching light and dark themes with reduced-motion support.
+- Enabled automatic npm publishing through GitHub Actions and scheduled Homebrew release updates.
+
 ## [0.2.3] — 2026-09-13
 
 - Added Windows and Linux desktop release builds, npm CLI distribution, and Homebrew tap automation.
@@ -55,6 +62,7 @@ All notable changes to Jolo are documented here. This project uses [semantic ver
 
 - Initial open-source release: desktop app, terminal CLI, local engine, and Jolo Access.
 
+[0.2.4]: https://github.com/jolo-build/jolo/releases/tag/v0.2.4
 [0.2.3]: https://github.com/jolo-build/jolo/releases/tag/v0.2.3
 [0.2.1]: https://github.com/jolo-build/jolo/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jolo-build/jolo/releases/tag/v0.2.0
