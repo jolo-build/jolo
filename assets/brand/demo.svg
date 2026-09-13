@@ -10,15 +10,32 @@
       .prompt { fill: #7da7e3; }
       .accent { fill: #7dc785; }
       .muted { fill: #6e7074; }
-      /* The overlay uncovers the transcript top to bottom in discrete steps, then resets. */
+      /* Reveal whole lines without ever covering the window frame or title. */
       @keyframes reveal {
-        0% { transform: translateY(0); }
-        84% { transform: translateY(-452px); }
-        95% { transform: translateY(-452px); }
-        100% { transform: translateY(-452px); }
+        0% { height: 38px; }
+        5% { height: 64px; }
+        10% { height: 90px; }
+        14% { height: 112px; }
+        19% { height: 136px; }
+        23% { height: 158px; }
+        27% { height: 180px; }
+        31% { height: 202px; }
+        35% { height: 226px; }
+        43% { height: 252px; }
+        48% { height: 278px; }
+        53% { height: 300px; }
+        60% { height: 324px; }
+        66% { height: 348px; }
+        72%, 100% { height: 414px; }
       }
-      .overlay { fill: #191a1c; animation: reveal 15s steps(17, jump-none) infinite; }
+      .reveal { height: 414px; animation: reveal 16s step-end infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .reveal { animation: none; }
+      }
     </style>
+    <clipPath id="transcript">
+      <rect class="reveal" x="0" y="38" width="760" height="414"/>
+    </clipPath>
   </defs>
 
   <rect class="frame" x="0.5" y="0.5" width="759" height="451" rx="10"/>
@@ -28,15 +45,15 @@
   <text class="title" x="380" y="24" text-anchor="middle">jolo demo</text>
   <line x1="1" y1="36" x2="759" y2="36" stroke="#33353a"/>
 
-  <g class="t">
+  <g class="t" clip-path="url(#transcript)">
     <text x="24" y="66"><tspan class="dim">$ </tspan><tspan class="text">jolo .</tspan></text>
     <text x="24" y="92"><tspan class="prompt">❯ </tspan><tspan class="text">Explain how this project is organized.</tspan></text>
     <text x="24" y="118"><tspan class="text">Jolo</tspan></text>
     <text x="40" y="140"><tspan class="muted">Read package.json · listed apps/ · searched packages/</tspan></text>
     <text x="40" y="164"><tspan class="text">The project has three main parts:</tspan></text>
-    <text x="56" y="186"><tspan class="accent">apps/      </tspan><tspan class="dim">application entry points</tspan></text>
-    <text x="56" y="208"><tspan class="accent">packages/  </tspan><tspan class="dim">shared components and tools</tspan></text>
-    <text x="56" y="230"><tspan class="accent">tests/     </tspan><tspan class="dim">checks for expected behavior</tspan></text>
+    <text x="56" y="186"><tspan class="accent">apps/</tspan><tspan class="dim" x="160">application entry points</tspan></text>
+    <text x="56" y="208"><tspan class="accent">packages/</tspan><tspan class="dim" x="160">shared components and tools</tspan></text>
+    <text x="56" y="230"><tspan class="accent">tests/</tspan><tspan class="dim" x="160">checks for expected behavior</tspan></text>
     <text x="40" y="252"><tspan class="muted">No files changed.</tspan></text>
     <text x="24" y="280"><tspan class="prompt">❯ </tspan><tspan class="text">Add a saved-searches filter and cover it with a test.</tspan></text>
     <text x="24" y="306"><tspan class="text">Jolo</tspan></text>
@@ -46,6 +63,4 @@
     <text x="24" y="404"><tspan class="prompt">❯ </tspan></text>
   </g>
 
-  <!-- Covers everything below the header; slides up one line at a time. -->
-  <rect class="overlay" x="0" y="38" width="760" height="452"/>
 </svg>
