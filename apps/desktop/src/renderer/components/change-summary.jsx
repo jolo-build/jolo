@@ -54,11 +54,11 @@ export function ChangeSummary({ files, onLoadDiff, onReview, frozen = false, ini
   if (!files.length) return null;
   return <section className="change-summary" aria-label="Changed files" data-run-id={runId}>
     <div className="change-summary-header">
-      <span className="change-summary-icon"><Icon name="fileDiff" size={21} /></span>
+      <Icon name="fileDiff" size={14} className="change-summary-icon" />
       <div className="change-summary-heading"><strong>Changed {files.length} {files.length === 1 ? 'file' : 'files'}</strong>
         {pending || unavailable ? <span className="change-summary-status">{pending ? 'Calculating changes…' : 'Line counts unavailable'}</span> : <LineCounts {...totals} />}
       </div>
-      <button type="button" className="change-summary-review" title="Review current working changes" onClick={onReview}><Icon name="fileDiff" size={14} />Review</button>
+      <button type="button" className="change-summary-review" title="Review current working changes" onClick={onReview}>Review<Icon name="chevron" size={12} /></button>
     </div>
     <ul className="change-summary-files">{visible.map(file => {
       const stat = counts.get(changeKey(file));
