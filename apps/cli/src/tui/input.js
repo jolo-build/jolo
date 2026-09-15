@@ -27,6 +27,9 @@ export function editInput(value, cursor, chunk, key = {}) {
   cursor = Math.max(0, Math.min(cursor, value.length));
   const unchanged = { value, cursor };
   if (key.eventType === "release") return unchanged;
+  if (key.return && key.shift && !key.ctrl && !key.meta && !key.super) {
+    return value.length < MAX_DRAFT_CHARS ? { value: value.slice(0, cursor) + "\n" + value.slice(cursor), cursor: cursor + 1 } : unchanged;
+  }
   const segments = graphemes.segment(value);
   const previous = () => cursor > 0 ? segments.containing(cursor - 1).index : 0;
   const next = () => cursor < value.length ? segments.containing(cursor).index + segments.containing(cursor).segment.length : value.length;
@@ -37,6 +40,21 @@ export function editInput(value, cursor, chunk, key = {}) {
     while (end < value.length && !/\s/u.test(value[end])) end++;
     return end;
   };
+  if (key.upArrow || key.downArrow) {
+    const start = cursor === 0 ? 0 : value.lastIndexOf("\n", cursor - 1) + 1;
+    const end = value.indexOf("\n", cursor);
+    if ((key.upArrow && start === 0) || (key.downArrow && end < 0)) return unchanged;
+    const targetStart = key.upArrow ? (start <= 1 ? 0 : value.lastIndexOf("\n", start - 2) + 1) : end + 1;
+    const targetEnd = key.upArrow ? start - 1 : value.indexOf("\n", targetStart);
+    const column = Bun.stringWidth(value.slice(start, cursor));
+    let offset = targetStart, cells = 0;
+    for (const { segment } of graphemes.segment(value.slice(targetStart, targetEnd < 0 ? value.length : targetEnd))) {
+      const width = Bun.stringWidth(segment);
+      if (cells + width > column) break;
+      cells += width; offset += segment.length;
+    }
+    return { value, cursor: offset };
+  }
   // macOS terminals send either modified arrows or Escape+b/f for Option+arrows.
   if (key.leftArrow || (key.meta && chunk === "b")) return { value, cursor: key.meta || key.ctrl ? wordLeft() : previous() };
   if (key.rightArrow || (key.meta && chunk === "f")) return { value, cursor: key.meta || key.ctrl ? wordRight() : next() };
@@ -54,6 +72,21 @@ export function editInput(value, cursor, chunk, key = {}) {
   const printable = sanitizeText(chunk, { multiline: false, tab: "", consumedEscape: true });
   // Keep the suffix intact when pasting at the limit, and never split a grapheme.
   const room = MAX_DRAFT_CHARS - value.length;
+  let inserted = "";
+  for (const { segment } of graphemes.segment(printable)) {
+    if (inserted.length + segment.length > room) break;
+    inserted += segment;
+  }
+  return { value: value.slice(0, cursor) + inserted + value.slice(cursor), cursor: cursor + inserted.length };
+}
+
+/** Pasted bulk text keeps its line breaks; control bytes still never reach the draft. */
+export function pasteText(value, cursor, chunk) {
+  cursor = Math.max(0, Math.min(cursor, value.length));
+  // Terminals variously separate pasted lines with \r, \n, or \r\n; normalize before
+  // sanitizeText, which deletes \r outright, or pasted lines would join without a break.
+  const printable = sanitizeText(String(chunk ?? "").replace(/\r\n|\r/g, "\n"), { multiline: true, tab: "  ", consumedEscape: true });
+  const room = Math.max(0, MAX_DRAFT_CHARS - value.length);
   let inserted = "";
   for (const { segment } of graphemes.segment(printable)) {
     if (inserted.length + segment.length > room) break;
@@ -84,4 +117,16 @@ export function inputViewport(value, cursor, columns) {
     remaining -= width;
   }
   return { before: left, caret, after: right };
+}
+
+/** A bounded set of logical lines, keeping the cursor's line visible. */
+export function inputRows(value, cursor, columns, maxRows = 6) {
+  const lines = value.split("\n");
+  const active = value.slice(0, cursor).split("\n").length - 1;
+  const start = Math.max(0, active - Math.max(1, maxRows) + 1);
+  const lineStart = cursor === 0 ? 0 : value.lastIndexOf("\n", cursor - 1) + 1;
+  return lines.slice(start, start + Math.max(1, maxRows)).map((line, offset) => ({
+    ...inputViewport(line, start + offset === active ? cursor - lineStart : 0, columns),
+    active: start + offset === active, index: start + offset,
+  }));
 }

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Static, useApp } from "ink";
+import { Static, useApp, useStdout } from "ink";
 import { Box, Text, useTheme } from "./theme.jsx";
 import { clean, line, plainTextLines, renderMarkdown } from "./markdown.js";
 import { Welcome } from "./welcome.jsx";
+import { scrollbackText } from "./scrollback.js";
 
 const MAX_REASONING_LINES = 24;
 
@@ -29,8 +30,8 @@ export function TranscriptLines({ lines }) {
 }
 
 // Completed messages belong to the terminal's scrollback, not a virtual viewport.
-// Each batch is printed once. Replacing Static's identity releases Ink's replay
-// string for the previous batch; the terminal retains the history independently.
+// Each batch is appended once as logical lines. The terminal retains and reflows
+// the history independently; only the current batch remains in React state.
 export function useNativeTranscript({ projection, revision, opened, width, showTools, permission }) {
   const { waitUntilRenderFlush } = useApp();
   const printedOrdinal = useRef(-1);
@@ -95,6 +96,22 @@ export function useNativeTranscript({ projection, revision, opened, width, showT
 }
 
 export function NativeTranscript({ batch, project, columns, restored = false, sessionTitle, update = null, welcomeOpen = false, welcomeHeight = 12 }) {
+  const { theme } = useTheme();
+  const { write } = useStdout();
+  const { waitUntilRenderFlush } = useApp();
+  const printed = useRef(-1);
+  useEffect(() => {
+    let mounted = true;
+    void waitUntilRenderFlush().then(() => {
+      if (!mounted || printed.current === batch.id) return;
+      printed.current = batch.id;
+      const lines = batch.items.flatMap(item => item.lines ?? []);
+      // Ink's stdout writer clears and restores the live controls around this
+      // append. Avoid Static's hard newlines at every old-width display row.
+      if (lines.length) write(scrollbackText(lines, theme));
+    });
+    return () => { mounted = false; };
+  }, [batch, theme, write, waitUntilRenderFlush]);
   const intro = (height) => <Box flexDirection="column" width="100%">
     <Text bold>Jolo <Text dimColor>{clean(project)}</Text></Text>
     {restored ? <Text bold>{sessionTitle ? `Restored: ${clean(sessionTitle)}` : "New session"}</Text> : <Welcome height={height} columns={columns} update={update} />}<Text> </Text>
@@ -102,8 +119,8 @@ export function NativeTranscript({ batch, project, columns, restored = false, se
   // The welcome stays live until the first prompt, so changing themes can repaint
   // it. Once the conversation starts it joins the terminal's native scrollback.
   return <>
-    <Static key={batch.id} items={welcomeOpen ? batch.items.filter((item) => !item.welcome) : batch.items}>{(item) => <Box key={item.id} flexDirection="column">
-      {item.welcome ? intro(12) : <TranscriptLines lines={item.lines} />}
+    <Static key={batch.id} items={welcomeOpen ? [] : batch.items.filter(item => item.welcome)}>{(item) => <Box key={item.id} flexDirection="column">
+      {intro(12)}
     </Box>}</Static>
     {welcomeOpen && welcomeHeight > 0 && intro(welcomeHeight)}
   </>;

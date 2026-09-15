@@ -40,7 +40,7 @@ export function createExecutorRouter(deps) {
 }
 
 /**
- * Run one hosted turn under Jolo's budgets: active time, iterations, and tool deadlines.
+ * Run one hosted turn under Jolo's budgets: active time, iterations, and optional tool deadlines.
  * @param {{ ctx: any, manifest: any, adapter: any, storage: any, budget: any, interactiveClients: () => number,
  *   revoke?: (runId: string) => void, tickMs?: number }} options `revoke` withdraws the guest credentials the
  * run was issued; an engine that hands out none passes nothing
@@ -61,7 +61,7 @@ export async function executeHosted({ ctx, manifest, adapter, storage, budget, i
     if (run?.state === 'awaiting_permission' && interactiveClients() === 0) {
       stop({ outcome: 'paused', pauseReason: 'permission', permissionId: storage.pendingPermissionForRun(run.id)?.id });
     } else if (activeMs >= budget.maxActiveMs) exhausted('active time budget reached');
-    else if ([...tools.values()].some(start => activeMs - start >= budget.toolDeadlineMs)) exhausted('hosted tool deadline reached');
+    else if (budget.hostedToolDeadlineMs != null && [...tools.values()].some(start => activeMs - start >= budget.hostedToolDeadlineMs)) exhausted('hosted tool deadline reached');
   }, tickMs);
   try {
     const result = await adapter.execute({

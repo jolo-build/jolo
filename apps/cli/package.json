@@ -13,6 +13,7 @@
     "@jolo/engine": "workspace:*",
     "@jolo/markdown": "workspace:*",
     "@jolo/updates": "workspace:*",
+    "chalk": "5.6.2",
     "ink": "7.1.1",
     "react": "19.2.8"
   },

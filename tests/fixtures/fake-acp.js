@@ -82,6 +82,20 @@ async function prompt(id, params) {
   // Recorded Devin reply format: no private-use delimiters, split across ACP chunks by say().
   if (text === 'devin-visualization') return finish(`visualize${JSON.stringify({ path: path.join(session.cwd, 'proposal-assessment.html'), mode: 'wide', title: 'Proposal assessment' })}`);
   let match;
+  if ((match = text.match(/^tool-deadline (reasoning|commentary|foreground|poll|read)$/))) {
+    const mode = match[1];
+    const toolCallId = tool({ title: 'Long test suite', kind: mode === 'read' ? 'read' : 'execute', status: 'in_progress', rawInput: { command: 'fixture-test-suite' } });
+    if (mode === 'commentary') say('The tests are running in the background.');
+    else if (mode !== 'foreground') update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Checking the running tests.' } });
+    await Bun.sleep(1800);
+    if (mode === 'poll') {
+      tool({ title: 'Read shell', rawInput: { shell_id: toolCallId, timeout: 90000 }, status: 'in_progress' });
+      await Bun.sleep(1800);
+    }
+    update({ sessionUpdate: 'tool_call_update', toolCallId, content: [{ type: 'content', content: { type: 'text', text: 'test output after yielding' } }] });
+    update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', rawOutput: { exit_code: 0 } });
+    return finish('The tests finished.');
+  }
   if (text === 'permission-partial' || text === 'permission-title') {
     const title = 'Inspect browser tools';
     const toolCallId = tool({ title, kind: 'execute' });

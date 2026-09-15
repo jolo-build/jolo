@@ -7,6 +7,22 @@ npm install -g jolo-cli
 jolo /path/to/project
 ```
 
+Or install with Bun:
+
+```sh
+bun add -g --trust jolo-cli
+jolo --version
+jolo .
+```
+
+`--trust` allows Jolo's postinstall script to download and verify the CLI binary. If you need Bun on macOS, install it first:
+
+```sh
+curl -fsSL https://bun.sh/install | bash
+```
+
+Restart your terminal, then run the Bun installation commands above. See the [Bun installation guide](https://bun.com/docs/installation) for details.
+
 Or run a single task:
 
 ```sh
@@ -17,7 +33,7 @@ Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provide
 
 ## How this package works
 
-`npm install` downloads the verified Jolo release archive for your platform (macOS and Linux, ARM64 and x64) from [GitHub Releases](https://github.com/jolo-build/jolo/releases) and unpacks it — the checksum is verified before anything is placed on your PATH. There is no Windows build yet.
+The package's postinstall script downloads the verified Jolo release archive for your platform (macOS and Linux, ARM64 and x64) from [GitHub Releases](https://github.com/jolo-build/jolo/releases) and unpacks it — the checksum is verified before anything is placed on your PATH. There is no Windows build yet.
 
 ## Release automation
 

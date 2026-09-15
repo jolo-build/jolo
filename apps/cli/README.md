@@ -4,6 +4,14 @@ This archive contains Jolo's CLI, engine, and pinned Bun runtime. A global Bun o
 
 ## Start
 
+To install the `jolo-cli` package with [Bun](https://bun.com/docs/installation):
+
+```sh
+bun add -g --trust jolo-cli
+```
+
+`--trust` allows Jolo's postinstall script to download and verify the CLI binary. On macOS, you can install Bun with `curl -fsSL https://bun.sh/install | bash`, then restart your terminal before running the command above.
+
 Run `bin/jolo` from this archive, or `jolo` if installed on your `PATH`:
 
 ```sh
@@ -36,6 +44,8 @@ Token limits are optional: `--context-window` and `--max-output` override discov
 `/model <preset>` configures a provider and can find models. Saving selects it for the current task and sets the profile default; selecting a hosted agent keeps the conversation. API keys go only through the credential RPC.
 
 ## Everyday use
+
+While a task is running, Enter queues your prompt. Press Enter again within half a second to interrupt and send it now. To send a message that is already waiting, leave the prompt empty and press Enter twice; this sends the first queued message.
 
 Enter sends a prompt, Esc stops the active task, Tab reveals tool output, and `/sessions` opens saved conversations. `/model` changes the answerer. Type `/` to browse commands, keep typing to filter, use ↑/↓ to select, Enter to open, or Tab to complete. Esc dismisses suggestions. The footer shows only the current model. `jolo --help` lists headless commands for sessions, worktrees, plans, approvals, and engine control. From a source checkout, `bun run jolo` and `bun run cli` both launch the client.
 
@@ -103,3 +113,25 @@ A running engine keeps serving the build it started with, which is why previous 
 The [Jolo website](https://jolo.build) provides the installer for a first install, and rerunning it also upgrades.
 
 To uninstall, stop the engine and remove the managed `PREFIX/bin/jolo` symlink and `PREFIX/share/jolo/` directory. Conversations/settings are stored separately: macOS uses `~/Library/Application Support/jolo/<profile>`; Linux uses `$XDG_DATA_HOME/jolo/<profile>` or `~/.local/share/jolo/<profile>`. A custom home stores them under `<home>/data/<profile>`.
+
+## Local development
+
+Run `bun run jolo` from the repository root to try source changes without rebuilding. Use the Bun version in `.bun-version` and install dependencies with `bun install --frozen-lockfile` first.
+
+To update your installed `jolo` command, quit the CLI and run this from the repository root after each code change:
+
+```sh
+(
+  set -eu
+  bun run build:cli
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/jolo/releases"
+  jolo_release_dir=$(mktemp -d "$HOME/.local/share/jolo/releases/local.XXXXXX")
+  cp -R dist/cli/. "$jolo_release_dir/"
+  "$jolo_release_dir/bin/jolo" --version
+  ln -sfn "../share/jolo/releases/${jolo_release_dir##*/}/bin/jolo" "$HOME/.local/bin/jolo"
+) && export PATH="$HOME/.local/bin:$PATH" && hash -r && jolo .
+```
+
+Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` once to use this installation in new terminals. `command -v jolo` should point to `~/.local/bin/jolo`.
+
+Your saved models, settings, and conversations survive reinstalls. If you changed engine code, finish active tasks and run `jolo engine stop` before reopening the CLI.

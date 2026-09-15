@@ -43,7 +43,11 @@ export function createRelay({ send, log }) {
 
   return {
     push(kind, value) {
-      const bytes = JSON.stringify(value).length;
+      // A preview or a terminal chunk is one string in a small envelope: sizing it by that string spares
+      // every chunk a second serialization on its way to the window. Events are measured as they are.
+      const bytes = kind === "preview" && typeof value.text === "string" ? value.text.length + 128
+        : kind === "terminal" && typeof value.data === "string" ? value.data.length + 128
+        : JSON.stringify(value).length;
       if (!canSend() && kind === "preview") { previewsDropped += 1; return; } // transient; commits will fill the gap
       if (!canSend() && kind === "terminal") { terminalDropped = true; return; } // the renderer re-attaches from a snapshot (§16.1)
       if (kind === "event" && queue.length >= MAX_BUFFERED_EVENTS) {

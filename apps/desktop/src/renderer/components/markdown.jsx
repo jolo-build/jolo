@@ -1,4 +1,4 @@
-import { createContext, useContext, lazy, Suspense, useMemo, useState, useEffect, useLayoutEffect, useRef } from "react";
+import { createContext, useContext, lazy, memo, Suspense, useMemo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { classifyReference, referenceTokens } from '@jolo/markdown/file-links';
 import { createPortal } from 'react-dom';
 import { parseDocument } from "@jolo/markdown";
@@ -130,18 +130,22 @@ function Block({ block, depth, sessionId, streaming }) {
 }
 
 /**
- * @param {{
+ * Every prop is a primitive, so a finished message whose text has not changed is skipped entirely when
+ * the transcript around it re-renders: a streaming reply redraws itself, not the replies above it.
+ * `sessionId` is what a visualization block needs to reach its artifacts; text with none renders the
+ * reference as a note instead.
+ *
+ * @typedef {{
  *   text: string,
  *   cacheKey: string | number,
  *   depth?: number,
  *   sessionId?: string | null,
  *   streaming?: boolean,
  *   webBaseUrl?: string | null,
- * }} props `sessionId` is what a visualization block needs to reach its artifacts; text with none renders
- *   the reference as a note instead.
+ * }} MarkdownProps
  */
-export function Markdown({ text, cacheKey, depth = 0, sessionId, streaming = false, webBaseUrl = null }) {
+export const Markdown = memo(function Markdown(/** @type {MarkdownProps} */ { text, cacheKey, depth = 0, sessionId, streaming = false, webBaseUrl = null }) {
   const cache = useMemo(() => new Map(), [cacheKey]); // completed blocks are parsed once per message
   const { blocks } = useMemo(() => parseDocument(text, { cache }), [text, cache]);
   return <ChatSession.Provider value={sessionId}><WebBase.Provider value={webBaseUrl}><div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div></WebBase.Provider></ChatSession.Provider>;
-}
+});

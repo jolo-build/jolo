@@ -58,6 +58,32 @@ async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('long ACP tools use the task budget by default; an optional deadline only times blocking tools', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    try {
+      const { settings } = await client.call('settings.update', { budgets: { toolDeadlineMs: 1000, maxActiveMs: 30_000 } });
+      expect(settings.budgets.hostedToolDeadlineMs).toBeNull();
+      for (const mode of ['default', 'reasoning', 'commentary', 'foreground', 'poll', 'read']) {
+        if (mode === 'reasoning') await client.call('settings.update', { budgets: { hostedToolDeadlineMs: 1000 } });
+        const { run } = await client.call('run.start', { sessionId: session.id, requestId: `deadline-${mode}`, prompt: `tool-deadline ${mode === 'default' ? 'foreground' : mode}` });
+        await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && [...TERMINAL, 'paused'].includes(e.payload.state)), { timeoutMs: 10_000, label: mode });
+        const finished = (await client.call('run.snapshot', { runId: run.id })).run;
+        if (['foreground', 'poll', 'read'].includes(mode)) {
+          expect(finished).toMatchObject({ state: 'paused', pauseReason: 'budget', failure: 'hosted tool deadline reached' });
+          if (mode === 'poll') expect(events.filter(e => e.type === 'tool.started' && e.runId === run.id)).toHaveLength(2);
+        } else {
+          expect(finished.state).toBe('completed');
+          const tool = (await messagesOf(run.id)).find(m => m.kind === 'tool');
+          expect(tool.status).toBe('complete');
+          expect(await text(tool)).toContain('test output after yielding');
+          expect(events.find(e => e.type === 'tool.completed' && e.runId === run.id).payload.status).toBe('ok');
+        }
+      }
+      await client.call('settings.update', { budgets: { hostedToolDeadlineMs: null } });
+      expect((await client.call('settings.get', {})).settings.budgets).toMatchObject({ toolDeadlineMs: 1000, hostedToolDeadlineMs: null, maxActiveMs: 30_000 });
+    } finally { await client.close(); }
+  }, 40_000);
+
   test("saved run changes belong to the editing chat, not another chat in its workspace", async () => {
     const { client, events, project, repo, session, runTo } = await boot();
     const changed = await runTo("own-edit", `write ${path.join(repo, "owned.txt")} hello`);

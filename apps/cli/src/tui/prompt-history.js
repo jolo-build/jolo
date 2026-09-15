@@ -1,6 +1,6 @@
 // Prompt draft and recall for the interactive client. Bounded by entries and by
 // characters so a long session cannot grow the client's memory without limit.
-import { editInput } from "./input.js";
+import { editInput, pasteText } from "./input.js";
 
 export const MAX_PROMPT_HISTORY = 50;
 export const MAX_PROMPT_HISTORY_CHARS = 128 * 1024;
@@ -38,6 +38,8 @@ export function promptReducer(state, action) {
       return { ...state, ...editInput('', 0, action.value) };
     case "edit":
       return { ...state, ...editInput(state.value, state.cursor, action.chunk, action.key) };
+    case "paste":
+      return { ...state, ...pasteText(state.value, state.cursor, action.chunk) };
     case "previous": {
       if (!state.history.length || state.index === 0) return state;
       const index = (state.index ?? state.history.length) - 1;

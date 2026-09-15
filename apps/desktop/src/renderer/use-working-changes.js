@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { engineCall } from './engine-context.jsx';
 
 /** Git is authoritative; file-tool events only supply the optional undo record. */
@@ -29,8 +29,11 @@ export function useWorkingChanges({ workspaceId, connected, watching, events, ru
     return () => { clearInterval(timer); window.removeEventListener('focus', refresh); };
   }, [watching, refresh]);
   const current = snapshot?.workspaceId === workspaceId ? snapshot : null;
-  const records = new Map(events.map(file => [file.newPath ?? file.path, file]));
-  const changes = current?.source === 'git'
-    ? current.files.map(file => ({ ...records.get(file.newPath ?? file.path), ...file })) : events;
+  // The panel and the composer take this list by identity, so it is rebuilt only when its inputs change.
+  const changes = useMemo(() => {
+    if (current?.source !== 'git') return events;
+    const records = new Map(events.map(file => [file.newPath ?? file.path, file]));
+    return current.files.map(file => ({ ...records.get(file.newPath ?? file.path), ...file }));
+  }, [current, events]);
   return { changes, refresh, status: { source: current?.source, loading: Boolean(workspaceId && !current), error: current?.error, truncated: current?.truncated } };
 }

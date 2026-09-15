@@ -4,17 +4,22 @@ import { layoutFlowchart, layoutSequence } from "../src/mermaid-layout.js";
 
 // The layout both clients share, measured here the way the desktop measures: whole numbers, boxes whose
 // edges are their borders. The terminal's own units are covered by its renderer's tests.
-const metrics = (model, extra = {}) => ({
-  vertical: model.direction === "TD" || model.direction === "TB" || model.direction === "BT",
-  reversed: model.direction === "BT" || model.direction === "RL",
-  wrap: (text) => String(text ?? "").split("\n"),
-  measure: (lines) => ({ w: Math.max(...lines.map((line) => line.length)) * 8 + 20, h: lines.length * 16 + 12 }),
-  gapMinor: 20,
-  lane: 10,
-  labelRoom: (text) => text.length * 8 + 16,
-  labelSpan: (text) => text.length * 8 + 16,
-  ...extra,
-});
+const metrics = (model, extra = {}) => {
+  const vertical = model.direction === "TD" || model.direction === "TB" || model.direction === "BT";
+  const span = (text) => Math.max(0, ...String(text).split("\n").map((line) => line.length)) * 8 + 16;
+  return {
+    vertical,
+    reversed: model.direction === "BT" || model.direction === "RL",
+    wrap: (text) => String(text ?? "").split("\n"),
+    measure: (lines) => ({ w: Math.max(...lines.map((line) => line.length)) * 8 + 20, h: lines.length * 16 + 12 }),
+    gapMinor: 20,
+    lane: 10,
+    // The contract the renderers honour: across, the label's width; down, the rows past the first.
+    labelRoom: vertical ? () => 0 : span,
+    labelSpan: span,
+    ...extra,
+  };
+};
 const flow = (source, extra) => { const model = parseMermaid(source); return layoutFlowchart(model, metrics(model, extra)); };
 const find = (laid, id) => laid.nodes.find((node) => node.id === id);
 const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -94,6 +99,27 @@ describe("laying a diagram out", () => {
     expect(leftwards.links[0].head).toMatchObject({ dir: "left" });
   });
 
+  test("a self-loop keeps its label beside the marker", () => {
+    const laid = flow("flowchart TD\n  A -->|retry| A\n  A --> B");
+    expect(laid.loops).toHaveLength(1);
+    const a = find(laid, "A");
+    expect(laid.loops[0].label).toMatchObject({ text: "retry", align: "start" });
+    expect(laid.loops[0].label.x).toBeGreaterThanOrEqual(a.x + a.w);
+    expect(laid.width).toBeGreaterThanOrEqual(laid.loops[0].label.x + "retry".length * 8);
+  });
+
+  test("a link's label sits centred on its own run", () => {
+    const laid = flow("flowchart TD\n  A[one] -->|go| B[two]\n  A --> C[three]");
+    const labelled = laid.links.find((link) => link.label);
+    expect(labelled.label.align).toBe("center");
+    const run = labelled.points.filter((point) => point.y === labelled.label.y);
+    expect(run.length).toBeGreaterThanOrEqual(2);
+    const [left, right] = [Math.min(...run.map((point) => point.x)), Math.max(...run.map((point) => point.x))];
+    expect(labelled.label.x).toBeGreaterThanOrEqual(left - 1);
+    expect(labelled.label.x).toBeLessThanOrEqual(right + 1);
+    expect(labelled.label.x).toBe((left + right) / 2);
+  });
+
   test("a node pointing at itself is marked beside its box rather than routed through it", () => {
     const laid = flow("flowchart TD\n  A --> A\n  A --> B");
     expect(laid.loops).toHaveLength(1);
@@ -108,7 +134,7 @@ describe("laying a diagram out", () => {
         B[General worker\\nPython / TypeScript / flows] -->|Claim and update jobs| D
         C[Protected environment\\nmode 0600\\nConfiguration] -->|Bounded, authenticated calls| D`, { lane: 22 });
       const labels = laid.links.filter(link => link.label).map(({label}) => ({
-        x: label.align === "end" ? label.x - label.text.length * 8 - 16 : label.x,
+        x: label.align === "end" ? label.x - label.text.length * 8 - 16 : label.align === "center" ? label.x - (label.text.length * 8 + 16) / 2 : label.x,
         y: label.y - 8, w: label.text.length * 8 + 16, h: 16,
       }));
       expect(labels).toHaveLength(3);
@@ -175,7 +201,7 @@ test("full branch labels fit within the canvas in every flow direction", () => {
     expect(labels.some(label => label.text === "Phishing confirmed")).toBe(true);
     for (const label of labels) {
       const span = sizes.labelSpan(label.text);
-      const start = label.align === "end" ? label.x - span : label.x;
+      const start = label.align === "end" ? label.x - span : label.align === "center" ? label.x - span / 2 : label.x;
       expect(start).toBeGreaterThanOrEqual(0);
       expect(start + span).toBeLessThanOrEqual(laid.width);
     }

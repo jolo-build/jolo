@@ -145,19 +145,25 @@ function createGrid() {
 }
 
 /** Cell measurements for the shared layout: a box is its label plus a border and a space either side. */
-const cellMetrics = (model, labelWidth) => ({
-  vertical: model.direction === "TD" || model.direction === "TB" || model.direction === "BT",
-  reversed: model.direction === "BT" || model.direction === "RL",
-  wrap: (text) => wrapLabel(text, Math.max(6, labelWidth)),
-  measure: (lines) => ({ w: widthOf(lines) + 4, h: lines.length + 2 }),
-  gapMinor: model.direction === "LR" || model.direction === "RL" ? 1 : 3,
-  lane: 1,
-  labelRoom: (text) => safe(text).length + 2,
-  labelSpan: (text) => safe(text).length + 2,
-  snap: Math.floor,
-  inset: 1, // a box's last row is its border, not the space after it
-  placeholder: 1,
-});
+const cellMetrics = (model, labelWidth) => {
+  const vertical = model.direction === "TD" || model.direction === "TB" || model.direction === "BT";
+  const edgeLines = (text) => wrapLabel(text, Math.max(6, labelWidth));
+  const edgeSpan = (text) => Math.max(0, ...edgeLines(text).map((line) => safe(line).length)) + 2;
+  return {
+    vertical,
+    reversed: model.direction === "BT" || model.direction === "RL",
+    wrap: (text) => wrapLabel(text, Math.max(6, labelWidth)),
+    measure: (lines) => ({ w: widthOf(lines) + 4, h: lines.length + 2 }),
+    gapMinor: model.direction === "LR" || model.direction === "RL" ? 1 : 3,
+    lane: 1,
+    // A lane spends its label room along the travel: across, the label's width; down, its extra rows.
+    labelRoom: vertical ? (text) => edgeLines(text).length - 1 : edgeSpan,
+    labelSpan: edgeSpan,
+    snap: Math.floor,
+    inset: 1, // a box's last row is its border, not the space after it
+    placeholder: 1,
+  };
+};
 
 function drawFlow(model, width, labelWidth) {
   const metrics = cellMetrics(model, labelWidth);
@@ -169,7 +175,11 @@ function drawFlow(model, width, labelWidth) {
     grid.box(node.x, node.y, node.w, node.h, node.shape, { dim: true });
     node.lines.forEach((text, index) => grid.text(node.x + 2, node.y + 1 + index, text));
   }
-  for (const loop of laid.loops) grid.put(loop.x, loop.y, "↺", { dim: true });
+  for (const loop of laid.loops) {
+    grid.put(loop.x, loop.y, "↺", { dim: true });
+    const lines = loop.label?.lines ?? (loop.label ? [loop.label.text] : []);
+    lines.forEach((line, row) => grid.label(loop.label.x - 1, Math.round(loop.label.y + row - (lines.length - 1) / 2), line, { color: "cyan" }));
+  }
   for (const link of laid.links) {
     grid.line(link.points, link.style);
     if (link.through) { const last = link.points.at(-1); grid.run(last.x, last.y, link.through.x, link.through.y, link.style); }
@@ -181,9 +191,14 @@ function drawFlow(model, width, labelWidth) {
       grid.put(x, link.head.y, glyph, { dim: true });
     }
     if (link.label) {
-      // Down the page the label follows the end of its own run, with a space to stand clear of the corner.
-      if (link.label.align === "end") grid.text(link.label.x - safe(link.label.text).length, link.label.y, link.label.text, { color: "cyan" });
-      else grid.label(link.label.x + (metrics.vertical ? 1 : 0), link.label.y, link.label.text, { color: "cyan" });
+      // The label is centred on its own run of the link; each of its lines lands on a row of its own.
+      const lines = link.label.lines ?? [link.label.text];
+      lines.forEach((line, row) => {
+        const y = link.label.y + Math.round(row - (lines.length - 1) / 2);
+        if (link.label.align === "end") grid.text(link.label.x - safe(line).length, y, line, { color: "cyan" });
+        else if (link.label.align === "center") grid.label(Math.floor(link.label.x - safe(line).length / 2) - 1, y, line, { color: "cyan" });
+        else grid.label(link.label.x + 1, y, line, { color: "cyan" }); // start: a cell clear of the line it follows
+      });
     }
   }
   const lines = grid.toLines();

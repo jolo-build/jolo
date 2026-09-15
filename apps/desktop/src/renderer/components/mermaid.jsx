@@ -15,8 +15,8 @@ const LINE = 16;
 const PAD_X = 10;
 const PAD_Y = 6;
 const LANE = LINE + 6; // leave clear space between neighbouring edge-label backgrounds
-const MAX_LABEL = 220; // px before a label wraps
-const MAX_LINES = 4;
+const MAX_LABEL = 360; // px before a label wraps
+const MAX_LINES = 8;
 
 let context; // undefined until tried, null when this environment has no canvas
 let fontFamily = "monospace";
@@ -69,17 +69,22 @@ const measureNode = (lines, node) => (DIAMONDS.has(node?.shape)
 // `kind` is what tells the two layouts apart downstream, so it is stated as the literal it is rather
 // than being widened to a string the drawing code would have to re-check.
 /** @typedef {ReturnType<typeof layoutFlowchart> & { kind: "flow" }} FlowLayout */
+/** The widest a link's label reaches across its lane: the broadest line it wraps to, plus its padding. */
+const edgeLabelSpan = (text) => Math.max(0, ...wrapLabel(text).map(edgeLabelWidth));
+
 /** @returns {FlowLayout} */
 function buildFlow(model) {
+  const vertical = model.direction === "TD" || model.direction === "TB" || model.direction === "BT";
   const laid = layoutFlowchart(model, {
-    vertical: model.direction === "TD" || model.direction === "TB" || model.direction === "BT",
+    vertical,
     reversed: model.direction === "BT" || model.direction === "RL",
     wrap: (text) => wrapLabel(text),
     measure: measureNode,
     gapMinor: model.direction === "LR" || model.direction === "RL" ? 18 : 26,
     lane: LANE,
-    labelRoom: edgeLabelWidth,
-    labelSpan: edgeLabelWidth,
+    // A lane spends its label room along the travel: across, the label's width; down, its extra lines.
+    labelRoom: vertical ? (text) => (wrapLabel(text).length - 1) * LINE : edgeLabelSpan,
+    labelSpan: edgeLabelSpan,
   });
   return { ...laid, kind: "flow" };
 }
@@ -141,13 +146,20 @@ function FlowDrawing({ laid, id }) {
         <text key={index} x={node.x + node.w / 2} y={node.y + node.h / 2 + (index - (node.lines.length - 1) / 2) * LINE} className="mermaid-text" textAnchor="middle" dominantBaseline="central">{line}</text>
       ))}
     </g>)}
-    {laid.loops.map((loop, index) => <text key={index} x={loop.x + 4} y={loop.y} className="mermaid-note-text" dominantBaseline="central">↺</text>)}
+    {laid.loops.map((loop, index) => <g key={index}>
+      <text x={loop.x + 4} y={loop.y} className="mermaid-note-text" dominantBaseline="central">↺</text>
+      {(loop.label?.lines ?? (loop.label ? [loop.label.text] : [])).map((line, row, lines) => (
+        <text key={row} x={loop.label.x} y={loop.label.y + (row - (lines.length - 1) / 2) * LINE} className="mermaid-edge-text" dominantBaseline="central">{line}</text>
+      ))}
+    </g>)}
     {laid.links.filter((link) => link.label).map((link, index) => {
-      const width = edgeLabelWidth(link.label.text);
-      const x = link.label.align === "end" ? link.label.x - width : link.label.x;
+      const lines = link.label.lines ?? [link.label.text];
+      const width = Math.max(0, ...lines.map(edgeLabelWidth));
+      const height = lines.length * LINE;
+      const x = link.label.align === "end" ? link.label.x - width : link.label.align === "center" ? link.label.x - width / 2 : link.label.x;
       return <g key={`label-${index}`}>
-        <rect x={x} y={link.label.y - LINE / 2} width={width} height={LINE} rx={3} className="mermaid-label-bg" />
-        <text x={x + 4} y={link.label.y} className="mermaid-edge-text" dominantBaseline="central">{link.label.text}</text>
+        <rect x={x} y={link.label.y - height / 2 - 2} width={width} height={height + 4} rx={3} className="mermaid-label-bg" />
+        {lines.map((line, row) => <text key={row} x={x + 4} y={link.label.y + (row - (lines.length - 1) / 2) * LINE} className="mermaid-edge-text" dominantBaseline="central">{line}</text>)}
       </g>;
     })}
   </>;

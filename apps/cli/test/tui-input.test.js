@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { deletePreviousWord, editDraft, editInput, inputViewport } from "../src/tui/input.js";
+import { deletePreviousWord, editDraft, editInput, inputViewport, inputRows, pasteText } from "../src/tui/input.js";
 
 test("arrows move the insertion point and editing preserves text on both sides", () => {
   let state = editInput("fix bug", 7, "", { leftArrow: true });
@@ -95,4 +95,37 @@ test("pasted terminal output loses its escape sequences but keeps ordinary brack
   expect(editDraft("", "[31mred[0m text")).toBe("red text"); // Ink may consume the escape byte itself
   expect(editDraft("", "\x1b]0;window title\x07done")).toBe("done");
   expect(editDraft("", "see [1] and a[0]b")).toBe("see [1] and a[0]b");
+});
+
+
+test("Shift+Enter inserts a newline at the cursor and arrows move between prompt lines", () => {
+  expect(editInput("firstsecond", 5, "", { return: true, shift: true })).toEqual({ value: "first\nsecond", cursor: 6 });
+  expect(editInput("first\nsecond", 6, "", { backspace: true })).toEqual({ value: "firstsecond", cursor: 5 });
+  expect(editInput("first\nsecond", 8, "", { upArrow: true }).cursor).toBe(2);
+  expect(editInput("first\nsecond", 2, "", { downArrow: true }).cursor).toBe(8);
+  expect(editInput("\nnext", 1, "", { upArrow: true }).cursor).toBe(0);
+  expect(editInput("\nnext", 0, "", { upArrow: true }).cursor).toBe(0);
+  expect(editInput("first", 3, "", { return: true, shift: true, eventType: "release" })).toEqual({ value: "first", cursor: 3 });
+  const full = "x".repeat(64 * 1024);
+  expect(editInput(full, 2, "", { return: true, shift: true })).toEqual({ value: full, cursor: 2 });
+});
+
+test("pasted multiline text lands in the draft with its line breaks intact", () => {
+  expect(pasteText("", 0, "first\nsecond\r\nthird\rfourth")).toEqual({ value: "first\nsecond\nthird\nfourth", cursor: 25 });
+  expect(pasteText("ab", 1, "X\nY")).toEqual({ value: "aX\nYb", cursor: 4 });
+  expect(pasteText("", 0, "a\x1b[31m\nb\x1b[0m")).toEqual({ value: "a\nb", cursor: 3 });
+  expect(pasteText("", 0, "a\tb")).toEqual({ value: "a  b", cursor: 4 });
+  const full = "x".repeat(64 * 1024);
+  expect(pasteText(full, 2, "more\ntext")).toEqual({ value: full, cursor: 2 });
+});
+
+test("multiline viewport keeps blank lines and the active caret within its row budget", () => {
+  const rows = inputRows("first\n\nthird", 6, 20, 3);
+  expect(rows.map(row => row.before + row.caret + row.after)).toEqual(["first", " ", "third"]);
+  expect(rows.map(row => row.active)).toEqual([false, true, false]);
+  const long = "one\ntwo\nthree\nfour\nfive";
+  const end = inputRows(long, long.length, 8, 2);
+  expect(end.map(row => row.index)).toEqual([3, 4]);
+  expect(end[1]).toMatchObject({ before: "five", caret: " ", active: true });
+  expect(inputRows(long, 0, 8, 2).map(row => row.index)).toEqual([0, 1]);
 });

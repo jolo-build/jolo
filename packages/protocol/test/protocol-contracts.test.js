@@ -13,3 +13,12 @@ test('event types, payloads and timestamps form an enforced contract', () => {
   expect(parseEvent({ ...event, type: 'grant.cretaed' }).ok).toBe(false);
   expect(parseEvent({ ...event, payload: {} }).ok).toBe(false);
 });
+
+test('budget patches preserve omitted fields and accept an explicit disabled hosted deadline', () => {
+  for (const budgets of [{}, { maxActiveMs: 60_000 }, { hostedToolDeadlineMs: 600_000 }, { hostedToolDeadlineMs: null }]) {
+    expect(parseParams('settings.update', { budgets })).toMatchObject({ ok: true, value: { budgets } });
+    expect(MethodSchemas['settings.update'].params.parse({ budgets })).toEqual({ budgets });
+  }
+  expect(parseParams('settings.update', { budgets: { hostedToolDeadlineMs: 0 } }).ok).toBe(false);
+  expect(parseParams('settings.update', { budgets: { toolDeadlineMs: null } }).ok).toBe(false);
+});

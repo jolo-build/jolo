@@ -49,6 +49,19 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Claude Code through its structured stream", () => {
+  test('long Claude tools do not inherit the native tool deadline', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    try {
+      await client.call('settings.update', { budgets: { toolDeadlineMs: 1000, maxActiveMs: 30_000 } });
+      const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'long-command', prompt: 'run sleep 1.8 && echo long-test-finished' });
+      const approval = await waitFor(() => events.find(e => e.type === 'permission.requested' && e.runId === run.id));
+      await client.call('permission.resolve', { permissionId: approval.payload.permissionId, decision: 'allow_once' });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && [...TERMINAL, 'paused'].includes(e.payload.state)), { timeoutMs: 10_000 });
+      expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toContain('long-test-finished');
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('multiple Claude chats in one folder keep independent turns, permissions, and history', async () => {
     const { client, events, project, session, messagesOf, text } = await boot({ clientKind: 'desktop' });
     try {

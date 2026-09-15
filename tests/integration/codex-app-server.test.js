@@ -172,8 +172,9 @@ describe("Codex through its app-server", () => {
   test("yielded commands keep streaming after the deadline; foreground and resumed waits stay bounded", async () => {
     const { client, events, session, messagesOf, text } = await boot();
     await client.call("settings.update", { budgets: { toolDeadlineMs: 1000, maxActiveMs: 30_000 } });
-    for (const mode of ["reasoning", "commentary", "foreground", "poll"]) {
-      const { run } = await client.call("run.start", { sessionId: session.id, requestId: `req_deadline_${mode}`, prompt: `tool-deadline ${mode}` });
+    for (const mode of ["default", "reasoning", "commentary", "foreground", "poll"]) {
+      if (mode === "reasoning") await client.call("settings.update", { budgets: { hostedToolDeadlineMs: 1000 } });
+      const { run } = await client.call("run.start", { sessionId: session.id, requestId: `req_deadline_${mode}`, prompt: `tool-deadline ${mode === "default" ? "foreground" : mode}` });
       await waitFor(() => events.some(e => e.type === "run.state" && e.runId === run.id && [...TERMINAL, "paused"].includes(e.payload.state)), { timeoutMs: 10_000, label: mode });
       const finished = (await client.call("run.snapshot", { runId: run.id })).run;
       if (["foreground", "poll"].includes(mode)) {

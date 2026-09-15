@@ -43,6 +43,16 @@ curl -fsSL https://jolo.build/install.sh | bash
 
 Or with Homebrew: `brew install jolo-build/tap/jolo-cli`.
 
+Or install the `jolo-cli` package with Bun:
+
+```sh
+bun add -g --trust jolo-cli
+jolo --version
+jolo .
+```
+
+`--trust` allows Jolo's postinstall script to download and verify the CLI binary. If you need Bun on macOS, run `curl -fsSL https://bun.sh/install | bash`, then restart your terminal before installing Jolo. See the [Bun installation guide](https://bun.com/docs/installation).
+
 This installs the CLI, not the desktop app. CLI packages are available for macOS and Linux, on ARM64 and x64.
 
 Want a look first? `jolo demo` plays a scripted session — no agent or account needed:
@@ -97,7 +107,7 @@ bun install --frozen-lockfile
 bun run desktop
 ```
 
-For the CLI, use `bun run jolo`.
+For the CLI, use `bun run jolo`. See [local CLI development](apps/cli/README.md#local-development) to rebuild and install your changes.
 
 ## Contribute
 

@@ -82,8 +82,13 @@ function wrapSegments(list, width, { indent = "", firstIndent = indent } = {}) {
   let current = [];
   let length = 0;
   let pendingSpace = false;
+  let continuation = null;
   const usable = (first) => Math.max(8, width - (first ? firstIndent : indent).length);
-  const flush = () => { const prefix = lines.length === 0 ? firstIndent : indent; lines.push({ spans: [...(prefix ? [{ text: prefix, dim: true }] : []), ...(current.length ? current : [{ text: " " }])] }); current = []; length = 0; pendingSpace = false; };
+  const flush = (nextContinuation = null) => {
+    const prefix = lines.length === 0 ? firstIndent : indent;
+    lines.push({ spans: [...(prefix ? [{ text: prefix, dim: true }] : []), ...(current.length ? current : [{ text: " " }])], continuation, continuationIndent: prefix.length });
+    current = []; length = 0; pendingSpace = false; continuation = nextContinuation;
+  };
   for (const word of words) {
     if (word.br) { flush(); continue; }
     if (word.space) { pendingSpace = current.length > 0; continue; }
@@ -91,13 +96,13 @@ function wrapSegments(list, width, { indent = "", firstIndent = indent } = {}) {
     while (text.length) {
       const room = usable(lines.length === 0);
       const gap = pendingSpace ? 1 : 0;
-      if (current.length && length + gap + text.length > room) { flush(); continue; }
+      if (current.length && length + gap + text.length > room) { flush(gap ? " " : ""); continue; }
       const take = current.length ? text.slice(0, room - length - gap) : text.slice(0, room);
       if (pendingSpace) { current.push({ text: " " }); length += 1; pendingSpace = false; }
       current.push({ text: take, ...word.style });
       length += take.length;
       text = text.slice(take.length);
-      if (text.length) flush();
+      if (text.length) flush("");
     }
   }
   if (current.length || lines.length === 0) flush();

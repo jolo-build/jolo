@@ -48,6 +48,20 @@ export async function runSidebarSmoke({ window, results, project, evaluate, wait
   await settle();
   assert((await measure()).sidebar === 0 && (await measure()).paneLeft === 0, 'collapsed sidebar still uses workspace space');
   assert(await evaluate("document.querySelector('.workspace-sidebar').inert && window.__sidebarComposer === document.querySelector('.composer textarea')"), 'collapsing sidebar lost composer or left hidden controls active');
+  if (attachedHere) debuggerApi.attach('1.3');
+  try {
+    const edge = await evaluate("(() => { const r = document.querySelector('.sidebar-hover-edge').getBoundingClientRect(); return { x: 2, y: Math.round(r.top + 100) }; })()");
+    await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...edge });
+    await settle();
+    assert((await measure()).sidebar === resized.sidebar - 16 && (await measure()).paneLeft === 0, 'hover did not reveal the sidebar over the workspace');
+    assert(await evaluate("!document.querySelector('.workspace-sidebar').inert && document.querySelector('.sidebar-toggle').getAttribute('aria-expanded') === 'false'"), 'hover did not enable sidebar controls or changed the collapsed preference');
+    await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: edge.y });
+    await settle();
+    assert((await measure()).sidebar > 0, 'sidebar hid while moving into it');
+    await debuggerApi.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resized.sidebar + 100, y: edge.y });
+    await settle();
+    assert((await measure()).sidebar === 0 && await evaluate("document.querySelector('.workspace-sidebar').inert"), 'sidebar did not hide after leaving');
+  } finally { if (attachedHere) debuggerApi.detach(); }
   window.webContents.reload();
   await waitFor("Boolean(window.__joloSmoke)", 'workspace reloaded');
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
@@ -83,6 +97,7 @@ export async function runSidebarSmoke({ window, results, project, evaluate, wait
   await settle();
   assert((await measure()).sidebar === 194, 'sidebar reset width failed');
   report.sidebar = { initial, resized, restored: await measure() };
+  report.checks.push('Collapsed sidebar reveals on left-edge hover without shifting the workspace, stays usable under the pointer, and hides on leave');
   report.checks.push('Sidebar drags and resizes by keyboard, collapses without remounting the composer, remembers its state through reload, and restores with Cmd/Ctrl+B in both themes');
   report.checks.push('Header logo and sidebar toggle fit inside their column without crossing the divider in expanded and collapsed layouts, including a narrow window');
 }

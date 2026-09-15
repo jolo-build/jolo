@@ -122,7 +122,18 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
 
       const closeText = (status = "complete") => { if (state.text) { ctx.finishMessage(state.text.messageId, status); state.text = null; } };
       const openText = (kind) => {
-        if (state.text?.kind !== kind) { closeText(); state.text = { kind, messageId: ctx.startMessage("assistant", kind) }; if (kind === "text") ctx.transition("model"); }
+        if (state.text?.kind !== kind) {
+          closeText();
+          // Devin keeps an execute call open while its shell runs in the background.
+          // A new reply or thought means the model has resumed; keep recording the
+          // command's output, but stop timing it as a blocking tool. A later shell
+          // poll is a separate tool call with its own optional deadline.
+          for (const [id, call] of toolCalls) {
+            if (call.kind === "execute" && turn.hasTool(id)) ctx.toolBackgrounded?.(id);
+          }
+          ctx.transition("model");
+          state.text = { kind, messageId: ctx.startMessage("assistant", kind) };
+        }
         return state.text.messageId;
       };
 

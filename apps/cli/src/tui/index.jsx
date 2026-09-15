@@ -2,7 +2,7 @@ import { requestId as createRequestId, TERMINAL } from "@jolo/client/run-state";
 // Interactive terminal client: Ink + React, imported only in interactive mode.
 // Bounded projection, capped redraws, one restoration path for every exit.
 import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { render, useApp, useInput, useWindowSize } from "ink";
+import { render, useApp, useInput, usePaste, useWindowSize } from "ink";
 import { ThemeProvider, useTheme, Box, Text } from "./theme.jsx";
 import { SessionProjection } from "@jolo/client/projection";
 import { clean } from "./markdown.js";
@@ -24,6 +24,8 @@ import { resolvePaths } from "@jolo/launcher";
 import { Prompt } from "./prompt.jsx";
 import { slashCommands } from "./commands.js";
 import { CommandMenu } from "./commands.jsx";
+import { createModelChoiceStore, restoreModelAgent } from "./model-choice.js";
+import { createQueueSteering } from "./queue-steering.js";
 import { terminalTheme } from "./terminal-theme.js";
 
 
@@ -34,7 +36,7 @@ function useTick(intervalMs) {
   return { revision, redraw };
 }
 
-function App({ client, project, initialSession, cursor, onExit, restored = false, onRestore, draftAgentId = null, initialStatus = "connected", onChooseAgent, update = null }) {
+function App({ client, project, initialSession, cursor, onExit, restored = false, onRestore, draftAgentId = null, initialStatus = "connected", onChooseAgent, rememberAgent, update = null }) {
   const { exit } = useApp();
   const themes = useTheme();
   const [themeMenu, setThemeMenu] = useState(false);
@@ -60,6 +62,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const [dismissedCommand, setDismissedCommand] = useState(null);
   useEffect(() => { setCommandIndex(0); setDismissedCommand(null); }, [input]);
   const ctrlC = useRef(0);
+  const steering = useMemo(() => createQueueSteering(runId => client.call("run.sendNow", { runId })), [client]);
+  useEffect(() => () => steering.clear(), [steering]);
   const layout = terminalLayout({ ...size, permission: Boolean(permission), changes: changes.length > 0 });
   const { columns, rows } = layout;
   const commands = !layout.tooSmall && !modelConfig && !sessionMenu && !themeMenu && !permission && !themeBusy && dismissedCommand !== input ? slashCommands(input) : [];
@@ -122,7 +126,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     return () => { disposed = true; loader?.dispose(); offEvent(); offPreview(); offClose(); offReconnect?.(); };
   }, [client, projection, initialSession]);
 
-  const activeRun = () => [...projection.runs.values()].find((run) => run.state && !TERMINAL.has(run.state) && run.state !== "paused") ?? null;
+  const activeRun = () => {
+    const runs = [...projection.runs.values()].filter(run => run.state && !TERMINAL.has(run.state) && run.state !== "paused");
+    return runs.find(run => run.state !== "queued") ?? runs[0] ?? null;
+  };
   const lastRun = () => [...projection.runs.values()].at(-1) ?? null;
 
   const send = async (prompt) => {
@@ -134,7 +141,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       setSession(current);
     }
     const requestId = createRequestId();
-    await client.call("run.start", { sessionId: current.id, requestId, prompt });
+    const { run } = await client.call("run.start", { sessionId: current.id, requestId, prompt });
+    return run;
   };
 
   const leave = () => {
@@ -143,6 +151,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   };
 
   const submit = (text) => {
+    steering.clear();
     const prompt = text.trim();
     const themeCommand = parseThemeCommand(prompt);
     if (themeCommand) {
@@ -178,12 +187,18 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     setWelcomeOpen(false);
     dispatchPrompt({ type: "submit", prompt });
     setStatus("connected");
-    if (activeRun()) setStatus("queued behind the active run");
-    send(prompt).catch((error) => setStatus(error.message));
+    const queuing = Boolean(activeRun());
+    const operation = send(prompt);
+    if (queuing) steering.remember(operation, text);
+    operation.catch((error) => setStatus(error.message));
   };
 
   useInput((chunk, key) => {
     if (key.eventType === "release") return;
+    if (key.return && (key.eventType === "repeat" || key.ctrl || key.meta)) return;
+    // Terminals can deliver two rapid Enter presses in one input chunk.
+    const enterCount = key.return ? 1 : /^\r+$/.test(chunk) ? Math.min(2, chunk.length) : 0;
+    if (!enterCount) steering.clear();
     if (key.ctrl && chunk === "c") {
       const run = activeRun();
       if (run && ctrlC.current === 0) { ctrlC.current = 1; setStatus("cancelling…"); client.call("run.cancel", { runId: run.id }).catch(() => {}); setTimeout(() => { ctrlC.current = 0; }, 3000); return; }
@@ -199,33 +214,71 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       return;
     }
     if (themeBusy) return;
+    if ((key.return && key.shift) || chunk === "\n" || (key.ctrl && chunk === "j")) {
+      steering.clear();
+      dispatchPrompt({ type: "edit", chunk: "", key: { return: true, shift: true } });
+      return;
+    }
     if (commands.length) {
       if (key.upArrow || key.downArrow) { setCommandIndex((selectedCommand + (key.upArrow ? -1 : 1) + commands.length) % commands.length); return; }
       if (key.escape) { setDismissedCommand(input); return; }
-      if (key.return || key.tab || chunk === '\t') {
+      if (enterCount || key.tab || chunk === '\t') {
         const item = commands[selectedCommand];
-        if (key.return && !item.arguments) submit(item.command);
+        if (enterCount && !item.arguments) submit(item.command);
         else dispatchPrompt({ type: 'replace', value: `${item.command} ` });
         return;
       }
     }
-    if (key.upArrow || key.downArrow) { dispatchPrompt({ type: key.upArrow ? "previous" : "next" }); return; }
+    if (key.upArrow || key.downArrow) {
+      const moved = editInput(input, promptState.cursor, "", key);
+      dispatchPrompt(moved.cursor !== promptState.cursor ? { type: "edit", chunk: "", key } : { type: key.upArrow ? "previous" : "next" });
+      return;
+    }
     if (key.escape) { const run = activeRun(); if (run) { setStatus("cancelling…"); client.call("run.cancel", { runId: run.id }).catch(() => {}); } return; }
-    if (key.return) { submit(input); return; }
-    if (chunk && /[\r\n]/.test(chunk)) { // pasted or bulk input: text before the first newline is submitted
-      const [head] = chunk.split(/[\r\n]/);
-      submit(editInput(input, promptState.cursor, head).value);
+    if (enterCount) {
+      for (let press = 0; press < enterCount; press++) {
+        const operation = steering.steer(input);
+        if (operation) {
+          setStatus("Sending queued message now…");
+          operation.then(() => setStatus("connected")).catch(error => setStatus(error.message));
+        } else if (!input.trim()) {
+          const queued = [...projection.runs.values()].find(run => run.state === "queued");
+          if (queued) {
+            // A waiting queue remains steerable after the original submission's
+            // double-Enter window expires, including after reopening a session.
+            steering.remember(Promise.resolve(queued), "");
+          } else if (press === 0) submit(input);
+        } else if (press === 0) submit(input);
+      }
+      return;
+    }
+    if (chunk && /[\r\n]/.test(chunk)) {
+      // Bulk input can also arrive unwrapped as one chunk: interior line breaks are a
+      // paste and stay in the draft, while a trailing newline is Enter submitting a line.
+      if (/[\r\n]/.test(chunk.replace(/[\r\n]+$/, ""))) { dispatchPrompt({ type: "paste", chunk }); return; }
+      submit(editInput(input, promptState.cursor, chunk.replace(/[\r\n]+$/, "")).value);
       return;
     }
     if (key.tab || chunk === "\t") { setShowTools((v) => !v); return; }
     dispatchPrompt({ type: "edit", chunk, key });
   }, { isActive: (modelConfig === null && sessionMenu === null && !themeMenu) || Boolean(permission) });
 
+  // usePaste turns on bracketed-paste mode so terminals wrap pasted text; the full
+  // paste — newlines and all — lands in the draft here and never reaches useInput.
+  usePaste((text) => {
+    if (permission || themeBusy) return;
+    steering.clear();
+    dispatchPrompt({ type: "paste", chunk: text });
+  }, { isActive: (modelConfig === null && sessionMenu === null && !themeMenu) || Boolean(permission) });
+
   const width = Math.max(8, columns - 2);
   const run = activeRun() ?? lastRun();
   const { batch, live } = useNativeTranscript({ projection, revision, opened: !welcomeOpen, width, showTools, permission });
+  const queuedRuns = [...projection.runs.values()].filter(run => run.state === "queued");
+  const queueRows = rows >= 16 ? Math.min(3, queuedRuns.length) : 0;
   const commandRows = commands.length ? Math.min(5, commands.length, Math.max(1, rows - 9)) : 0;
-  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - (commandRows ? commandRows + 1 : 0)));
+  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows));
+  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0)));
   const visible = previewRows > 0 ? live.slice(-previewRows) : [];
   const modelSelected = async (message, target) => {
     const wanted = (target?.id === "jolo" || target?.preset) ? null : target?.id;
@@ -244,6 +297,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       const { session: updated } = await client.call('session.setModel', { sessionId: current.id, expectedRevision: current.revision, model: target.modelRef ?? null });
       sessionRef.current = updated; setSession(updated);
     }
+    if (target) rememberAgent(wanted);
     setModelConfig(null);
     if (message) setStatus(message);
     void refreshSettings();
@@ -251,14 +305,15 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
 
   return (
     <>
-      <NativeTranscript batch={batch} project={project.rootPath} columns={columns} restored={restored} sessionTitle={initialSession?.title} update={update} welcomeOpen={welcomeOpen && !restored} welcomeHeight={themeMenu || modelConfig || sessionMenu ? 0 : Math.min(12, Math.max(0, rows - 10 - (commandRows ? commandRows + 1 : 0)))} />
+      <NativeTranscript batch={batch} project={project.rootPath} columns={columns} restored={restored} sessionTitle={initialSession?.title} update={update} welcomeOpen={welcomeOpen && !restored} welcomeHeight={themeMenu || modelConfig || sessionMenu ? 0 : Math.min(12, Math.max(0, rows - 10 - (promptRows - 1) - (commandRows ? commandRows + 1 : 0)))} />
       {themes.error && <Text color="error" wrap="truncate-end">Theme: {clean(themes.error)}</Text>}
       {themeMenu ? <ThemeMenu rows={rows} columns={columns} paused={Boolean(permission)} onClose={() => setThemeMenu(false)} /> : sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
-      <Prompt value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
+      {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}
+      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}
@@ -276,16 +331,17 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
 
 /**
  * Owns the selection so a restore can swap the whole chat out; the rest is handed to `App`.
- * @param {{ session: any, restored?: boolean, project: any, client: import("../follow-run.js").EngineClient, cursor: string, onExit: () => void, update?: { latest?: string } | null }} props
+ * @param {{ session: any, restored?: boolean, project: any, client: import("../follow-run.js").EngineClient, cursor: string, onExit: () => void, draftAgentId?: string | null, rememberAgent: (agentId: string | null) => void, update?: { latest?: string } | null }} props
  */
-function SessionWorkspace({ session, restored, project, ...props }) {
-  const [selected, setSelected] = useState(/** @type {WorkspaceSelection} */ ({ session, revision: 0, restored, agentId: session?.agentId ?? null, workspaceId: session?.workspaceId ?? project.workspaceId }));
+function SessionWorkspace({ session, restored, project, draftAgentId = null, ...props }) {
+  const [selected, setSelected] = useState(/** @type {WorkspaceSelection} */ ({ session, revision: 0, restored, agentId: session ? session.agentId ?? null : draftAgentId, workspaceId: session?.workspaceId ?? project.workspaceId }));
   return <App key={selected.revision} {...props} project={{ ...project, workspaceId: selected.workspaceId }} initialSession={selected.session} draftAgentId={selected.agentId} initialStatus={selected.status} restored={selected.restored}
     onRestore={(session) => setSelected((previous) => ({ session, revision: previous.revision + 1, restored: true, agentId: session ? session.agentId ?? null : previous.agentId, workspaceId: session?.workspaceId ?? previous.workspaceId }))}
     onChooseAgent={(agentId) => setSelected((previous) => ({ ...previous, agentId }))} />;
 }
 
-export async function startTui({ client, project, session, cursor, restored = false, update = null, themeStore = createThemeStore(resolvePaths()), themeId = undefined }) {
+export async function startTui({ client, project, session, cursor, restored = false, update = null, themeStore = createThemeStore(resolvePaths()), themeId = undefined, modelChoiceStore = createModelChoiceStore(resolvePaths()) }) {
+  const draftAgentId = session ? null : await restoreModelAgent(client, modelChoiceStore);
   let terminalRestored = false;
   let instance = null;
   let canvas = null;
@@ -313,7 +369,9 @@ export async function startTui({ client, project, session, cursor, restored = fa
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     const kitty = await supportsKittyKeyboard();
     canvas = await terminalTheme();
-    instance = render(<ThemeProvider store={themeStore} initialId={themeId} onChange={canvas.apply}><SessionWorkspace client={client} project={project} session={session} restored={restored} cursor={cursor} onExit={restore} update={update} /></ThemeProvider>, { exitOnCtrlC: false, alternateScreen: false, nativeScrollback: true, maxFps: 60, incrementalRendering: true, kittyKeyboard: { mode: kitty ? "enabled" : "disabled" } });
+    // Start at the top of a clean viewport without erasing terminal scrollback.
+    if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[H");
+    instance = render(<ThemeProvider store={themeStore} initialId={themeId} onChange={canvas.apply}><SessionWorkspace draftAgentId={draftAgentId} rememberAgent={modelChoiceStore.write} client={client} project={project} session={session} restored={restored} cursor={cursor} onExit={restore} update={update} /></ThemeProvider>, { exitOnCtrlC: false, alternateScreen: false, nativeScrollback: true, maxFps: 60, incrementalRendering: true, kittyKeyboard: { mode: kitty ? "enabled" : "disabled" } });
     await instance.waitUntilExit();
   } finally {
     restore();

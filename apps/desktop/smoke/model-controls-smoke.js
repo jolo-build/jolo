@@ -7,20 +7,42 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   const open = "document.querySelector('.model-popover')?.matches(':popover-open')";
   const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const type = (selector, value) => evaluate(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
-  const key = code => { window.webContents.sendInputEvent({type:'keyDown',keyCode:code}); window.webContents.sendInputEvent({type:'keyUp',keyCode:code}); };
+  const key = code => { window.webContents.sendInputEvent({type:'keyDown',keyCode:code}); if (code === 'Enter') window.webContents.sendInputEvent({type:'char',keyCode:'\r'}); window.webContents.sendInputEvent({type:'keyUp',keyCode:code}); };
   const saved = async () => (await bridge.rawCall('settings.get',{})).settings.agents.codex;
   await evaluate("window.__joloSmoke.pickAnswerer('codex')");
   await waitFor("document.querySelector('.model-select')?.textContent.includes('Codex')",'Codex selected');
   await type('.composer textarea','Keep this draft.');
   await click('.model-select'); await waitFor(open,'popover opens');
-  await waitFor("document.querySelector('.effort-slider input')?.max === '2'",'reported effort levels');
+  await waitFor("document.querySelector('[data-model=\"fake-large\"]')",'reported models');
   await waitFor("document.querySelector('.model-select')?.getAttribute('aria-expanded') === 'true'", 'popover toggle handled');
   await click('.model-select'); await waitFor('!'+open,'second click closes popover');
   await click('.model-select'); await waitFor(open,'popover reopens');
-  await click('.effort-model');
-  assert.equal(await evaluate("document.querySelector('.model-popover input:not([type=range])')"),null,'model list has no search field');
-  await click('[data-model="fake-large"]');
-  await waitFor("document.querySelector('.effort-slider input') && document.querySelector('.model-select')?.textContent.includes('Fake Large')",'model persisted from list');
+  await type('.model-search input','large');
+  await waitFor("document.querySelector('[data-model=\"fake-large\"]') && !document.querySelector('[data-model=\"fake-small\"]')", 'search filters models');
+  key('Enter');
+  assert.equal(await evaluate('window.__joloSmoke.state().runCount'),0,'search does not submit the draft');
+  await type('.model-search input','');
+  await click('[data-source="agent:claude"]');
+  assert.equal(await evaluate("window.__joloSmoke.state().answerer"),'Codex','browsing leaves the active agent unchanged');
+  await click('[data-source="agent:codex"]');
+  await waitFor("document.querySelector('[data-model=\"fake-large\"]')",'return to Codex models');
+  const originalMenuTheme = nativeTheme.themeSource;
+  try {
+    for (const theme of /** @type {const} */ (['light','dark'])) {
+      nativeTheme.themeSource = theme;
+      await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      assert(await evaluate("[...document.querySelectorAll('.model-providers, .model-submenu')].every(p => { const r=p.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && p.scrollWidth <= p.clientWidth; })"), 'both menu panels fit the viewport');
+      writeFileSync(path.join(results,`model-menu-${theme}.png`),(await window.webContents.capturePage()).toPNG());
+    }
+  } finally {nativeTheme.themeSource=originalMenuTheme;}
+
+  await type('.model-search input', 'large');
+  await evaluate("document.querySelector('.model-search input').focus()"); key('Down');
+  await waitFor("document.activeElement?.getAttribute('data-model') === 'fake-large'", 'arrow key enters model results');
+  key('Enter');
+  await waitFor('!'+open,'model selection closes the menu');
+  await click('.model-effort-select');
+  await waitFor("document.querySelector('.effort-slider input:not(:disabled)')?.max === '2' && document.querySelector('.model-select')?.textContent.includes('Fake Large')",'model persisted from list');
   await evaluate("document.querySelector('.effort-slider input').focus()");
   key('End');
   await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'high'",'keyboard changes effort');
@@ -48,6 +70,7 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await evaluate("document.querySelector('.effort-slider input').focus()"); key('End');
   await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'high'",'high before model switch');
   await click('.effort-model'); await click('[data-model="fake-small"]');
+  await waitFor('!'+open,'small model selected'); await click('.model-effort-select');
   await waitFor("document.querySelector('.effort-slider input')?.max === '1'",'small model hides unsupported high effort');
   assert.equal((await saved()).effort,null);
   await evaluate("document.querySelector('.effort-slider input').focus()"); key('End');
@@ -62,17 +85,17 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/low/);
   const currentSession=await evaluate('window.__joloSmoke.state().sessionId');
   const originalDefault=(await bridge.rawCall('settings.get',{})).settings.model;
-  await click('.model-select'); await waitFor(open,'provider switch popover'); await click('.effort-model');
-  await evaluate("(() => {const s=document.querySelector('[aria-label=\"Answering agent\"]');s.value='jolo';s.dispatchEvent(new Event('change',{bubbles:true}));})()");
-  await waitFor("document.querySelector('[aria-label=\"Model provider\"] option[value=\"smoke-model\"]')",'connected providers');
-  await evaluate("(() => {const s=document.querySelector('[aria-label=\"Model provider\"]');s.value='smoke-model';s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  await click('.model-select'); await waitFor(open,'provider switch popover');
+  await waitFor("document.querySelector('[data-source=\"provider:smoke-model\"]')",'connected providers');
+  await click('[data-source="provider:smoke-model"]');
   await waitFor("document.querySelector('[data-model=\"test-model\"]')",'native provider models');
   writeFileSync(path.join(results,'composer-model-list.png'),(await window.webContents.capturePage()).toPNG());
   await click('[data-model="test-model"]');
-  await waitFor("window.__joloSmoke.state().answerer === 'Jolo · Test Model' && document.querySelector('.effort-model')",'native model chosen');
+  await waitFor("window.__joloSmoke.state().answerer === 'Jolo · Test Model' && !document.querySelector('.model-popover').matches(':popover-open')",'native model chosen');
   const session=(await bridge.rawCall('session.page',{sessionId:currentSession})).session;
   assert.equal(session.model.preset,'smoke-model'); assert.equal(session.model.model,'test-model');
   assert.deepEqual((await bridge.rawCall('settings.get',{})).settings.model,originalDefault,'native picker must not replace other tasks’ default');
+  await click('.model-select'); await waitFor(open,'native menu reopens');
   await click('.model-select'); await waitFor('!'+open,'native menu closes on second click');
   await type('.composer textarea','Reply with the selected provider.'); await click('.composer-submit');
   await waitFor("window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().runCount === 2",'native provider answers in same task');
@@ -87,7 +110,7 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await evaluate("window.__joloSmoke.pickAnswerer('codex')");
   await evaluate('window.__joloSmoke.newChat()');
   await waitFor("window.__joloSmoke.state().sessionAgentId === 'codex' && document.querySelector('.model-select')?.textContent.includes('Fake Small')", 'new chat remembers hosted model');
-  assert.match(await evaluate("document.querySelector('.model-select').textContent"), /Low/);
+  assert.match(await evaluate("document.querySelector('.model-effort-select').textContent"), /Low/);
   await new Promise((resolve, reject) => {
     const loaded = () => { clearTimeout(timer); resolve(null); };
     const timer = setTimeout(() => { window.webContents.removeListener('did-finish-load', loaded); reject(new Error('model choice reload timed out')); }, 10000);
@@ -98,6 +121,6 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await evaluate('window.__joloSmoke.newChat()');
   await waitFor("window.__joloSmoke.state().sessionAgentId === 'codex' && document.querySelector('.model-select')?.textContent.includes('Fake Small')", 'choice survives app reload');
   assert.deepEqual((await bridge.rawCall('settings.get', {})).settings.model, originalDefault);
-  report.checks.push('Composer model list, supported effort stops, keyboard and pointer selection, reset, double-click dismissal, draft preservation, light/dark layout agent/provider switching, and actual hosted/native execution passed.');
+  report.checks.push('Cascading provider menu, model search, supported effort stops, keyboard model selection and pointer effort selection, reset, double-click dismissal, draft preservation, light/dark layout agent/provider switching, and actual hosted/native execution passed.');
   report.checks.push('New tasks and standalone chats retain the last model, agent and effort, including after reload, without changing the provider default.');
 }

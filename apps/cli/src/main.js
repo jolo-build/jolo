@@ -653,7 +653,8 @@ async function commandInteractive({ positional, flags }) {
     const status = await client.call("engine.status", {});
     await client.subscribe({ after: status.cursor });
     const { startTui } = await import("./tui/index.jsx");
-    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update, themeStore, themeId });
+    const { createModelChoiceStore } = await import("./tui/model-choice.js");
+    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update, themeStore, themeId, modelChoiceStore: createModelChoiceStore(paths) });
   } finally {
     await client.close();
   }

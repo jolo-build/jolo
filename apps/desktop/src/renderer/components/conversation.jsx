@@ -1,5 +1,5 @@
 import { modelLabel } from '../model-options.js';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
@@ -91,35 +91,64 @@ function ScreenshotPreview({ artifactId }) {
   return src ? <img className="screenshot" src={src} alt="browser screenshot" /> : <span className="hint">loading screenshot…</span>;
 }
 
-function ToolBlock({ message }) {
-  const [head, ...rest] = message.text.split("\n");
+/**
+ * The projection grows a message in place, so the fields that change arrive as their own props: memo
+ * compares them, and a finished tool is neither split nor redrawn on every tick of a later reply.
+ * @typedef {{ text: string, status: string, committedBytes: number, renderedBytes: number, diffArtifactId?: string | null }} ToolBlockProps
+ */
+const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, status, committedBytes, renderedBytes, diffArtifactId }) {
+  const [head, rest] = useMemo(() => { const at = text.indexOf("\n"); return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + 1)]; }, [text]);
   const [expanded, setExpanded] = useState(false);
-  const loading = !head && message.committedBytes > message.renderedBytes;
+  const loading = !head && committedBytes > renderedBytes;
   let screenshot = null;
-  if (/^(?:jolo_browser\/|mcp__jolo_browser__)?browser_screenshot(?:\s|$)/.test(head) && message.status !== "streaming") {
-    try { const parsed = JSON.parse(rest[0] ?? ""); if (parsed.ok && parsed.mimeType === "image/png" && parsed.artifactId) screenshot = parsed.artifactId; } catch { /* not JSON yet */ }
+  if (/^(?:jolo_browser\/|mcp__jolo_browser__)?browser_screenshot(?:\s|$)/.test(head) && status !== "streaming") {
+    try { const parsed = JSON.parse(rest.split("\n", 1)[0]); if (parsed.ok && parsed.mimeType === "image/png" && parsed.artifactId) screenshot = parsed.artifactId; } catch { /* not JSON yet */ }
   }
   return (
     <details className="block tool" onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || message.status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{message.status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      <summary><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       {expanded && <>
-        {message.diffArtifactId && <DiffPreview artifactId={message.diffArtifactId} />}
-        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading tool output…</p> : <pre>{rest.join("\n")}</pre>}
+        {diffArtifactId && <DiffPreview artifactId={diffArtifactId} />}
+        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
       </>}
     </details>
   );
-}
+});
 
-function ReasoningBlock({ message }) {
-  const working = message.status === "streaming";
-  if (!message.text.trim()) return <div className="reasoning-pending" role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
+const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
+  const working = status === "streaming";
+  if (!text.trim()) return <div className="reasoning-pending" role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
   return (
     <details className="block reasoning">
       <summary><ActivityIcon name="think" active={working} /><span>Reasoning{working ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
-      <pre>{message.text}</pre>
+      <pre>{text}</pre>
     </details>
   );
-}
+});
+
+/**
+ * One turn of the transcript. Its text grows in place, so what grows is passed beside it for memo to compare.
+ * @typedef {{
+ *   message: import('@jolo/client/projection').ProjectedMessage,
+ *   text: string,
+ *   status: string,
+ *   committedBytes: number,
+ *   renderedBytes: number,
+ *   run: any,
+ *   guestName: string | null,
+ *   assistantName: string,
+ *   sessionId?: string | null,
+ * }} MessageArticleProps
+ */
+const MessageArticle = memo(function MessageArticle(/** @type {MessageArticleProps} */ { message, text, status, committedBytes, renderedBytes, run, guestName, assistantName, sessionId }) {
+  const assistant = message.role === "assistant";
+  return <article data-message-id={message.id} className={`message ${message.role} ${message.kind}${status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
+    {message.role === 'user' && run?.attachments?.length > 0 && <div className="message-attachments">{run.attachments.map((attachment, index) => !attachment.mimeType.startsWith('image/') ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
+    {message.role === 'user' && run?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{run.taskReferences.map(task => <button type="button" key={task.url} title={`${task.team?.name ?? 'Personal'} · ${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>{task.team?.name ?? 'Personal'} · r{task.revision} ↗</span></button>)}</div>}
+    {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}
+    {!text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
+  </article>;
+});
 
 function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   const working = messages.some((message) => message.status === "streaming");
@@ -133,7 +162,9 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   // A completed tool is only a gap in the run, not task completion. Keep
   // the disclosure icon steady until the owning run explicitly completes.
   const label = `Task activity${tools ? ` · ${tools} ${tools === 1 ? 'action' : 'actions'}` : ' · Reasoning'}`;
-  return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool" ? <ToolBlock key={message.id} message={message} /> : <ReasoningBlock key={message.id} message={message} />)}</div></details>;
+  return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool"
+    ? <ToolBlock key={message.id} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} diffArtifactId={message.diffArtifactId} />
+    : <ReasoningBlock key={message.id} text={message.text} status={message.status} />)}</div></details>;
 }
 
 export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
@@ -187,7 +218,13 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   // Queued messages (and ones removed before starting) have no transcript yet.
   // Their status must not replace the turn the conversation is displaying.
   const lastRun = activeRun ?? projection?.runs.get(messages.at(-1)?.runId) ?? runs.filter(run => ['failed', 'interrupted'].includes(run.state)).at(-1);
-  const changesSignature = JSON.stringify(runs.map(({ id, state, changedPaths, changeEvents }) => ({ id, state, changedPaths, changeEvents })));
+  // A run is replaced whenever it changes and kept otherwise, so the identities say whether the
+  // signature must be rebuilt; a streaming tick then serializes nothing.
+  const runsSeen = useRef({ runs: /** @type {any[]} */ ([]), signature: '[]' });
+  if (runsSeen.current.runs.length !== runs.length || runs.some((run, index) => run !== runsSeen.current.runs[index])) {
+    runsSeen.current = { runs, signature: JSON.stringify(runs.map(({ id, state, changedPaths, changeEvents }) => ({ id, state, changedPaths, changeEvents }))) };
+  }
+  const changesSignature = runsSeen.current.signature;
   useEffect(() => {
     setChangeCards(cards => updateChangeCards(cards, JSON.parse(changesSignature)));
   }, [changesSignature]);
@@ -230,16 +267,11 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;
         if (message.loadError) return <div key={message.id} className="message" role="alert"><p>Couldn’t load saved {message.kind === "tool" ? "tool output" : message.kind === "reasoning" ? "reasoning" : "message"}.</p><button onClick={() => { void projection.fill(message.id).catch(() => {}); }}>Retry loading</button></div>;
-        const assistant = message.role === "assistant";
         // A turn someone else was called into says so, so a reply is never read as the usual answerer's (§6.5).
-        const calledIn = projection?.runs.get(message.runId)?.agentId ?? null;
+        const run = projection?.runs.get(message.runId);
+        const calledIn = run?.agentId ?? null;
         const guestName = calledIn === "jolo" ? "Jolo" : calledIn ? agents.find((entry) => entry.id === calledIn)?.displayName ?? calledIn : null;
-        return <article key={message.id} data-message-id={message.id} className={`message ${message.role} ${message.kind}${message.status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
-          {message.role === 'user' && projection?.runs.get(message.runId)?.attachments?.length > 0 && <div className="message-attachments">{projection.runs.get(message.runId).attachments.map((attachment, index) => !attachment.mimeType.startsWith('image/') ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
-          {message.role === 'user' && projection?.runs.get(message.runId)?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{projection.runs.get(message.runId).taskReferences.map(task => <button type="button" key={task.url} title={`${task.team?.name ?? 'Personal'} · ${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>{task.team?.name ?? 'Personal'} · r{task.revision} ↗</span></button>)}</div>}
-          {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}
-          {!message.text && message.committedBytes > message.renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={message.text} cacheKey={message.id} sessionId={projection?.runs.get(message.runId)?.sessionId ?? sessionId} streaming={message.status === "streaming"} /> : <div className="message-text">{message.text}</div>}
-        </article>;
+        return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} run={run} guestName={guestName} assistantName={assistantName} sessionId={sessionId} />;
       })}
     </div>
   </div>;

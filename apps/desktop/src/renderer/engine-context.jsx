@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const pendingReads = new Map();
 const COALESCED = new Set(["engine.status", "session.list", "workspace.list", "plan.list", "plan.get", "agent.list", "agent.catalog", "settings.get", "board.list", "board.tasks"]);
@@ -97,6 +97,10 @@ export function EngineProvider({ children }) {
     });
     return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); };
   }, [refreshSettings, refreshBoard, refreshCatalog, showNotice]);
-  return <Context.Provider value={{ engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }}>{children}</Context.Provider>;
+  // One object per change, not per render: every pane reads this context, so a fresh object each time
+  // would re-render all of them whenever a notice comes or goes.
+  const value = useMemo(() => ({ engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }),
+    [engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest]);
+  return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export const useEngineConnection = () => useContext(Context);

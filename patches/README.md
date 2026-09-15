@@ -2,7 +2,7 @@
 
 `ink@7.1.1.patch` adds an opt-in `nativeScrollback` render option. Bun applies it through the root `patchedDependencies` entry and lockfile. Headless commands do not load Ink.
 
-Jolo uses the normal terminal buffer, immutable `Static` transcript batches, and compact live controls. The terminal owns wheel/trackpad scrolling while Jolo runs. On exit, Jolo clears the visible screen and restores the cursor and terminal input mode; saved conversations remain available through `/sessions`. Ink releases previous batches instead of keeping a second replay copy of the whole transcript.
+Jolo uses the normal terminal buffer and compact live controls. Completed transcript batches are appended through Ink's stdout writer as logical lines; automatic display wraps are removed before printing so terminals such as Kitty can reflow old replies when zoom changes the width. Paragraph breaks, separate list items, code rows, and table rows remain explicit. Only the welcome uses `Static`, and Ink releases previous batches instead of keeping a second replay copy of the whole transcript. The terminal owns wheel/trackpad scrolling while Jolo runs. On exit, Jolo clears the visible screen and restores the cursor and terminal input mode; saved conversations remain available through `/sessions`.
 
 The patch handles normal-buffer resize problems:
 

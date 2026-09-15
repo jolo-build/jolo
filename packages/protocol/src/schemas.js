@@ -693,6 +693,17 @@ export const BudgetSettingsSchema = z.object({
   maxIterations: z.number().int().min(1).max(10_000).default(512),
   maxActiveMs: z.number().int().min(1_000).max(7 * 24 * 3_600_000).default(4 * 3_600_000),
   toolDeadlineMs: z.number().int().min(1_000).max(3_600_000).default(120_000),
+  // Hosted CLIs own their tool lifecycles, including long commands and background
+  // jobs. Only impose a host-side per-tool deadline when explicitly configured.
+  hostedToolDeadlineMs: z.number().int().min(1_000).max(3_600_000).nullable().default(null),
+});
+
+// Defaults belong on reads, not patches: changing one limit must preserve the others.
+const BudgetPatchSchema = z.object({
+  maxIterations: BudgetSettingsSchema.shape.maxIterations.removeDefault().optional(),
+  maxActiveMs: BudgetSettingsSchema.shape.maxActiveMs.removeDefault().optional(),
+  toolDeadlineMs: BudgetSettingsSchema.shape.toolDeadlineMs.removeDefault().optional(),
+  hostedToolDeadlineMs: BudgetSettingsSchema.shape.hostedToolDeadlineMs.removeDefault().optional(),
 });
 
 export const SettingsSchema = z.object({
@@ -772,7 +783,7 @@ Object.assign(MethodSchemas, {
       provider: ProviderSettingsSchema.nullable().optional(),
       model: ModelRefSchema.nullable().optional(),
       providers: ProviderOverridesSchema.optional(),
-      budgets: BudgetSettingsSchema.partial().optional(),
+      budgets: BudgetPatchSchema.optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
     }),
     result: z.object({ settings: SettingsSchema }),

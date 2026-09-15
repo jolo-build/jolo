@@ -1,5 +1,5 @@
 // Bundle the renderer with Bun; Electron loads the static output from dist/.
-import { cpSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 const root = path.resolve(import.meta.dir, "..");
 const dist = path.join(root, "dist");
@@ -14,6 +14,9 @@ for (const directory of ["src/main", "smoke"]) {
   }
 }
 mkdirSync(dist, { recursive: true });
+// Chunks are named by content, and the root build copies this whole directory into the app bundle, so
+// the output of earlier builds would ship alongside the current one. Only the bundle's own files go.
+for (const file of readdirSync(dist)) if (/^(main|chunk-[a-z0-9]+)\.js$/.test(file)) rmSync(path.join(dist, file));
 const result = await Bun.build({
   entrypoints: [path.join(root, "src/renderer/main.jsx")],
   outdir: dist,

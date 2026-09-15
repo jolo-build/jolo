@@ -74,8 +74,8 @@ export const pointLabel = (node) => (node.id.endsWith("start") ? "start" : "end"
  *   wrap: (text: string) => string[],
  *   measure: (lines: string[], node: object) => { w: number, h: number },
  *   gapMinor: number, lane: number,
- *   labelRoom: (text: string) => number,
- *   labelSpan: (text: string) => number,
+ *   labelRoom: (text: string) => number, // room a labelled lane needs along the travel: width across, height down
+ *   labelSpan: (text: string) => number, // the label's extent across the travel: the widest line it wraps to
  *   snap?: (value: number) => number,
  *   inset?: number, placeholder?: number,
  * }} metrics sizes in whatever unit the caller draws in. `inset` is 1 where a box's last row *is* its
@@ -164,10 +164,14 @@ export function layoutFlowchart(model, metrics) {
       const from = centre(byId.get(segment.from));
       const to = centre(byId.get(segment.to));
       const label = segment.edge.label && !byId.get(segment.from).dummy ? segment.edge.label : "";
-      if (label && !vertical) room = Math.max(room, labelRoom(label));
+      if (label) room = Math.max(room, labelRoom(label));
       if (from === to && !label) { segment.lane = null; segment.laneLabel = label; continue; }
-      const start = Math.min(from, to);
-      const stop = Math.max(from, to) + (label && vertical ? labelSpan(label) : 0);
+      // A label centred on its run can reach past either end of it, so the lane is reserved for the run
+      // and the label's wrapped span together.
+      const mid = (from + to) / 2;
+      const reach = label && vertical ? labelSpan(label) / 2 : 0;
+      const start = Math.min(from, to, mid - reach);
+      const stop = Math.max(from, to, mid + reach);
       let slot = used.findIndex((end) => end < start - 1);
       if (slot === -1) { slot = used.length; used.push(0); }
       used[slot] = stop;
@@ -220,15 +224,38 @@ export function layoutFlowchart(model, metrics) {
     const to = byId.get(segment.to);
     if (!from || !to) continue;
     if (segment.sameLayer) {
-      // Neighbours in one layer, or a node pointing at itself: marked beside the box rather than routed,
-      // because a line between them would have to cross the boxes they sit in.
+      // Neighbours in one layer, or a node pointing at itself. A self-loop is marked beside the box; a link
+      // between neighbours runs between the sides that face each other, jogging where their centres differ.
       const a = place(from);
       const b = place(to);
-      if (from === to) { loops.push({ id: from.id, x: a.x + from.w, y: a.y + half(from.h) }); continue; }
-      const points = vertical
-        ? [{ x: a.x + from.w, y: a.y + half(from.h) }, { x: b.x, y: b.y + half(to.h) }]
-        : [{ x: a.x + half(from.w), y: a.y + from.h }, { x: b.x + half(to.w), y: b.y }];
-      links.push({ edge: segment.edge, style: segment.edge.style, points, head: null, label: null, aside: true });
+      if (from === to) {
+        const loopLabel = segment.edge.label
+          ? { text: segment.edge.label, lines: wrap(segment.edge.label), x: a.x + from.w + lane, y: a.y + half(from.h), align: "start" }
+          : null;
+        loops.push({ id: from.id, x: a.x + from.w, y: a.y + half(from.h), label: loopLabel });
+        continue;
+      }
+      const ahead = vertical ? b.x + half(to.w) >= a.x + half(from.w) : b.y + half(to.h) >= a.y + half(from.h);
+      const aMid = vertical ? a.y + half(from.h) : a.x + half(from.w);
+      const bMid = vertical ? b.y + half(to.h) : b.x + half(to.w);
+      const aPort = vertical ? (ahead ? a.x + from.w : a.x) : (ahead ? a.y + from.h : a.y);
+      const bPort = vertical ? (ahead ? b.x : b.x + to.w) : (ahead ? b.y : b.y + to.h);
+      const jog = snap((aPort + bPort) / 2);
+      const points = (vertical
+        ? [{ x: aPort, y: aMid }, { x: jog, y: aMid }, { x: jog, y: bMid }, { x: bPort, y: bMid }]
+        : [{ x: aMid, y: aPort }, { x: aMid, y: jog }, { x: bMid, y: jog }, { x: bMid, y: bPort }]
+      ).filter((point, index, all) => index === 0 || point.x !== all[index - 1].x || point.y !== all[index - 1].y);
+      // The head sits on the node the edge was written to point at — the near end for a link laid out
+      // backwards, as it is everywhere else.
+      const head = segment.edge.arrow === "none" ? null
+        : segment.reversedEdge
+          ? (vertical ? { x: aPort, y: aMid, dir: ahead ? "left" : "right" } : { x: aMid, y: aPort, dir: ahead ? "up" : "down" })
+          : (vertical ? { x: bPort, y: bMid, dir: ahead ? "right" : "left" } : { x: bMid, y: bPort, dir: ahead ? "down" : "up" });
+      if (head) head.kind = segment.edge.arrow;
+      const label = segment.edge.label
+        ? { text: segment.edge.label, lines: wrap(segment.edge.label), x: vertical ? jog : (aMid + bMid) / 2, y: vertical ? (aMid + bMid) / 2 : jog, align: "center" }
+        : null;
+      links.push({ edge: segment.edge, style: segment.edge.style, points, head, label, aside: true });
       continue;
     }
     const exit = port(from, "exit");
@@ -243,10 +270,13 @@ export function layoutFlowchart(model, metrics) {
       ? [exit, { x: exit.x, y: laneAt }, { x: enter.x, y: laneAt }, enter]
       : [exit, { x: laneAt, y: exit.y }, { x: laneAt, y: enter.y }, enter];
     const trimmed = points.filter((point, index) => index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y);
+    // A label sits centred on its own run of the link, the way mermaid draws it, wrapped to as many
+    // lines as the caller's wrap allows.
     const label = segment.laneLabel
-      ? vertical
-        ? { text: segment.laneLabel, x: Math.max(exit.x, enter.x), y: laneAt, align: "start" }
-        : { text: segment.laneLabel, x: laneAt, y: enter.y, align: reversed ? "end" : "start" }
+      ? { text: segment.laneLabel, lines: wrap(segment.laneLabel),
+          ...(vertical
+            ? { x: (exit.x + enter.x) / 2, y: laneAt, align: "center" }
+            : { x: laneAt, y: (exit.y + enter.y) / 2, align: reversed ? "end" : "start" }) }
       : null;
     links.push({
       edge: segment.edge,
@@ -268,8 +298,12 @@ export function layoutFlowchart(model, metrics) {
   for (const { label } of links) {
     if (!label) continue;
     const span = labelSpan(label.text);
-    left = Math.min(left, label.align === "end" ? label.x - span : label.x);
-    right = Math.max(right, label.align === "end" ? label.x : label.x + span);
+    const start = label.align === "end" ? label.x - span : label.align === "center" ? label.x - span / 2 : label.x;
+    left = Math.min(left, start);
+    right = Math.max(right, start + span);
+  }
+  for (const loop of loops) {
+    if (loop.label) right = Math.max(right, loop.label.x + labelSpan(loop.label.text));
   }
   const shift = (point) => point ? { ...point, x: point.x - left } : point;
   return {
@@ -277,7 +311,7 @@ export function layoutFlowchart(model, metrics) {
     height,
     nodes: nodes.map((node) => ({ ...node, ...shift(place(node)) })),
     links: links.map((link) => ({ ...link, points: link.points.map(shift), head: shift(link.head), label: shift(link.label), through: shift(link.through) })),
-    loops: loops.map(shift),
+    loops: loops.map((loop) => ({ ...shift(loop), label: loop.label ? shift(loop.label) : null })),
     groups: model.groups ?? [],
   };
 }

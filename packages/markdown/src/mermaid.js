@@ -13,7 +13,7 @@ const MAX_SOURCE_CHARS = 32 * 1024;
 const MAX_NODES = 120;
 const MAX_EDGES = 240;
 const MAX_EVENTS = 400;
-const MAX_LABEL_CHARS = 200;
+const MAX_LABEL_CHARS = 400;
 
 const SHAPES = [
   // Longest delimiters first: "[[x]]" must not be read as "[x]" with stray brackets.

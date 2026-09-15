@@ -70,6 +70,19 @@ function DesktopWorkspace() {
   const boardActive = paneViews[layout.active] === 'board';
   const [sidebarState, setSidebarState] = useState(() => readSidebar(window.localStorage));
   const sidebarHidden = boardActive || sidebarState.collapsed;
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const canPeekSidebar = sidebarState.collapsed && !boardActive && !settingsOwner;
+  const sidebarPeeking = canPeekSidebar && sidebarHovered;
+  useEffect(() => { setSidebarHovered(false); }, [sidebarState.collapsed, boardActive, settingsOwner]);
+  useEffect(() => {
+    if (!sidebar) return;
+    // The sidebar content is portaled from WorkspacePane; listen on its DOM host.
+    const leave = () => { if (!sidebar.contains(document.activeElement)) setSidebarHovered(false); };
+    const blur = event => { if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) setSidebarHovered(false); };
+    sidebar.addEventListener('pointerleave', leave);
+    sidebar.addEventListener('focusout', blur);
+    return () => { sidebar.removeEventListener('pointerleave', leave); sidebar.removeEventListener('focusout', blur); };
+  }, [sidebar]);
   const [viewport, setViewport] = useState(window.innerWidth);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const width = sidebarWidth(sidebarState.width, viewport);
@@ -103,6 +116,7 @@ function DesktopWorkspace() {
     return id;
   }, []);
   const close = useCallback((id) => dispatch({ type: "close", id }), []);
+  const focusPane = useCallback((id) => dispatch({ type: "focus", id }), []);
   const zoom = useCallback((id) => dispatch({ type: "zoom", id }), []);
   const resize = useCallback((id, ratio) => dispatch({ type: "resize", id, ratio }), []);
   // Browser guests are expensive; retain the existing one-live-browser policy across splits.
@@ -154,11 +168,12 @@ function DesktopWorkspace() {
   const geometry = paneRects(layout.tree);
   const acceptsTaskDrop = event => draggedTask && !settingsOwner && layout.panes.length < MAX_PANES &&
     !document.querySelector('dialog[open]') && Array.from(event.dataTransfer.types).includes(TASK_DRAG_TYPE);
-  return <TaskDragContext.Provider value={setDraggedTask}><div className={`app split-app${sidebarHidden ? ' sidebar-collapsed' : ''}${sidebarDragging ? ' sidebar-resizing' : ''}`} data-platform={window.jolo.platform}
+  return <TaskDragContext.Provider value={setDraggedTask}><div className={`app split-app${sidebarHidden ? ' sidebar-collapsed' : ''}${sidebarPeeking ? ' sidebar-peeking' : ''}${sidebarDragging ? ' sidebar-resizing' : ''}`} data-platform={window.jolo.platform}
     style={/** @type {import('react').CSSProperties} */ ({ '--sidebar-width': `${sidebarHidden ? 0 : width}px`, '--sidebar-expanded-width': `${width}px`, '--header-sidebar-width': sidebarHidden ? 'max-content' : `${width}px` })}>
     <div className="shell-slot" ref={setHeader} />
     <div className={`workspace-body${settingsOwner ? ' settings-open' : ''}`}>
-      <div className="workspace-sidebar" id="workspace-sidebar" ref={setSidebar} inert={Boolean(settingsOwner) || sidebarHidden} aria-hidden={sidebarHidden || undefined} />
+      {canPeekSidebar && <div className="sidebar-hover-edge" aria-hidden="true" onPointerEnter={event => { if (event.pointerType !== 'touch') setSidebarHovered(true); }} />}
+      <div className="workspace-sidebar" id="workspace-sidebar" ref={setSidebar} inert={Boolean(settingsOwner) || (sidebarHidden && !sidebarPeeking)} aria-hidden={(sidebarHidden && !sidebarPeeking) || undefined} />
       {!settingsOwner && !sidebarHidden && <SidebarDivider width={width} maximum={sidebarLimit(viewport)} onResize={resizeSidebar} onDragging={setSidebarDragging} />}
       <div className="pane-canvas" ref={canvas} data-pane-count={layout.panes.length} inert={Boolean(settingsOwner)}>
         {layout.panes.map((pane) => {
@@ -167,7 +182,7 @@ function DesktopWorkspace() {
           return <section key={pane.id} className={`pane-slot${layout.active === pane.id ? " focused" : ""}${layout.panes.length > 1 ? " compact-pane" : ""}`} data-pane-id={pane.id} aria-label={`Workspace pane ${pane.id.slice(5)}`} hidden={hidden}
             style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
             onPointerDownCapture={() => dispatch({ type: "focus", id: pane.id })} onFocusCapture={() => dispatch({ type: "focus", id: pane.id })}>
-            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onViewChange={onViewChange} onActivate={() => dispatch({ type: "focus", id: pane.id })} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} />
+            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onViewChange={onViewChange} onFocus={focusPane} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} />
             {draggedTask && !hidden && !settingsOwner && <div className="task-split-target"
               onDragOver={event => {
                 if (!acceptsTaskDrop(event)) return;
