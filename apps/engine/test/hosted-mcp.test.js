@@ -28,8 +28,8 @@ test('browser tools stay configured while workspace hosts attach and disconnect'
   const first = config({ id: 'one' }, { id: 'first' });
   expect(first.hasBrowser).toBe(true);
   expect(first.hasSearch).toBe(false);
-  expect(first.server.args.at(-1)).toBe('schedule,browser');
-  expect(issued).toEqual([['first', 'one', [...SCHEDULE_METHODS, 'browser.call']]]);
+  expect(first.server.args.at(-1)).toBe('schedule,delegation,browser');
+  expect(issued).toEqual([['first', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call']]]);
   expect(browser.hasBrowser('one')).toBe(false);
   browser.setOpener(conn, ['two']);
   expect(config({ id: 'one' }, { id: 'second' }).hasBrowser).toBe(true);
@@ -37,8 +37,8 @@ test('browser tools stay configured while workspace hosts attach and disconnect'
   browser.setOpener(conn, ['one', 'two']);
   const third = config({ id: 'one' }, { id: 'third' });
   expect(third.hasBrowser).toBe(true);
-  expect(third.server.args.at(-1)).toBe('schedule,browser');
-  expect(issued.at(-1)).toEqual(['third', 'one', [...SCHEDULE_METHODS, 'browser.call']]);
+  expect(third.server.args.at(-1)).toBe('schedule,delegation,browser');
+  expect(issued.at(-1)).toEqual(['third', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call']]);
   browser.setOpener(conn, []);
   expect(config({ id: 'one' }, { id: 'fourth' }).hasBrowser).toBe(true);
   expect(browser.hasBrowser('one')).toBe(false);
@@ -57,6 +57,6 @@ test('a search-capable engine adds the search bridge and warms the index', () =>
   const hosted = config({ id: 'one', path: '/repo' }, { id: 'run' });
   expect(hosted.hasBrowser).toBe(false);
   expect(hosted.hasSearch).toBe(true);
-  expect(hosted.server.args.at(-1)).toBe('schedule,search');
+  expect(hosted.server.args.at(-1)).toBe('schedule,delegation,search');
   expect(acquired).toEqual(['/repo']);
 });

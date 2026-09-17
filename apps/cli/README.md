@@ -53,6 +53,16 @@ Headless exit codes are 0 for success, 1 for failure, 2 for usage errors, 3 for 
 
 The engine starts automatically and can outlive a client. Finish work before `jolo engine stop`. Use `--home <dir>` and `--profile <name>` for separate state. Browser tools need a connected desktop host. Hosted programs retain your local user's privileges; Jolo mediates the operations exposed through its tools and adapters.
 
+## Model mentions and child tasks
+
+See the [animated walkthrough](../../README.md#delegate-to-a-model) for the selection, child task, and result flow.
+
+Type `^` anywhere in the prompt to search installed agents and connected API providers. Use ↑/↓ and Enter or Tab to insert a model and effort choice; the next Enter sends the message. Tell the current agent what work to delegate. The parent keeps its model, and the child runs on the exact source, model, and effort you selected.
+
+Selections persist as aliases in the conversation, so later turns can reuse them. The agent uses `delegation_models`, `delegate_task`, `delegation_status`, and `delegation_cancel` to manage the children and collect their final responses. Each child appears in `/sessions` and shares the workspace with its parent. Up to four children can work at once, with sixteen children per turn and sixteen model selections per conversation. Children cannot delegate further. Cancelling the parent cancels its active children; if a child needs approval, open its conversation to respond.
+
+For headless prompts, use the explicit form `^agent:codex/MODEL~high` or `^provider:openai/MODEL`. URI-encode model IDs containing slashes or other reserved characters; omit `~high` for default effort. Unavailable models fail without substitution. Carets inside code examples or escaped as `\^` do not authorize delegation.
+
 ## Schedules
 
 A schedule is a heartbeat on a task: a prompt that returns on an interval so the task can check on delegated work, review the board, or correct course without someone watching the clock. Schedules are durable — they live in the engine and survive restarts — and an active schedule keeps the engine resident.

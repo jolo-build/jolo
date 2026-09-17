@@ -23,6 +23,7 @@ Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provide
 - Open files, a terminal, and a browser without leaving the app.
 - Work on several tasks at once, with split views and separate Git worktrees.
 - Create a plan, choose an agent for each step, and run the steps in order.
+- Type `^` to choose a model for a child task, such as an independent review or investigation.
 - Give a task a heartbeat — a prompt that returns on an interval to check on delegated work.
 - Attach files and explore diagrams and interactive visualizations.
 
@@ -90,6 +91,17 @@ jolo run --agent claude "Explain this repository" --path /path/to/project
 ```
 
 See the [CLI guide](apps/cli/README.md) for more commands.
+
+## Delegate to a model
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/model-mentions-dark.svg">
+  <img alt="Animated walkthrough: choose a model with ^, delegate a review, and collect the child task’s result in the parent conversation" src="assets/brand/model-mentions-light.svg">
+</picture>
+
+In desktop or the terminal UI, type `^` in your message and choose a model, its agent or API provider, and an optional effort level. Ask your current agent what to delegate—for example, “Ask this model to review the diff.” The selection makes that exact model available for child tasks without changing who answers the main conversation.
+
+Selected models remain available in the conversation. Each child has its own conversation in the same workspace; the parent can collect its response and summarize it. Desktop shows child-task status with controls to open or stop each child. In the CLI, `/sessions` opens child conversations. Stopping the parent also stops its active children. A turn supports up to four active children, and children cannot create further children.
 
 ## Appearance
 

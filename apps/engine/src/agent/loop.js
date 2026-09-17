@@ -1,3 +1,4 @@
+import { delegationInstructions } from '../delegation/index.js';
 // Agent loop: bounded provider requests, batched tools, durable transcript items.
 // Imports no filesystem/process adapters; every tool goes through the dispatcher (§10.1).
 import { readFileSync } from "node:fs";
@@ -131,7 +132,7 @@ export function createAgentExecutor(deps) {
         let contextItems = portableItems(providerItems(storage, session.id), nativeRef);
         const build = () => {
           const tools = registry.declarations({ browserAvailable: dispatcher.hasBrowser(workspace.id) });
-          const instructions = applicationInstructions({ workspaceRoot: workspace.path, toolNames: tools.map(tool => tool.name), standalone: storage.getProject?.(session.projectId)?.preferences?.standalone === true });
+          const instructions = [applicationInstructions({ workspaceRoot: workspace.path, toolNames: tools.map(tool => tool.name), standalone: storage.getProject?.(session.projectId)?.preferences?.standalone === true }), delegationInstructions(storage, run)].filter(Boolean).join('\n\n');
           return buildRequest({ capabilities, items: contextItems, tools, instructions, repoInstructions, sessionId: session.id, runId: run.id, reasoningEffort: providerSettings.reasoningEffort });
         };
         try {

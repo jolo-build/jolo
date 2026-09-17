@@ -1,3 +1,4 @@
+import { delegationTools } from '../tools/delegation.js';
 import { requireInteractive } from "./authorization.js";
 import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
@@ -19,14 +20,14 @@ import { linkChatFolder } from '../account/chat-context.js';
  * @typedef {{
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, credentials: any,
  *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
- *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, agents: any, runs: any,
+ *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
  *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
  * }} RpcDependencies
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -217,23 +218,39 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
       return { session, messages, runs: storage.listRunsForSession(sessionId).map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
+    'delegation.models': ({ source }) => delegations.models(source),
+    'delegation.list': ({ sessionId }) => delegations.list(sessionId),
+    'delegation.call': (params, conn) => {
+      const runId = conn?.capability?.runId ?? params.runId;
+      const run = runId && storage.getRun(runId);
+      if (!run) throw new ProtocolError('permission_denied', 'Delegation needs an existing parent run');
+      const session = storage.getSession(run.sessionId);
+      if (!session || (conn?.capability && session.workspaceId !== conn.capability.workspaceId)) throw new ProtocolError('permission_denied', 'The parent workspace is unavailable');
+      const tool = delegationTools.find(tool => tool.name === params.name);
+      return tool.execute({ delegations, runId }, tool.params.parse(params.arguments));
+    },
     "run.start": async (params) => {
       const existing = storage.findRunByRequest(params.sessionId, params.requestId);
       if (existing) return { run: existing, deduplicated: true };
+      const selected = await delegations?.prepare(params.prompt) ?? [];
+      const admit = request => storage.transaction(() => {
+        delegations?.register(request.sessionId, selected);
+        return runs.start(request);
+      });
       const resolved = tasks ? await tasks.resolve(params.prompt) : { references: [], assertCurrent() {} };
       resolved.assertCurrent();
       params = { ...params, taskReferences: resolved.references };
       // "@codex …" at the start of a message calls that agent into this conversation for one turn (§6.5).
       const session = storage.getSession(params.sessionId);
       const named = params.execution?.preset ? { agentId: SELF_MENTION } : params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
-      if (!named) return runs.start(params);
+      if (!named) return admit(params);
       if (named.agentId !== SELF_MENTION) {
         const manifest = agents.catalog.get(named.agentId); // throws when a client names an agent that is gone
         if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a terminal and cannot answer a task`);
       } else if (!session?.agentId) {
-        return runs.start(params); // Jolo already answers here
+        return admit(params); // Jolo already answers here
       }
-      return runs.start({ ...params, execution: { ...(params.execution ?? {}), agentId: named.agentId } });
+      return admit({ ...params, execution: { ...(params.execution ?? {}), agentId: named.agentId } });
     },
     "run.cancel": (params) => ({ run: runs.cancel(params) }),
     "run.sendNow": (params, conn) => { requireInteractive(conn); return { run: runs.sendNow(params) }; },

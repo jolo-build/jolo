@@ -51,7 +51,7 @@ export function insideWorkspace(root, candidate) {
  * What a run was told to be answered with, as an override the catalog understands: a value the task chose, or
  * nothing at all, so the agent's own configuration stands (§6.6).
  */
-export const runChoice = (run) => ({
+export const runChoice = (run) => run?.execution?.pinned ? { model: run.execution.model, effort: run.execution.effort ?? null } : ({
   ...(run?.execution?.model ? { model: run.execution.model } : {}),
   ...(run?.execution?.effort ? { effort: run.execution.effort } : {}),
 });

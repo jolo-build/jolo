@@ -16,7 +16,7 @@ export class ToolDispatcher {
    * The last collaborators are what a given deployment happens to host: an engine without a
    * browser, a process supervisor, a patch directory, a search index or a scheduler simply leaves
    * them out, and the tools that need them report themselves unavailable.
-   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any, schedules?: () => any }} options
+   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any, schedules?: () => any, delegations?: () => any }} options
    */
   constructor(options) {
     this.registry = options.registry;
@@ -29,6 +29,7 @@ export class ToolDispatcher {
     this.patchesDir = options.patchesDir ?? null;
     this.search = options.search ?? null;
     this.schedules = options.schedules ?? null; // late-bound: the scheduler is built after the dispatcher
+    this.delegations = options.delegations ?? null;
   }
 
   hasBrowser(workspaceId) { return Boolean(this.browser?.hasBrowser(workspaceId)); }
@@ -82,11 +83,13 @@ export class ToolDispatcher {
       const ctx = {
         workspace,
         sessionId: run.sessionId,
+        runId: run.id,
         storage: this.storage,
         signal: controller.signal,
         env: this.env,
         search: this.search,
         schedules: this.schedules?.() ?? null,
+        delegations: this.delegations?.() ?? null,
         storeArtifact: (kind, buffer) => this.storeArtifact(run.sessionId, kind, buffer),
         invocationId: invocation.id,
         deadlineMs: leaseMs,

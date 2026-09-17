@@ -1,3 +1,4 @@
+import { delegationInstructions } from '../delegation/index.js';
 // What one answerer is told when it takes over a conversation another has been holding.
 //
 // The shape is borrowed from how an agent hands work to its own next context when its window fills, and it
@@ -204,13 +205,15 @@ export function createSummarizer({ providerFactory, settings, log, sessionId, ru
  */
 export async function handoffPrompt({ storage, run, session, resumed, from = null, to = null, summarize = null }) {
   const asked = askedOf(run, storage);
+  const guidance = delegationInstructions(storage, run);
+  const withDelegation = prompt => guidance ? `${guidance}\n\n${prompt.includes('\n\nCurrent request:\n') ? prompt : `Current request:\n${prompt}`}` : prompt;
   const seen = session?.agentState?._jolo?.seen?.[to?.id];
   const afterOrdinal = resumed && Number.isInteger(seen) ? seen : -1;
   const recent = recentHistory(storage, run.sessionId, { excludeRunId: run.id, afterOrdinal });
-  if (resumed && !recent.keptCount && !recent.omittedCount) return asked;
+  if (resumed && !recent.keptCount && !recent.omittedCount) return withDelegation(asked);
   const handoff = await buildHandoff(storage, { sessionId: run.sessionId, excludeRunId: run.id, from, to, summarize, afterOrdinal });
   const context = resumed ? `Shared conversation updates since your previous turn. These messages were produced outside your vendor thread. Use the recorded work and document paths when interpreting the current request.\n${handoff.text}` : handoff.text;
-  return context.trim() ? `${context}\n\nCurrent request:\n${asked}` : asked;
+  return withDelegation(context.trim() ? `${context}\n\nCurrent request:\n${asked}` : asked);
 }
 
 /** Advance delivery only after a completed turn. A failed/cancelled attempt must not

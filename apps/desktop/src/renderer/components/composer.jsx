@@ -1,3 +1,4 @@
+import { typingModelMention, completeModelMention, modelMentionChoices, modelMentions, loadModelMentionCatalog } from '@jolo/protocol/model-mentions';
 import { modelLabel } from '../model-options.js';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -140,6 +141,18 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [listAt, setListAt] = useState(null);
+  const modelMention = disabled ? null : typingModelMention(text, caret);
+  const [modelReport, setModelReport] = useState(null);
+  const [modelError, setModelError] = useState('');
+  const mentioningModel = Boolean(modelMention);
+  useEffect(() => {
+    if (!mentioningModel) return;
+    let current = true;
+    setModelError('');
+    loadModelMentionCatalog(engineCall, report => { if (current) setModelReport(report); })
+      .catch(error => { if (current) setModelError(error.message); });
+    return () => { current = false; };
+  }, [mentioningModel]);
   const typed = disabled ? null : typingMention(text, caret);
   const taskMatch = !disabled && /(?:^|[\s(\[])#([A-Z][A-Z0-9]{0,23}(?:-[0-9]{0,15})?|)$/i.exec(text.slice(0, caret));
   const taskQuery = taskMatch ? taskMatch[1].toUpperCase() : null;
@@ -154,8 +167,9 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [taskQuery]);
-  const choices = taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
+  const choices = modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
   const picking = choices.length > 0;
+  useEffect(() => { document.querySelector('.mention-list .selected')?.scrollIntoView({ block: 'nearest' }); }, [highlight]);
   // The compose area hides what overflows it, so the list is placed against the window instead of the form.
   useEffect(() => {
     if (!picking) { setListAt(null); return; }
@@ -164,6 +178,12 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
   }, [picking, choices.length, text]);
   const choose = (option) => {
     if (!option) return;
+    if (option.modelMention) {
+      const next = completeModelMention(text, caret, option.selector);
+      setText(next.value); setCaret(0);
+      requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(next.cursor, next.cursor); });
+      return;
+    }
     if (option.task) {
       const start = caret - taskQuery.length - 1;
       const insert = `#${option.key} `;
@@ -229,13 +249,13 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
     </div>)}</div>}
     {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
-    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
+    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
       {choices.map((option, index) => <li key={option.id}>
         <button type="button" role="option" aria-selected={index === highlight} className={index === highlight ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-          <span className="mention-name">{option.task ? "#" : "@"}{option.task ? option.key : option.id}</span><span className="mention-detail">{option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
+          <span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.id}</span><span className="mention-detail">{option.modelMention ? "" : option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
         </button>
       </li>)}
-      <li className="mention-hint">{taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
+      <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
     <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
@@ -258,6 +278,8 @@ export function Composer({ standalone = false, disabled, autoFocusOnType = false
           } else { void submit(); }
         }
       }} />
+    {mentioningModel && !choices.length && <p className="hint" role="status">{modelError || (!modelReport || modelReport.loading ? 'Loading available models…' : modelReport.notes[0] || 'No matching models. Check your agent installation or provider credentials in Settings.')}</p>}
+    {modelMentions(text).length > 0 && <div className="delegation-chips" aria-label="Selected child-task models">{modelMentions(text).map(mention => <span className="delegation-chip" key={mention.start} title={mention.selector}><Icon name="bolt" size={13} /><span>{modelMentionChoices(modelReport?.models ?? [], mention.selector).find(choice => choice.selector === mention.selector)?.label ?? mention.selector}</span><button type="button" aria-label={`Remove ${mention.selector}`} onClick={() => { setText(text.slice(0, mention.start) + text.slice(mention.end)); input.current?.focus(); }}><Icon name="close" size={12} /></button></span>)}</div>}
     <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>

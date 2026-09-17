@@ -137,7 +137,7 @@ main{padding:28px 20px}
 /* Desktop walkthroughs: a scaled app surface with a continuous playback timeline. */
 .demo{background:#f6f7f5;border:0;box-shadow:0 0 0 1px #2426290a;border-radius:12px}
 .demo-canvas{padding:0;height:auto;aspect-ratio:900/520;overflow:hidden}
-.film-screen{width:900px;height:520px;transform-origin:top left;display:flex;background:var(--bg);position:relative;font-size:13px;overflow:hidden}
+.film-screen{width:900px;height:520px;transform-origin:top left;display:flex;background:var(--bg);position:absolute;top:0;left:0;font-size:13px;overflow:hidden}
 .film-sidebar{width:224px;flex:none;padding:0 10px 18px;background:var(--side);border-right:1px solid var(--line)}
 .film-wordmark{font-size:29px;font-weight:550;letter-spacing:-2px;padding:0 8px 22px}
 .film-wordmark span{float:right;color:#898b91;font-size:15px;letter-spacing:0;margin-top:8px}
@@ -352,3 +352,14 @@ main{padding:28px 20px}
 .film-checkin .film-icon{flex:none}
 .film-screen[data-kind='schedule'][data-stage='2'] .film-checkin,.film-screen[data-kind='schedule'][data-stage='3'] .film-checkin{opacity:1;transform:none}
 .film-plan-row b.film-beat-state{margin-left:auto;white-space:nowrap}
+
+.film-delegation{position:relative}
+.film-delegation-card{display:flex;flex-direction:column;gap:9px;margin-top:18px;padding:16px;border:1px solid #dfe1e5;border-radius:10px;font-size:12px}
+.film-delegation-card strong{display:flex;align-items:center;gap:8px;font-weight:500}
+.film-delegation-card small,.film-child-state{color:#73767d;font-size:11px}
+.film-delegation-picker{position:absolute;left:22px;right:22px;bottom:126px;background:white;border:1px solid #dfe1e5;border-radius:9px;padding:6px;box-shadow:0 4px 20px #24262916}
+.film-delegation-picker b{display:flex;gap:18px;padding:12px;background:#f0f1f2;border-radius:6px;font-size:12px;font-weight:500}
+.film-delegation-picker b span{color:#73767d}
+.film-delegation-picker small{display:block;padding:8px;font-size:10px;color:#73767d}
+.film-screen[data-kind='delegation'][data-stage='0'] .film-messages,.film-screen[data-kind='delegation'][data-stage='1'] .film-messages{visibility:hidden}
+.film-screen[data-kind='delegation']:not([data-stage='0']) .film-delegation-picker{display:none}

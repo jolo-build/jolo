@@ -1,0 +1,84 @@
+// Regenerate the README's illustrated walkthrough: bun scripts/model-mention-demo.js
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+for (const [name, p] of Object.entries({
+  light: { bg: '#ffffff', panel: '#f6f8fa', hover: '#eaeef2', text: '#1f2328', muted: '#57606a', border: '#d0d7de', accent: '#0969da', success: '#1a7f37' },
+  dark: { bg: '#0d1117', panel: '#161b22', hover: '#21262d', text: '#e6edf3', muted: '#9198a1', border: '#30363d', accent: '#58a6ff', success: '#3fb950' },
+})) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title desc">
+  <title id="title">Choose a model and delegate a child task in Jolo</title>
+  <desc id="desc">An illustrated, repeating walkthrough: type a caret, choose a model and effort, ask it to review a diff, then read its result in the parent conversation. The parent keeps its own model. With reduced motion, the completed result stays visible.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: ${p.text}; font-size: 17px; }
+    .muted { fill: ${p.muted}; font-size: 14px; } .small { font-size: 13px; } .bold { font-weight: 600; }
+    .accent { fill: ${p.accent}; } .success { fill: ${p.success}; }
+    .stage { opacity: 0; } .done { opacity: 1; }
+    @keyframes choose { 0%,28% { opacity:1; } 30%,100% { opacity:0; } }
+    @keyframes work { 0%,30% { opacity:0; } 32%,62% { opacity:1; } 64%,100% { opacity:0; } }
+    @keyframes done { 0%,64% { opacity:0; } 66%,100% { opacity:1; } }
+    @keyframes progress { from { width:0; } to { width:880px; } }
+    @keyframes pulse { 0%,100% { opacity:.35; } 50% { opacity:1; } }
+    .choose { animation:choose 15s linear infinite; } .work { animation:work 15s linear infinite; }
+    .done { animation:done 15s linear infinite; } .progress { animation:progress 15s linear infinite; }
+    .pulse { animation:pulse 1.2s ease-in-out infinite; }
+    @media (prefers-reduced-motion:reduce) { .stage,.progress,.pulse { animation:none; } .done { opacity:1; } }
+  </style>
+  <rect x="1" y="1" width="958" height="518" rx="18" fill="${p.bg}" stroke="${p.border}"/>
+  <path d="M1 66H959" stroke="${p.border}"/>
+  <text x="32" y="42" font-size="26" class="bold">jolo</text>
+  <text x="110" y="41" class="muted">/</text><text x="132" y="41">Review a change</text>
+  <rect x="704" y="22" width="224" height="28" rx="14" fill="${p.panel}"/>
+  <text x="816" y="41" text-anchor="middle" class="muted small">Parent model stays the same</text>
+
+  <g class="stage choose">
+    <text x="40" y="112" class="bold">1. Choose the model for the child task</text>
+    <text x="40" y="140" class="muted">Type ^ and search the models available through your agents and providers.</text>
+    <rect x="40" y="166" width="880" height="145" rx="12" fill="${p.bg}" stroke="${p.border}"/>
+    <rect x="48" y="174" width="864" height="56" rx="8" fill="${p.hover}"/>
+    <text x="66" y="209" class="bold">^ Selected model</text>
+    <text x="490" y="209" class="muted">Codex · high effort</text>
+    <text x="896" y="209" text-anchor="end" class="accent">↵</text>
+    <text x="66" y="261">^ Selected model</text><text x="490" y="261" class="muted">Codex · default effort</text>
+    <text x="66" y="294" class="muted small">↑/↓ select · Enter inserts the choice</text>
+    <rect x="40" y="328" width="880" height="112" rx="14" fill="${p.panel}" stroke="${p.border}"/>
+    <text x="62" y="366">Ask ^ to review the diff for bugs.</text>
+    <text x="62" y="412" class="muted">Select a model, then send your request.</text>
+  </g>
+
+  <g class="stage work">
+    <text x="40" y="112" class="bold">2. Let the selected model work on a focused task</text>
+    <rect x="40" y="138" width="880" height="56" rx="12" fill="${p.panel}"/>
+    <text x="62" y="173">Ask the selected model to review the diff for bugs.</text>
+    <text x="40" y="227" class="muted">Parent agent</text>
+    <text x="40" y="255">I’ll ask the selected model to review the changes.</text>
+    <rect x="40" y="279" width="880" height="114" rx="12" fill="${p.bg}" stroke="${p.border}"/>
+    <circle cx="67" cy="311" r="5" fill="${p.accent}" class="pulse"/>
+    <text x="84" y="317" class="bold">Review the diff</text>
+    <text x="62" y="349" class="muted">Selected model · Codex · high effort · working</text>
+    <text x="62" y="376" class="muted small">A separate conversation in the same workspace</text>
+    <rect x="824" y="300" width="74" height="34" rx="7" fill="${p.hover}"/>
+    <text x="861" y="323" text-anchor="middle" class="muted">Stop</text>
+    <text x="40" y="428" class="muted">Open the child conversation to follow its work or answer an approval.</text>
+  </g>
+
+  <g class="stage done">
+    <text x="40" y="112" class="bold">3. Get the result back in the main conversation</text>
+    <text x="40" y="157" class="muted">Parent agent</text>
+    <text x="40" y="190">The review found a missing null check in the save handler.</text>
+    <text x="40" y="220">The child’s response includes the affected code and a suggested fix.</text>
+    <rect x="40" y="252" width="880" height="108" rx="12" fill="${p.bg}" stroke="${p.border}"/>
+    <text x="62" y="291" class="success">✓</text><text x="88" y="291" class="bold">Review the diff</text>
+    <text x="62" y="324" class="muted">Selected model · Codex · high effort · completed</text>
+    <rect x="770" y="271" width="128" height="34" rx="7" fill="${p.hover}"/>
+    <text x="834" y="294" text-anchor="middle" class="muted">Open child task</text>
+    <text x="40" y="405" class="muted">The model selection remains available for later turns in this conversation.</text>
+    <text x="40" y="432" class="muted">Continue with your parent agent, or inspect the child’s full response.</text>
+  </g>
+  <text x="40" y="476" class="muted small">Illustrated workflow · type ^ in desktop or the terminal UI</text>
+  <rect x="40" y="495" width="880" height="3" rx="1.5" fill="${p.border}"/>
+  <rect x="40" y="495" width="880" height="3" rx="1.5" fill="${p.accent}" class="progress"/>
+</svg>
+`;
+  writeFileSync(path.join(import.meta.dir, `../assets/brand/model-mentions-${name}.svg`), svg);
+}

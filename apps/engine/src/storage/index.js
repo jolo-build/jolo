@@ -2,6 +2,7 @@ import { parseEvent, WORKING_RUN_STATES } from "@jolo/protocol";
 import { PermissionRepository } from "./permissions.js";
 import { PlanRepository } from "./plans.js";
 import { ScheduleRepository } from "./schedules.js";
+import { DelegationRepository } from "./delegations.js";
 // Storage service: the only module that touches SQLite.
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
@@ -37,6 +38,7 @@ export class Storage {
     this.permissionRepository = new PermissionRepository(this);
     this.plans = new PlanRepository(this);
     this.schedules = new ScheduleRepository(this);
+    this.delegations = new DelegationRepository(this);
     this.eventRepository = new EventRepository(this.db);
     this.eventRepository.bootstrap();
     this.eventRepository.prune();
