@@ -79,6 +79,7 @@ export const RunExecutionSchema = z.object({
   agentId: Id.nullable().default(null),
   model: z.string().max(200).nullable().default(null),
   effort: z.string().max(40).nullable().default(null),
+  pinned: z.boolean().optional(),
 });
 
 export const ImageMimeSchema = z.enum(IMAGE_MIME_TYPES);
@@ -730,7 +731,25 @@ export const BrowserCancelSchema = z.object({ invocationId: Id, reason: z.string
 export const BrowserOpenSchema = z.object({ invocationId: Id, workspaceId: Id, leaseMs: z.number().int().positive().max(30_000) });
 export const BrowserOpenerSchema = z.object({ workspaceIds: z.array(Id).max(64) });
 
+export const DelegationModelSchema = z.object({
+  alias: z.string().regex(/^m\d+$/), selector: z.string(), name: z.string(), execution: RunExecutionSchema,
+});
+export const DelegationSchema = z.object({
+  id: Id, parentRunId: Id, runId: Id, sessionId: Id, title: z.string(), modelAlias: z.string(),
+  state: RunStateSchema, failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
+  createdAt: IsoTimestamp, output: z.string(), truncated: z.boolean(),
+});
+
 Object.assign(MethodSchemas, {
+  'delegation.models': {
+    params: z.object({ source: z.string().max(80).optional() }),
+    result: z.object({ models: z.array(z.object({ source: z.string(), sourceName: z.string(), model: z.string(), name: z.string(), efforts: z.array(z.string()) })).max(1000), notes: z.array(z.string()) }),
+  },
+  'delegation.list': { params: z.object({ sessionId: Id }), result: z.object({ delegations: z.array(DelegationSchema).max(100) }) },
+  'delegation.call': {
+    params: z.object({ workspaceId: Id.optional(), runId: Id.optional(), name: z.enum(['delegation_models', 'delegate_task', 'delegation_status', 'delegation_cancel']), arguments: z.record(z.string(), z.unknown()).default({}) }),
+    result: z.union([z.object({ models: z.array(DelegationModelSchema).max(16) }), z.object({ delegation: DelegationSchema })]),
+  },
   'browser.call': {
     params: z.object({ workspaceId: Id, name: z.enum(['browser_open', 'browser_tabs', ...BROWSER_OPERATIONS.map(operation => `browser_${operation}`)]), arguments: z.record(z.string(), z.unknown()).default({}) }),
     result: z.object({ content: z.array(z.union([z.object({ type: z.literal('text'), text: z.string() }), z.object({ type: z.literal('image'), data: z.string().max(1_400_000), mimeType: z.literal('image/png') })])), structuredContent: z.record(z.string(), z.unknown()).optional(), isError: z.boolean() }),

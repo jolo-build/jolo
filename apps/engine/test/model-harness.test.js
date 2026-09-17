@@ -39,6 +39,7 @@ test('run overrides, session selection, profile defaults, and capabilities resol
   const session = { model: { preset: 'anthropic', model: 'session', effort: 'high' } };
   expect(resolveModelRef({ model })).toMatchObject(model);
   expect(resolveModelRef({ model }, session).model).toBe('session');
+  expect(resolveModelRef({ model }, session, { preset: 'anthropic', model: 'session', effort: null, pinned: true }).effort).toBeNull();
   expect(resolveModelRef({ model }, session, { preset: 'gemini', model: 'once' })).toMatchObject({ preset: 'gemini', model: 'once', effort: null, contextWindowTokens: null });
   expect(resolveModelRef({ model }, {}, { model: 'different' }).contextWindowTokens).toBeNull();
   expect(() => resolveModelRef({ model }, {}, { preset: 'gemini' })).toThrow('requires a model');

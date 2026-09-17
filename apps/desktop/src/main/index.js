@@ -52,6 +52,7 @@ const log = {
 const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "project.linkFolder", "chat.create", "session.create", "session.list", "session.page",
   "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
+  "delegation.models", "delegation.list", "delegation.call",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
   'account.status', 'account.sync', 'account.login', 'account.cancel', 'account.logout',

@@ -313,9 +313,10 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         // An agent may take the model over the protocol rather than on its command line. When it offers that
         // selector and knows the configured model, use it; the command-line flag has already covered the rest.
         const selector = modelSelector(configOptions);
+        if (run.execution?.pinned && chosen.model && selector && !selector.options.some(option => option.value === chosen.model)) throw new Error(`Selected model ${chosen.model} is no longer available`);
         if (chosen.model && selector && selector.options.some((option) => option.value === chosen.model)) {
           try { await request("session/set_config_option", { sessionId: state.sessionId, configId: selector.id, value: chosen.model }); }
-          catch (error) { log.warn("acp agent refused the configured model", { agentId: manifest.id, model: chosen.model, error: String(error?.message ?? error) }); }
+          catch (error) { if (run.execution?.pinned) throw error; log.warn("acp agent refused the configured model", { agentId: manifest.id, model: chosen.model, error: String(error?.message ?? error) }); }
         }
         const prompt = await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
         const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });

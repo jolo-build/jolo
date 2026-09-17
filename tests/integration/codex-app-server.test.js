@@ -53,6 +53,26 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Codex through its app-server", () => {
+  test('a model mention pins a child through the scoped MCP bridge and leaves the parent model unchanged', async () => {
+    const { client, session, runTo, messagesOf, text } = await boot();
+    try {
+      const available = await client.call('delegation.models', { source: 'agent:codex' });
+      expect(available.models.map(model => model.model)).toContain('fake-large');
+      const parent = await runTo('req_delegate', 'delegation-check ^agent:codex/fake-large~high');
+      expect(parent.state).toBe('completed');
+      const { delegations } = await client.call('delegation.list', { sessionId: session.id });
+      expect(delegations).toHaveLength(1);
+      expect(delegations[0]).toMatchObject({ state: 'completed', execution: { agentId: 'codex', model: 'fake-large', effort: 'high', pinned: true } });
+      expect(delegations[0].sessionId).not.toBe(session.id);
+      expect(await text((await messagesOf(parent.id)).at(-1))).toContain('fake-large');
+      expect(await text((await messagesOf(parent.id)).at(-1))).toContain('high');
+      const next = await runTo('req_parent_model', 'model');
+      expect(await text((await messagesOf(next.id)).at(-1))).toBe('Running the default model at the default effort.');
+      const aliases = await client.call('delegation.call', { runId: next.id, name: 'delegation_models' });
+      expect(aliases.models).toHaveLength(1);
+    } finally { await client.close(); }
+  }, 30_000);
+
   test('image-heavy conversations resume without replaying oversized history', async () => {
     const { client, repo, runTo, messagesOf, text } = await boot();
     try {

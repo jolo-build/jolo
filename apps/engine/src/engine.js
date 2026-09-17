@@ -22,6 +22,7 @@ import { TerminalService } from "./terminal/service.js";
 import { createBoard } from "./board/index.js";
 import { createWorktreeService } from "./workspaces/worktrees.js";
 import { createOrchestrator } from "./orchestrator/index.js";
+import { createDelegationService } from './delegation/index.js';
 import { createScheduler } from "./scheduler/index.js";
 import { createHostedMcpConfig } from "./hosted-mcp.js";
 import { SELF_MENTION } from "./agents/mentions.js";
@@ -67,6 +68,7 @@ export function createEngine(options) {
   let worktrees = null;
   let plans = null;
   let schedules = null;
+  let delegations = null;
   let agents = null;
   const agentName = () => {
     const settings = settingsService?.get();
@@ -99,7 +101,7 @@ export function createEngine(options) {
     supervisor = new ProcessSupervisor({ storage, log, env: toolEnv, recoveryDir: paths.recoveryDir, baseEnv: options.env ?? process.env });
     supervisor.reconcile();
     terminals = new TerminalService({ storage, supervisor, lifetime, log, shell: (options.env ?? process.env).JOLO_SHELL ?? null });
-    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules });
+    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules, delegations: () => delegations });
     board = createBoard({ storage, env: toolEnv, log });
     worktrees = createWorktreeService({ storage, permissions, paths, env: toolEnv, terminals, log });
     try {
@@ -120,6 +122,7 @@ export function createEngine(options) {
       const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;
       return !answerer || answerer === SELF_MENTION ? providerFactory.capture(session, execution) : null;
     }, workspaceBusy: id => worktrees.isBusy(id) });
+    delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory });
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
     // Plans are reconciled after runs, so a task whose run has just been called interrupted is seen as such.
@@ -128,7 +131,7 @@ export function createEngine(options) {
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
@@ -158,6 +161,7 @@ export function createEngine(options) {
         // Stop the scheduler before anything else with a worker: a beat landing mid-shutdown would
         // start a run that runs.stopAll then interrupts, while the slot has already advanced.
         if (schedules) await step("schedules", () => schedules.stop());
+        if (delegations) await step("delegations", () => delegations.close());
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
         if (search) await step("search", () => search.close());

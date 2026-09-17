@@ -7,9 +7,10 @@ import { runScopedMcp } from './search/mcp.js';
 import { searchBridge } from './search/mcp.js';
 import { browserBridge } from './browser/mcp.js';
 import { scheduleBridge, SCHEDULE_METHODS } from './scheduler/mcp.js';
+import { delegationBridge } from './delegation/mcp.js';
 
-const BRIDGES = { search: searchBridge, browser: browserBridge, schedule: scheduleBridge };
-const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call'], schedule: SCHEDULE_METHODS };
+const BRIDGES = { search: searchBridge, browser: browserBridge, schedule: scheduleBridge, delegation: delegationBridge };
+const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call'], schedule: SCHEDULE_METHODS, delegation: ['delegation.call'] };
 
 /**
  * The MCP server config for one hosted run: `jolo` serving every bridge this engine can offer.
@@ -17,7 +18,7 @@ const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call']
  */
 export function createHostedMcpConfig({ paths, capabilityTokens, browser, search, log }) {
   return (workspace, run) => {
-    const tools = ['schedule'];
+    const tools = ['schedule', 'delegation'];
     if (search) {
       tools.push('search');
       void search.acquire(workspace.path).then(lease => lease?.release()).catch(() => {}); // warm the index so the first query is fast

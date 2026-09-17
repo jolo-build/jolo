@@ -11,6 +11,7 @@ const navIcons={
  'split-view':'M3 4h18v16H3ZM12 4v16',orchestration:'m4 8 2 2 3-3M4 17l2 2 3-3M13 9h7M13 18h7',agents:'M12 3v4M12 17v4M3 12h4M17 12h4M7 7l3 3M14 14l3 3M7 17l3-3M14 10l3-3',
  browser:'M3 5h18v14H3ZM3 10h18',changes:'M7 20V5m0 0-3 3m3-3 3 3M17 4v15m0 0 3-3m-3 3-3-3',schedules:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 7v5l3 2',access:'M5 5h5v14H5ZM14 5h5v14h-5Z',cli:'m4 5 6 6-6 6m9 1h7',
 };
+navIcons['model-mentions']=navIcons.agents;
 const navIcon=slug=>`<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${navIcons[slug]}"/></svg>`;
 const demo=type=>`<section class="demo" data-demo="${type}" aria-label="Animated ${type} walkthrough"><div class="demo-canvas"></div><div class="film-footer"><p class="demo-caption" aria-live="off"></p><button class="film-toggle" type="button" aria-label="Pause animation">Ⅱ</button></div><div class="film-track"><div class="film-progress"></div></div><noscript><p>Read the steps below to follow this workflow.</p></noscript></section>`;
 for(const [i,g] of guides.entries()){

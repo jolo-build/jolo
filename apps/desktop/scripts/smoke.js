@@ -30,6 +30,7 @@ if (visualization) process.env.JOLO_VISUALIZATION_SMOKE = '1';
 const workspaceBoard = process.argv.includes('--board');
 if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
 if (process.argv.includes('--model-controls')) process.env.JOLO_MODEL_CONTROLS_SMOKE = '1';
+if (process.argv.includes('--delegation')) process.env.JOLO_DELEGATION_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
 if (process.argv.includes('--history')) process.env.JOLO_HISTORY_SMOKE = '1';
 const browserChat = process.argv.includes('--browser-chat');

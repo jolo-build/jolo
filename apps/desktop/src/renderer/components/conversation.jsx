@@ -1,3 +1,4 @@
+import { DelegatedTasks } from './delegated-tasks.jsx';
 import { modelLabel } from '../model-options.js';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
@@ -164,7 +165,7 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
     : <ReasoningBlock key={message.id} text={message.text} status={message.status} />)}</div></details>;
 }
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, onOpenSession = null, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
   const lastScrollTop = useRef(0);
@@ -310,6 +311,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         const guestName = calledIn === "jolo" ? "Jolo" : calledIn ? agents.find((entry) => entry.id === calledIn)?.displayName ?? calledIn : null;
         return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} run={run} guestName={guestName} assistantName={assistantName} sessionId={sessionId} />;
       })}
+      {sessionId && <DelegatedTasks sessionId={sessionId} working={Boolean(activeRun)} onOpenSession={onOpenSession} />}
     </div>
   </div>;
 }

@@ -35,7 +35,7 @@ export function promptReducer(state, action) {
     case "clear":
       return { ...createPromptState(), history: state.history };
     case "replace":
-      return { ...state, ...editInput('', 0, action.value) };
+      return { ...state, ...editInput('', 0, action.value), ...(action.cursor !== undefined ? { cursor: action.cursor } : {}) };
     case "edit":
       return { ...state, ...editInput(state.value, state.cursor, action.chunk, action.key) };
     case "paste":

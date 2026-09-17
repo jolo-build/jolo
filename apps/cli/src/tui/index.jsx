@@ -1,3 +1,4 @@
+import { typingModelMention, completeModelMention, modelMentionChoices, loadModelMentionCatalog } from '@jolo/protocol/model-mentions';
 import { requestId as createRequestId, TERMINAL } from "@jolo/client/run-state";
 // Interactive terminal client: Ink + React, imported only in interactive mode.
 // Bounded projection, capped redraws, one restoration path for every exit.
@@ -66,7 +67,20 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   useEffect(() => () => steering.clear(), [steering]);
   const layout = terminalLayout({ ...size, permission: Boolean(permission), changes: changes.length > 0 });
   const { columns, rows } = layout;
-  const commands = !layout.tooSmall && !modelConfig && !sessionMenu && !themeMenu && !permission && !themeBusy && dismissedCommand !== input ? slashCommands(input) : [];
+  const modelMention = typingModelMention(input, promptState.cursor);
+  const [mentionReport, setMentionReport] = useState(null);
+  const [mentionError, setMentionError] = useState('');
+  const mentioningModel = Boolean(modelMention);
+  useEffect(() => {
+    if (!mentioningModel) return;
+    let current = true;
+    setMentionError('');
+    loadModelMentionCatalog((method, params) => client.call(method, params), report => { if (current) setMentionReport(report); })
+      .catch(error => { if (current) setMentionError(error.message); });
+    return () => { current = false; };
+  }, [client, mentioningModel]);
+  const mentionChoices = modelMention ? modelMentionChoices(mentionReport?.models ?? [], modelMention.query) : [];
+  const commands = !layout.tooSmall && !modelConfig && !sessionMenu && !themeMenu && !permission && !themeBusy && dismissedCommand !== input ? (modelMention ? mentionChoices.map(choice => ({ command: `^${choice.selector}`, description: choice.label, arguments: true, selector: choice.selector })) : slashCommands(input)) : [];
   const selectedCommand = Math.min(commandIndex, Math.max(0, commands.length - 1));
   const agentId = session ? session.agentId ?? null : draftAgent;
 
@@ -224,7 +238,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       if (key.escape) { setDismissedCommand(input); return; }
       if (enterCount || key.tab || chunk === '\t') {
         const item = commands[selectedCommand];
-        if (enterCount && !item.arguments) submit(item.command);
+        if ('selector' in item) {
+          const next = completeModelMention(input, promptState.cursor, item.selector);
+          dispatchPrompt({ type: 'replace', value: next.value, cursor: next.cursor });
+        } else if (enterCount && !item.arguments) submit(item.command);
         else dispatchPrompt({ type: 'replace', value: `${item.command} ` });
         return;
       }
@@ -313,6 +330,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
       {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}
+      {mentioningModel && !commands.length && dismissedCommand !== input && <Text dimColor wrap="truncate-end">{mentionError || (!mentionReport || mentionReport.loading ? 'Loading child-task models…' : mentionReport.notes[0] || 'No matching child-task models')}</Text>}
       <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}

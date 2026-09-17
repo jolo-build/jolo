@@ -58,6 +58,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_DELEGATION_SMOKE === '1') {
+    const { runDelegationSmoke } = await import('./delegation-smoke.js');
+    try {
+      await runDelegationSmoke({ window, bridge, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_CHAT_LAYOUT_SMOKE === '1') {
     const { runChatLayoutSmoke } = await import('./chat-layout-smoke.js');
     try {

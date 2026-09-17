@@ -61,6 +61,26 @@ async function boot({ env = {} } = {}) {
   };
 }
 
+test('model mentions complete without submitting and authorize a child on the selected source and effort', async () => {
+  const t = await boot();
+  try {
+    await t.ready();
+    t.type('@codex delegation-check ^fake-large~high');
+    await t.seen('Fake Large');
+    t.type(ENTER);
+    await t.seen('^agent:codex/fake-large~high');
+    expect((await t.client.call('session.list', { projectId: t.project.projectId })).sessions).toHaveLength(0);
+    t.type(ENTER);
+    await t.seen('Child result: Running fake-large at high.');
+    const { sessions } = await t.client.call('session.list', { projectId: t.project.projectId });
+    expect(sessions).toHaveLength(2);
+    const parent = sessions.find(session => session.title !== 'Selected model review');
+    const { delegations } = await t.client.call('delegation.list', { sessionId: parent.id });
+    expect(delegations[0]).toMatchObject({ state: 'completed', execution: { agentId: 'codex', model: 'fake-large', effort: 'high' } });
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 30_000);
+
 test("/model configures the shared provider and hosted models without sending commands or secrets as tasks", async () => {
   const t = await boot();
   try {

@@ -141,6 +141,21 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     if (accepted?.action !== 'accept' || Object.keys(accepted.content ?? {}).length || accepted._meta) throw new Error('Jolo browser approval did not reach its dispatcher');
     const text = await browserMcpCheck(settings.mcp_servers?.jolo, result => completed({ ...tool, status: 'completed', result }));
     say(text);
+  } else if (prompt.startsWith('delegation-check')) {
+    if (!received.includes('m1:')) throw new Error('Selected model aliases were not supplied to the parent');
+    const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
+    const { mcpCall } = await import('./browser-mcp-client.js');
+    const bridge = settings.mcp_servers?.jolo;
+    const selected = await mcpCall(bridge, 'delegation_models', {});
+    const tool = item('mcpToolCall', { server: 'jolo', tool: 'delegate_task', arguments: { modelAlias: selected.models[0].alias }, status: 'inProgress' });
+    started(tool);
+    const result = await mcpCall(bridge, 'delegate_task', { modelAlias: selected.models[0].alias, prompt: 'model', title: 'Selected model review', requestId: 'fixture-review' });
+    let child = result.delegation;
+    for (let i = 0; i < 10 && !['completed', 'failed', 'cancelled', 'paused'].includes(child.state); i++)
+      child = (await mcpCall(bridge, 'delegation_status', { delegationId: child.id, waitMs: 1000 })).delegation;
+    if (child.state !== 'completed') throw new Error(`Child did not complete: ${JSON.stringify(child)}`);
+    completed({ ...tool, status: 'completed', result: child.output });
+    say(`Child result: ${child.output}`);
   } else if (prompt === 'schedule-check') {
     const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
     if (!settings.mcp_servers?.jolo) { say('Jolo bridge unavailable'); end('completed'); return; }
