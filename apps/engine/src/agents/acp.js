@@ -13,10 +13,9 @@ import { createHash } from "node:crypto";
 // `grok agent stdio`; no vendor library.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { RESULT_DISPLAY_MAX, hostedPath, createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
+import { RESULT_DISPLAY_MAX, createHostedTurn, digestOf, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
-import { acpSearchServers } from '../search/hosted.js';
-import { acpBrowserServers } from '../browser/hosted.js';
+import { acpMcpServers } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, acpImageContent } from '../attachments.js';
@@ -63,10 +62,10 @@ export function modelSelector(configOptions) {
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, dispatcher: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any,
- *   searchConfig?: (workspace: any, run: any) => any, browserConfig?: (workspace: any, run: any) => any,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
-export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
+export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, mcpConfig, providerFactory = null, settings = null }) {
   return {
     name: "acp",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -74,15 +73,15 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       const { run, signal } = ctx;
       const session = storage.getSession(run.sessionId);
       const workspace = storage.getWorkspace(session.workspaceId);
-      const browserServer = browserConfig?.(workspace, run);
-      const mcpServers = [...acpSearchServers(searchConfig?.(workspace, run)), ...acpBrowserServers(browserServer)];
+      const hosted = mcpConfig?.(workspace, run);
+      const mcpServers = [...acpMcpServers(hosted?.server)];
       const manifest = answerer ?? catalog.get(session.agentId);
       // What this run was told to use, when a plan task chose something other than the agent's default (§6.6).
       const wanted = runChoice(ctx.run);
       const argv = catalog.command(manifest, wanted); // how this vendor starts its ACP agent (Grok: agent stdio), plus the model flags in force
       const chosen = catalog.config(manifest, wanted);
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
-      const env = hostedEnvironment(supervisor);
+      const env = hostedEnvironment(supervisor, turn.environment);
 
       const state = {
         sessionId: null, loading: false, stopReason: null, failure: null, done: false,
@@ -193,7 +192,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       };
 
       const insideOrRefuse = (id, target, what) => {
-        if (typeof target === "string" && path.isAbsolute(target) && insideWorkspace(workspace.path, target)) return true;
+        if (typeof target === "string" && path.isAbsolute(target) && turn.containsFile(target)) return true;
         refuse(id, `Jolo policy: ${what} outside the workspace is not allowed`, RPC.POLICY);
         return false;
       };
@@ -201,7 +200,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         if (!insideOrRefuse(id, params.path, "reading")) return;
         try {
           permissions.authorize({ toolClass: "read", workspaceId: workspace.id, runId: run.id });
-          const target = hostedPath(workspace.path, params.path).absolute;
+          const target = turn.filePath(params.path).absolute;
           if (statSync(target).size > FILE_MAX_BYTES) return refuse(id, "Jolo policy: the file is too large to hand over", RPC.POLICY);
           let content = readFileSync(target, "utf8");
           const line = Number.isInteger(params.line) && params.line > 0 ? params.line : null;
@@ -214,8 +213,19 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         if (!insideOrRefuse(id, params.path, "writing")) return;
         if (typeof params.content !== "string") return refuse(id, "content must be a string", RPC.INVALID_PARAMS);
         try {
-          const resolved = hostedPath(workspace.path, params.path, { mustExist: false });
+          const resolved = turn.filePath(params.path, { mustExist: false });
           if (resolved.stat?.size > 2 * 1024 * 1024) return refuse(id, "Jolo policy: the file exceeds the editable size limit", RPC.POLICY);
+          if (resolved.temporary) {
+            permissions.authorize({ toolClass: 'mutation', workspaceId: workspace.id, runId: run.id });
+            if (Buffer.byteLength(params.content) > 1024 * 1024) return refuse(id, 'Jolo policy: the content exceeds the editable size limit', RPC.POLICY);
+            if (signal.aborted) return refuse(id, 'The run was cancelled', RPC.POLICY);
+            mkdirSync(path.dirname(resolved.absolute), { recursive: true, mode: 0o700 });
+            // Recheck newly created parents against the same symlink policy.
+            turn.filePath(params.path, { mustExist: false });
+            writeFileSync(resolved.absolute, params.content, { mode: 0o600 });
+            respond(id, {});
+            return;
+          }
           const before = resolved.stat ? readFileSync(resolved.absolute) : null;
           const operation = before
             ? { op: "replace", path: resolved.relative, expectedHash: `sha256:${createHash("sha256").update(before).digest("hex")}`, content: params.content }
@@ -223,7 +233,9 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           const result = await dispatcher.invoke({ run, workspace: { id: workspace.id, root: workspace.path }, signal,
             call: { callId: `acp-write:${id}`, name: "apply_patch", arguments: { operations: [operation] } } });
           if (result.status !== "ok") return refuse(id, JSON.parse(result.output).error?.message ?? "file write failed", RPC.POLICY);
-          respond(id, null);
+          // ACP requires an object result. Returning null makes strict clients
+          // report a parse error after the patch has already succeeded.
+          respond(id, {});
         } catch (error) { refuse(id, String(error?.message ?? error), RPC.INTERNAL); }
       };
 
@@ -306,7 +318,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           catch (error) { log.warn("acp agent refused the configured model", { agentId: manifest.id, model: chosen.model, error: String(error?.message ?? error) }); }
         }
         const prompt = await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
-        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });
+        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });
         state.stopReason = typeof result?.stopReason === "string" ? result.stopReason : "end_turn";
         closeTurn();
       };

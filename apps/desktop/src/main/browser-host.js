@@ -11,6 +11,24 @@ const ALLOWED_SCHEMES = new Set(["http:", "https:"]);
 export function installBrowserHost(window, { log, onGuest, sessionForPartition }) {
   const guests = new Map(); // webContents id -> { guest, partition }
   const workspaceBySession = new Map();
+  const reloadTarget = async (source = window.webContents) => {
+    if (window.webContents.isDestroyed()) return window.webContents;
+    // Resolve focus in the trusted application document. Only a visible browser
+    // can claim refresh; retained guests in hidden panels must not receive it.
+    const guestId = await window.webContents.executeJavaScript(`(() => {
+      const sourceId = ${source === window.webContents ? 'null' : JSON.stringify(source.id)};
+      const views = sourceId === null
+        ? [document.activeElement?.closest('.browser')?.querySelector('webview')]
+        : [...document.querySelectorAll('.browser webview')];
+      for (const view of views) {
+        if (!view || view.closest('[hidden]') || !view.getClientRects().length) continue;
+        try { const id = view.getWebContentsId(); if (sourceId === null || id === sourceId) return id; } catch {}
+      }
+      return null;
+    })()`).catch(() => null);
+    return guests.get(guestId)?.guest ?? window.webContents;
+  };
+  installReloadShortcuts(window.webContents, () => reloadTarget());
   installZoomShortcuts(window.webContents, factor => {
     // Electron propagates an embedder's zoom to its guests even in isolated mode.
     // Preserve each page's own scale when zooming the surrounding interface.
@@ -49,7 +67,7 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
   window.webContents.on("did-attach-webview", (_event, guest) => {
     const id = guest.id;
     guests.set(id, { guest });
-    installReloadShortcuts(guest, window.webContents);
+    installReloadShortcuts(guest, () => reloadTarget(guest));
     installCloseShortcuts(guest, window.webContents);
     installZoomShortcuts(guest);
     // Let Chromium handle wheel/pinch input in this guest. Manual mode suppresses

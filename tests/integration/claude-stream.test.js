@@ -49,6 +49,26 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Claude Code through its structured stream", () => {
+  test('subagent review reports stay in tool activity without corrupting or duplicating the parent reply', async () => {
+    const { client, events, runTo, messagesOf, text } = await boot();
+    try {
+      client.onEvent(event => { if (event.type === 'permission.requested') void client.call('permission.resolve', { permissionId: event.payload.permissionId, decision: 'deny' }); });
+      const run = await runTo('review', 'subagent-review');
+      expect(run.state).toBe('completed');
+      const messages = await messagesOf(run.id);
+      const replies = messages.filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['I found one issue. Validate the interval before saving.']);
+      expect(replies.every(message => message.status === 'complete')).toBe(true);
+      const tools = messages.filter(message => message.kind === 'tool');
+      expect(tools).toHaveLength(1);
+      expect(await text(tools[0])).toContain('Agent');
+      expect(await text(tools[0])).toContain('INTERNAL_REVIEW');
+      expect(tools[0].status).toBe('complete');
+      expect(events.filter(event => event.type === 'permission.requested')).toHaveLength(1);
+      expect(run.note.summary).toBe('I found one issue. Validate the interval before saving.');
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('long Claude tools do not inherit the native tool deadline', async () => {
     const { client, events, session, messagesOf, text } = await boot();
     try {
@@ -97,23 +117,34 @@ describe("Claude Code through its structured stream", () => {
     } finally { await client.close(); }
   }, 20_000);
 
-  test('Claude gets browser tools only while its own workspace is displayed in desktop', async () => {
+  test('Claude keeps browser tools while live workspace availability changes', async () => {
     const { client, engine, project, events, runTo, messagesOf, text } = await boot();
     const host = await engine.connect({ clientKind: 'desktop' });
     try {
       const run = await runTo('req_browser', 'browser-check');
       expect(run.state).toBe('completed');
-      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
-      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser unavailable: open this workspace in Jolo desktop to use its inline browser');
+      expect(events.some(event => event.type === 'tool.completed' && event.payload.name === 'browser_open' && event.payload.status === 'error')).toBe(true);
       await host.call('browser.setOpener', { workspaceIds: [project.workspaceId, 'stale-workspace'] });
       const discovered = await runTo('req_browser_visible', 'browser-discovery');
       expect(discovered.state).toBe('completed');
       expect(await text((await messagesOf(discovered.id)).at(-1))).toBe('Browser tools available');
       await host.call('browser.setOpener', { workspaceIds: [] });
       const closed = await runTo('req_browser_closed', 'browser-check');
-      expect(await text((await messagesOf(closed.id)).at(-1))).toBe('Browser tools unavailable');
+      expect(await text((await messagesOf(closed.id)).at(-1))).toBe('Browser unavailable: open this workspace in Jolo desktop to use its inline browser');
       expect(events.some(event => event.type === 'permission.requested')).toBe(false);
     } finally { await host.close(); await client.close(); }
+  }, 25_000);
+  test('Claude calls its scoped schedule tools without a permission prompt', async () => {
+    const { client, events, session, runTo, messagesOf, text } = await boot();
+    try {
+      const run = await runTo('req_schedule', 'schedule-check');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Schedules on this task: 1');
+      expect(events.some(event => event.type === 'permission.requested')).toBe(false);
+      const { schedules } = await client.call('schedule.list', { sessionId: session.id });
+      expect(schedules.map(schedule => schedule.prompt)).toEqual(['check the board']);
+    } finally { await client.close(); }
   }, 25_000);
   test("a hosted session streams replies as Jolo messages and continues the same Claude session next turn", async () => {
     const { client, events, session, runTo, text, messagesOf } = await boot();

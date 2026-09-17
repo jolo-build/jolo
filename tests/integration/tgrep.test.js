@@ -5,7 +5,7 @@ import { TgrepService } from '../../apps/engine/src/search/tgrep.js';
 import { fileTools } from '../../apps/engine/src/tools/files.js';
 import { resolveToolEnvironment } from '../../apps/engine/src/tools/dispatcher.js';
 import { SearchTextParams } from '@jolo/protocol';
-import { searchMcpConfig } from '../../apps/engine/src/search/hosted.js';
+import { hostedMcpConfig } from '../../apps/engine/src/hosted-mcp.js';
 import { tempHome, removeHome, waitFor, startEngine } from './helpers.js';
 
 const cleanup = [];
@@ -128,7 +128,7 @@ test('hosted stdio MCP searches only its pinned workspace through the engine', a
   const engine = await startEngine({ home, idleMs: 30_000, env: { JOLO_TGREP: '' } }); cleanup.push(() => engine.stop());
   const client = await engine.connect(); cleanup.push(() => client.close());
   const project = await client.call('project.open', { path: root });
-  const config = searchMcpConfig(engine.paths, project.workspaceId, true);
+  const config = hostedMcpConfig(engine.paths, project.workspaceId, ['search']);
   const proc = Bun.spawn([config.command, ...config.args], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
   cleanup.push(async () => { if (proc.exitCode === null) proc.kill(); await proc.exited; });
   const stdout = new Response(proc.stdout).text(), stderr = new Response(proc.stderr).text();
@@ -143,7 +143,7 @@ test('hosted stdio MCP searches only its pinned workspace through the engine', a
   // `map` would hand `JSON.parse` an index where it expects a reviver, so name the one argument used.
   const responses = (await stdout).trim().split('\n').map(/** @type {(line: string) => any} */ (JSON.parse));
   expect(responses.find(message => message.id === null).error.code).toBe(-32600);
-  expect(responses.find(message => message.id === 1).result.serverInfo.name).toBe('jolo-search');
+  expect(responses.find(message => message.id === 1).result.serverInfo.name).toBe('jolo');
   expect(responses.find(message => message.id === 2).result.tools[0].name).toBe('search_text');
   const output = responses.find(message => message.id === 3).result;
   expect(output.isError).toBe(false); expect(output.structuredContent.matches).toHaveLength(4);

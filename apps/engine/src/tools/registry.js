@@ -7,12 +7,13 @@ import { outputTools } from "./output.js";
 import { browserTools } from "./browser.js";
 import { editTools } from "./edit.js";
 import { commandTools } from "./command.js";
+import { scheduleTools } from "./schedules.js";
 
 export const TOOL_RESULT_MAX_BYTES = 64 * 1024;
 export const TOOL_ARGUMENT_MAX_BYTES = 1024 * 1024;
 
 export class ToolRegistry {
-  constructor(tools = [...fileTools, ...editTools, ...commandTools, ...gitTools, ...outputTools, ...browserTools]) {
+  constructor(tools = [...fileTools, ...editTools, ...commandTools, ...gitTools, ...outputTools, ...browserTools, ...scheduleTools]) {
     /** @type {Map<string, any>} */
     this.tools = new Map(tools.map((tool) => [tool.name, tool]));
   }

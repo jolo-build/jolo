@@ -53,11 +53,38 @@ Headless exit codes are 0 for success, 1 for failure, 2 for usage errors, 3 for 
 
 The engine starts automatically and can outlive a client. Finish work before `jolo engine stop`. Use `--home <dir>` and `--profile <name>` for separate state. Browser tools need a connected desktop host. Hosted programs retain your local user's privileges; Jolo mediates the operations exposed through its tools and adapters.
 
+## Schedules
+
+A schedule is a heartbeat on a task: a prompt that returns on an interval so the task can check on delegated work, review the board, or correct course without someone watching the clock. Schedules are durable — they live in the engine and survive restarts — and an active schedule keeps the engine resident.
+
+Create a task and its heartbeat together:
+
+```sh
+jolo run "Watch the rollout" --every 15m --path /path/to/project
+jolo run "Review the branch and fix what fails" --every 1h --every-prompt "Check board status and flag drift" --path /path/to/project
+```
+
+`--every` accepts `15m`-style intervals (`s`, `m`, `h`, `d` suffixes) between 1 minute and 7 days. `--every-prompt` sets a different message for the beats; without it the task's own prompt is reused.
+
+Or attach a heartbeat to an existing task, and manage the ones it already has:
+
+```sh
+jolo schedule add <session-id> --every 15m "Check the delegated tasks"
+jolo schedule list                    # every wake-up waiting to fire; --session <id> filters, --json structures
+jolo schedule pause <schedule-id>     # hold the next beat without losing the schedule
+jolo schedule resume <schedule-id>
+jolo schedule remove <schedule-id>
+```
+
+Each beat posts the prompt as an ordinary run — it asks permissions like any run and lands on the board like any run. A beat that comes due while the task is mid-turn is skipped rather than queued, and beats missed while the engine slept coalesce into a single check-in. A task holds at most 8 active schedules. Archiving a task pauses its heartbeats and restoring resumes them; deleting cancels them. `resume` refuses a heartbeat whose task is archived or whose workspace is gone — restore the task first.
+
+Hosted agents see the same schedules through their scoped tools, so you can also just ask in the chat: "check the delegated tasks every 15 minutes." The desktop's Schedules panel shows the same records.
+
 ## Themes
 
 Enter `/themes` to open the theme picker. Use ↑/↓ to select, Enter to apply and save, or Esc to close. `/theme` also opens the picker.
 
-Built-ins include all four [Catppuccin palettes](https://catppuccin.com/palette/) (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`) and [GitHub](https://github.com/primer/github-vscode-theme) Light, Dark, and Dark Dimmed (`github-light`, `github-dark`, `github-dark-dimmed`). `terminal` is the default and uses your terminal's colors.
+Built-ins include a neutral Jolo White theme (`white`), all four [Catppuccin palettes](https://catppuccin.com/palette/) (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`) and [GitHub](https://github.com/primer/github-vscode-theme) Light, Dark, and Dark Dimmed (`github-light`, `github-dark`, `github-dark-dimmed`). `terminal` is the default and uses your terminal's colors.
 
 ```sh
 jolo theme list

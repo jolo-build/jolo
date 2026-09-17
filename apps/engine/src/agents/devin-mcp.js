@@ -34,8 +34,14 @@ export function prepareDevinMcp(env, servers, { platform = process.platform, tem
     const injected = Object.fromEntries(servers.map(({ name, command, args, env: variables = [] }) => [name, {
       command, args, env: Object.fromEntries(variables.map(({ name, value }) => [name, value])),
     }]));
+    // Jolo-managed entries point at per-run token files that are gone; the bridge was
+    // renamed too, so drop earlier injections before merging this run's servers. Only
+    // names Jolo itself has written — a user's own jolo_* server is not ours to remove.
+    const JOLO_SERVER_NAMES = new Set(['jolo', 'jolo_browser', 'jolo_search', 'jolo_schedule']);
+    const stale = name => JOLO_SERVER_NAMES.has(name);
+    const kept = from => Object.fromEntries(Object.entries(from ?? {}).filter(([name]) => !stale(name) || name in injected));
     writeFileSync(path.join(target, 'config.json'), JSON.stringify(settings), { mode: 0o600 });
-    writeFileSync(path.join(target, 'mcp_config.json'), JSON.stringify({ ...mcp, mcpServers: { ...legacy, ...mcp.mcpServers, ...injected } }), { mode: 0o600 });
+    writeFileSync(path.join(target, 'mcp_config.json'), JSON.stringify({ ...mcp, mcpServers: { ...kept(legacy), ...kept(mcp.mcpServers), ...injected } }), { mode: 0o600 });
     return { env: { ...env, [configVariable]: directory }, dispose };
   } catch (error) { dispose(); throw error; }
 }

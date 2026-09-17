@@ -1,6 +1,6 @@
 // Node/Bun-compatible socket client. No Bun-only APIs.
 import net from "node:net";
-import { encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, parsePreview, parseBrowserExecute, TerminalOutputSchema, TerminalStateSchema, compareSeq, PROTOCOL_VERSION, ProtocolError } from "@jolo/protocol";
+import { encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, parsePreview, parseBrowserExecute, TerminalOutputSchema, TerminalStateSchema, compareSeq, PROTOCOL_VERSION, ProtocolError, EVENT_TYPES } from "@jolo/protocol";
 
 /**
  * @param {{ socketPath: string, token: string, clientKind?: string, build?: string, requestTimeoutMs?: number, idPrefix?: string }} options
@@ -45,6 +45,9 @@ export async function connect(options) {
       if ("method" in message && !("id" in message)) {
         if (message.method === "event") {
           const event = parseEvent(message.params);
+          // A newer engine may send event types this build does not know: drop them rather than
+          // sever the stream. Anything else malformed still fails hard.
+          if (!event.ok && typeof message.params?.type === "string" && !EVENT_TYPES.includes(message.params.type)) return;
           if (!event.ok) return socket.destroy(event.error);
           if (compareSeq(event.value.eventSeq, lastSeq) <= 0) return; // duplicate or replayed
           lastSeq = event.value.eventSeq;
@@ -141,7 +144,15 @@ export async function connect(options) {
       if (handlers.onEvent) eventHandlers.add(handlers.onEvent);
       if (handlers.onPreview) previewHandlers.add(handlers.onPreview);
       lastSeq = params?.after ?? "0";
-      try { const result = await call("events.subscribe", params ?? {}); subscribed = true; return result; }
+      try {
+        // An engine that predates event-type negotiation rejects the unknown field — only
+        // declare the client's types when hello advertises support for them.
+        const subscribeParams = { ...(params ?? {}) };
+        if (hello.supportedEventTypes) subscribeParams.eventTypes ??= [...EVENT_TYPES];
+        const result = await call("events.subscribe", subscribeParams);
+        subscribed = true;
+        return result;
+      }
       finally { subscribing = false; }
     },
     onEvent(handler) { eventHandlers.add(handler); return () => eventHandlers.delete(handler); },

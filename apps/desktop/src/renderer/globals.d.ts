@@ -57,6 +57,7 @@ declare global {
   interface JoloTerminalHook {
     readonly ready: boolean;
     fontFamily: () => string;
+    theme: () => import('@xterm/xterm').ITheme;
     input: (data: string) => Promise<any>;
     text: () => string;
   }

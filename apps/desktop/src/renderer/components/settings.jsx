@@ -4,6 +4,7 @@ import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
 import { AgentLogo } from './brand.jsx';
 import { FONT_DEFAULTS, readFonts, saveFonts } from '../fonts.js';
+import { DESKTOP_THEMES, readTheme, saveTheme, themeStyle } from '../themes.js';
 import { modelLabel, effortLabel } from '../model-options.js';
 import { AccountSettings } from './account-settings.jsx';
 
@@ -106,11 +107,12 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
   const [section, setSection] = useState(initialSection);
   const [agentForm, setAgentForm] = useState(() => Object.fromEntries(agents.map(agent => [agent.id, { model: agent.model ?? '', effort: agent.effort ?? '' }])));
   const [fonts, setFonts] = useState(readFonts);
-  const [saved, setSaved] = useState(() => ({ agents: agentForm, fonts }));
+  const [theme, setTheme] = useState(readTheme);
+  const [saved, setSaved] = useState(() => ({ agents: agentForm, fonts, theme }));
   const [note, setNote] = useState(null), [busy, setBusy] = useState(false);
   const id = useId(), heading = useRef(null), scroll = useRef(null), close = useRef(onClose);
   close.current = onClose;
-  const dirty = !same(agentForm, saved.agents) || !same(fonts, saved.fonts);
+  const dirty = !same(agentForm, saved.agents) || !same(fonts, saved.fonts) || theme !== saved.theme;
   const current = sections.find(item => item.id === section);
   useEffect(() => { heading.current?.focus(); }, []);
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 0; }, [section]);
@@ -126,7 +128,7 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
   }, [busy]);
-  const discard = () => { setAgentForm(saved.agents); setFonts(saved.fonts); setNote(null); };
+  const discard = () => { setAgentForm(saved.agents); setFonts(saved.fonts); setTheme(saved.theme); setNote(null); };
   const save = async event => {
     event.preventDefault();
     if (busy || !dirty) return;
@@ -134,7 +136,8 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
     try {
       if (!same(agentForm, saved.agents) && onSaveAgents) await onSaveAgents(Object.fromEntries(Object.entries(agentForm).map(([agentId, entry]) => [agentId, { model: entry.model.trim() || null, effort: entry.effort.trim() || null }])));
       const nextFonts = !same(fonts, saved.fonts) ? saveFonts(fonts) : fonts;
-      setFonts(nextFonts); setSaved({ agents: agentForm, fonts: nextFonts }); setNote({ text: 'Changes saved.' });
+      const nextTheme = theme !== saved.theme ? saveTheme(theme) : theme;
+      setFonts(nextFonts); setTheme(nextTheme); setSaved({ agents: agentForm, fonts: nextFonts, theme: nextTheme }); setNote({ text: 'Changes saved.' });
     } catch (error) { setNote({ text: error.message, error: true }); }
     finally { setBusy(false); }
   };
@@ -161,7 +164,18 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
             <div role="tabpanel" id={`${id}-provider`} aria-labelledby={`${id}-provider-tab`} hidden={section !== 'provider'}>
               <ProviderModels settings={settings} session={session} onPresets={onPresets} onDiscover={onDiscoverProviderModels} onSaveConnection={onSaveConnection} onSaveDefault={onSave} onUseModel={onUseModel} onSetCredential={onSetCredential} />
             </div>
-            <div role="tabpanel" id={`${id}-appearance`} aria-labelledby={`${id}-appearance-tab`} hidden={section !== 'appearance'}>
+            <div className="settings-appearance" role="tabpanel" id={`${id}-appearance`} aria-labelledby={`${id}-appearance-tab`} hidden={section !== 'appearance'}>
+              <section className="settings-card">
+                <div className="settings-card-heading"><div><h2>Theme</h2><p className="hint">The same color themes as the CLI. System default follows your computer’s appearance.</p></div></div>
+                <label>Color theme<Select aria-label="Color theme" value={theme} onChange={event => { setTheme(event.target.value); setNote(null); }}>
+                  {DESKTOP_THEMES.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </Select></label>
+                {theme !== 'system' && <div className="settings-theme-preview" style={themeStyle(theme)} aria-label="Theme preview">
+                  <div className="theme-preview-side"><span>Workspace</span><span className="theme-preview-active">New chat</span><span>Files</span></div>
+                  <div className="theme-preview-content"><strong>A little help. A lot of possibility.</strong><code><span className="theme-preview-keyword">const</span> answer = <span className="theme-preview-number">42</span>;</code><span className="theme-preview-success">All checks passed</span></div>
+                </div>}
+                <p className="hint">Save to apply across the interface, code, diffs, and terminals on this device.</p>
+              </section>
               <section className="settings-card">
                 <div className="settings-card-heading"><div><h2>Fonts</h2><p className="hint">Use a bundled font or any font installed on your computer.</p></div></div>
                 {[['sans', 'Interface'], ['mono', 'Code and diffs'], ['terminal', 'Terminal']].map(([kind, label]) => <label key={kind}>{label}<input value={fonts[kind]} onChange={event => { setFonts({ ...fonts, [kind]: event.target.value }); setNote(null); }} placeholder={FONT_DEFAULTS[kind]} spellCheck={false} /></label>)}

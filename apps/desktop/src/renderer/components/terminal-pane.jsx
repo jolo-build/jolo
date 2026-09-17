@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ensureFontLoaded, stackFor } from "../fonts.js";
 import { Icon } from './icon.jsx';
+import { terminalTheme } from '../themes.js';
 
 const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
@@ -29,10 +30,11 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
   useEffect(() => {
     let disposed = false;
     const appearance = matchMedia("(prefers-color-scheme: dark)");
-    const theme = () => appearance.matches ? { background: "#191a1c", foreground: "#ededee", cursor: "#ededee", selectionBackground: "#282f47" } : { background: "#fcfcfb", foreground: "#242629", cursor: "#292c30", selectionBackground: "#edf1ff" };
+    const theme = () => terminalTheme(document.documentElement.dataset.theme, appearance.matches);
     const instance = new Terminal({ cursorBlink: true, fontSize: 12.5, fontFamily: stackFor("terminal"), scrollback: 2000, theme: theme() });
     const updateTheme = () => { instance.options.theme = theme(); };
     appearance.addEventListener("change", updateTheme);
+    window.addEventListener('jolo:theme', updateTheme);
     const fitter = new FitAddon();
     instance.loadAddon(fitter);
     term.current = instance;
@@ -100,6 +102,7 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
     const hook = {
       get ready() { return Boolean(terminalId.current); },
       fontFamily: () => instance.options.fontFamily,
+      theme: () => instance.options.theme,
       input: (data) => call("terminal.input", { terminalId: terminalId.current, data }),
       text: () => { if (!terminalId.current) return ""; const b = instance.buffer.active; const lines = []; for (let i = 0; i < b.length; i += 1) lines.push(b.getLine(i)?.translateToString(true) ?? ""); return lines.join("\n").trim(); },
     };
@@ -117,6 +120,7 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
       window.__joloTerminals?.delete(hookId);
       if (window.__joloTerminal === hook) window.__joloTerminal = [...(window.__joloTerminals?.values() ?? [])].at(-1);
       appearance.removeEventListener("change", updateTheme);
+      window.removeEventListener('jolo:theme', updateTheme);
       window.removeEventListener("jolo:fonts", onFonts);
       instance.dispose();
     };

@@ -1,6 +1,7 @@
-import { parseEvent } from "@jolo/protocol";
+import { parseEvent, WORKING_RUN_STATES } from "@jolo/protocol";
 import { PermissionRepository } from "./permissions.js";
 import { PlanRepository } from "./plans.js";
+import { ScheduleRepository } from "./schedules.js";
 // Storage service: the only module that touches SQLite.
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
@@ -35,6 +36,7 @@ export class Storage {
     this.artifacts = new ArtifactStore(options.artifactsDir);
     this.permissionRepository = new PermissionRepository(this);
     this.plans = new PlanRepository(this);
+    this.schedules = new ScheduleRepository(this);
     this.eventRepository = new EventRepository(this.db);
     this.eventRepository.bootstrap();
     this.eventRepository.prune();
@@ -366,6 +368,12 @@ export class Storage {
     return Boolean(this.db.query("SELECT 1 FROM runs WHERE session_id = ?1 AND state NOT IN ('completed', 'failed', 'cancelled', 'interrupted') LIMIT 1").get(id));
   }
 
+  /** A turn actually in flight — paused and permission-waiting runs do not hold the task. */
+  sessionHasBusyRuns(id) {
+    const states = WORKING_RUN_STATES.map(() => "?").join(", ");
+    return Boolean(this.db.query(`SELECT 1 FROM runs WHERE session_id = ? AND state IN (${states}) LIMIT 1`).get(id, ...WORKING_RUN_STATES));
+  }
+
   bumpSessionRevision(id) {
     this.db.query("UPDATE sessions SET revision = revision + 1, updated_at = ?1 WHERE id = ?2").run(now(), id);
     return this.getSession(id);
@@ -585,6 +593,36 @@ export class Storage {
 
   finishPlanExecution(...args) { return this.plans.finishPlanExecution(...args); }
 
+  // ---- schedules ------------------------------------------------------------------------------
+  // A schedule posts a prompt into a session on an interval; the record is what a restart reads.
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["insertSchedule"]>} args */
+  insertSchedule(...args) { return this.schedules.insertSchedule(...args); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["getSchedule"]>} args */
+  getSchedule(...args) { return this.schedules.getSchedule(...args); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["listSchedules"]>} args */
+  listSchedules(...args) { return this.schedules.listSchedules(...args); }
+
+  /** Active schedules whose slot has passed, oldest first — the scheduler reads this each tick.
+   * @param {Parameters<import("./schedules.js").ScheduleRepository["dueSchedules"]>} args */
+  dueSchedules(...args) { return this.schedules.dueSchedules(...args); }
+  /** The next wake an active schedule is waiting for, or null when none is armed. */
+  nextScheduleDueAt() { return this.schedules.nextDueAt(); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["countSchedules"]>} args */
+  countSchedules(...args) { return this.schedules.countSchedules(...args); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["updateScheduleState"]>} args */
+  updateScheduleState(...args) { return this.schedules.updateScheduleState(...args); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["reschedule"]>} args */
+  reschedule(...args) { return this.schedules.reschedule(...args); }
+
+  /** @param {Parameters<import("./schedules.js").ScheduleRepository["advanceSchedule"]>} args */
+  advanceSchedule(...args) { return this.schedules.advanceSchedule(...args); }
+
   // ---- permissions ------------------------------------------------------------------------
 
   insertPermission(...args) { return this.permissionRepository.insertPermission(...args); }
@@ -650,8 +688,11 @@ export class Storage {
     return this.getMessage(id);
   }
 
-  listMessagesForSession(sessionId, { beforeOrdinal = Number.MAX_SAFE_INTEGER, afterOrdinal = -1, limit }) {
-    const rows = this.db.query("SELECT * FROM messages WHERE session_id = ?1 AND ordinal < ?2 AND ordinal > ?3 ORDER BY ordinal DESC LIMIT ?4").all(sessionId, beforeOrdinal, afterOrdinal, limit + 1);
+  listMessagesForSession(sessionId, { beforeOrdinal = Number.MAX_SAFE_INTEGER, afterOrdinal = -1, limit, handoffKind = null, excludeRunId = null }) {
+    // Filter before pagination: a long tool run must not hide the preceding review.
+    const handoffFilter = handoffKind === 'conversation' ? " AND kind != 'reasoning' AND role != 'tool' AND committed_bytes > 0"
+      : handoffKind === 'tool' ? " AND kind != 'reasoning' AND role = 'tool' AND committed_bytes > 0" : '';
+    const rows = this.db.query(`SELECT * FROM messages WHERE session_id = ?1 AND ordinal < ?2 AND ordinal > ?3 AND (?5 IS NULL OR run_id IS NULL OR run_id != ?5)${handoffFilter} ORDER BY ordinal DESC LIMIT ?4`).all(sessionId, beforeOrdinal, afterOrdinal, limit + 1, excludeRunId);
     const hasOlder = rows.length > limit;
     return { messages: rows.slice(0, limit).reverse().map(mapMessage), hasOlder };
   }

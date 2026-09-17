@@ -68,3 +68,39 @@ test('guest credential cannot claim interactive authority, cross workspaces, or 
     await client.close();
   } finally { await f.close(); }
 });
+
+test('event-type negotiation filters replay and live; undeclared subscribers keep the legacy set', async () => {
+  const f = await fixture();
+  try {
+    const stamp = new Date().toISOString();
+    const scheduleEvent = (id) => ({ type: 'schedule.updated', payload: { schedule: { id, sessionId: 'ses_x', prompt: 'wake', everyMs: 60_000, state: 'active', fireCount: 0, nextFireAt: stamp, lastRunId: null, lastError: null, createdAt: stamp, updatedAt: stamp } } });
+    f.storage.appendEvent({ type: 'grant.created', payload: { grantId: 'g1', scope: 'inspect' } });
+    f.storage.appendEvent(scheduleEvent('s1'));
+
+    // A legacy client declares nothing: replay and live carry only the original event set.
+    const legacy = await connect(f.options), legacySeen = [];
+    legacy.onEvent(event => legacySeen.push(event.type));
+    const legacyResult = await legacy.call('events.subscribe', { after: '0' });
+    expect(legacyResult.replayed).toBe(1);
+    expect(legacySeen).toEqual(['grant.created']);
+
+    // A client that declares one type sees only it, in replay and live.
+    const typed = await connect(f.options), typedSeen = [];
+    typed.onEvent(event => typedSeen.push(event.type));
+    const typedResult = await typed.call('events.subscribe', { after: '0', eventTypes: ['schedule.updated'] });
+    expect(typedResult.replayed).toBe(1);
+    expect(typedSeen).toEqual(['schedule.updated']);
+
+    f.storage.appendEvent({ type: 'grant.created', payload: { grantId: 'g2', scope: 'inspect' } });
+    f.storage.appendEvent(scheduleEvent('s2'));
+    for (let i = 0; i < 40 && (legacySeen.length < 2 || typedSeen.length < 2); i++) await Bun.sleep(25);
+    expect(legacySeen).toEqual(['grant.created', 'grant.created']);
+    expect(typedSeen).toEqual(['schedule.updated', 'schedule.updated']);
+
+    // The current client declares every type it knows, so new event types reach it.
+    const modern = await connect(f.options), modernSeen = [];
+    await modern.subscribe({ after: '0' }, { onEvent: event => modernSeen.push(event.type) });
+    expect(modernSeen.sort()).toEqual(['grant.created', 'grant.created', 'schedule.updated', 'schedule.updated'].sort());
+    await legacy.close(); await typed.close(); await modern.close();
+  } finally { await f.close(); }
+}, 15000);

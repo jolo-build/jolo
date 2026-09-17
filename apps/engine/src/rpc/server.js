@@ -4,7 +4,7 @@ import net from "node:net";
 import { timingSafeEqual } from "node:crypto";
 import {
   encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, toRpcError, ProtocolError,
-  PROTOCOL_VERSION, SCHEMA_VERSION, METHOD_NAMES, FRAME_MAX_BYTES, CONNECTION_BUFFER_MAX_BYTES, LIMITS, compareSeq,
+  PROTOCOL_VERSION, SCHEMA_VERSION, METHOD_NAMES, FRAME_MAX_BYTES, CONNECTION_BUFFER_MAX_BYTES, LIMITS, compareSeq, DEFAULT_EVENT_TYPES, EVENT_TYPES,
 } from "@jolo/protocol";
 
 const HANDSHAKE_DEADLINE_MS = 5_000;
@@ -91,6 +91,7 @@ export function createRpcServer(options) {
       engineBootId: bootId,
       eventStreamId: storage.eventStreamId,
       supportedMethods: capability ? ["hello", ...capability.methods] : METHOD_NAMES,
+      supportedEventTypes: [...EVENT_TYPES],
       frameLimits: { maxFrameBytes: FRAME_MAX_BYTES, maxBufferedBytes: CONNECTION_BUFFER_MAX_BYTES },
     };
   };
@@ -114,7 +115,8 @@ export function createRpcServer(options) {
     if (compareSeq(params.after, highWater) > 0 || (minRetained !== "0" && compareSeq(params.after, String(BigInt(minRetained) - 1n)) < 0)) {
       throw new ProtocolError("resync_required", "cursor is outside retained history", { cursor: highWater });
     }
-    const sub = { sessionId: params.sessionId ?? null, lastSeq: params.after, replaying: true, live: [], liveBytes: 0 };
+    // Subscribers that do not declare the types they parse get the set every client knew first.
+    const sub = { sessionId: params.sessionId ?? null, lastSeq: params.after, replaying: true, live: [], liveBytes: 0, eventTypes: new Set(params.eventTypes ?? DEFAULT_EVENT_TYPES) };
     conn.subscription = sub;
     let cursor = params.after;
     let replayed = 0;
@@ -125,9 +127,8 @@ export function createRpcServer(options) {
         if (oldest !== "0" && compareSeq(cursor, String(BigInt(oldest) - 1n)) < 0) throw new ProtocolError("resync_required", "history expired during replay", { cursor: storage.maxSeq() });
         const page = storage.listEvents({ after: cursor, sessionId: params.sessionId, limit: LIMITS.eventPageSize }).filter(event => compareSeq(event.eventSeq, highWater) <= 0);
         for (const event of page) {
-          await sendReplay(conn, event);
+          if (sub.eventTypes.has(event.type)) { await sendReplay(conn, event); replayed++; }
           sub.lastSeq = cursor = event.eventSeq;
-          replayed++;
         }
         if (page.length < LIMITS.eventPageSize || compareSeq(cursor, highWater) >= 0) break;
       }
@@ -183,6 +184,7 @@ export function createRpcServer(options) {
       const sub = conn.subscription;
       if (!sub) continue;
       if (sub.sessionId && sub.sessionId !== event.sessionId) continue;
+      if (!sub.eventTypes.has(event.type)) continue;
       if (compareSeq(event.eventSeq, sub.lastSeq) <= 0) continue;
       if (sub.replaying) {
         sub.liveBytes += Buffer.byteLength(JSON.stringify(event));

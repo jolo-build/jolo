@@ -16,7 +16,7 @@ function fixture() {
 const document = (changes = {}) => ({ version: 1, id: 'custom', extends: 'github-dark', colors: { accent: '#abcdef' }, ...changes });
 
 test('built-ins cover complete palettes and terminal colors keep their original behavior', () => {
-  expect(BUILTIN_THEMES).toHaveLength(8);
+  expect(BUILTIN_THEMES).toHaveLength(9);
   for (const theme of BUILTIN_THEMES.slice(1)) {
     expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
     for (const color of Object.values(theme.colors)) expect(color).toMatch(/^#[0-9a-f]{6}$/);
@@ -29,7 +29,7 @@ test('built-ins cover complete palettes and terminal colors keep their original 
 test('listing is read-only; creation, selection, edits, and removal persist per profile', () => {
   const { dataDir, store } = fixture();
   expect(store.selected()).toBe('terminal');
-  expect(store.list().themes).toHaveLength(8);
+  expect(store.list().themes).toHaveLength(BUILTIN_THEMES.length);
   expect(existsSync(store.directory)).toBe(false);
   const created = store.create('ocean', { from: 'github-light', colors: { accent: '#112233' } });
   expect(created.theme.colors).toMatchObject({ accent: '#112233', background: '#ffffff' });
@@ -70,7 +70,7 @@ test('malformed custom files are isolated and never corrupt the saved selection'
   const { store } = fixture();
   const installed = store.install(document()); store.select('custom');
   writeFileSync(installed.path, '{');
-  expect(store.list().themes).toHaveLength(8);
+  expect(store.list().themes).toHaveLength(BUILTIN_THEMES.length);
   expect(store.list().errors).toHaveLength(1);
   expect(() => store.select('missing')).toThrow();
   expect(store.selected()).toBe('custom');

@@ -6,7 +6,7 @@ export function parseArgs(argv) {
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--") && ["theme", "from", "set", "path", "profile", "home", "session", "model", "context-window", "max-output", "base-url", "reasoning", "max-iterations", "max-active-time", "branch", "base", "agent", "effort", "task", "server", "device-name"].includes(key)) {
+      if (next !== undefined && !next.startsWith("--") && ["theme", "from", "set", "path", "profile", "home", "session", "model", "context-window", "max-output", "base-url", "reasoning", "max-iterations", "max-active-time", "branch", "base", "agent", "effort", "task", "server", "device-name", "every", "every-prompt"].includes(key)) {
         // A flag given more than once collects its values, which is how a plan's tasks are written on one line.
         if (flags[key] === undefined) flags[key] = next;
         else flags[key] = Array.isArray(flags[key]) ? [...flags[key], next] : [flags[key], next];

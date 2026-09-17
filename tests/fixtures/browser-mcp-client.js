@@ -32,9 +32,9 @@ export async function browserMcpCheck(config, onResult = () => {}) {
     if (!list.tools.some(tool => tool.name === 'browser_fill')) throw new Error('browser tools missing');
     const tabs = await request('tools/call', { name: 'browser_tabs', arguments: {} });
     let tab = tabs.structuredContent?.tabs[0];
-    if (!tab && tabs.structuredContent?.canOpen) {
+    if (!tab) {
       const opened = await request('tools/call', { name: 'browser_open', arguments: {} });
-      if (opened.isError) throw new Error(opened.content[0].text);
+      if (opened.isError) return `Browser unavailable: ${opened.structuredContent?.error?.message ?? opened.content[0].text}`;
       tab = opened.structuredContent;
     }
     if (!tab) return 'No browser attached';
@@ -48,5 +48,39 @@ export async function browserMcpCheck(config, onResult = () => {}) {
     const bad = await request('tools/call', { name: 'browser_navigate', arguments: { url: 'file:///etc/passwd' } });
     if (!bad.isError) throw new Error('unsafe scheme admitted');
     return 'Browser controlled; screenshot received as an image';
+  } finally { clearTimeout(timer); child.stdin.end(); await child.exited; await reader; }
+}
+
+/**
+ * One tools/call round-trip against the scoped jolo bridge — for non-browser tools.
+ * @returns {Promise<any>} the call's structured content, or its first text part parsed as JSON
+ */
+export async function mcpCall(config, name, args = {}) {
+  if (!config?.command) throw new Error('jolo MCP was not configured');
+  const child = Bun.spawn([config.command, ...config.args], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+  const pending = new Map();
+  let sequence = 0;
+  const reader = (async () => {
+    let buffer = '';
+    for await (const chunk of child.stdout) {
+      buffer += new TextDecoder().decode(chunk);
+      let end;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const response = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+        const entry = pending.get(response.id); pending.delete(response.id);
+        if (response.error) entry?.reject(new Error(response.error.message)); else entry?.resolve(response.result);
+      }
+    }
+  })();
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = ++sequence; pending.set(id, { resolve, reject });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`); child.stdin.flush();
+  });
+  const timer = setTimeout(() => { for (const entry of pending.values()) entry.reject(new Error('jolo MCP timed out')); child.kill(); }, 15_000);
+  try {
+    await request('initialize', { protocolVersion: '2025-06-18', clientInfo: { name: 'fixture', version: '1' }, capabilities: {} });
+    const result = await request('tools/call', { name, arguments: args });
+    if (result.isError) throw new Error(result.content?.[0]?.text ?? 'tool call failed');
+    return result.structuredContent ?? JSON.parse(result.content?.[0]?.text ?? 'null');
   } finally { clearTimeout(timer); child.stdin.end(); await child.exited; await reader; }
 }

@@ -158,28 +158,44 @@ test('browser uses native isolated mouse zoom and bounded keyboard shortcuts', (
   expect(factor).toBeCloseTo(1.1);
 });
 
-test('focused browser refresh shortcuts target the desktop, not the embedded page', () => {
+test('refresh targets the visible browser from its page or toolbar and the desktop outside it', async () => {
   let reloads = 0, hardReloads = 0, prevented = 0, destroyed = false;
+  let desktopReloads = 0, selectedGuest = 91;
   const contents = Object.assign(new EventEmitter(), {
-    isDestroyed: () => destroyed,
-    reload: () => { reloads++; }, reloadIgnoringCache: () => { hardReloads++; },
+    isDestroyed: () => false,
+    executeJavaScript: async () => selectedGuest,
+    reload: () => { desktopReloads++; }, reloadIgnoringCache: () => { desktopReloads++; },
   });
   const session = Object.assign(new EventEmitter(), { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} });
   const guest = Object.assign(new EventEmitter(), { id: 91, session,
     debugger: { attach() {}, async sendCommand() {} }, setWindowOpenHandler() {},
     setZoomMode() {}, async setVisualZoomLevelLimits() {},
-    reload() { throw new Error('Refreshed the guest instead of the desktop'); },
+    isDestroyed: () => destroyed,
+    reload: () => { reloads++; }, reloadIgnoringCache: () => { hardReloads++; },
   });
   installBrowserHost({ webContents: contents }, { log, sessionForPartition: () => session, onGuest() {} });
   contents.emit('did-attach-webview', {}, guest);
-  const key = input => guest.emit('before-input-event', { preventDefault() { prevented++; } }, { type: 'keyDown', ...input });
-  key({ key: 'F5' });
-  key({ key: 'r', ...(process.platform === 'darwin' ? { meta: true } : { control: true }) });
-  key({ key: 'F5', shift: true });
+  /** @param {any} input @param {EventEmitter} [source] */
+  const key = async (input, source = guest) => {
+    for (const listener of source.listeners('before-input-event')) await listener({ preventDefault() { prevented++; } }, { type: 'keyDown', ...input });
+  };
+  await key({ key: 'F5' });
+  await key({ key: 'r', ...(process.platform === 'darwin' ? { meta: true } : { control: true }) });
+  await key({ key: 'F5', shift: true });
   expect([reloads, hardReloads, prevented]).toEqual([2, 1, 3]);
-  for (const input of [{ key: 'r' }, { key: 'F5', type: 'keyUp' }, { key: 'F5', isAutoRepeat: true }, { key: 'F5', alt: true }]) key(input);
+  expect(desktopReloads).toBe(0);
+  for (const input of [{ key: 'r' }, { key: 'F5', type: 'keyUp' }, { key: 'F5', alt: true }]) await key(input);
   expect([reloads, hardReloads, prevented]).toEqual([2, 1, 3]);
+  await key({ key: 'F5', isAutoRepeat: true });
+  expect([reloads, hardReloads, prevented]).toEqual([2, 1, 4]);
+  await key({ key: 'F5' }, contents); // Address bar belongs to the application WebContents.
+  expect([reloads, desktopReloads]).toEqual([3, 0]);
+  selectedGuest = null;
+  await key({ key: 'F5' }, contents);
+  await key({ key: 'F5' }); // Stale native focus on a now-hidden browser.
+  expect([reloads, desktopReloads]).toEqual([3, 2]);
+  selectedGuest = 91;
   destroyed = true;
-  key({ key: 'F5' });
-  expect(reloads).toBe(2);
+  await key({ key: 'F5' });
+  expect([reloads, desktopReloads]).toEqual([3, 2]);
 });

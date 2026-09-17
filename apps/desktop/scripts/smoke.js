@@ -20,6 +20,8 @@ if (process.argv.includes('--panels')) process.env.JOLO_PANELS_SMOKE = '1';
 if (process.argv.includes('--panel-tabs')) process.env.JOLO_PANEL_TABS_SMOKE = '1';
 if (process.argv.includes('--chat-folders')) process.env.JOLO_CHAT_FOLDERS_SMOKE = '1';
 if (process.argv.includes('--file-previews')) process.env.JOLO_FILE_PREVIEWS_SMOKE = '1';
+if (process.argv.includes('--themes')) process.env.JOLO_THEMES_SMOKE = '1';
+if (process.argv.includes('--chat-layout')) process.env.JOLO_CHAT_LAYOUT_SMOKE = '1';
 const liveResults = process.argv.includes("--live-results");
 const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
@@ -108,6 +110,11 @@ if (process.argv.includes('--file-previews')) {
   process.env.JOLO_FILE_LINKS_FIXTURE = fixtureBuild.outputs[0].path;
 }
 const results = path.join(root, "smoke-results");
+if (process.argv.includes('--chat-layout')) {
+  const fixtureBuild = await Bun.build({ entrypoints: [path.join(root, 'test/fixtures/chat-layout-browser.jsx')], outdir: path.join(home, 'chat-layout-fixture'), target: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"' } });
+  if (!fixtureBuild.success) throw new Error(fixtureBuild.logs.join('\n'));
+  process.env.JOLO_CHAT_LAYOUT_FIXTURE = fixtureBuild.outputs[0].path;
+}
 mkdirSync(results, { recursive: true });
 const browserFixture = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response("<!doctype html><title>Jolo smoke page</title><h1>Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>", { headers: { 'content-type': 'text/html' } }) });
 process.env.JOLO_SMOKE_BROWSER_URL = browserFixture.url.href;

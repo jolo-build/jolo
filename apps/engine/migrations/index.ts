@@ -14,6 +14,7 @@ import imageAttachments from "./0010_image_attachments.ts";
 import taskReferences from "./0011_task_references.ts";
 
 import modelHarness from "./0012_model_harness.ts";
+import schedules from "./0013_schedules.ts";
 
 export interface Migration {
   readonly version: number;
@@ -40,4 +41,5 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 10, name: "0010_image_attachments.sql", sql: imageAttachments },
   { version: 11, name: "0011_task_references.sql", sql: taskReferences },
   { version: 12, name: "0012_model_harness.sql", sql: modelHarness },
+  { version: 13, name: "0013_schedules.sql", sql: schedules },
 ]);

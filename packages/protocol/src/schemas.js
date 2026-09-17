@@ -231,7 +231,51 @@ export const EVENT_TYPES = Object.freeze([
   "plan.task.state",
   "plan.task.updated",
   "account.changed",
+  "schedule.fired",
+  "schedule.updated",
 ]);
+
+/**
+ * The set a pre-negotiation subscriber knows — a frozen snapshot of EVENT_TYPES when
+ * `events.subscribe` learned to carry `eventTypes`. New event types join EVENT_TYPES
+ * only, which keeps them gated from older subscribers without a second list to update.
+ */
+export const DEFAULT_EVENT_TYPES = Object.freeze([
+  "session.created",
+  "session.updated",
+  "session.deleted",
+  "run.state",
+  "run.usage",
+  "message.started",
+  "message.committed",
+  "message.finished",
+  "provider.attempt",
+  "tool.started",
+  "tool.completed",
+  "grant.created",
+  "browser.host",
+  "permission.requested",
+  "permission.resolved",
+  "files.changed",
+  "run.verification",
+  "terminal.opened",
+  "terminal.closed",
+  "context.compacted",
+  "workspace.viewed",
+  "workspace.created",
+  "workspace.removed",
+  "agent.started",
+  "agent.status",
+  "agent.exited",
+  "plan.created",
+  "plan.state",
+  "plan.task.state",
+  "plan.task.updated",
+  "account.changed",
+]);
+
+/** Events added after event-type negotiation: only subscribers that declare them get them. */
+export const GATED_EVENT_TYPES = Object.freeze(EVENT_TYPES.filter((type) => !DEFAULT_EVENT_TYPES.includes(type)));
 
 export const EventSchema = z.object({
   engineBootId: Id,
@@ -423,6 +467,44 @@ export const PlanExecutionSchema = z.object({
   endedAt: IsoTimestamp.nullable(),
 });
 
+// ---- schedules ------------------------------------------------------------------------------
+// A schedule posts a prompt into a session on an interval: a heartbeat that wakes a task so it
+// can check on delegated work and correct course. Interval only — no cron — and at most one
+// catch-up fire per wake, so a sleeping engine yields one check-in, not a backlog.
+
+export const SCHEDULE_STATES = Object.freeze(["active", "paused", "cancelled"]);
+export const SCHEDULE_LIMITS = Object.freeze({ minEveryMs: 60_000, maxEveryMs: 7 * 86_400_000, maxActivePerSession: 8 });
+
+/** Interval spelling shared by the CLI and the agent-facing schedule tools: `15m`, `1h`, `1d`. */
+export function parseEveryMs(value) {
+  const match = /^(\d+)(s|m|h|d)$/.exec(String(value ?? "").trim().toLowerCase());
+  if (!match) return null;
+  const ms = Number(match[1]) * { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2]];
+  return ms >= SCHEDULE_LIMITS.minEveryMs && ms <= SCHEDULE_LIMITS.maxEveryMs ? ms : null;
+}
+
+/** The inverse: `900000` → `15m`. Values between the units fall back to seconds. */
+export function formatEveryMs(ms) {
+  for (const [unit, size] of /** @type {[string, number][]} */ ([["d", 86_400_000], ["h", 3_600_000], ["m", 60_000], ["s", 1_000]])) {
+    if (ms % size === 0 && ms >= size) return `${ms / size}${unit}`;
+  }
+  return `${Math.round(ms / 1_000)}s`;
+}
+
+export const ScheduleSchema = z.object({
+  id: Id,
+  sessionId: Id,
+  prompt: z.string().max(LIMITS.promptBytes),
+  everyMs: z.number().int().min(1),
+  state: z.enum(SCHEDULE_STATES),
+  fireCount: z.number().int().nonnegative(),
+  nextFireAt: IsoTimestamp,
+  lastRunId: Id.nullable(),
+  lastError: z.string().max(300).nullable(),
+  createdAt: IsoTimestamp,
+  updatedAt: IsoTimestamp,
+});
+
 /** A task as it is written down, before it has an identity. */
 export const PlanTaskDraftSchema = z.object({
   title: z.string().min(1).max(200),
@@ -456,6 +538,8 @@ export const EventPayloadSchemas = Object.freeze({
     summary: z.string().max(600).nullable().optional(),
   }),
   "plan.task.updated": z.object({ planId: Id, task: PlanTaskSchema }),
+  "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
+  "schedule.updated": z.object({ schedule: ScheduleSchema }),
   "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
   "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
@@ -487,6 +571,8 @@ const HelloResult = z.object({
   engineBootId: Id,
   eventStreamId: Id.optional(),
   supportedMethods: z.array(z.string()),
+  /** Present when the engine understands `eventTypes` on events.subscribe; absent on older engines. */
+  supportedEventTypes: z.array(z.string()).optional(),
   frameLimits: z.object({ maxFrameBytes: z.number().int(), maxBufferedBytes: z.number().int() }),
 });
 
@@ -604,7 +690,7 @@ export const MethodSchemas = {
     result: z.object({ run: RunSchema, messages: z.array(MessageSchema), cursor: DecimalString }),
   },
   "events.subscribe": {
-    params: z.object({ after: DecimalString.default("0"), sessionId: Id.optional() }),
+    params: z.object({ after: DecimalString.default("0"), sessionId: Id.optional(), eventTypes: z.array(z.string().min(1).max(64)).max(EVENT_TYPES.length + 16).optional() }),
     result: z.object({ cursor: DecimalString, replayed: z.number().int().nonnegative() }),
   },
   "attachment.create": {
@@ -928,6 +1014,22 @@ Object.assign(MethodSchemas, {
   "plan.task.remove": { params: z.object({ taskId: Id }), result: z.object({ taskId: Id }) },
   "plan.task.retry": { params: z.object({ taskId: Id }), result: z.object({ task: PlanTaskSchema }) },
   "plan.task.skip": { params: z.object({ taskId: Id }), result: z.object({ task: PlanTaskSchema }) },
+
+  // Schedules: wake a session on an interval. Creating one is free; firing it is the run.
+  // A capability caller omits sessionId: its credential names the session its run belongs to.
+  "schedule.create": {
+    params: z.object({
+      sessionId: Id.optional(),
+      workspaceId: Id.optional(),
+      prompt: z.string().min(1).max(LIMITS.promptBytes),
+      everyMs: z.number().int().min(SCHEDULE_LIMITS.minEveryMs).max(SCHEDULE_LIMITS.maxEveryMs),
+    }),
+    result: z.object({ schedule: ScheduleSchema }),
+  },
+  "schedule.list": { params: z.object({ sessionId: Id.optional(), workspaceId: Id.optional() }), result: z.object({ schedules: z.array(ScheduleSchema) }) },
+  "schedule.pause": { params: z.object({ scheduleId: Id, workspaceId: Id.optional() }), result: z.object({ schedule: ScheduleSchema }) },
+  "schedule.resume": { params: z.object({ scheduleId: Id, workspaceId: Id.optional() }), result: z.object({ schedule: ScheduleSchema }) },
+  "schedule.cancel": { params: z.object({ scheduleId: Id, workspaceId: Id.optional() }), result: z.object({ schedule: ScheduleSchema }) },
 });
 
 Object.freeze(MethodSchemas);

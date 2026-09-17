@@ -22,6 +22,8 @@ import { TerminalService } from "./terminal/service.js";
 import { createBoard } from "./board/index.js";
 import { createWorktreeService } from "./workspaces/worktrees.js";
 import { createOrchestrator } from "./orchestrator/index.js";
+import { createScheduler } from "./scheduler/index.js";
+import { createHostedMcpConfig } from "./hosted-mcp.js";
 import { SELF_MENTION } from "./agents/mentions.js";
 import { createCatalog } from "./agents/catalog.js";
 import { createModelDirectory } from "./agents/models.js";
@@ -32,8 +34,7 @@ import { prepareEndpoint } from "./endpoint.js";
 import { createLifetime } from "./lifetime.js";
 import { createLogger } from "./log.js";
 import { TgrepService } from "./search/tgrep.js";
-import { searchMcpConfig } from "./search/hosted.js";
-import { createBrowserConfig } from './browser/hosted.js';
+
 
 export { OwnershipError, SchemaError } from "./storage/index.js";
 
@@ -65,6 +66,7 @@ export function createEngine(options) {
   let board = null;
   let worktrees = null;
   let plans = null;
+  let schedules = null;
   let agents = null;
   const agentName = () => {
     const settings = settingsService?.get();
@@ -97,7 +99,7 @@ export function createEngine(options) {
     supervisor = new ProcessSupervisor({ storage, log, env: toolEnv, recoveryDir: paths.recoveryDir, baseEnv: options.env ?? process.env });
     supervisor.reconcile();
     terminals = new TerminalService({ storage, supervisor, lifetime, log, shell: (options.env ?? process.env).JOLO_SHELL ?? null });
-    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir });
+    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules });
     board = createBoard({ storage, env: toolEnv, log });
     worktrees = createWorktreeService({ storage, permissions, paths, env: toolEnv, terminals, log });
     try {
@@ -109,12 +111,9 @@ export function createEngine(options) {
     agentModels = createModelDirectory({ catalog, supervisor, build, log });
     agents = new AgentService({ catalog, terminals, storage, log });
     const jolo = createAgentExecutor({ storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });
-    const searchConfig = (workspace, run) => {
-      if (toolEnv.tgrep) void search.acquire(workspace.path).then(lease => lease?.release());
-      return searchMcpConfig(toolEnv.tgrep ? { ...paths, tokenPath: capabilityTokens.issue(run.id, workspace.id).tokenPath } : paths, workspace.id, Boolean(toolEnv.tgrep));
-    };
+    const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      searchConfig, browserConfig: createBrowserConfig({ browser, paths, capabilityTokens }),
+      mcpConfig,
       providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
     runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
@@ -127,10 +126,13 @@ export function createEngine(options) {
     plans = createOrchestrator({ storage, runs, catalog, log });
     const stopped = plans.reconcile();
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
+    schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
+    // Beats missed while the engine was down each produce one check-in, after clients can attach.
+    schedules.start();
     endpoint.publish({ engineBootId: bootId, pid: process.pid, build, protocol: PROTOCOL_VERSION, schemaVersion: SCHEMA_VERSION, startedAt });
     lifetime.start();
     log.info("engine ready", { bootId, pid: process.pid, socket: paths.socketPath, provider: agentName() });
@@ -153,6 +155,9 @@ export function createEngine(options) {
       try {
         lifetime.stop();
         if (account) { await step('chat sync', () => account.chatSync.stop()); await step('account', () => account.stop()); }
+        // Stop the scheduler before anything else with a worker: a beat landing mid-shutdown would
+        // start a run that runs.stopAll then interrupts, while the slot has already advanced.
+        if (schedules) await step("schedules", () => schedules.stop());
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
         if (search) await step("search", () => search.close());

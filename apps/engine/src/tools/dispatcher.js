@@ -13,10 +13,10 @@ const canonical = (value) => JSON.stringify(value, Object.keys(value ?? {}).sort
 
 export class ToolDispatcher {
   /**
-   * The last four collaborators are what a given deployment happens to host: an engine without a
-   * browser, a process supervisor, a patch directory or a search index simply leaves them out, and
-   * the tools that need them report themselves unavailable.
-   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any }} options
+   * The last collaborators are what a given deployment happens to host: an engine without a
+   * browser, a process supervisor, a patch directory, a search index or a scheduler simply leaves
+   * them out, and the tools that need them report themselves unavailable.
+   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any, schedules?: () => any }} options
    */
   constructor(options) {
     this.registry = options.registry;
@@ -28,6 +28,7 @@ export class ToolDispatcher {
     this.supervisor = options.supervisor ?? null;
     this.patchesDir = options.patchesDir ?? null;
     this.search = options.search ?? null;
+    this.schedules = options.schedules ?? null; // late-bound: the scheduler is built after the dispatcher
   }
 
   hasBrowser(workspaceId) { return Boolean(this.browser?.hasBrowser(workspaceId)); }
@@ -85,6 +86,7 @@ export class ToolDispatcher {
         signal: controller.signal,
         env: this.env,
         search: this.search,
+        schedules: this.schedules?.() ?? null,
         storeArtifact: (kind, buffer) => this.storeArtifact(run.sessionId, kind, buffer),
         invocationId: invocation.id,
         deadlineMs: leaseMs,

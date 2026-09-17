@@ -11,6 +11,7 @@ if (!flags.has("--print") || !flags.has("--output-format") || !argv.includes("st
   process.stderr.write(`fake-claude: unexpected argv ${JSON.stringify(argv)}\n`);
   process.exit(64);
 }
+const offersBrowser = config => config?.args?.at(-1)?.split(',').includes('browser');
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
 const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
@@ -56,16 +57,52 @@ async function turn(prompt, images = []) {
   };
   let turns = 1;
   let match;
-  if (prompt === 'browser-discovery') {
-    say(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo_browser ? 'Browser tools available' : 'Browser tools unavailable');
+  if (prompt === 'subagent-review') {
+    const parentId = 'toolu_reviewer';
+    const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
+    const event = value => out({ type: 'stream_event', event: value, parent_tool_use_id: null, session_id: sessionId });
+    const report = '[{"file":"app.js","line":10,"summary":"INTERNAL_REVIEW","failure_scenario":"internal details"}]';
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { prompt: 'Review the code' } }] }, session_id: sessionId });
+    // Two overlapping streams use the same block index. A child stop must not clear the parent's block.
+    event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'I found one issue. ' } });
+    child({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+    child({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: report } } });
+    child({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
+    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: report }, { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'echo child-review' } }] } });
+    // Child permissions still go through the host policy even though their transcript stays internal.
+    const decision = await new Promise(resolve => {
+      pending.set('child-permission', resolve);
+      child({ type: 'control_request', request_id: 'child-permission', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo child-review' }, tool_use_id: 'child-bash' } });
+    });
+    child({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'child-bash', content: decision.behavior }] } });
+    child({ type: 'stream_event', event: { type: 'message_stop' } });
+    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'SECOND_INTERNAL_REVIEW' }] } });
+    out({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: parentId, content: report }] }, session_id: sessionId });
+    event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Validate the interval before saving.' } });
+    event({ type: 'content_block_stop', index: 0 });
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'I found one issue. Validate the interval before saving.' }] }, session_id: sessionId });
+    event({ type: 'message_stop' });
+  } else if (prompt === 'browser-discovery') {
+    say(offersBrowser(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo) ? 'Browser tools available' : 'Browser tools unavailable');
   } else if (prompt === 'browser-check') {
     if (!valueOf('--append-system-prompt')?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
-    const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo_browser;
-    if (!config) say('Browser tools unavailable');
+    const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo;
+    if (!offersBrowser(config)) say('Browser tools unavailable');
     else {
       const { browserMcpCheck } = await import('./browser-mcp-client.js');
-      const result = await tool('mcp__jolo_browser__browser_screenshot', {}, async () => ({ content: await browserMcpCheck(config) }));
+      const result = await tool('mcp__jolo__browser_screenshot', {}, async () => ({ content: await browserMcpCheck(config) }));
       say(result.denied ? result.message : result.content);
+    }
+  } else if (prompt === 'schedule-check') {
+    const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo;
+    if (!config) throw new Error('jolo MCP was not configured');
+    const { mcpCall } = await import('./browser-mcp-client.js');
+    const created = await tool('mcp__jolo__schedule_create', { every: '15m', prompt: 'check the board' }, async () => ({ content: (await mcpCall(config, 'schedule_create', { every: '15m', prompt: 'check the board' })) }));
+    if (created.denied) say(created.message);
+    else {
+      const listed = await tool('mcp__jolo__schedule_list', {}, async () => ({ content: (await mcpCall(config, 'schedule_list', {})) }));
+      say(listed.denied ? listed.message : `Schedules on this task: ${listed.content?.schedules?.length ?? 0}`);
     }
   } else if (prompt === 'image-check') {
     say(`Images received: ${images.map(image => `${image.source.media_type}:${Buffer.from(image.source.data, 'base64').length}`).join(', ')}`);

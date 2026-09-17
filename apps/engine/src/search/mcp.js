@@ -4,17 +4,17 @@ import { connect } from '@jolo/client';
 import { SearchTextParams } from '@jolo/protocol';
 import { z } from 'zod';
 
-export async function runSearchMcp(argv = process.argv.slice(3)) {
-  const inputSchema = z.toJSONSchema(SearchTextParams); delete inputSchema.$schema;
-  return runScopedMcp({ argv, name: 'jolo-search', tools: [{ name: 'search_text', description: 'Search this workspace using Jolo’s live tgrep index, with automatic live-search fallback while indexing. Literal by default. Set fresh=true when verifying recent edits. Returns bounded file paths, line numbers, text, and a paging cursor.', inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }],
-    async call(client, workspaceId, params) {
-      if (params?.name !== 'search_text') throw new Error('unknown search tool');
-      const args = SearchTextParams.parse(params.arguments ?? {});
-      const value = await client.call('workspace.search', { ...args, workspaceId });
-      return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false };
-    },
-  });
-}
+const inputSchema = z.toJSONSchema(SearchTextParams); delete inputSchema.$schema;
+
+export const searchBridge = {
+  tools: [{ name: 'search_text', description: 'Search this workspace using Jolo’s live tgrep index, with automatic live-search fallback while indexing. Literal by default. Set fresh=true when verifying recent edits. Returns bounded file paths, line numbers, text, and a paging cursor.', inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }],
+  async call(client, workspaceId, params) {
+    if (params?.name !== 'search_text') throw new Error('unknown search tool');
+    const args = SearchTextParams.parse(params.arguments ?? {});
+    const value = await client.call('workspace.search', { ...args, workspaceId });
+    return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false };
+  },
+};
 
 /** Bounded stdio transport shared by workspace-scoped hosted tool servers. */
 export async function runScopedMcp({ argv, name, tools, call }) {

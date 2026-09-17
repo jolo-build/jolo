@@ -4,7 +4,7 @@ import { connectResumable } from "@jolo/client";
 // Headless CLI. Interactive mode is a later milestone and is never imported here.
 import { fileURLToPath } from "node:url";
 import { resolvePaths, connectOrStart, tryConnect } from "@jolo/launcher";
-import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema } from "@jolo/protocol";
+import { compareSeq, DEMO_PROVIDER_SETTINGS, parseModelTarget, ModelRefSchema, parseEveryMs, formatEveryMs, SCHEDULE_LIMITS } from "@jolo/protocol";
 import { findProject, renderBoardDetail, renderBoardTable } from "./board.js";
 import { deleteSession, listSessions, restoreSession } from "./sessions.js";
 import { runAccountCommand } from './account.js';
@@ -28,7 +28,7 @@ import { followRun } from "./follow-run.js";
 
 const USAGE = `usage:
   jolo [<dir>] [--theme <id>]                       interactive terminal client (needs a TTY)
-  jolo run "<task>" [--json] [--path <dir>] [--agent claude] [--worktree [--branch <name>] [--base <ref>]]
+  jolo run "<task>" [--json] [--path <dir>] [--agent claude] [--every 15m [--every-prompt "<text>"]] [--worktree [--branch <name>] [--base <ref>]]
   jolo attach <run-id> [--json]
   jolo cancel <run-id>
   jolo resume <run-id> [--json]
@@ -51,6 +51,9 @@ const USAGE = `usage:
   jolo plan start|pause|cancel <plan-id>
   jolo plan task assign <task-id> [--agent <id>] [--model <name>] [--effort <level>] [--clear]
   jolo plan task retry|skip <task-id>
+  jolo schedule add <session-id> --every <15m|1h|1d> "<prompt>"   wake a task on an interval — a heartbeat
+  jolo schedule list [--session <id>] [--json]                   the wake-ups waiting to fire
+  jolo schedule pause|resume|remove <schedule-id>
   jolo worktree list [--path <dir>] [--json]
   jolo worktree add [--path <dir>] [--branch <name>] [--base <ref>] [--json]
   jolo worktree remove <branch|workspace-id> [--path <dir>] [--force]
@@ -107,6 +110,9 @@ async function attachEngine(flags, { start = true, clientKind = 'headless' } = {
 async function commandRun({ positional, flags }) {
   const prompt = positional.slice(1).join(" ").trim();
   if (!prompt) { err(USAGE); return EXIT.usage; }
+  const everyMs = flags.every === undefined ? null : parseEvery(flags.every);
+  if (flags.every !== undefined && !everyMs) { err(EVERY_BOUNDS); return EXIT.usage; }
+  if (flags["every-prompt"] !== undefined && !everyMs) { err("--every-prompt needs --every"); return EXIT.usage; }
   const json = flags.json === true;
   const { client } = await attachEngine(flags);
   try {
@@ -127,6 +133,11 @@ async function commandRun({ positional, flags }) {
     // --agent hands the task to a hosted agent; Jolo relays the prompt and routes its permission requests here.
     const { session, cursor } = await client.call("session.create", { projectId: project.projectId, workspaceId, title: prompt.slice(0, 80), ...(flags.agent ? { agentId: flags.agent } : {}) });
     if (flags.agent && !json) err(`task answered by ${flags.agent}`);
+    if (everyMs) {
+      const { schedule } = await client.call("schedule.create", { sessionId: session.id, prompt: flags["every-prompt"] ?? prompt, everyMs });
+      emit(json, { type: "schedule.created", schedule });
+      if (!json) err("heartbeat " + schedule.id + " fires every " + EVERY_LONG(everyMs));
+    }
     const requestId = createRequestId();
     return await followRun(client, {
       session, cursor, json,
@@ -359,6 +370,65 @@ async function commandWorktree({ positional, flags }) {
   } finally {
     await client.close();
   }
+}
+
+/** "15m" / "1h" / "2d" as the user types it, in milliseconds; null when it is not a duration in range. A repeated flag keeps its last value. */
+const parseEvery = (value) => parseEveryMs(Array.isArray(value) ? value.at(-1) : value);
+const EVERY_BOUNDS = "--every must look like 15m, 1h, or 1d (between " + (SCHEDULE_LIMITS.minEveryMs / 60_000) + "m and " + (SCHEDULE_LIMITS.maxEveryMs / 86_400_000) + "d)";
+
+const EVERY_LONG = formatEveryMs;
+
+async function commandSchedule({ positional, flags }) {
+  const sub = positional[1];
+  const json = flags.json === true;
+
+  if (sub === "add") {
+    const sessionId = positional[2];
+    const prompt = positional.slice(3).join(" ").trim();
+    const everyMs = parseEvery(flags.every);
+    if (!sessionId || !prompt) { err(USAGE); return EXIT.usage; }
+    if (!everyMs) { err(EVERY_BOUNDS); return EXIT.usage; }
+    const { client } = await attachEngine(flags);
+    try {
+      const { schedule } = await client.call("schedule.create", { sessionId, prompt, everyMs });
+      out(json ? JSON.stringify({ schedule }) : `${schedule.id}  every ${EVERY_LONG(schedule.everyMs)} → ${schedule.sessionId}`);
+      return EXIT.completed;
+    } finally {
+      await client.close();
+    }
+  }
+
+  if (["pause", "resume", "remove"].includes(sub)) {
+    const scheduleId = positional[2];
+    if (!scheduleId) { err(USAGE); return EXIT.usage; }
+    const { client } = await attachEngine(flags);
+    try {
+      const { schedule } = await client.call(`schedule.${sub === "remove" ? "cancel" : sub}`, { scheduleId });
+      out(json ? JSON.stringify({ schedule }) : `schedule ${schedule.id} is ${schedule.state}`);
+      return EXIT.completed;
+    } finally {
+      await client.close();
+    }
+  }
+
+  if (sub === undefined || sub === "list") {
+    if (flags.session === true || Array.isArray(flags.session)) { err(USAGE); return EXIT.usage; }
+    const { client } = await attachEngine(flags);
+    try {
+      const { schedules } = await client.call("schedule.list", { ...(flags.session !== undefined ? { sessionId: String(flags.session) } : {}) });
+      if (json) { out(JSON.stringify({ schedules })); return EXIT.completed; }
+      if (!schedules.length) out("no schedules yet");
+      for (const schedule of schedules) {
+        out(`${schedule.id}  ${schedule.state.padEnd(7)} every ${EVERY_LONG(schedule.everyMs).padEnd(4)} → ${schedule.sessionId}  fired ${schedule.fireCount}×${schedule.lastError ? `  last error: ${schedule.lastError}` : ""}`);
+      }
+      return EXIT.completed;
+    } finally {
+      await client.close();
+    }
+  }
+
+  err(USAGE);
+  return EXIT.usage;
 }
 
 /** "<title>: <brief>" as the user types it; a task with no colon is its own brief. */
@@ -640,8 +710,10 @@ async function commandInteractive({ positional, flags }) {
   try {
     let selected = null;
     let projectPath = dir;
-    if (flags.session) {
-      selected = await restoreSession(client, flags.session);
+    const restoreId = Array.isArray(flags.session) ? flags.session.at(-1) : flags.session;
+    if (flags.session === true) { err(USAGE); return EXIT.usage; }
+    if (restoreId) {
+      selected = await restoreSession(client, restoreId);
       const { projects } = await client.call("board.list", {});
       const known = projects.find((row) => row.projectId === selected.projectId);
       if (!known) throw new Error("The saved session's project is unavailable.");
@@ -654,7 +726,7 @@ async function commandInteractive({ positional, flags }) {
     await client.subscribe({ after: status.cursor });
     const { startTui } = await import("./tui/index.jsx");
     const { createModelChoiceStore } = await import("./tui/model-choice.js");
-    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(flags.session), update, themeStore, themeId, modelChoiceStore: createModelChoiceStore(paths) });
+    return await startTui({ client, project, session: selected, cursor: status.cursor, restored: Boolean(restoreId), update, themeStore, themeId, modelChoiceStore: createModelChoiceStore(paths) });
   } finally {
     await client.close();
   }
@@ -689,7 +761,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
+  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, schedule: commandSchedule, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

@@ -348,3 +348,7 @@ main{padding:28px 20px}
 
 @media(prefers-reduced-motion:reduce){.film-working>.film-icon{animation:none}
 }
+.film-checkin{opacity:0;transform:translateY(8px);transition:opacity .5s,transform .7s;margin-top:14px;display:flex;align-items:center;gap:8px;background:#eef0f8;color:#4b5568}
+.film-checkin .film-icon{flex:none}
+.film-screen[data-kind='schedule'][data-stage='2'] .film-checkin,.film-screen[data-kind='schedule'][data-stage='3'] .film-checkin{opacity:1;transform:none}
+.film-plan-row b.film-beat-state{margin-left:auto;white-space:nowrap}

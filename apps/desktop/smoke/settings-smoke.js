@@ -48,6 +48,19 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
       await settle();
       writeFileSync(path.join(results, `settings-inputs-${theme}.png`), (await window.webContents.capturePage()).toPNG());
       await tab('appearance');
+      const reset = await evaluate(`(() => {
+        const button = document.querySelector('.settings-reset');
+        button.scrollIntoView({block:'center'});
+        const style = getComputedStyle(button), rect = button.getBoundingClientRect();
+        return { padding: [style.paddingLeft, style.paddingRight], x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      })()`);
+      assert(reset.padding.every(value => parseFloat(value) >= 9), 'Reset fonts label has cramped horizontal padding');
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(reset.x), y: Math.round(reset.y) });
+      await settle();
+      assert(await evaluate(`(() => {
+        const button = document.querySelector('.settings-reset');
+        return button.matches(':hover') && getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)';
+      })()`), 'Reset fonts button is missing its hover background');
       writeFileSync(path.join(results, `settings-appearance-${theme}.png`), (await window.webContents.capturePage()).toPNG());
       await tab('account');
       await waitFor("document.querySelector('.account-settings')?.textContent.includes('Sign in to Jolo')", 'account settings read the engine status');

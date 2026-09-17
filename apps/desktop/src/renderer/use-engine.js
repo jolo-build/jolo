@@ -32,6 +32,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const permissions = useRef(new PendingPermissions());
   const [changes, setChanges] = useState([]);
   const [plans, setPlans] = useState([]);
+  const [schedules, setSchedules] = useState([]);
   const [, bump] = useReducer((x) => x + 1, 0);
   const paintTimer = useRef(null);
   const redraw = useCallback(() => {
@@ -110,6 +111,16 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     } catch { return []; }
   }, []);
 
+  /** Heartbeats on the selected task, live and paused (cancelled ones are already gone). */
+  const refreshSchedules = useCallback(async (id = sessionRef.current) => {
+    if (!id) { setSchedules([]); return []; }
+    try {
+      const { schedules: list } = await call("schedule.list", { sessionId: id });
+      if (sessionRef.current === id) setSchedules(list);
+      return list;
+    } catch { return []; }
+  }, []);
+
   const markViewed = useCallback(async (workspaceId) => { if (!workspaceId) return; try { await call("board.viewed", { workspaceId }); } catch { /* the workspace may be gone */ } }, []);
 
   const selectSession = useCallback(async (id) => {
@@ -119,6 +130,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const requests = new PendingPermissions();
     permissions.current = requests;
     setChanges([]);
+    void refreshSchedules(id); // the panels menu badges this task's heartbeats before its panel opens
     history.current = null;
     if (!id) { projection.current = null; bump(); return; }
     const next = new SessionProjection({
@@ -151,7 +163,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     next.seed(page);
     older.seed(page);
     for (const message of page.messages) if (message.committedBytes > 0) void next.fill(message.id);
-  }, [redraw]);
+  }, [redraw, refreshSchedules]);
 
   const openProject = useCallback(async (path, options = {}) => {
     const request = ++projectRequest.current;
@@ -351,12 +363,14 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       let workspacesChanged = false;
       let agentsChanged = false;
       let plansChanged = false;
+      let schedulesChanged = false;
       for (const item of items) {
         if (item.kind === "event") {
           // A finished task the user is looking at counts as seen; the board stops calling it new.
           if (item.value.type === "run.state" && TERMINAL.has(item.value.payload.state) && item.value.sessionId === sessionRef.current && projectRef.current && document.hasFocus() && visibleRef.current) void markViewed(currentWorkspaceId());
           if (item.value.type.startsWith("agent.") && item.value.payload.workspaceId === currentWorkspaceId()) agentsChanged = true;
           if (item.value.type.startsWith("plan.")) plansChanged = true;
+          if (item.value.type.startsWith("schedule.") && item.value.sessionId === sessionRef.current) schedulesChanged = true;
           if (WORKSPACE_EVENTS.has(item.value.type) && item.value.payload.projectId === projectRef.current?.projectId || (item.value.type === "workspace.created" && item.value.payload.workspace?.projectId === projectRef.current?.projectId)) workspacesChanged = true;
           if (item.value.sessionId === sessionRef.current && current) current.applyEvent(item.value);
           if (item.value.sessionId === sessionRef.current) {
@@ -378,9 +392,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       if (workspacesChanged) void refreshWorkspaces();
       if (agentsChanged) void refreshAgents();
       if (plansChanged) void refreshPlans();
+      if (schedulesChanged) void refreshSchedules();
     });
     return offEvents;
-  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans]);
+  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans, refreshSchedules]);
 
   useEffect(() => {
     const off = window.jolo.onEvents((items, meta) => { if (meta?.resyncRequired) setRelayNote("renderer fell behind; reloading the session"), void selectSession(sessionRef.current); });
@@ -403,6 +418,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
     board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
     plans, refreshPlans,
+    schedules, refreshSchedules,
     openProject, selectSession, newSession, newChat, send, sendNow, removeQueued, cancel, refreshSettings, resolvePermission, resumeRun, loadDiff, loadFile, revertChange,
     call,
   };

@@ -9,6 +9,19 @@ const draw = (source, width = 76) => {
 const shown = (source, width) => draw(source, width).text.join("\n");
 
 describe("drawing a mermaid diagram in a terminal", () => {
+  test('side notes preserve whole-cell participant and message alignment', () => {
+    const picture = shown(`sequenceDiagram
+      participant U as User
+      participant K as Keystone API
+      U->>K: Ask a question
+      Note left of U: Context
+      Note right of K: Evidence`, 100);
+    for (const text of ['User', 'Keystone API', 'Ask a question', 'Context', 'Evidence']) expect(picture).toContain(text);
+    expect(picture).toContain('┌');
+    expect(picture).toContain('▶');
+    expect(picture.split('\n').every(row => row.length <= 100)).toBe(true);
+  });
+
   test("a flowchart becomes boxes joined by lines that point where the author pointed them", () => {
     const picture = shown("flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|yes| C[Store]\n  B -->|no| D[Stop]");
     expect(picture).toContain("│ Start │");
