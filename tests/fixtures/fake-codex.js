@@ -115,19 +115,45 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     if (!entry.developerInstructions?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
     // `Bun.TOML.parse` only promises `object`; the engine writes the browser server under this key.
     const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
-    if (!settings.mcp_servers?.jolo_browser) { say('Browser tools unavailable'); end('completed'); return; }
+    if (!settings.mcp_servers?.jolo?.args?.at(-1)?.split(',').includes('browser')) { say('Browser tools unavailable'); end('completed'); return; }
+    if (await Bun.file(path.join(entry.cwd, '.fake-browser-reconnect')).exists()) {
+      if (!entry.developerInstructions.includes('retry browser_open') || entry.developerInstructions.includes('no browser connection')) throw new Error('browser guidance prevents reconnection');
+      const { mcpCall } = await import('./browser-mcp-client.js');
+      let failure;
+      try { await mcpCall(settings.mcp_servers.jolo, 'browser_open'); } catch (error) { failure = error.message; }
+      if (!failure?.includes('open this workspace in Jolo desktop')) throw new Error(`expected live missing-host error: ${failure}`);
+      await Bun.write(path.join(entry.cwd, '.fake-browser-unavailable'), failure);
+      const deadline = Date.now() + 10_000;
+      while (!await Bun.file(path.join(entry.cwd, '.fake-browser-connected')).exists()) {
+        if (Date.now() >= deadline || turn.interrupted) throw new Error('desktop did not reconnect');
+        await Bun.sleep(20);
+      }
+    }
     const { browserMcpCheck } = await import('./browser-mcp-client.js');
-    const tool = item('mcpToolCall', { server: 'jolo_browser', tool: 'browser_screenshot', arguments: {}, status: 'inProgress' });
+    const tool = item('mcpToolCall', { server: 'jolo', tool: 'browser_screenshot', arguments: {}, status: 'inProgress' });
     started(tool);
-    const approval = { threadId, turnId, serverName: 'jolo_browser', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call' }, message: 'Allow browser_screenshot?', requestedSchema: { type: 'object', properties: {} } };
+    const approval = { threadId, turnId, serverName: 'jolo', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call' }, message: 'Allow browser_screenshot?', requestedSchema: { type: 'object', properties: {} } };
     for (const change of [{ serverName: 'external' }, { threadId: 'other' }, { turnId: 'other' }, { mode: 'url' }, { _meta: {} }, { requestedSchema: { type: 'object', properties: { secret: { type: 'string' } } } }]) {
       const denied = await ask('mcpServer/elicitation/request', { ...approval, ...change });
       if (denied?.action === 'accept') throw new Error('unrelated approval was accepted');
     }
     const accepted = await ask('mcpServer/elicitation/request', approval);
     if (accepted?.action !== 'accept' || Object.keys(accepted.content ?? {}).length || accepted._meta) throw new Error('Jolo browser approval did not reach its dispatcher');
-    const text = await browserMcpCheck(settings.mcp_servers?.jolo_browser, result => completed({ ...tool, status: 'completed', result }));
+    const text = await browserMcpCheck(settings.mcp_servers?.jolo, result => completed({ ...tool, status: 'completed', result }));
     say(text);
+  } else if (prompt === 'schedule-check') {
+    const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
+    if (!settings.mcp_servers?.jolo) { say('Jolo bridge unavailable'); end('completed'); return; }
+    // Schedules are part of the scoped bridge whether or not this workspace has a browser:
+    // the engine auto-accepts the elicitation and the call reaches the real tools.
+    const tool = item('mcpToolCall', { server: 'jolo', tool: 'schedule_list', arguments: {}, status: 'inProgress' });
+    started(tool);
+    const accepted = await ask('mcpServer/elicitation/request', { threadId, turnId, serverName: 'jolo', mode: 'form', _meta: { codex_approval_kind: 'mcp_tool_call' }, message: 'Allow schedule_list?', requestedSchema: { type: 'object', properties: {} } });
+    if (accepted?.action !== 'accept') { say('Schedule approval refused'); end('completed'); return; }
+    const { mcpCall } = await import('./browser-mcp-client.js');
+    const result = await mcpCall(settings.mcp_servers.jolo, 'schedule_list', {});
+    completed({ ...tool, status: 'completed', result: JSON.stringify(result) });
+    say(`Schedules on this task: ${result?.schedules?.length ?? 0}`);
   } else if ((match = prompt.match(/^tool-deadline (reasoning|commentary|foreground|poll)$/))) {
     const mode = match[1];
     const exec = item("commandExecution", { command: "fixture-dev-server", cwd, processId: "1", status: "inProgress" });

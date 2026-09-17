@@ -2,6 +2,14 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DEMO_PROVIDER_SETTINGS } from "@jolo/protocol";
 import { SettingsPage } from "../src/renderer/components/settings.jsx";
+import { DESKTOP_THEMES } from '../src/renderer/themes.js';
+
+test('Appearance offers all shared themes through a labeled native selection', () => {
+  const html = renderToStaticMarkup(<SettingsPage {...(/** @type {import('react').ComponentProps<typeof SettingsPage>} */ ({ settings: { provider: null }, initialSection: 'appearance' }))} />);
+  expect(html).toContain('aria-label="Color theme"');
+  for (const theme of DESKTOP_THEMES) expect(html).toContain(`value="${theme.id}"`);
+  expect(html).toContain('System default');
+});
 
 test("desktop waits for the engine catalog instead of inventing selectable providers", () => {
   // The case stops at what the page shows before the engine's catalog arrives, so it passes the

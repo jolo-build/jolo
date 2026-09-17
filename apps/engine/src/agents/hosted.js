@@ -7,7 +7,8 @@
 // ends with usage recorded. This module holds those parts so each adapter is only its protocol.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolveWorkspacePath } from "../tools/paths.js";
 import { PermissionRequired } from "../permissions/service.js";
 
@@ -89,6 +90,10 @@ export { spawnLineChild } from "../processes/line-child.js";
  */
 export function createHostedTurn({ ctx, storage, permissions, manifest, session, workspace }) {
   const { run, signal } = ctx;
+  // One private scratch directory per turn. Never grant access to all of /tmp.
+  let scratchDir;
+  const scratch = () => scratchDir ??= realpathSync(mkdtempSync(path.join(tmpdir(), 'jolo-agent-')));
+  const containsFile = target => insideWorkspace(workspace.path, target) || Boolean(scratchDir && insideWorkspace(scratchDir, target));
   permissions.grantEdit(workspace.id, run.id); // a task may edit its own workspace; the guest's edits get the same grant (§10.1)
   const userMessage = ctx.startMessage("user", "text");
   ctx.appendText(userMessage, run.prompt);
@@ -110,6 +115,14 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
 
   return {
     appendBounded,
+    get environment() { const directory = scratch(); return { TMPDIR: directory, TMP: directory, TEMP: directory }; },
+    get fileInstructions() { return `Temporary files: use ${JSON.stringify(scratch())} (also TMPDIR, TMP and TEMP), not a hard-coded /tmp path. Jolo permits reads and writes in this private directory for this turn and removes it when the turn ends. Save final mockups, visualizations, and other deliverables inside the workspace before linking them in your reply; only workspace files can be previewed in chat.`; },
+    containsFile,
+    filePath(target, options = {}) {
+      const root = insideWorkspace(workspace.path, target) ? workspace.path : scratchDir;
+      if (!root) throw new Error('path is outside the workspace');
+      return { ...hostedPath(root, target, options), temporary: root === scratchDir };
+    },
     /**
      * Keep what a later turn needs (the vendor's own session or thread id); never a credential. Kept under the
      * agent's own name, because more than one agent can answer in one conversation (§6.5).
@@ -129,7 +142,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
      */
     async decide({ toolClass, toolName, targets = [], summary, script, cwd, argumentDigest }) {
       if (toolClass === "read" || toolClass === "mutation") {
-        const outside = targets.find((target) => !insideWorkspace(workspace.path, target));
+        const outside = targets.find((target) => !containsFile(target));
         if (outside !== undefined) return { deny: `Jolo policy: ${toolName} outside the workspace is not allowed` };
         try { permissions.authorize({ toolClass, workspaceId: workspace.id, runId: run.id }); return "allow"; }
         catch (error) { return { deny: `Jolo policy: ${error.message}` }; }
@@ -206,6 +219,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
     },
     /** The turn is over: whatever is still open was interrupted; usage is recorded; nothing was verified. */
     finish({ usage }) {
+      if (scratchDir) rmSync(scratchDir, { recursive: true, force: true });
       for (const [callId, tool] of tools) { ctx.finishMessage(tool.messageId, "interrupted"); tools.delete(callId); }
       const recorded = {
         inputTokens: Math.max(0, usage.inputTokens | 0), outputTokens: Math.max(0, usage.outputTokens | 0),

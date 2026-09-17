@@ -23,6 +23,7 @@ Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provide
 - Open files, a terminal, and a browser without leaving the app.
 - Work on several tasks at once, with split views and separate Git worktrees.
 - Create a plan, choose an agent for each step, and run the steps in order.
+- Give a task a heartbeat — a prompt that returns on an interval to check on delegated work.
 - Attach files and explore diagrams and interactive visualizations.
 
 ## Install
@@ -89,6 +90,12 @@ jolo run --agent claude "Explain this repository" --path /path/to/project
 ```
 
 See the [CLI guide](apps/cli/README.md) for more commands.
+
+## Appearance
+
+In the desktop app, open **Settings → Appearance → Color theme**, choose a palette, and click **Save changes**. The desktop shares the CLI’s neutral Jolo White theme, four Catppuccin palettes (Latte, Frappé, Macchiato, Mocha), and three GitHub palettes (Light, Dark, Dark Dimmed). **System default** follows your computer’s light or dark appearance.
+
+The choice is remembered on this device and applies to the interface, code highlighting, diffs, and terminal panes. Desktop and CLI selections are independent.
 
 ## Web tasks
 

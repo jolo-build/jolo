@@ -216,13 +216,14 @@ function drawSequence(model, width) {
     headHeight: 3, gapColumn: 3, row: 1, left: 1,
     labelWidth: (text) => safe(text).length,
     noteRoom: (span) => Math.max(8, span - 4),
+    selfWidth: 4,
     snap: Math.floor,
   });
   if (laid.width > width || laid.height > MAX_DIAGRAM_LINES) return null;
   const grid = createGrid();
   for (const column of laid.columns) {
-    grid.box(column.x, 0, column.w, 3, "rect", { dim: true });
-    grid.text(column.x + 2, 1, column.text, { bold: true });
+    grid.box(column.x, 0, column.w, laid.headHeight, "rect", { dim: true });
+    column.lines.forEach((line, row) => grid.text(column.x + 2, 1 + row, line, { bold: true }));
   }
   // Lifelines go down before anything is written over them, so a label's padding fills only what is free.
   for (const column of laid.columns) grid.run(column.centre, laid.lifelineTop, column.centre, laid.lifelineBottom, "solid");
@@ -249,7 +250,7 @@ function drawSequence(model, width) {
         grid.run(back, item.y, back, item.y + 1, item.style);
         grid.run(item.x + 1, item.y + 1, back, item.y + 1, item.style);
         grid.put(item.x + 1, item.y + 1, ARROWS.left, { dim: true });
-        if (item.label) grid.label(back + 1, item.y, item.label, {});
+        item.lines.forEach((line, row) => grid.label(back + 1, item.y + row, line, {}));
         break;
       }
       case "note":
@@ -269,7 +270,7 @@ function drawSequence(model, width) {
     grid.put(x + 1, rail.y, "─", { dim: true });
     grid.put(x, rail.end, "└", { dim: true });
     grid.put(x + 1, rail.end, "─", { dim: true });
-    grid.text(x + 2, rail.y, ` ${rail.label} `, { dim: true, italic: true });
+    rail.lines.forEach((line, row) => grid.text(x + 2, rail.y + row, ` ${line} `, { dim: true, italic: true }));
   }
   return grid.toLines().slice(0, laid.lifelineBottom + 1);
 }

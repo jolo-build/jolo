@@ -55,7 +55,8 @@
     "@jolo/protocol": "workspace:*",
     "@jolo/updates": "workspace:*",
     "@types/bun": "^1.4.2",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@jolo/themes": "workspace:*"
   },
   "trustedDependencies": [
     "electron"

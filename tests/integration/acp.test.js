@@ -27,6 +27,34 @@ test('Devin discovers browser tools from its per-run config on first and resumed
   for (const directory of directories) expect(existsSync(directory)).toBe(false);
 }, 30_000);
 
+test('Devin can use private scratch files, keep a preview, and clean up on completion or cancellation', async () => {
+  const { client, home, repo, project, session, runTo, messagesOf, text, events } = await boot({ agentId: 'devin' });
+  try {
+    const directories = [];
+    for (const requestId of ['scratch-first', 'scratch-resumed']) {
+      const run = await runTo(requestId, 'scratch-files');
+      expect(run.failure).toBeNull();
+      expect(run.state).toBe('completed');
+      const reply = (await messagesOf(run.id)).find(message => message.role === 'assistant' && message.kind === 'text');
+      const result = JSON.parse(await text(reply));
+      directories.push(result.directory);
+      expect(existsSync(result.directory)).toBe(false);
+      expect(readFileSync(path.join(repo, 'notes.txt'), 'utf8')).toBe('alpha\n');
+      expect((await client.call('workspace.readFile', { workspaceId: project.workspaceId, path: result.saved })).text).toBe('<h1>Mockup from scratch</h1>');
+      expect(events.filter(event => event.runId === run.id && event.type === 'files.changed').flatMap(event => event.payload.changes.map(change => change.path))).toEqual(['mockup.html']);
+      expect(events.some(event => event.runId === run.id && event.type === 'permission.requested')).toBe(false);
+    }
+    expect(new Set(directories).size).toBe(2);
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'scratch-cancel', prompt: 'scratch-cancel' });
+    const marker = path.join(home, 'acp-state/scratch-pending');
+    await waitFor(() => existsSync(marker), { label: 'scratch ready for cancellation' });
+    const directory = readFileSync(marker, 'utf8');
+    expect(existsSync(directory)).toBe(true);
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => !existsSync(directory), { label: 'cancelled scratch cleaned up' });
+  } finally { client.close(); }
+}, 30_000);
+
 /** A profile with an ACP agent played by the fixture, so nothing here reaches any vendor's CLI or account. */
 async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
   const home = tempHome(); homes.push(home);
@@ -58,6 +86,22 @@ async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('successful file creation and replacement are acknowledged without a parse error or retry', async () => {
+    const { client, repo, runTo, messagesOf, text, events } = await boot({ agentId: 'devin' });
+    try {
+      const target = path.join(repo, 'written.txt');
+      for (const content of ['created', 'replaced']) {
+        const run = await runTo(`write-${content}`, `write ${target} ${content}`);
+        expect(run.state).toBe('completed');
+        expect(readFileSync(target, 'utf8')).toBe(content);
+        expect(await text((await messagesOf(run.id)).at(-1))).toBe('Written.');
+        const completed = events.filter(event => event.runId === run.id && event.type === 'tool.completed');
+        expect(completed.map(event => [event.payload.name, event.payload.status])).toEqual([['apply_patch', 'ok'], ['devin:edit', 'ok']]);
+        expect(events.some(event => event.runId === run.id && event.type === 'permission.requested')).toBe(false);
+      }
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('long ACP tools use the task budget by default; an optional deadline only times blocking tools', async () => {
     const { client, events, session, messagesOf, text } = await boot();
     try {
@@ -154,15 +198,15 @@ describe("an agent hosted through the Agent Client Protocol", () => {
     } finally { await client.close(); }
   }, 25_000);
 
-  test('ACP omits unavailable browser tools when creating and resuming a session', async () => {
+  test('ACP checks the live browser connection on first and resumed turns', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {
       for (const request of ['browser-first', 'browser-resumed']) {
         const run = await runTo(request, 'browser-check');
         expect(run.state).toBe('completed');
-        expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
+        expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser unavailable: open this workspace in Jolo desktop to use its inline browser');
       }
-      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+      expect(events.filter(event => event.type === 'tool.completed' && event.payload.name === 'browser_open' && event.payload.status === 'error')).toHaveLength(2);
     } finally { await client.close(); }
   }, 25_000);
   test("reopened sessions include pending approvals until they are decided or cancelled", async () => {

@@ -1,6 +1,7 @@
 import { nativeTheme } from 'electron';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { ONBOARDING_KEY } from '../src/renderer/onboarding.js';
 
 // Hold styles and real startup reads in an isolated profile, so fast machines
 // still exercise the first paint, refresh, and failure states deterministically.
@@ -53,6 +54,8 @@ export function prepareLoadingSmoke({ window, bridge, root }) {
     const originalTheme = nativeTheme.themeSource;
     try {
       await waitFor("document.querySelector('link[href=\"styles.css\"]') && !document.querySelector('.app') && !document.getElementById('startup-screen').hidden", 'loading paints before application styles and React');
+      // This suite measures the work board; the first-run guide has its own smoke suite.
+      await evaluate(`localStorage.setItem(${JSON.stringify(ONBOARDING_KEY)}, 'dismissed')`);
       for (const theme of /** @type {const} */ (['light', 'dark'])) {
         nativeTheme.themeSource = theme;
         await settle();
@@ -84,7 +87,7 @@ export function prepareLoadingSmoke({ window, bridge, root }) {
       if (!pendingFonts.length || !(await evaluate("!document.getElementById('startup-screen').hidden && document.getElementById('root').inert"))) throw new Error('startup revealed the interface before its fonts finished loading');
       releaseFonts();
       await waitFor("document.getElementById('startup-screen').hidden && !document.getElementById('root').inert && document.querySelector('.board .empty-state')", 'initial data is ready and the board is usable');
-      if (!(await evaluate("document.fonts.status === 'loaded' && document.fonts.check('13px Inter') && document.querySelector('header').getBoundingClientRect().height > 0 && document.querySelector('.sidebar').getBoundingClientRect().width > 0 && document.querySelector('footer').getBoundingClientRect().height > 0"))) throw new Error('startup ended before the interface finished laying out');
+      if (!(await evaluate("document.fonts.status === 'loaded' && document.fonts.check('13px Inter') && document.querySelector('header').getBoundingClientRect().height > 0 && document.querySelector('.board').getBoundingClientRect().width > 0 && document.querySelector('.board').getBoundingClientRect().height > 0 && document.querySelector('.workspace-sidebar').inert"))) throw new Error('startup ended before the interface finished laying out');
       checks.push('the logo remains over all mounted components until initial data, fonts, and layout are ready, then reveals the interface together');
       checks.push('a failed application stylesheet shows a retry button that reloads successfully');
 

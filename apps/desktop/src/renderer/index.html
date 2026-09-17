@@ -9,15 +9,17 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <!-- Present before the bundle loads, including on a renderer refresh. -->
   <style>
-    html { color-scheme: light dark; background: light-dark(#fff, #171717); }
+    html { color-scheme: light dark; background: var(--startup-bg, light-dark(#fff, #171717)); }
     body { margin: 0; }
     /* Lay out and load the interface behind the opaque splash; inert blocks interaction. */
-    #startup-screen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: light-dark(#fff, #171717); color: light-dark(#202020, #ededed); }
+    #startup-screen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--startup-bg, light-dark(#fff, #171717)); color: var(--startup-text, light-dark(#202020, #ededed)); }
     #startup-screen[hidden], #startup-screen [hidden] { display: none; }
     .startup-logo { width: 64px; height: 64px; animation: startup-pulse 1.6s ease-in-out infinite; }
     @media (prefers-color-scheme: dark) { .startup-logo { filter: invert(1); } }
+    html[data-theme-mode="dark"] .startup-logo { filter: invert(1); }
+    html[data-theme-mode="light"] .startup-logo { filter: none; }
     .startup-detail { position: absolute; top: calc(50% + 56px); left: 24px; right: 24px; text-align: center; font: 13px/1.5 system-ui, sans-serif; }
-    .startup-status { color: light-dark(#6b6b6b, #a3a3a3); }
+    .startup-status { color: var(--startup-muted, light-dark(#6b6b6b, #a3a3a3)); }
     .startup-detail p { margin: 0 0 12px; }
     .startup-detail button { font: inherit; color: inherit; border: 0; border-radius: 6px; padding: 7px 12px; background: light-dark(#ededed, #292929); cursor: default; }
     #startup-screen[data-failed] .startup-logo { animation: none; }

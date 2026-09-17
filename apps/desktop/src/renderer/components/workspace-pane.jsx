@@ -19,6 +19,7 @@ import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
 import { PlanPane } from "./plan-pane.jsx";
+import { SchedulesPanel } from "./schedules-panel.jsx";
 import { JoloLogo } from "./brand.jsx";
 import { TaskDialog } from "./task-dialog.jsx";
 import { TaskHeader } from "./task-header.jsx";
@@ -107,6 +108,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   });
   const { context, setContext } = panelTabs;
   const plansOpen = panelTabs.items.some(tab => tab.id === 'plans');
+  const schedulesOpen = panelTabs.items.some(tab => tab.id === 'schedules');
   useLayoutEffect(() => { setWatchChanges(context === 'changes' || context === 'files'); }, [context]);
   const contextFor = tab => tab?.panelType === 'file' ? 'files' : tab?.panelType ?? null;
   const selectTab = id => { panelTabs.select(id); setContext(contextFor(panelTabs.items.find(tab => tab.id === id))); };
@@ -149,6 +151,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const livePlans = state.plans.filter((plan) => !["done", "cancelled"].includes(plan.state));
   const planCount = livePlans.length;
   const plansNeedingYou = livePlans.some((plan) => (plan.tasks ?? []).some((task) => task.state === "blocked"));
+  const activeSchedules = state.schedules.filter((schedule) => schedule.state === "active").length;
   const agentName = (id) => agentCatalog.find((entry) => entry.id === id)?.displayName ?? id;
   const lastRun = projection ? [...projection.runs.values()].at(-1) : null;
   const session = sessions.find((item) => item.id === sessionId);
@@ -363,7 +366,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
             {view === "board" && <button onClick={() => setShowSettings(true)} aria-label="Settings" title="Settings"><Icon name="settings" /></button>}
             <button className={view === "board" ? "active" : ""} onClick={() => setView(view === "board" ? "task" : "board")} aria-label="Board" title="Board" aria-pressed={view === "board"}><Icon name="board" /><span className="header-action-label">Board</span>{needsYou > 0 && <span className="count needs">{needsYou}</span>}</button>
-            <PanelMenu selected={view === 'board' ? null : context} panels={project?.standalone ? CONTEXT_PANELS.slice(0, 3) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, checks: verificationLabel(verification) }} onSelect={id => { selectContext(id); showTask(); }} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen} />
+            <PanelMenu selected={view === 'board' ? null : context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verificationLabel(verification) }} onSelect={id => { selectContext(id); showTask(); }} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen} />
             {!multi && <span className="header-divider" aria-hidden="true" />}
             {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "x")} aria-label="Split right" title="Split right"><Icon name="splitRight" size={14} /></button>}
             {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "y")} aria-label="Split below" title="Split below"><Icon name="splitBelow" size={14} /></button>}
@@ -423,6 +426,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
               {!terminalTabs.items.length && <div className="panel-empty"><Icon name="terminal" size={26} /><h2>No open terminals</h2><button onClick={newTerminal}>New terminal tab</button></div>}
             </div>
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); showTask(); }} />}</div>
+            <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
           </div>
         </aside>
       </ContextSplit>

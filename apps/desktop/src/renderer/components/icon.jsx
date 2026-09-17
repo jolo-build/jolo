@@ -1,5 +1,6 @@
 // Small, static icon set. No icon runtime or font is loaded by the renderer.
 const paths = {
+  copy: 'M9 9h12v12H9ZM15 9V3H3v12h6',
   download: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
   zoomIn: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6M10.5 7.5v6',
   zoomOut: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6',

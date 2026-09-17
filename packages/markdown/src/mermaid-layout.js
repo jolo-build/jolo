@@ -326,23 +326,42 @@ export function layoutFlowchart(model, metrics) {
  *   headHeight: number, gapColumn: number, row: number, left: number,
  *   labelWidth: (text: string) => number,
  *   noteRoom: (span: number) => number,
+ *   participantRoom?: number, maxLabelWidth?: number, selfWidth?: number,
  *   snap?: (value: number) => number,
  * }} metrics
  */
 export function layoutSequence(model, metrics) {
-  const { wrap, measure, headHeight, gapColumn, row: rowSize, left, labelWidth, noteRoom } = metrics;
+  const { wrap, measure, gapColumn, row: rowSize, left, labelWidth, noteRoom } = metrics;
   const snap = metrics.snap ?? ((value) => value);
   const half = (value) => snap(value / 2);
 
   const columns = model.participants.map((participant) => {
-    const lines = [wrap(participant.label, 18)[0] ?? participant.id];
+    const lines = wrap(participant.label, metrics.participantRoom ?? 18);
     const { w } = measure(lines);
-    return { id: participant.id, text: lines[0], w };
+    return { id: participant.id, text: lines.join(" "), lines, w };
   });
   const byId = new Map(columns.map((column) => [column.id, column]));
+  const headHeight = Math.max(metrics.headHeight, ...columns.map(column => measure(column.lines).h));
+  const labelLines = text => wrap(text, metrics.maxLabelWidth ?? Infinity);
+  const spanOf = lines => Math.max(0, ...lines.map(labelWidth));
+  const selfWidth = metrics.selfWidth ?? gapColumn;
   let at = left;
   for (const column of columns) { column.x = at; column.centre = at + half(column.w); at += column.w + gapColumn; }
-  const width = Math.max(0, at - gapColumn) + left;
+  // Message labels reserve space between their participants. Process columns
+  // left to right so later constraints never undo an earlier lane's spacing.
+  for (let end = 1; end < columns.length; end++) {
+    for (const event of model.events) {
+      if (event.kind !== "message" || !event.label) continue;
+      const a = columns.findIndex(column => column.id === event.from);
+      const b = columns.findIndex(column => column.id === event.to);
+      if (a < 0 || b < 0 || a === b || Math.max(a, b) !== end) continue;
+      const first = columns[Math.min(a, b)], last = columns[end];
+      const extra = spanOf(labelLines(event.label)) + gapColumn - (last.centre - first.centre);
+      if (extra > 0) for (const column of columns.slice(end)) { column.x += extra; column.centre += extra; }
+    }
+  }
+  let minX = 0, maxX = Math.max(0, ...columns.map(column => column.x + column.w)) + left;
+  const include = (x, width) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x + width); };
 
   const items = [];
   const blocks = [];
@@ -356,11 +375,18 @@ export function layoutSequence(model, metrics) {
         const to = byId.get(event.to);
         if (!from || !to) break;
         if (from === to) {
-          items.push({ kind: "self", from: from.id, x: from.centre, y, label: event.label, style: event.style, arrow: event.arrow });
-          y += rowSize * 2;
+          const lines = event.label ? labelLines(event.label) : [];
+          items.push({ kind: "self", from: from.id, x: from.centre, y, label: event.label, lines, style: event.style, arrow: event.arrow });
+          include(from.centre, selfWidth + left + spanOf(lines));
+          y += Math.max(2, lines.length + 1) * rowSize;
           break;
         }
-        if (event.label) { items.push({ kind: "label", text: event.label, from: from.id, to: to.id, x: Math.min(from.centre, to.centre), span: Math.abs(to.centre - from.centre), y }); y += rowSize; }
+        if (event.label) for (const text of labelLines(event.label)) {
+          const x = Math.min(from.centre, to.centre), span = Math.abs(to.centre - from.centre);
+          items.push({ kind: "label", text, from: from.id, to: to.id, x, span, y });
+          include(x + span / 2 - labelWidth(text) / 2, labelWidth(text));
+          y += rowSize;
+        }
         items.push({ kind: "message", from: from.id, to: to.id, fromX: from.centre, toX: to.centre, y, style: event.style, arrow: event.arrow });
         y += rowSize * 2;
         break;
@@ -373,21 +399,29 @@ export function layoutSequence(model, metrics) {
         const lines = wrap(event.text, noteRoom(last - first));
         const size = measure(lines);
         const boxWidth = Math.max(size.w, last - first);
-        const x = event.placement === "left" ? Math.max(0, first - boxWidth - gapColumn / 2)
-          : event.placement === "right" ? last + gapColumn / 2
+        const x = event.placement === "left" ? first - boxWidth - half(gapColumn)
+          : event.placement === "right" ? last + half(gapColumn)
           : first;
-        items.push({ kind: "note", x: Math.min(x, Math.max(0, width - boxWidth)), y, w: boxWidth, h: size.h, lines });
+        items.push({ kind: "note", x, y, w: boxWidth, h: size.h, lines });
+        include(x, boxWidth);
         y += size.h;
         break;
       }
       case "block": {
-        blocks.push({ label: `${event.tag}${event.label ? ` ${event.label}` : ""}`, y, depth: blocks.length });
-        y += rowSize;
+        const label = `${event.tag}${event.label ? ` ${event.label}` : ""}`;
+        const lines = labelLines(label);
+        blocks.push({ label, lines, y, depth: blocks.length });
+        include(0, spanOf(lines) + left * 2 + blocks.length * left);
+        y += rowSize * lines.length;
         break;
       }
       case "branch": {
-        items.push({ kind: "branch", text: `${event.tag}${event.label ? ` ${event.label}` : ""}`, depth: blocks.at(-1)?.depth ?? 0, y });
-        y += rowSize;
+        for (const text of labelLines(`${event.tag}${event.label ? ` ${event.label}` : ""}`)) {
+          const depth = blocks.at(-1)?.depth ?? 0;
+          items.push({ kind: "branch", text, depth, y });
+          include(0, labelWidth(text) + left * 2 + depth * left);
+          y += rowSize;
+        }
         break;
       }
       case "end": {
@@ -400,5 +434,12 @@ export function layoutSequence(model, metrics) {
     }
   }
   for (const open of blocks) rails.push({ ...open, end: y });
-  return { width, height: Math.max(y, top), columns, items, rails: rails.reverse(), lifelineTop: top, lifelineBottom: Math.max(y, top), labelWidth };
+  // Notes and self-messages may reach beyond either end participant. Translate
+  // everything together so the SVG viewBox contains the full diagram.
+  for (const column of columns) { column.x -= minX; column.centre -= minX; }
+  for (const item of items) {
+    if (item.x !== undefined) item.x -= minX;
+    if (item.fromX !== undefined) { item.fromX -= minX; item.toX -= minX; }
+  }
+  return { width: maxX - minX, height: Math.max(y, top), headHeight, row: rowSize, selfWidth, columns, items, rails: rails.reverse(), lifelineTop: top, lifelineBottom: Math.max(y, top), labelWidth };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseMermaid } from "../src/mermaid.js";
 import { layoutFlowchart, layoutSequence } from "../src/mermaid-layout.js";
+import { longSequence } from './fixtures/long-sequence.js';
 
 // The layout both clients share, measured here the way the desktop measures: whole numbers, boxes whose
 // edges are their borders. The terminal's own units are covered by its renderer's tests.
@@ -187,6 +188,36 @@ describe("laying a diagram out", () => {
   });
 });
 
+
+test('long sequence labels, self-messages and side notes stay inside the canvas', () => {
+  const wrap = (text, room) => {
+    const lines = [''];
+    for (const word of text.split(/\s+/)) {
+      if (lines.at(-1) && (lines.at(-1).length + word.length + 1) * 8 > room) lines.push(word);
+      else lines[lines.length - 1] += `${lines.at(-1) ? ' ' : ''}${word}`;
+    }
+    return lines;
+  };
+  const laid = layoutSequence(parseMermaid(longSequence), {
+    wrap, measure: lines => ({ w: Math.max(...lines.map(line => line.length)) * 8 + 20, h: lines.length * 16 + 12 }),
+    headHeight: 38, gapColumn: 34, row: 19, left: 6, labelWidth: text => text.length * 8,
+    noteRoom: span => Math.max(120, span - 24), participantRoom: 180, maxLabelWidth: 240, selfWidth: 26,
+  });
+  expect(laid.columns.map(column => column.lines.join(' '))).toContain('Keystone Tools');
+  expect(laid.items.filter(item => item.kind === 'label').map(item => item.text).join(' ')).toContain('Question + conversation ID + page context');
+  for (const item of laid.items) {
+    const start = item.kind === 'label' ? item.x + item.span / 2 - item.text.length * 4 : item.x;
+    const end = item.kind === 'label' ? start + item.text.length * 8 : item.kind === 'self' ? start + laid.selfWidth + 6 + Math.max(...item.lines.map(line => line.length * 8)) : item.kind === 'note' ? start + item.w : null;
+    if (end !== null) { expect(start).toBeGreaterThanOrEqual(0); expect(end).toBeLessThanOrEqual(laid.width); }
+  }
+  const leftNote = laid.items.find(item => item.kind === 'note' && item.lines[0].startsWith('Open'));
+  const rightNote = laid.items.find(item => item.kind === 'note' && item.lines[0].startsWith('Preserve'));
+  expect(leftNote.x + leftNote.w).toBeLessThan(laid.columns[0].x);
+  expect(rightNote.x).toBeGreaterThan(laid.columns.at(-1).x + laid.columns.at(-1).w);
+  const self = laid.items.find(item => item.kind === 'self');
+  const next = laid.items[laid.items.indexOf(self) + 1];
+  expect(next.y).toBeGreaterThanOrEqual(self.y + self.lines.length * laid.row);
+});
 
 test("full branch labels fit within the canvas in every flow direction", () => {
   for (const direction of ["TD", "TB", "BT", "LR", "RL"]) {

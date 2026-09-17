@@ -15,8 +15,9 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
   const publish = () => {
     const ids = workspaceIds;
     publishing = publishing.catch(() => {}).then(() => bridge.rawCall('browser.setOpener', { workspaceIds: ids }));
-    return publishing.catch(error => log.warn('browser opener registration failed', { error: String(error?.message ?? error) }));
+    return publishing;
   };
+  const publishInBackground = () => publish().catch(error => log.warn('browser opener registration failed', { error: String(error?.message ?? error) }));
   const finish = (entry, result, reply = true) => {
     if (!pending.delete(entry.invocationId)) return;
     clearTimeout(entry.timer);
@@ -51,12 +52,15 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
       if (!checked.success) return;
       workspaceIds = [...new Set(checked.data.workspaceIds)];
       for (const entry of pending.values()) if (!workspaceIds.includes(entry.workspaceId)) finish(entry, { error: 'workspace pane closed while opening the browser' });
-      if (bridge.client && !bridge.client.closed) void publish();
+      if (bridge.client && !bridge.client.closed) void publishInBackground();
     },
-    onConnected: publish,
-    // Runs sample browser availability once when their hosted process starts.
-    // Publish the pane list before admission, including after a fast pane switch.
-    beforeRun: publish,
+    onConnected: publishInBackground,
+    // Do not admit a run with a failed or stale pane registration. A pane can
+    // change while its previous publication is still waiting on the socket.
+    async beforeRun() {
+      let ids;
+      do { ids = workspaceIds; await publish(); } while (ids !== workspaceIds);
+    },
     onDisconnected() { for (const entry of pending.values()) finish(entry, {}, false); },
     handleOpen(params) {
       const checked = BrowserOpenSchema.safeParse(params);

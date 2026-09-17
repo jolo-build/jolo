@@ -2,6 +2,7 @@ import { useId, useMemo, useState, useRef, useLayoutEffect, useEffect } from "re
 import { createPortal } from "react-dom";
 import { Modal } from "./modal.jsx";
 import { Icon } from "./icon.jsx";
+import { CopyCodeButton } from './copy-code-button.jsx';
 import { parseMermaid } from "@jolo/markdown/mermaid";
 import { layoutFlowchart, layoutSequence } from "@jolo/markdown/mermaid-layout";
 
@@ -98,8 +99,11 @@ function buildSequence(model) {
     gapColumn: 34,
     row: 19,
     left: 6,
-    labelWidth: textWidth,
+    labelWidth: (text) => textWidth(text, EDGE_FONT),
     noteRoom: (span) => Math.max(120, span - 24),
+    participantRoom: 180,
+    maxLabelWidth: 240,
+    selfWidth: 26,
   });
   return { ...laid, kind: "sequence" };
 }
@@ -166,16 +170,16 @@ function FlowDrawing({ laid, id }) {
 }
 
 function SequenceDrawing({ laid, id }) {
-  const headHeight = LINE + PAD_Y * 2;
+  const headHeight = laid.headHeight;
   return <>
     {laid.columns.map((column) => <g key={column.id}>
       <line x1={column.centre} y1={laid.lifelineTop} x2={column.centre} y2={laid.lifelineBottom} className="mermaid-lifeline" strokeDasharray="2 4" />
       <rect x={column.x} y={0} width={column.w} height={headHeight} rx={4} className="mermaid-shape" />
-      <text x={column.centre} y={headHeight / 2} className="mermaid-text mermaid-participant" textAnchor="middle" dominantBaseline="central">{column.text}</text>
+      {column.lines.map((line, row) => <text key={row} x={column.centre} y={headHeight / 2 + (row - (column.lines.length - 1) / 2) * LINE} className="mermaid-text mermaid-participant" textAnchor="middle" dominantBaseline="central">{line}</text>)}
     </g>)}
     {laid.rails.map((rail, index) => <g key={`rail-${index}`}>
       <rect x={Math.min(rail.depth, 2) * 6} y={rail.y} width={laid.width - Math.min(rail.depth, 2) * 12} height={Math.max(LINE, rail.end - rail.y)} rx={4} className="mermaid-rail" />
-      <text x={Math.min(rail.depth, 2) * 6 + 8} y={rail.y + LINE / 2} className="mermaid-edge-text mermaid-rail-label" dominantBaseline="central">{rail.label}</text>
+      {rail.lines.map((line, row) => <text key={row} x={Math.min(rail.depth, 2) * 6 + 8} y={rail.y + LINE / 2 + row * laid.row} className="mermaid-edge-text mermaid-rail-label" dominantBaseline="central">{line}</text>)}
     </g>)}
     {laid.items.map((item, index) => {
       switch (item.kind) {
@@ -190,10 +194,10 @@ function SequenceDrawing({ laid, id }) {
           />;
         }
         case "self": {
-          const right = item.x + 26;
+          const right = item.x + laid.selfWidth;
           return <g key={index}>
             <path d={`M${item.x} ${item.y} L${right} ${item.y} L${right} ${item.y + 15} L${item.x + 3} ${item.y + 15}`} className="mermaid-link" fill="none" strokeDasharray={DASH[item.style]} markerEnd={`url(#${id}-arrow)`} />
-            {item.label && <text x={right + 6} y={item.y + 7} className="mermaid-edge-text" dominantBaseline="central">{item.label}</text>}
+            {item.lines.map((line, row) => <text key={row} x={right + 6} y={item.y + 7 + row * laid.row} className="mermaid-edge-text" dominantBaseline="central">{line}</text>)}
           </g>;
         }
         case "note":
@@ -321,19 +325,29 @@ function FullWindowDiagram({ laid, onClose }) {
  */
 export function MermaidDiagram({ block, fallback }) {
   const [source, setSource] = useState(false), [expanded, setExpanded] = useState(false);
+  const [fontVersion, setFontVersion] = useState(0);
+  useEffect(() => {
+    let active = true;
+    const remeasure = () => { if (active) { context = undefined; setFontVersion(value => value + 1); } };
+    void document.fonts.ready.then(remeasure);
+    document.fonts.addEventListener('loadingdone', remeasure);
+    window.addEventListener('jolo:fonts', remeasure);
+    return () => { active = false; document.fonts.removeEventListener('loadingdone', remeasure); window.removeEventListener('jolo:fonts', remeasure); };
+  }, []);
   const id = useId().replace(/[^\w-]/g, "");
   const laid = useMemo(() => {
     const model = parseMermaid(block.text);
     if (!model) return null;
     try { return model.type === "sequence" ? buildSequence(model) : buildFlow(model); }
     catch { return null; }
-  }, [block.text]);
+  }, [block.text, fontVersion]);
   if (!laid || !(laid.width > 0 && laid.height > 0)) return fallback;
   const groups = laid.kind === "flow" ? laid.groups.filter((group) => group.nodeIds.length) : [];
   const pad = 2;
   return <div className="md-embed md-diagram">
     <div className="md-code-language">
       <span>{block.language}</span><span className="grow" />
+      <CopyCodeButton text={block.text} />
       {!source && <button type="button" className="mermaid-expand" aria-label="Open full-window diagram" title="Open full-window diagram" onClick={() => setExpanded(true)}><Icon name="maximize" size={15} /></button>}
       <button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Diagram" : "Source"}</button>
     </div>

@@ -17,6 +17,7 @@ const PROGRAMS = [
   "packages/launcher",
   "packages/markdown",
   "packages/updates",
+  "packages/themes",
   "apps/engine",
   "apps/cli",
   "apps/cli/npm",

@@ -18,7 +18,10 @@ function fixture({ messages = [], runs = [], changed = {} } = {}) {
   return {
     reads,
     storage: {
-      listMessagesForSession: (_id, { limit, afterOrdinal = -1 }) => { const eligible = rows.filter(row => row.ordinal > afterOrdinal); return { messages: eligible.slice(-limit), hasOlder: eligible.length > limit }; },
+      listMessagesForSession: (_id, { limit, afterOrdinal = -1, excludeRunId = null, handoffKind = null }) => {
+        const eligible = rows.filter(row => row.ordinal > afterOrdinal && row.runId !== excludeRunId && (!handoffKind || row.kind !== 'reasoning' && row.committedBytes > 0 && (row.role === 'tool') === (handoffKind === 'tool')));
+        return { messages: eligible.slice(-limit), hasOlder: eligible.length > limit };
+      },
       lastMessageOrdinal: (_id, runId = null) => rows.filter(row => !runId || row.runId === runId).at(-1)?.ordinal ?? -1,
       /** @param {any} _id @param {{ role?: string }} [filter] */
       firstMessageForSession: (_id, { role } = {}) => rows.find((row) => !role || row.role === role) ?? null,
@@ -188,5 +191,47 @@ describe("what a new answerer is told about a conversation it did not hold", () 
     expect(current).not.toContain('Old request');
     expect(current).not.toContain('Old reply');
     expect(current).not.toContain('omitted');
+  });
+
+  test('a review survives intervening tool-heavy work for both fresh and returning agents', async () => {
+    const findings = `Review findings: ${'preserve tenant scope; '.repeat(300)} FINAL_FINDING: release expired reservations.`;
+    const { storage } = fixture({
+      runs: [{ id: 'review', execution: { agentId: 'claude' } }],
+      messages: [
+        { text: 'Already delivered.', runId: 'codex' },
+        { role: 'user', text: '@claude review the implementation', runId: 'review' },
+        { text: findings, runId: 'review' },
+        ...Array.from({ length: 160 }, (_, i) => ({ role: 'tool', kind: 'tool', text: `merge output ${i}: ${'x'.repeat(4000)}`, runId: 'merge' })),
+        { text: 'Conflict resolved. Tests pass.', runId: 'merge' },
+        { role: 'user', text: '@codex fix what Claude found', runId: 'now' },
+      ],
+    });
+    const run = { id: 'now', sessionId: 's', prompt: '@codex fix what Claude found', execution: { agentId: 'codex' } };
+    for (const resumed of [false, true]) {
+      const prompt = await handoffPrompt({ storage, run, session: { agentState: { _jolo: { seen: { codex: 0 } } } }, resumed, from: claude, to: codex });
+      expect(prompt).toContain(findings);
+      expect(prompt).toContain('"agent":"claude"');
+      expect(prompt).toContain('Conflict resolved. Tests pass.');
+      expect(prompt).toContain('merge output 159:');
+      expect(prompt.indexOf(findings)).toBeLessThan(prompt.indexOf('Conflict resolved.'));
+      expect(Buffer.byteLength(prompt)).toBeLessThan(48 * 1024);
+      if (resumed) expect(prompt).not.toContain('Already delivered.');
+    }
+  });
+
+  test('the summary receives exactly the omitted messages after prioritizing replies over tool logs', async () => {
+    const { storage } = fixture({ messages: [
+      { text: 'REVIEW_FINDING: fix guard.go', runId: 'review' },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: 'tool', kind: 'tool', text: `OUTPUT_${i}: ${'x'.repeat(4000)}` })),
+      { text: 'MERGE_FINISHED' },
+    ] });
+    let summarized = '';
+    const result = await buildHandoff(storage, { sessionId: 's', summarize: async source => { summarized = source; return 'Earlier commands inspected the merge.'; } });
+    expect(result.text).toContain('REVIEW_FINDING');
+    expect(result.text).toContain('OUTPUT_29:');
+    expect(summarized).toContain('OUTPUT_0:');
+    expect(summarized).not.toContain('REVIEW_FINDING');
+    expect(summarized).not.toContain('MERGE_FINISHED');
+    expect(summarized).not.toContain('OUTPUT_29:');
   });
 });

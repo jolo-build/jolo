@@ -6,6 +6,7 @@ import { MermaidDiagram } from "./mermaid.jsx";
 import { Visualization } from './visualization.jsx';
 import { ImageAttachment } from './image-attachment.jsx';
 import { FilePreviewContext } from '../file-preview-context.js';
+import { CopyCodeButton } from './copy-code-button.jsx';
 
 // Naming what the loader resolves to keeps the highlighter and its plain-text fallback one component
 // type, rather than two unrelated ones the union of which nothing accepts.
@@ -87,7 +88,7 @@ const MAX_EMBED_DEPTH = 2;
 
 /** A fence as code: highlighted, with its language named. */
 function CodeBlock({ block }) {
-  return <div className="md-code-block">{block.language && <div className="md-code-language">{block.language}</div>}<pre className="md-code" data-language={block.language ?? ""}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre></div>;
+  return <div className="md-code-block"><div className="md-code-language"><span>{block.language || 'text'}</span><span className="grow" /><CopyCodeButton text={block.text} /></div><pre className="md-code" data-language={block.language ?? ""}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre></div>;
 }
 
 /** A markdown fence is a document, not code: render it, keep its source one click away. */
@@ -96,7 +97,7 @@ function MarkdownEmbed({ block, depth }) {
   const webBaseUrl = useContext(WebBase);
   const [source, setSource] = useState(false);
   return <div className="md-embed">
-    <div className="md-code-language"><span>{block.language}</span><span className="grow" /><button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Rendered" : "Source"}</button></div>
+    <div className="md-code-language"><span>{block.language}</span><span className="grow" /><CopyCodeButton text={block.text} /><button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Rendered" : "Source"}</button></div>
     {source ? <pre className="md-code" data-language={block.language}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre> : <div className="md-embed-body"><Markdown text={block.text} cacheKey={block.text.length} depth={depth + 1} sessionId={sessionId} webBaseUrl={webBaseUrl} /></div>}
   </div>;
 }

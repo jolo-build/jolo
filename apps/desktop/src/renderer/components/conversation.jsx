@@ -5,7 +5,7 @@ import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
-import { runLabel } from "../presentation.js";
+import { runLabel, screenshotArtifactId } from "../presentation.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -100,10 +100,7 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
   const [head, rest] = useMemo(() => { const at = text.indexOf("\n"); return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + 1)]; }, [text]);
   const [expanded, setExpanded] = useState(false);
   const loading = !head && committedBytes > renderedBytes;
-  let screenshot = null;
-  if (/^(?:jolo_browser\/|mcp__jolo_browser__)?browser_screenshot(?:\s|$)/.test(head) && status !== "streaming") {
-    try { const parsed = JSON.parse(rest.split("\n", 1)[0]); if (parsed.ok && parsed.mimeType === "image/png" && parsed.artifactId) screenshot = parsed.artifactId; } catch { /* not JSON yet */ }
-  }
+  const screenshot = status === "streaming" ? null : screenshotArtifactId(text);
   return (
     <details className="block tool" onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
@@ -170,6 +167,8 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
 export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
+  const lastScrollTop = useRef(0);
+  const touchY = useRef(null);
   const historyAnchor = useRef(null);
   const adjustedTop = useRef(null);
   const [changeCards, setChangeCards] = useState(() => readChangeCards(sessionId));
@@ -211,8 +210,26 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         : anchor.scrollTop + el.scrollHeight - anchor.height;
       adjustedTop.current = el.scrollTop;
       if (!history?.loading) historyAnchor.current = null;
-    } else if (follow.current) el.scrollTop = el.scrollHeight;
+    } else if (follow.current && el.scrollHeight - el.clientHeight - el.scrollTop > 1) el.scrollTop = el.scrollHeight;
+    lastScrollTop.current = el.scrollTop;
   });
+  useLayoutEffect(() => {
+    const el = container.current;
+    let frame = 0;
+    // Images, diagrams, and expanded tools can grow between React commits.
+    // Coalesce those changes and follow only while the reader is at the end.
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!follow.current || historyAnchor.current) return;
+        el.scrollTop = el.scrollHeight;
+        lastScrollTop.current = el.scrollTop;
+      });
+    });
+    observer.observe(el);
+    observer.observe(el.firstElementChild);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, []);
   const activeRun = runs.find(run => ['preparing', 'model', 'tools', 'awaiting_permission', 'cancelling'].includes(run.state));
   const thinking = activeRun?.state === 'model' && messages.some(message => message.runId === activeRun.id && message.kind === 'reasoning' && message.status === 'streaming');
   // Queued messages (and ones removed before starting) have no transcript yet.
@@ -245,10 +262,30 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
     if (end >= 0) groups.splice(end + 1, 0, { type: 'changes', id: `changes:${card.runId}`, runId: card.runId });
   }
-  return <div className="conversation" ref={container} onScroll={() => {
+  return <div className="conversation" ref={container} tabIndex={0}
+    onWheelCapture={event => { if (!event.ctrlKey && event.deltaY < 0) follow.current = false; }}
+    onTouchStart={event => { touchY.current = event.touches[0]?.clientY ?? null; }}
+    onTouchMove={event => {
+      const y = event.touches[0]?.clientY;
+      if (touchY.current !== null && y > touchY.current) follow.current = false;
+      touchY.current = y ?? null;
+    }}
+    onKeyDownCapture={event => {
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable=true]')) return;
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey) follow.current = false;
+    }}
+    onPointerDown={event => {
+      const el = container.current;
+      if (event.clientX >= el.getBoundingClientRect().left + el.clientWidth) follow.current = false;
+    }}
+    onScroll={() => {
     const el = container.current;
     if (historyAnchor.current && el.scrollTop !== adjustedTop.current) historyAnchor.current = captureAnchor();
-    follow.current = !history?.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    // A small upward gesture must detach immediately, even within 100px of
+    // the end. Only a downward scroll all the way back resumes following.
+    if (el.scrollTop < lastScrollTop.current) follow.current = false;
+    else if (el.scrollTop > lastScrollTop.current && !history?.loading && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) follow.current = true;
+    lastScrollTop.current = el.scrollTop;
     if (el.scrollTop < 100 && !history?.error) loadOlder();
   }}>
     <div className={`transcript${messages.length ? "" : " empty-transcript"}`}>

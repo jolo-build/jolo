@@ -121,4 +121,16 @@ describe("headless cli", () => {
     expect((await jolo(["run"], { home })).code).toBe(2);
     expect((await jolo(["bogus"], { home })).code).toBe(2);
   });
+
+  test("schedule flags fail as usage errors before an engine is started", async () => {
+    const home = tempHome();
+    homes.push(home);
+    const orphan = await jolo(["run", "work", "--every-prompt", "check in", "--path", home], { home });
+    expect(orphan.code).toBe(2);
+    expect(orphan.stderr).toContain("--every-prompt needs --every");
+    expect(orphan.stderr).not.toContain("started engine");
+    const bare = await jolo(["schedule", "list", "--session"], { home });
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).not.toContain("started engine");
+  });
 });

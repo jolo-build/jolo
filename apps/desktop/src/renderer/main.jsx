@@ -1,4 +1,7 @@
 import { failStartup, showStartup } from "./startup.js";
+import { initializeTheme } from './themes.js';
+
+initializeTheme();
 
 window.addEventListener('beforeunload', showStartup);
 

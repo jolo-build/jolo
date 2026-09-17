@@ -13,6 +13,7 @@
         "@jolo/launcher": "workspace:*",
         "@jolo/markdown": "workspace:*",
         "@jolo/protocol": "workspace:*",
+        "@jolo/themes": "workspace:*",
         "@jolo/updates": "workspace:*",
         "@types/bun": "^1.4.2",
         "typescript": "5.9.3",
@@ -43,6 +44,7 @@
         "@jolo/launcher": "workspace:*",
         "@jolo/markdown": "workspace:*",
         "@jolo/protocol": "workspace:*",
+        "@jolo/themes": "workspace:*",
         "@jolo/updates": "workspace:*",
         "chalk": "5.6.2",
         "ink": "7.1.1",
@@ -60,6 +62,7 @@
         "@jolo/launcher": "workspace:*",
         "@jolo/markdown": "workspace:*",
         "@jolo/protocol": "workspace:*",
+        "@jolo/themes": "workspace:*",
         "@jolo/updates": "workspace:*",
         "@xterm/addon-fit": "0.11.0",
         "@xterm/xterm": "6.0.0",
@@ -132,6 +135,10 @@
       "dependencies": {
         "zod": "4.5.4",
       },
+    },
+    "packages/themes": {
+      "name": "@jolo/themes",
+      "version": "0.1.0",
     },
     "packages/updates": {
       "name": "@jolo/updates",
@@ -307,6 +314,8 @@
     "@jolo/markdown": ["@jolo/markdown@workspace:packages/markdown"],
 
     "@jolo/protocol": ["@jolo/protocol@workspace:packages/protocol"],
+
+    "@jolo/themes": ["@jolo/themes@workspace:packages/themes"],
 
     "@jolo/updates": ["@jolo/updates@workspace:packages/updates"],
 

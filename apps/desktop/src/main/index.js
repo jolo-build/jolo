@@ -21,7 +21,6 @@ import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-
 import { openChatFile, fileErrorResult } from './chat-files.js';
 import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
 import { saveArtifactImage } from './image-downloads.js';
-import { installReloadShortcuts } from './reload-shortcuts.js';
 import { installCloseShortcuts } from './close-shortcuts.js';
 import { HostDialogs } from './host-dialogs.js';
 
@@ -62,6 +61,7 @@ const RENDERER_METHODS = new Set([
   "agent.catalog", "agent.models", "agent.start", "agent.list", "agent.stop",
   "plan.create", "plan.list", "plan.get", "plan.start", "plan.pause", "plan.cancel",
   "plan.task.add", "plan.task.update", "plan.task.remove", "plan.task.retry", "plan.task.skip",
+  "schedule.create", "schedule.list", "schedule.pause", "schedule.resume", "schedule.cancel",
   "terminal.open", "terminal.attach", "terminal.input", "terminal.resize", "terminal.lease", "terminal.close", "terminal.list",
 ]);
 
@@ -193,7 +193,6 @@ function createWindow() {
   };
   nativeTheme.on("updated", updateBackground);
   window.once("closed", () => nativeTheme.removeListener("updated", updateBackground));
-  installReloadShortcuts(window.webContents);
   installCloseShortcuts(window.webContents);
   window.webContents.setWindowOpenHandler(({ url }) => {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch { /* ignore */ }

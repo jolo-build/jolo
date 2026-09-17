@@ -9,7 +9,7 @@
 // prompt with an error, "sleep" waits to be cancelled, "model" reports the model in force,
 // and anything else answers in prose after a thought. Sessions persist under $FAKE_ACP_STATE so a later
 // process can session/load them.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const argv = process.argv.slice(2);
@@ -19,13 +19,14 @@ if (!argv.includes("--acp")) {
 }
 const stateDir = process.env.FAKE_ACP_STATE ?? null;
 const configuredBrowser = params => {
-  if (process.env.FAKE_DEVIN_CONFIG !== '1') return params.mcpServers?.find(server => server.name === 'jolo_browser');
+  if (process.env.FAKE_DEVIN_CONFIG !== '1') { const server = params.mcpServers?.find(server => server.name === 'jolo'); return server?.args?.at(-1)?.split(',').includes('browser') ? server : null; }
   // Mirror Devin's actual behavior: ACP mcpServers is ignored; configuration comes from disk.
   const configHome = process.platform === 'win32' ? process.env.APPDATA : process.env.XDG_CONFIG_HOME;
   const config = JSON.parse(readFileSync(path.join(configHome, 'devin/mcp_config.json'), 'utf8'));
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(path.join(stateDir, 'devin-configs'), `${configHome}\n`, { flag: 'a' });
-  return config.mcpServers.jolo_browser;
+  const server = config.mcpServers.jolo;
+  return server?.args?.at(-1)?.split(',').includes('browser') ? server : null;
 };
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
 let chosenModel = valueOf("-m") ?? valueOf("--model");
@@ -46,7 +47,7 @@ let client = null; // what the client said it can do
 let cancelled = null; // resolver for a "sleep" prompt
 const sessions = new Map();
 let browserServer = null;
-const ask = (method, params) => new Promise((resolve) => { const id = ++counter; pending.set(id, resolve); out({ id, method, params }); });
+const ask = (method, params) => new Promise((resolve) => { const id = ++counter; pending.set(id, { method, resolve }); out({ id, method, params }); });
 const stateFile = (sessionId) => (stateDir ? path.join(stateDir, `${sessionId}.json`) : null);
 const persist = (sessionId) => { const file = stateFile(sessionId); if (file) { mkdirSync(stateDir, { recursive: true }); writeFileSync(file, JSON.stringify(sessions.get(sessionId))); } };
 
@@ -77,6 +78,38 @@ async function prompt(id, params) {
     return options.find((option) => option.optionId === outcome.optionId)?.kind ?? "reject_once";
   };
   const tool = (fields) => { const toolCallId = `call-${++counter}`; update({ sessionUpdate: "tool_call", toolCallId, status: "pending", ...fields }); return toolCallId; };
+  if (text === 'scratch-files' || text === 'scratch-cancel') {
+    const directory = process.env.TMPDIR;
+    if (!directory || process.env.TMP !== directory || process.env.TEMP !== directory || !received.includes(JSON.stringify(directory))) throw new Error('scratch directory missing from environment or instructions');
+    const file = path.join(directory, 'nested/mockup.html'), content = '<h1>Mockup from scratch</h1>';
+    const toolCallId = tool({ title: 'Create mockup', kind: 'edit', locations: [{ path: file }] });
+    for (const kind of ['edit', 'read']) {
+      const verdict = await permission({ toolCallId, title: 'Scratch file', kind, locations: [{ path: file }] }, [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }]);
+      if (verdict !== 'allow_once') throw new Error(`scratch ${kind} rejected`);
+    }
+    for (const version of ['<h1>Initial mockup</h1>', content]) {
+      const write = await ask('fs/write_text_file', { sessionId, path: file, content: version });
+      if (write?.error) throw new Error(write.error.message);
+    }
+    const read = await ask('fs/read_text_file', { sessionId, path: file });
+    if (read.content !== content) throw new Error('scratch read failed');
+    symlinkSync(stateDir, path.join(directory, 'link'));
+    for (const blocked of [path.join(directory, 'link/notes.txt'), path.join(directory, '.git/config'), path.join(directory, '../unrelated.txt')]) {
+      const denied = await ask('fs/write_text_file', { sessionId, path: blocked, content: 'must not write' });
+      if (!denied?.error) throw new Error(`scratch boundary bypass: ${blocked}`);
+    }
+    const oversized = await ask('fs/write_text_file', { sessionId, path: file, content: 'x'.repeat(1024 * 1024 + 1) });
+    if (!oversized?.error || (await ask('fs/read_text_file', { sessionId, path: file })).content !== content) throw new Error('scratch size limit bypass');
+    const saved = await ask('fs/write_text_file', { sessionId, path: path.join(session.cwd, 'mockup.html'), content: read.content });
+    if (saved?.error) throw new Error(saved.error.message);
+    update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed' });
+    if (text === 'scratch-cancel') {
+      writeFileSync(path.join(stateDir, 'scratch-pending'), directory);
+      await new Promise(resolve => { cancelled = resolve; });
+      return finish(null, 'cancelled');
+    }
+    return finish(JSON.stringify({ directory, saved: 'mockup.html' }));
+  }
   update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking about it." } });
   if (text.startsWith('image-check')) return finish(`Images received: ${(params.prompt ?? []).filter(part => part.type === 'image').map(image => `${image.mimeType}:${Buffer.from(image.data, 'base64').length}`).join(', ')}`);
   // Recorded Devin reply format: no private-use delimiters, split across ACP chunks by say().
@@ -198,8 +231,16 @@ async function prompt(id, params) {
 
 async function handle(message) {
   if (message.id !== undefined && message.method === undefined) {
-    const resolve = pending.get(message.id);
-    if (resolve) { pending.delete(message.id); resolve(message.error ? { error: message.error } : message.result); }
+    const waiter = pending.get(message.id);
+    if (waiter) {
+      pending.delete(message.id);
+      // ACP's WriteTextFileResponse is an object (with optional _meta). Like
+      // Devin, reject a null success even when the file was actually written.
+      const invalidWrite = waiter.method === 'fs/write_text_file' && (!message.result || typeof message.result !== 'object' || Array.isArray(message.result));
+      waiter.resolve(message.error ? { error: message.error } : invalidWrite
+        ? { error: { code: -32700, message: 'Parse error: fs/write_text_file result must be an object' } }
+        : message.result);
+    }
     return;
   }
   const { id, method, params = {} } = message;

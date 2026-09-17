@@ -74,7 +74,7 @@ describe("release build", () => {
       client = await connect({ socketPath: paths.socketPath, token: readFileSync(paths.tokenPath, 'utf8').trim(), clientKind: 'test' });
       const project = await client.call('project.open', { path: repo });
       if (existsSync(path.join(lib, 'tgrep'))) await waitFor(async () => (await client.call('workspace.search', { workspaceId: project.workspaceId, pattern: 'packaged-marker' })).engine === 'tgrep', { timeoutMs: 10_000, label: 'packaged native index' });
-      const mcp = Bun.spawn([path.join(lib, 'bun'), path.join(lib, 'engine.js'), 'search-mcp', '--socket', paths.socketPath, '--token-file', paths.tokenPath, '--workspace', project.workspaceId], { cwd: home, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+      const mcp = Bun.spawn([path.join(lib, 'bun'), path.join(lib, 'engine.js'), 'jolo-mcp', '--socket', paths.socketPath, '--token-file', paths.tokenPath, '--workspace', project.workspaceId, '--tools', 'search'], { cwd: home, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
       const output = new Response(mcp.stdout).text(), errors = new Response(mcp.stderr).text();
       mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search_text', arguments: { pattern: 'packaged-marker' } } }) + '\n');
       mcp.stdin.end();

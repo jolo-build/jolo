@@ -9,12 +9,12 @@
 //   2. the goal: the first request in the conversation, verbatim, clamped (only once it no longer fits below)
 //   3. the work log: one line per finished run from Jolo's own records — no model, no cost, always available
 //   4. a summary of the messages that had to be left out, written by a model when one is configured
-//   5. the most recent messages verbatim, newest fitted first
+//   5. recent questions and agent replies first, then tool evidence, in conversation order
 //   6. the current request
 //
 // What was left out is said, in numbers. A summary that could not be written is said too, rather than
 // pretended: the reader is then told exactly how much of the middle it cannot see.
-import { askedOf, recentHistory } from "./history.js";
+import { askedOf, handoffMessages, recentHistory } from "./history.js";
 
 export const HANDOFF_BUDGET_BYTES = 48 * 1024;
 /** Reserves for the fixed layers; whatever they do not use goes to the recent messages. */
@@ -79,10 +79,10 @@ export function workLogOf(storage, sessionId, { excludeRunId = null, afterOrdina
  * The messages the recent layer will NOT carry, oldest first, as plain lines a summariser can read. Bounded
  * by SUMMARY_SOURCE_MAX_BYTES from the end, so the newest of the omitted middle wins when even that overflows.
  */
-export function omittedTranscript(storage, sessionId, { keepNewest, excludeRunId = null, afterOrdinal = -1 }) {
-  const { messages } = storage.listMessagesForSession(sessionId, { limit: 400, afterOrdinal });
-  const eligible = messages.filter((message) => message.runId !== excludeRunId && message.kind !== "reasoning" && message.committedBytes > 0);
-  const older = keepNewest > 0 ? eligible.slice(0, -keepNewest) : eligible;
+export function omittedTranscript(storage, sessionId, { keptIds, excludeRunId = null, afterOrdinal = -1 }) {
+  const { messages } = handoffMessages(storage, sessionId, { limit: 400, afterOrdinal, excludeRunId });
+  const kept = new Set(keptIds);
+  const older = messages.filter(message => !kept.has(message.id)).sort((a, b) => a.ordinal - b.ordinal);
   const lines = [];
   let bytes = 0;
   for (const message of older.toReversed()) {
@@ -147,7 +147,7 @@ export async function buildHandoff(storage, { summarize = null, ...options }) {
   const plan = planHandoff(storage, options);
   let summary = null;
   if (plan.omitted > 0 && summarize) {
-    const middle = omittedTranscript(storage, plan.sessionId, { keepNewest: plan.recent.keptCount, excludeRunId: plan.excludeRunId, afterOrdinal: plan.afterOrdinal });
+    const middle = omittedTranscript(storage, plan.sessionId, { keptIds: plan.recent.keptIds, excludeRunId: plan.excludeRunId, afterOrdinal: plan.afterOrdinal });
     if (middle.text) { try { summary = await summarize(middle.text); } catch { summary = null; } }
   }
   return renderHandoff(plan, summary);

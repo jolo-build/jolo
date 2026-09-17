@@ -18,6 +18,10 @@ test('Codex controls the inline browser on first and resumed turns with Jolo gui
   await checkHostedBrowser(await boot());
 }, 30_000);
 
+test('a running Codex turn can retry browser_open after its desktop host attaches', async () => {
+  await checkHostedBrowser(await boot(), { attachAfterStart: true });
+}, 30_000);
+
 /** A profile whose "codex" is the app-server fixture, so nothing here reaches the real CLI or its account. */
 async function boot({ clientKind = "test" } = {}) {
   const home = tempHome(); homes.push(home);
@@ -132,15 +136,24 @@ describe("Codex through its app-server", () => {
       expect((await reader.call('artifact.read', { artifactId: saved.artifactId, encoding: 'base64' })).text).toStartWith('iVBOR');
     } finally { await reader.close(); }
   }, 30_000);
-  test('Codex omits browser MCP when no desktop can open this workspace', async () => {
+  test('Codex receives the live browser error when no desktop can open this workspace', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {
       const run = await runTo('req_browser_headless', 'browser-check');
       expect(run.state).toBe('completed');
-      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser tools unavailable');
-      expect(events.some(event => event.type === 'tool.completed' && event.payload.name.startsWith('browser_'))).toBe(false);
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Browser unavailable: open this workspace in Jolo desktop to use its inline browser');
+      expect(events.some(event => event.type === 'tool.completed' && event.payload.name === 'browser_open' && event.payload.status === 'error')).toBe(true);
     } finally { await client.close(); }
   });
+  test('Codex reaches its scoped schedule tools with no browser attached', async () => {
+    const { client, events, runTo, messagesOf, text } = await boot();
+    try {
+      const run = await runTo('req_schedule', 'schedule-check');
+      expect(run.state).toBe('completed');
+      expect(await text((await messagesOf(run.id)).at(-1))).toBe('Schedules on this task: 0');
+      expect(events.some(event => event.type === 'permission.requested')).toBe(false);
+    } finally { await client.close(); }
+  }, 25_000);
   test('hosted Codex opens its closed workspace browser through MCP and receives image content', async () => {
     const { client, engine, project, runTo, messagesOf, text, events } = await boot();
     const host = await engine.connect({ clientKind: 'desktop' });

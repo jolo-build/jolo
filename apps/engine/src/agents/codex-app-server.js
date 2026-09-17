@@ -11,10 +11,10 @@ import { realpathSync } from "node:fs";
 //
 // The shapes below were generated from the installed binary (`codex app-server generate-json-schema`) and
 // confirmed in live sessions; see the engine's agents README.
-import { createHostedTurn, insideWorkspace, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
+import { createHostedTurn, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
-import { codexSearchArgs } from '../search/hosted.js';
-import { codexBrowserArgs, browserPreview } from '../browser/hosted.js';
+import { browserPreview } from '../browser/mcp.js';
+import { codexMcpArgs } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages } from '../attachments.js';
@@ -66,7 +66,7 @@ function itemOutcome(item) {
     case "fileChange": return { status: jolo, text: status };
     case "mcpToolCall": {
       // The vendor receives MCP images; Jolo's transcript keeps the artifact metadata, not base64.
-      if (!item.error && item.server === 'jolo_browser' && Array.isArray(item.result?.content)) return { status: item.result.isError ? 'error' : jolo, text: item.result.content.filter(part => part.type === 'text').map(part => browserPreview(part.text)).join('\n') };
+      if (!item.error && item.server === 'jolo' && Array.isArray(item.result?.content)) return { status: item.result.isError ? 'error' : jolo, text: item.result.content.filter(part => part.type === 'text').map(part => browserPreview(part.text)).join('\n') };
       return { status: jolo, text: item.error ? String(item.error?.message ?? item.error) : JSON.stringify(item.result ?? null) };
     }
     case "dynamicToolCall": return { status: jolo, text: JSON.stringify(item.contentItems ?? null) };
@@ -78,10 +78,10 @@ function itemOutcome(item) {
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any,
- *   searchConfig?: (workspace: any, run: any) => any, browserConfig?: (workspace: any, run: any) => any,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
-export function createCodexAppServerExecutor({ storage, catalog, permissions, supervisor, build = "dev", log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
+export function createCodexAppServerExecutor({ storage, catalog, permissions, supervisor, build = "dev", log, mcpConfig, providerFactory = null, settings = null }) {
   return {
     name: "codex-app-server",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -94,9 +94,9 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       const [binary, ...extraArgs] = catalog.command(manifest, wanted); // a user manifest may add Codex's global options, such as -c key=value
       const chosen = catalog.config(manifest, wanted); // Codex takes the model over the protocol rather than as a flag
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
-      const env = hostedEnvironment(supervisor);
-      const browserServer = browserConfig?.(workspace, run);
-      const developerInstructions = [inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n');
+      const env = hostedEnvironment(supervisor, turn.environment);
+      const hosted = mcpConfig?.(workspace, run);
+      const developerInstructions = [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n');
 
       const state = {
         threadId: null, turnId: null, completed: null, failure: null, done: false,
@@ -115,7 +115,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         return true;
       };
       try {
-        link = spawnLineChild({ argv: [binary, ...extraArgs, ...codexSearchArgs(searchConfig?.(workspace, run)), ...codexBrowserArgs(browserServer), "app-server"], cwd: workspace.path, env, signal, onCancel, log, agentId: manifest.id });
+        link = spawnLineChild({ argv: [binary, ...extraArgs, ...codexMcpArgs(hosted?.server), "app-server"], cwd: workspace.path, env, signal, onCancel, log, agentId: manifest.id });
       } catch (error) {
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
@@ -159,7 +159,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
           const relative = path.relative(workspace.path, path.resolve(workspace.path, target));
           const canonicalRelative = path.relative(realpathSync(workspace.path), path.resolve(workspace.path, target));
           const outside = value => value === '..' || value.startsWith(`..${path.sep}`);
-          (!insideWorkspace(workspace.path, target) && outside(relative) && outside(canonicalRelative) ? external : local).push(target);
+          (!turn.containsFile(target) && outside(relative) && outside(canonicalRelative) ? external : local).push(target);
         }
         const decision = await turn.decide({ toolClass: "mutation", toolName: "apply_patch", targets: local });
         if (decision !== "allow" || !external.length) return decision;
@@ -207,7 +207,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
             // Jolo's own scoped bridge. Let the actual tool call reach Jolo's
             // dispatcher, which enforces workspace, live-run and browse policy.
             // Never accept external-server forms, URL flows or persistent grants.
-            if (browserServer && params.serverName === 'jolo_browser' && params.threadId === state.threadId
+            if (hosted && params.serverName === 'jolo' && params.threadId === state.threadId
               && params.turnId === state.turnId && params.mode === 'form'
               && params._meta?.codex_approval_kind === 'mcp_tool_call'
               && params.requestedSchema?.type === 'object'

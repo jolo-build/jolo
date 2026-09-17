@@ -10,8 +10,7 @@
 // initialize/can_use_tool/control_response forms in the engine's agents README.
 import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
-import { browserTools } from '../tools/browser.js';
-import { browserPreview } from '../browser/hosted.js';
+import { browserPreview } from '../browser/mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
@@ -49,10 +48,10 @@ export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any,
- *   searchConfig?: (workspace: any, run: any) => any, browserConfig?: (workspace: any, run: any) => any,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
-export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, searchConfig, browserConfig, providerFactory = null, settings = null }) {
+export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, mcpConfig, providerFactory = null, settings = null }) {
   return {
     name: "claude-stream",
     /** @param {any} ctx @param {any} [answerer] the agent answering this run, when a message called one in (§4.3) */
@@ -64,14 +63,13 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const [binary, ...extraArgs] = catalog.command(manifest, runChoice(ctx.run)); // the --model/--effort in force, plus any the manifest adds
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
       const remembered = recall(session, manifest).claudeSessionId ?? null;
-      const searchServer = searchConfig?.(workspace, run);
-      const browserServer = browserConfig?.(workspace, run);
-      const mcpServers = { ...(searchServer ? { jolo_search: searchServer } : {}), ...(browserServer ? { jolo_browser: browserServer } : {}) };
-      const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(browserServer), hosted: true }), standaloneChatInstructions(storage, session)].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
+      const hosted = mcpConfig?.(workspace, run);
+      const mcpServers = hosted ? { jolo: hosted.server } : {};
+      const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
       const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
       const images = readImages(storage, run);
       const content = images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
-      const env = hostedEnvironment(supervisor);
+      const env = hostedEnvironment(supervisor, turn.environment);
 
       const state = {
         blocks: new Map(), // stream block index -> { kind, messageId }
@@ -91,11 +89,12 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const decide = async (request) => {
         const toolName = String(request.tool_name ?? "");
         const input = request.input ?? {};
-        // This server validates, authorizes, and records the operation in the engine.
-        if (browserServer && browserTools.some(tool => toolName === `mcp__jolo_browser__${tool.name}`)) return { behavior: 'allow', updatedInput: input };
+        // The jolo server is Jolo's own scoped bridge: it validates, authorizes, and records
+        // the operation in the engine, so its tools — schedules, search, browser — never prompt.
+        if (hosted && toolName.startsWith('mcp__jolo__')) return { behavior: 'allow', updatedInput: input };
         const target = input.file_path ?? input.path ?? request.blocked_path;
         const { summary, script } = describeTool(toolName, input);
-        const toolClass = searchServer && toolName === 'mcp__jolo_search__search_text' ? 'read' : classify(toolName);
+        const toolClass = classify(toolName);
         const decision = await turn.decide({ toolClass, toolName, targets: typeof target === "string" && target ? [target] : [], summary, script, cwd: ".", argumentDigest: digestOf({ tool: toolName, input }) });
         if (decision === null) return null;
         return decision === "allow" ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: decision.deny };
@@ -115,6 +114,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       };
 
       const onMessage = async (message) => {
+        // Claude multiplexes subagent transcripts onto this stream. Their block indexes are local
+        // to the child, and their reports belong to the parent's Agent/Task tool result, not the
+        // conversation. Permission requests from any agent must still reach Jolo's policy.
+        if (message.parent_tool_use_id != null && message.type !== 'control_request') return;
         switch (message.type) {
           case "control_response":
             if (message.response?.request_id === "jolo-init") link.write({ type: "user", message: { role: "user", content } });

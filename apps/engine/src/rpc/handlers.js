@@ -19,30 +19,44 @@ import { linkChatFolder } from '../account/chat-context.js';
  * @typedef {{
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, credentials: any,
  *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
- *   search: any, terminals: any, board: any, worktrees: any, plans: any, agents: any, runs: any,
+ *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, agents: any, runs: any,
  *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
  *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
  * }} RpcDependencies
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
    */
-  const editSession = ({ sessionId, expectedRevision, title, state, deleted = false }) => storage.transaction(() => {
-    const session = storage.getSession(sessionId);
-    if (!session) throw new ProtocolError("not_found", "task no longer exists");
-    if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
-    if ((state === "archived" || deleted) && storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "finish or stop this task before archiving or deleting it");
-    const updated = storage.updateSession(sessionId, { title, state, deleted });
-    storage.appendEvent({ sessionId, type: deleted ? "session.deleted" : "session.updated", payload: deleted ? { sessionId, projectId: session.projectId } : { session: updated } });
-    return deleted ? { sessionId } : { session: updated };
-  });
+  const editSession = ({ sessionId, expectedRevision, title, state, deleted = false }) => {
+    const result = storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError("not_found", "task no longer exists");
+      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+      if ((state === "archived" || deleted) && storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "finish or stop this task before archiving or deleting it");
+      const updated = storage.updateSession(sessionId, { title, state, deleted });
+      storage.appendEvent({ sessionId, type: deleted ? "session.deleted" : "session.updated", payload: deleted ? { sessionId, projectId: session.projectId } : { session: updated } });
+      return deleted ? { sessionId } : { session: updated };
+    });
+    // Archive, restore and delete each carry the task's heartbeats with them.
+    schedules?.reconcileSession(sessionId);
+    return result;
+  };
 
   let activeSearches = 0;
   let inFlight = 0, reloading = false;
+  /** The task a capability credential is bound to, resolved from the run it was issued for. Fails closed. */
+  const capabilitySession = (conn) => {
+    if (!conn?.capability) return null;
+    const sessionId = storage.getRun(conn.capability.runId)?.sessionId;
+    if (!sessionId) throw new ProtocolError("permission_denied", "this credential no longer names a task");
+    return sessionId;
+  };
+  const scheduleScope = (conn) => conn?.capability ? { sessionId: capabilitySession(conn) } : null;
+
   const handlers = {
     'browser.call': browserCallHandler({ storage, runs, dispatcher, settingsService }),
     'workspace.search': async ({ workspaceId, ...args }, conn) => {
@@ -306,6 +320,18 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     "plan.task.remove": ({ taskId }) => plans.removeTask(taskId),
     "plan.task.retry": ({ taskId }) => plans.retryTask(taskId),
     "plan.task.skip": ({ taskId }) => plans.skipTask(taskId),
+    // A schedule is a heartbeat a task asked for: it fires whether or not anyone is watching.
+    // A capability credential (the MCP bridge a hosted agent gets) is bound to one run: the schedule
+    // it manages is that run's own session's. Owner callers name the session themselves.
+    "schedule.create": (params, conn) => {
+      const sessionId = capabilitySession(conn) ?? params.sessionId;
+      if (!sessionId) throw new ProtocolError("invalid_params", "a schedule needs a task to wake");
+      return schedules.create({ sessionId, prompt: params.prompt, everyMs: params.everyMs });
+    },
+    "schedule.list": (params, conn) => schedules.list({ sessionId: capabilitySession(conn) ?? params.sessionId ?? null }),
+    "schedule.pause": ({ scheduleId }, conn) => schedules.pause(scheduleId, scheduleScope(conn)),
+    "schedule.resume": ({ scheduleId }, conn) => schedules.resume(scheduleId, scheduleScope(conn)),
+    "schedule.cancel": ({ scheduleId }, conn) => schedules.cancel(scheduleId, scheduleScope(conn)),
     "board.list": () => board.list(),
     "board.tasks": (params) => board.tasks(params),
     "board.viewed": ({ workspaceId }) => {
