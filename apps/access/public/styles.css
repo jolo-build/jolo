@@ -137,6 +137,28 @@ footer a { display:flex; align-items:center; height:100%; }
 .task-editor > label,.task-editor form > label { margin-bottom:16px; }
 .task-editor h2 { margin-top:0; }
 .task-detail-page { overflow:hidden; }
+.task-archive-status {
+  display:inline-flex;
+  align-items:center;
+  align-self:flex-start;
+  gap:8px;
+  margin:0 0 14px;
+  padding:5px 10px 5px 8px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:var(--surface);
+  color:var(--muted);
+  font-size:.75rem;
+  line-height:1.5;
+}
+.task-archive-status::before {
+  content:'';
+  width:6px;
+  height:6px;
+  flex:none;
+  border-radius:50%;
+  background:currentColor;
+}
 .task-view-layout { display:grid; flex:1; grid-template-columns:minmax(0,2fr) minmax(240px,1fr); gap:24px; min-height:0; min-width:0; overflow:hidden; }
 .task-view-body,.task-summary { padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .task-view-body h2 { margin:0 0 20px; font-size:21px; line-height:1.4; }

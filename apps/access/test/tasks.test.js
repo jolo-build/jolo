@@ -66,6 +66,7 @@ test('personal task forms create idempotently, edit with revisions, archive, and
   expect(conflict.status).toBe(409); expect(conflictPage).toContain('value="Keep my draft"'); expect(conflictPage).toContain('id="task-edit"');
   expect((await post(f,a,location+'/archive',{revision:'2'})).status).toBe(303);
   const archived=await (await get(f,a,location)).text();
+  expect(archived).toContain('class="task-archive-status">This task is archived.</p>');
   expect(archived).toContain('Restore task'); expect(archived).not.toContain(`href="${location}/edit"`);
   expect((await get(f,a,location+'/edit')).headers.get('location')).toBe(location);
   expect((await get(f,a,'/tasks')).status).toBe(200);

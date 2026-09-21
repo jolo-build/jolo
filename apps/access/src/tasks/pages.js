@@ -43,7 +43,7 @@ export function taskViewPage({ origin, account, task, labels, members = [], team
   const properties = `<dl>${property('State', TASK_STATES[task.state])}${property('Priority', task.priority)}${property('Project label', task.project || 'None')}${property('Assignee', assignee)}<div><dt>Labels</dt><dd>${labels.filter(l => selected.includes(l.id)).map(labelBadge).join(' ') || 'None'}</dd></div></dl>${taskHint(task)}`;
   const draft = commentDraft?.id ? null : commentDraft;
   return page(`${taskKeyOf(task)}`, `<div class="task-heading"><div><p class="eyebrow">${e(team?.name ?? 'PERSONAL')}</p><h1>${taskKeyOf(task)}</h1></div><div class="task-heading-actions"><a href="/tasks${team ? '?team=' + e(team.id) : ''}">Back to tasks</a>${writable && !task.archived_at ? `<a class="button" href="${path}/edit">Edit task</a>` : ''}</div></div>${note(error)}
-    ${task.archived_at ? '<p class="notice">This task is archived.</p>' : ''}
+    ${task.archived_at ? '<p class="task-archive-status">This task is archived.</p>' : ''}
     <details class="task-mobile-details"><summary>Details <span>${e(TASK_STATES[task.state])} · ${e(task.priority)}</span></summary><div class="task-scroll">${properties}</div></details>
     <div class="task-view-layout">
       <section class="task-discussion" aria-label="Task discussion">
