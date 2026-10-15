@@ -7,9 +7,10 @@
 // other machines still needs a Developer ID signature and notarization.
 import { packager } from "@electron/packager";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
+import { createDmg } from "./dmg.js";
 const root = path.resolve(import.meta.dir, "..", "..", "..");
 const app = path.join(root, "dist", "desktop-app");
 if (!existsSync(path.join(app, "main.js"))) throw new Error("run `bun scripts/build.js` first");
@@ -58,7 +59,7 @@ if (platform === "darwin" && bundle) signed = sign(bundle);
  * Windows, a tar.gz on Linux — with the checksum and build manifest used by the release pipeline
  * and desktop update notices.
  */
-function archive(target) {
+async function archive(target) {
   const extension = platform === "darwin" ? "dmg" : platform === "win32" ? "zip" : "tar.gz";
   const name = `jolo-desktop-${platform}-${arch}.${extension}`;
   const file = path.join(root, "dist", "desktop", name);
@@ -69,13 +70,7 @@ function archive(target) {
   };
   if (platform === "darwin") {
     if (process.platform !== "darwin") throw new Error("DMG creation requires macOS");
-    const staging = mkdtempSync(path.join(tmpdir(), 'jolo-dmg-'));
-    try {
-      run(['ditto', target, path.join(staging, 'Jolo.app')]);
-      symlinkSync('/Applications', path.join(staging, 'Applications'));
-      run(['hdiutil', 'create', '-volname', 'Jolo', '-srcfolder', staging, '-format', 'UDZO', '-fs', 'HFS+', '-ov', file]);
-      run(['hdiutil', 'verify', file]);
-    } finally { rmSync(staging, { recursive: true, force: true }); }
+    await createDmg(target, file);
   } else if (platform === "win32") {
     // Git Bash shadows Windows bsdtar with GNU tar, which treats drive letters as remote hosts
     // and cannot create ZIP files. Select the native archive tool explicitly on Windows.
@@ -97,7 +92,7 @@ let packaged = null;
 if (process.argv.includes("--dmg") || process.argv.includes("--archive")) {
   if (!bundle) throw new Error("the packager produced nothing to archive");
   if (process.argv.includes("--dmg") && platform !== "darwin") throw new Error("--dmg is for macOS bundles; use --archive elsewhere");
-  packaged = archive(bundle);
+  packaged = await archive(bundle);
 }
 
 let installed = null;
