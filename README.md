@@ -35,7 +35,7 @@ Use Claude Code, Codex, Devin CLI, Grok CLI, Antigravity CLI, or your own API pr
 - **Windows** (`.zip`, x64): unpack it and run `Jolo.exe` inside.
 - **Linux** (`.tar.gz`, x64 and ARM64): unpack it and run `./Jolo-linux-*/Jolo`.
 
-Jolo is in early development. The macOS app is not yet notarized, Windows and Linux builds are unsigned, and automatic updates are not available.
+Jolo is in early development. The macOS app is not yet notarized, and Windows and Linux builds are unsigned. Installed desktop apps can download a verified update in Settings → About, then restart to install it. The previous app is restored if the replacement fails to start. Older releases need one manual upgrade to gain in-app updates.
 
 **CLI:** Run this in your terminal:
 

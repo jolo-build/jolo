@@ -17,6 +17,8 @@ import { createAttention } from "./attention.js";
 import { newestSourceTime } from "./staleness.js";
 import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
+import { createDesktopInstaller, desktopInstallLayout } from './desktop-installer.js';
+import { acknowledgeDesktopUpdate } from './update-helper.js';
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
 import { openChatFile, fileErrorResult } from './chat-files.js';
 import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
@@ -298,19 +300,31 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
     bridge.relay.reset();
     return { cursor: bridge.lastSeq };
   });
-  // Reports what is published; downloading stays the user's own action through openExternal.
+  // Main owns update URLs, checksums, and installation paths; the renderer can only request actions.
   ipcMain.handle("jolo:update:check", async (event, options) => {
     if (!trusted(event)) throw new Error("untrusted sender");
     if (!releases) return { current: app.getVersion(), managed: false };
     return { ...await releases.check({ force: options?.force === true }), managed: true };
   });
+  for (const [channel, action] of [['jolo:update:download', 'download'], ['jolo:update:install', 'install']]) {
+    ipcMain.handle(channel, async event => {
+      if (!trusted(event)) throw new Error('untrusted sender');
+      if (!releases) return { current: app.getVersion(), managed: false };
+      return { ...await releases[action](), managed: true };
+    });
+  }
 }
 
 
-if (SMOKE && process.env.JOLO_HOME) app.setPath("userData", path.join(process.env.JOLO_HOME, "electron-userdata")); // never share local storage with normal launches
+// A custom Jolo home isolates both the engine and Electron's settings, including during updates.
+if (process.env.JOLO_HOME) app.setPath("userData", path.join(process.env.JOLO_HOME, "electron-userdata"));
 
 app.setName("Jolo"); // what the system calls this application, including in its notification settings
 app.whenReady().then(async () => {
+  if (PACKAGED_LAYOUT && !SMOKE) {
+    try { acknowledgeDesktopUpdate({ target: desktopInstallLayout(process.execPath).target, version: app.getVersion(), started: true }); }
+    catch (error) { log.warn('could not record desktop update startup', { error: String(error.message ?? error) }); }
+  }
   const window = createWindow();
   const lightIcon = nativeImage.createFromPath(APP_ICON);
   const darkIcon = nativeImage.createFromPath(path.join(ROOT, "dist", "jolo-app-dark.png"));
@@ -345,8 +359,20 @@ app.whenReady().then(async () => {
     cacheFile: path.join(app.getPath("userData"), "updates.json"),
     baseUrl: process.env.JOLO_UPDATE_BASE_URL || undefined,
     log,
+    installer: createDesktopInstaller({ appDirectory: ROOT, execPath: process.execPath, userData: app.getPath('userData'), baseUrl: process.env.JOLO_UPDATE_BASE_URL || undefined,
+      beforeInstall: async () => {
+        try { await bridge.rawCall('engine.reload', {}); }
+        catch (error) {
+          if (error.code === 'conflict') throw new Error('Finish active tasks and close terminal panels before restarting to update.');
+          throw error;
+        }
+        await bridge.close();
+      },
+      quit: () => setTimeout(() => app.quit(), 100),
+    }),
+    changed: state => { if (!window.isDestroyed()) window.webContents.send('jolo:update:state', { ...state, managed: true }); },
     notice: ({ latest }) => {
-      if (!window.isDestroyed()) window.webContents.send("jolo:notice", { kind: "update", tone: "muted", title: `Jolo ${latest} is available`, body: "Open Settings to download it.", at: Date.now() });
+      if (!window.isDestroyed()) window.webContents.send("jolo:notice", { kind: "update", tone: "muted", title: `Jolo ${latest} is available`, body: "Open Settings to update Jolo.", at: Date.now() });
     },
   }) : null;
   releases?.start();
@@ -374,6 +400,10 @@ app.whenReady().then(async () => {
   const loadingSmoke = SMOKE && process.env.JOLO_LOADING_SMOKE === '1'
     ? (await import(new URL('loading-smoke.js', SMOKE_DIR).href)).prepareLoadingSmoke({ window, bridge, root: ROOT }) : null;
   await window.loadFile(path.join(ROOT, "dist", "index.html"));
+  if (PACKAGED_LAYOUT && !SMOKE) {
+    try { acknowledgeDesktopUpdate({ target: desktopInstallLayout(process.execPath).target, version: app.getVersion() }); }
+    catch (error) { log.warn('could not acknowledge desktop update', { error: String(error.message ?? error) }); }
+  }
   if (SMOKE && process.env.JOLO_LIVE_RESULTS_SMOKE !== "1" && process.env.JOLO_LOADING_SMOKE !== "1") { window.moveTop(); window.focus(); app.focus({ steal: true }); }
   bridge.connect().catch((error) => { log.error("engine attach failed", { error: String(error?.message ?? error) }); bridge.notify({ connected: false, error: String(error?.message ?? error) }); });
   if (SMOKE) {

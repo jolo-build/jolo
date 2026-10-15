@@ -7,6 +7,7 @@ import { FONT_DEFAULTS, readFonts, saveFonts } from '../fonts.js';
 import { DESKTOP_THEMES, readTheme, saveTheme, themeStyle } from '../themes.js';
 import { modelLabel, effortLabel } from '../model-options.js';
 import { AccountSettings } from './account-settings.jsx';
+import { AboutSettings } from './about-settings.jsx';
 
 
 const sections = [
@@ -17,36 +18,6 @@ const sections = [
   { id: 'about', label: 'About', icon: 'circleCheck', description: 'Which Jolo this is, and whether a newer one has been released.' },
 ];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-
-// Jolo never replaces itself: a release is announced here and downloaded by the user. Opening
-// this tab reads the last recorded check, so it costs nothing; the button asks the network.
-function AboutSettings() {
-  const [state, setState] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const check = useCallback(async (force) => {
-    setChecking(true);
-    try { setState(await window.jolo.checkForUpdate?.({ force }) ?? { managed: false }); }
-    catch (error) { setState({ error: String(error?.message ?? error) }); }
-    finally { setChecking(false); }
-  }, []);
-  useEffect(() => { void check(false); }, [check]);
-
-  const version = state?.current;
-  return <section className="settings-card">
-    <div className="settings-card-heading"><div><h2>Jolo{version ? ` ${version}` : ''}</h2><p className="hint">
-      {state === null ? 'Checking this installation…'
-        : state.managed === false ? 'This build runs from a source checkout, so there is nothing to update.'
-        : state.error ? `Could not reach the release server: ${state.error}`
-        : state.available ? `Jolo ${state.latest} has been released.`
-        : 'This is the newest published release.'}
-    </p></div></div>
-    {/* A build with nothing to check gets the note above and no dead control. */}
-    {state && state.managed !== false && <div className="settings-card-actions">
-      <button type="button" onClick={() => void check(true)} disabled={checking}>{checking ? 'Checking…' : 'Check for updates'}</button>
-      {state.available && state.releaseUrl && <button type="button" className="primary" onClick={() => window.jolo.openExternal(state.releaseUrl)}>Download {state.latest}</button>}
-    </div>}
-  </section>;
-}
 
 function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
   const [found, setFound] = useState({});

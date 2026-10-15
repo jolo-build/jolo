@@ -38,6 +38,9 @@ declare global {
     openExternal: (url: string) => Promise<boolean>;
     /** Absent for the same reason as `prepareVisualization`; a source checkout reports `managed: false`. */
     checkForUpdate?: (options?: { force?: boolean }) => Promise<JoloUpdateState>;
+    downloadUpdate?: () => Promise<JoloUpdateState>;
+    installUpdate?: () => Promise<JoloUpdateState>;
+    onUpdate?: (listener: (state: JoloUpdateState) => void) => () => void;
     resync: () => Promise<{ cursor: number }>;
     setOverlay: (active: boolean) => void;
     smoke: boolean;
@@ -51,6 +54,10 @@ declare global {
     available?: boolean;
     releaseUrl?: string;
     error?: string;
+    installable?: boolean;
+    status?: string;
+    received?: number;
+    total?: number;
   }
 
   /** One terminal view, published so the smoke checks can type into the shell the user sees. */
