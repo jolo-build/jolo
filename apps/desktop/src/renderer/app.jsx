@@ -103,7 +103,8 @@ function DesktopWorkspace() {
   const browserWorkspaces = useRef('');
   const register = useCallback((id, controller) => {
     if (controller) controllers.current.set(id, controller); else controllers.current.delete(id);
-    const ids = [...new Set([...controllers.current.values()].map(item => item.workspaceId).filter(Boolean))].sort();
+    const panes = [...controllers.current.values()];
+    const ids = [...new Set([...panes.map(item => item.workspaceId), ...panes.flatMap(item => [...(item.browserWorkspaceIds ?? [])].reverse())].filter(Boolean))].slice(0, 64).sort();
     const key = JSON.stringify(ids);
     if (browserWorkspaces.current !== key) { browserWorkspaces.current = key; window.jolo.setBrowserWorkspaces(ids); }
   }, []);
@@ -119,8 +120,8 @@ function DesktopWorkspace() {
   const focusPane = useCallback((id) => dispatch({ type: "focus", id }), []);
   const zoom = useCallback((id) => dispatch({ type: "zoom", id }), []);
   const resize = useCallback((id, ratio) => dispatch({ type: "resize", id, ratio }), []);
-  // Browser guests are expensive; retain the existing one-live-browser policy across splits.
-  const onBrowserOpen = useCallback((id) => { for (const [other, controller] of controllers.current) if (other !== id) controller.closeBrowser(); }, []);
+  // Guests remain owned by their workspaces, including while another pane or chat is active.
+  const onBrowserOpen = useCallback(() => {}, []);
   useEffect(() => window.jolo.onCloseRequest?.(({ fromBrowser }) => {
     const browser = fromBrowser && [...controllers.current.entries()].find(([, controller]) => controller.hasBrowser);
     const id = browser ? browser[0] : layoutRef.current.active;
@@ -130,14 +131,16 @@ function DesktopWorkspace() {
     }
     window.jolo.quit();
   }), []);
-  useEffect(() => window.jolo.onBrowserOpen(({ workspaceId, expiresAt }) => {
+  useEffect(() => window.jolo.onBrowserOpen(({ workspaceId, sessionId, expiresAt }) => {
     if (Date.now() >= expiresAt) throw new Error('browser open request expired');
     if (document.querySelector('dialog[open]:not(.mermaid-full-window), .settings-page')) throw new Error('close the host dialog before opening the browser');
-    const [id, controller] = browserTarget(controllers.current, workspaceId, layoutRef.current.active);
-    if (layoutRef.current.zoom && layoutRef.current.zoom !== id) dispatch({ type: 'zoom', id: layoutRef.current.zoom });
-    dispatch({ type: 'focus', id });
-    controller.showTask();
-    controller.openBrowser();
+    const [id, controller] = browserTarget(controllers.current, workspaceId, layoutRef.current.active, sessionId);
+    if (controller.workspaceId === workspaceId && (!sessionId || controller.sessionId === sessionId)) {
+      if (layoutRef.current.zoom && layoutRef.current.zoom !== id) dispatch({ type: 'zoom', id: layoutRef.current.zoom });
+      dispatch({ type: 'focus', id });
+      controller.showTask();
+    }
+    return controller.openBrowserForWorkspace(workspaceId, sessionId, expiresAt);
   }), []);
 
   useEffect(() => {

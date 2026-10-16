@@ -70,7 +70,7 @@ export async function saveModelConfig(client, target, form) {
   let stored = null;
   try {
     if (secret) stored = (await client.call("credential.set", { provider: form.name, value: secret })).stored;
-    await client.call("settings.update", patch);
+    if (patch.providers) await client.call("settings.update", { providers: patch.providers });
   } catch (error) {
     const message = secret ? String(error.message).split(secret).join("[redacted]") : error.message;
     throw new Error(`${stored ? "API key stored; model settings were not saved. " : ""}${message}`);
@@ -80,7 +80,7 @@ export async function saveModelConfig(client, target, form) {
 
 export function currentModelLabel(settings, session) {
   if (!settings) return "Loading model…";
-  if (session?.agentId) return `${session.agentId} · ${settings.agents?.[session.agentId]?.model ?? "default"}`;
+  if (session?.agentId) return `${session.agentId} · ${(session.agentModels?.[session.agentId] ?? settings.agents?.[session.agentId])?.model ?? "default"}`;
   if (session?.model ?? settings.model) return (session?.model ?? settings.model).preset === "fake" ? "Demo provider" : (session?.model ?? settings.model).model;
   return settings.provider && settings.provider.name !== "fake" ? settings.provider.model : settings.demoProviderEnabled ? "Demo provider" : "Configure provider";
 }

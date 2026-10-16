@@ -1,3 +1,4 @@
+import { editPath } from './edit-records.js';
 import { createHash } from "node:crypto";
 // Any agent that speaks the Agent Client Protocol, hosted as a Jolo session.
 //
@@ -17,11 +18,22 @@ import { RESULT_DISPLAY_MAX, createHostedTurn, digestOf, handoffParties, hostedE
 import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { acpMcpServers } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { screenInstructions } from '../tools/screen.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, acpImageContent } from '../attachments.js';
 import { prepareDevinMcp } from './devin-mcp.js';
 
 export const PROTOCOL_VERSION = 1;
+
+/**
+ * Whether a `session/prompt` may include image blocks.
+ * Grok transcribes `ContentBlock::Image` but initialize only sets `embeddedContext`, so `promptCapabilities.image` stays false.
+ * @param {any} init the agent's initialize result
+ * @param {{ id?: string }} [manifest]
+ */
+export function acceptsPromptImages(init, manifest) {
+  return init?.agentCapabilities?.promptCapabilities?.image === true || init?._meta?.grokShell === true || manifest?.id === 'grok';
+}
 const READ_KINDS = new Set(["read", "search"]);
 const MUTATION_KINDS = new Set(["edit", "delete", "move"]);
 const FILE_MAX_BYTES = 8 * 1024 * 1024;
@@ -62,7 +74,7 @@ export function modelSelector(configOptions) {
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, dispatcher: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any,
- *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean, hasScreen?: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
 export function createAcpExecutor({ storage, dispatcher, catalog, permissions, supervisor, build = "dev", log, mcpConfig, providerFactory = null, settings = null }) {
@@ -91,6 +103,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       const pending = new Map();
       let transportClosed = false;
       const toolCalls = new Map();
+      const hostWrittenPaths = new Set();
       let nextId = 1;
       let link;
       let devinMcp;
@@ -143,6 +156,18 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
         const text = contentText(update.content);
         if (update.status === "completed" || update.status === "failed") {
           const detail = text || (update.rawOutput === undefined || update.rawOutput === null ? "" : rawDetail(update.rawOutput).slice(0, RESULT_DISPLAY_MAX));
+          if (update.status === 'completed') {
+            const value = toolCalls.get(update.toolCallId);
+            // fs/write_text_file already records an exact native patch. Do not count its
+            // subsequent ACP diff notification as another edit.
+            const content = (value.content ?? []).filter(part => {
+              if (part.type !== 'diff' || typeof part.path !== 'string') return true;
+              const key = editPath(workspace.path, part.path);
+              if (!hostWrittenPaths.has(key)) return true;
+              hostWrittenPaths.delete(key); return false;
+            });
+            turn.recordEdits(update.toolCallId, 'acp', { ...value, content });
+          }
           turn.toolFinished(update.toolCallId, { text: detail, isError: update.status === "failed" });
         } else if (text) turn.toolOutput(update.toolCallId, `${text}\n`);
       };
@@ -233,6 +258,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           const result = await dispatcher.invoke({ run, workspace: { id: workspace.id, root: workspace.path }, signal,
             call: { callId: `acp-write:${id}`, name: "apply_patch", arguments: { operations: [operation] } } });
           if (result.status !== "ok") return refuse(id, JSON.parse(result.output).error?.message ?? "file write failed", RPC.POLICY);
+          hostWrittenPaths.add(editPath(workspace.path, params.path));
           // ACP requires an object result. Returning null makes strict clients
           // report a parse error after the patch has already succeeded.
           respond(id, {});
@@ -284,7 +310,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
       const drive = async () => {
         const init = await request("initialize", { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "jolo", title: "Jolo", version: build } });
         if (init?.protocolVersion !== PROTOCOL_VERSION) throw new Error(`speaks ACP version ${init?.protocolVersion ?? "?"}; Jolo speaks ${PROTOCOL_VERSION}`);
-        if (run.attachments?.some(item => item.mimeType.startsWith('image/')) && !init.agentCapabilities?.promptCapabilities?.image) throw new Error(`${manifest.displayName} does not support image attachments. Choose an agent with image support.`);
+        if (run.attachments?.some(item => item.mimeType.startsWith('image/')) && !acceptsPromptImages(init, manifest)) throw new Error(`${manifest.displayName} does not support image attachments. Choose an agent with image support.`);
         const remembered = recall(session, manifest).acpSessionId ?? null;
         let loaded = null;
         let resumed = false;
@@ -319,7 +345,7 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           catch (error) { if (run.execution?.pinned) throw error; log.warn("acp agent refused the configured model", { agentId: manifest.id, model: chosen.model, error: String(error?.message ?? error) }); }
         }
         const prompt = await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
-        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });
+        const result = await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: `${[inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), hosted?.hasScreen ? screenInstructions({ hosted: true }) : '', standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n')}\n\nCurrent request:\n${prompt}` }, ...acpImageContent(readImages(storage, run))] });
         state.stopReason = typeof result?.stopReason === "string" ? result.stopReason : "end_turn";
         closeTurn();
       };

@@ -65,10 +65,10 @@ test("keys use the credential RPC only; an empty key leaves existing credentials
   const client = { call: async (method, params) => { calls.push([method, params]); return method === "credential.set" ? { stored: "session" } : { settings: {} }; } };
   const key = "test-secret-key";
   expect(await saveModelConfig(client, jolo, { ...configured(), apiKey: key })).toContain("engine exits");
-  expect(calls).toEqual([["credential.set", { provider: "openai", value: key }], ["settings.update", patch]]);
+  expect(calls).toEqual([["credential.set", { provider: "openai", value: key }], ["settings.update", { providers: patch.providers }]]);
   calls.length = 0;
   await saveModelConfig(client, jolo, configured());
-  expect(calls).toEqual([["settings.update", patch]]);
+  expect(calls).toEqual([["settings.update", { providers: patch.providers }]]);
   calls.length = 0;
   await expect(saveModelConfig(client, jolo, { ...configured(), model: "", apiKey: key })).rejects.toThrow();
   expect(calls).toEqual([]);

@@ -8,15 +8,17 @@ import { searchBridge } from './search/mcp.js';
 import { browserBridge } from './browser/mcp.js';
 import { scheduleBridge, SCHEDULE_METHODS } from './scheduler/mcp.js';
 import { delegationBridge } from './delegation/mcp.js';
+import { screenBridge } from './screen/mcp.js';
 
-const BRIDGES = { search: searchBridge, browser: browserBridge, schedule: scheduleBridge, delegation: delegationBridge };
-const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call'], schedule: SCHEDULE_METHODS, delegation: ['delegation.call'] };
+const BRIDGES = { search: searchBridge, browser: browserBridge, schedule: scheduleBridge, delegation: delegationBridge, screen: screenBridge };
+const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call'], schedule: SCHEDULE_METHODS, delegation: ['delegation.call'], screen: ['screen.call'] };
 
 /**
  * The MCP server config for one hosted run: `jolo` serving every bridge this engine can offer.
- * @returns {(workspace: any, run: any) => { server: { command: string, args: string[] }, hasBrowser: boolean, hasSearch: boolean }}
+ * The screen is offered only while a desktop has registered one when the run starts.
+ * @returns {(workspace: any, run: any) => { server: { command: string, args: string[] }, hasBrowser: boolean, hasSearch: boolean, hasScreen: boolean }}
  */
-export function createHostedMcpConfig({ paths, capabilityTokens, browser, search, log }) {
+export function createHostedMcpConfig({ paths, capabilityTokens, browser, search, screen = null, log }) {
   return (workspace, run) => {
     const tools = ['schedule', 'delegation'];
     if (search) {
@@ -27,9 +29,11 @@ export function createHostedMcpConfig({ paths, capabilityTokens, browser, search
     // tools in the run; the broker checks the live workspace host on each call.
     const hasBrowser = Boolean(browser);
     if (hasBrowser) tools.push('browser');
+    const hasScreen = Boolean(screen?.hasScreen());
+    if (hasScreen) tools.push('screen');
     const methods = tools.flatMap(name => BRIDGE_METHODS[name]);
     const tokenPath = capabilityTokens.issue(run.id, workspace.id, methods).tokenPath;
-    return { server: hostedMcpConfig({ ...paths, tokenPath }, workspace.id, tools), hasBrowser, hasSearch: Boolean(search) };
+    return { server: hostedMcpConfig({ ...paths, tokenPath }, workspace.id, tools), hasBrowser, hasSearch: Boolean(search), hasScreen };
   };
 }
 

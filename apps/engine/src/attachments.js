@@ -52,7 +52,7 @@ export function writeImageUpload(storage, { sessionId, artifactId, offset, data,
 }
 
 export function validateAttachments(storage, sessionId, attachments = []) {
-  if (attachments.filter(item => item.mimeType === 'text/plain').length > LIMITS.textAttachments || attachments.filter(item => item.mimeType.startsWith('image/')).length > LIMITS.imageAttachments || attachments.filter(item => item.mimeType === 'application/octet-stream').length > LIMITS.fileAttachments) throw new ProtocolError('limit_exceeded', 'attach up to 4 images, 4 text files, and 4 other files per message');
+  if (attachments.filter(item => item.mimeType === 'text/plain').length > LIMITS.textAttachments || attachments.filter(item => item.mimeType === 'application/octet-stream').length > LIMITS.fileAttachments) throw new ProtocolError('limit_exceeded', 'attach up to 4 text files and 4 other files per message');
   return attachments.map(value => {
     const parsed = AttachmentSchema.safeParse(value);
     if (!parsed.success) throw new ProtocolError('invalid_params', 'invalid attachment');
@@ -87,14 +87,40 @@ export function textAttachmentContext(storage, run, maxBytes = Infinity) {
 export const claudeImageContent = images => images.map(image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }));
 export const acpImageContent = images => images.map(image => ({ type: 'image', mimeType: image.mimeType, data: image.data }));
 
-/** Hydrate only the images that survived context selection, under a separate binary budget. */
+/** Image-bearing tool results that still carry their pixels in a request: the newest ones (§7.2). */
+export const IMAGE_RESULTS_KEPT = 3;
+const RESULT_IMAGE_MAX_BYTES = 1024 * 1024;
+
+/** Images a tool stored for the model (screenshots), read back from this task's own artifacts. */
+export function readResultImages(storage, sessionId, images) {
+  return images.map(image => {
+    const artifact = storage.getArtifact(image.artifactId);
+    if (!artifact || artifact.sessionId !== sessionId || !artifact.finalizedHash || artifact.committedBytes !== image.bytes || image.bytes > RESULT_IMAGE_MAX_BYTES) throw new ProtocolError('unavailable', 'a tool image is missing or belongs to another task');
+    const buffer = storage.readArtifact(artifact, 0, image.bytes).buffer;
+    if (buffer.length !== image.bytes) throw new ProtocolError('unavailable', 'could not read a tool image');
+    return { ...image, data: buffer.toString('base64') };
+  });
+}
+
+/**
+ * The tool results whose images stay in the request. Older screenshots keep their text only: a
+ * long browsing session would otherwise fill the window with pictures of pages that have changed.
+ */
+export function imageResultsKept(items) {
+  const kept = new Set();
+  for (let i = items.length - 1; i >= 0 && kept.size < IMAGE_RESULTS_KEPT; i -= 1) if (items[i].kind === 'tool_result' && items[i].payload.images?.length) kept.add(items[i]);
+  return kept;
+}
+
+/** Hydrate images that survived context selection; user uploads have no count cap. */
 export function hydrateRequestImages(storage, request) {
-  let bytes = 0;
+  const kept = imageResultsKept(request.items);
   return { ...request, items: request.items.map(item => {
+    if (item.kind === 'tool_result' && item.payload.images?.length) {
+      if (!kept.has(item)) { const { images, ...payload } = item.payload; return { ...item, payload: { ...payload, imagesOmitted: images.length } }; }
+      return { ...item, payload: { ...item.payload, images: readResultImages(storage, request.sessionId, item.payload.images) } };
+    }
     if (item.kind !== 'user_message' || !item.payload.attachments?.length) return item;
-    const images = readImages(storage, { sessionId: request.sessionId, attachments: item.payload.attachments });
-    bytes += images.reduce((sum, image) => sum + image.bytes, 0);
-    if (bytes > LIMITS.imageAttachmentBytes * LIMITS.imageAttachments) throw new ProtocolError('limit_exceeded', 'image context exceeds 20 MB; start a new task or use fewer images');
-    return { ...item, payload: { ...item.payload, images } };
+    return { ...item, payload: { ...item.payload, images: readImages(storage, { sessionId: request.sessionId, attachments: item.payload.attachments }) } };
   }) };
 }

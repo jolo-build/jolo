@@ -30,7 +30,7 @@ function ProjectStatus({ row }) {
     : state === "cancelled" ? "stopped"
     : "ready";
   return <span className={`board-progress ${status}`} aria-hidden="true">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <span className={`board-progress-icon${status === "running" ? " board-progress-rotor" : ""}`}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
       <circle className="board-progress-track" cx="12" cy="12" r="9" />
       {status === "running" && <circle className="board-progress-arc" cx="12" cy="12" r="9" strokeDasharray="19 38" />}
       {status === "done" && <path d="m8 12 2.6 2.6L16 9" />}
@@ -38,7 +38,7 @@ function ProjectStatus({ row }) {
       {status === "failed" && <path d="m9 9 6 6m0-6-6 6" />}
       {status === "paused" && <path d="M9.5 8.5v7m5-7v7" />}
       {status === "stopped" && <rect x="9" y="9" width="6" height="6" rx=".6" fill="currentColor" stroke="none" />}
-    </svg>
+    </svg></span>
   </span>;
 }
 
@@ -113,8 +113,8 @@ export function Board({ board, connected, onOpen, onNewTask, onNewChat, onChatMe
   return <div className="board" aria-label="Work board"><div className="board-content">
     <div className="board-head"><div><h1>Workspaces</h1><p><span className={`state-dot ${connected ? rows.some(working) ? 'working' : '' : 'offline'}`} />{connected ? rows.length ? boardSummary(rows) : 'A place for your next idea.' : 'Connecting to the engine…'}</p></div><div className="board-head-actions"><button className="outline board-add" onClick={onOpenFolder}><Icon name="folderPlus" size={16} />Open folder</button><div className="board-chat-actions"><button onClick={onNewChat} className="primary" disabled={!connected}><Icon name="squarePen" size={16} />New chat</button></div></div></div>
     {!rows.length && board && <div className="empty-state"><JoloMark className="welcome-mark" /><h2>Start with a chat.</h2><p>You can also open a folder when you want to work on a project.</p></div>}
-    {rows.length > 0 && <section className="board-folders" aria-label="Workspace folders"><div className="board-section-heading"><h2>Folders <span className="board-total">{rows.length}</span></h2><span>Recent activity</span></div><div className="board-list">{rows.map(row => <WorkspaceRow key={row.workspaceId} row={row} homeDirectory={homeDirectory} revision={board.generatedAt} now={now} expanded={open.has(row.workspaceId)} onToggle={() => toggle(row.workspaceId)} onOpen={onOpen} onNewTask={onNewTask} call={call} />)}</div></section>}
-    <RecentChats call={call} revision={board?.generatedAt} onOpen={onOpen} onMenu={onChatMenu} variant="board" now={now} />
+    {rows.length > 0 && <section className="board-folders" aria-label="Workspace folders"><div className="board-section-heading"><h2>Folders <span className="board-total">{rows.length}</span></h2><span>Recent activity</span></div><div className="board-list">{rows.map(row => <WorkspaceRow key={row.workspaceId} row={row} homeDirectory={homeDirectory} revision={row.tasksRevision ?? board.generatedAt} now={now} expanded={open.has(row.workspaceId)} onToggle={() => toggle(row.workspaceId)} onOpen={onOpen} onNewTask={onNewTask} call={call} />)}</div></section>}
+    <RecentChats call={call} revision={board?.standaloneTasksRevision ?? board?.generatedAt} onOpen={onOpen} onMenu={onChatMenu} variant="board" now={now} />
     {onGetStarted && <div className="board-get-started"><button type="button" onClick={onGetStarted}><Icon name="circleCheck" size={14} />Getting started</button></div>}
   </div></div>;
 }

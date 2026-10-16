@@ -1,4 +1,5 @@
-import { DelegatedTasks } from './delegated-tasks.jsx';
+import { loadRecordedDiff } from '../chat-edits.js';
+import { DelegatedTasks, useDelegatedTasks } from './delegated-tasks.jsx';
 import { modelLabel } from '../model-options.js';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
@@ -6,7 +7,7 @@ import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
-import { runLabel, screenshotArtifactId } from "../presentation.js";
+import { runLabel, screenshotImage } from "../presentation.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -21,6 +22,7 @@ function toolIcon(head) {
   if (/^(browser|web|fetch)/.test(name)) return 'browser';
   if (/^(search|grep|glob|find)/.test(name)) return 'search';
   if (/^(viewimage|readimage|imageread|imageview|screenshot)/.test(name)) return 'image';
+  if (/^screen/.test(name)) return 'image';
   if (/^(applypatch|revertpatch|replace|edit|write|filechange|notebookedit|delete|move)/.test(name)) return 'edit';
   if (/^(read|file|list|ls$)/.test(name)) return 'file';
   if (/^(plan|todo|updateplan)/.test(name)) return 'plan';
@@ -71,7 +73,7 @@ function DiffPreview({ artifactId }) {
   </div>;
 }
 
-function ScreenshotPreview({ artifactId }) {
+function ScreenshotPreview({ artifactId, mimeType = 'image/png' }) {
   const [src, setSrc] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -85,11 +87,11 @@ function ScreenshotPreview({ artifactId }) {
         offset += response.result.bytes;
         if (response.result.eof) break;
       }
-      if (!cancelled && base64) setSrc(`data:image/png;base64,${base64}`);
+      if (!cancelled && base64) setSrc(`data:${mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'};base64,${base64}`);
     })().catch(() => {});
     return () => { cancelled = true; };
-  }, [artifactId]);
-  return src ? <img className="screenshot" src={src} alt="browser screenshot" /> : <span className="hint">loading screenshot…</span>;
+  }, [artifactId, mimeType]);
+  return src ? <img className="screenshot" src={src} alt="screenshot" /> : <span className="hint">loading screenshot…</span>;
 }
 
 /**
@@ -101,13 +103,13 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
   const [head, rest] = useMemo(() => { const at = text.indexOf("\n"); return at < 0 ? [text, ""] : [text.slice(0, at), text.slice(at + 1)]; }, [text]);
   const [expanded, setExpanded] = useState(false);
   const loading = !head && committedBytes > renderedBytes;
-  const screenshot = status === "streaming" ? null : screenshotArtifactId(text);
+  const screenshot = status === "streaming" ? null : screenshotImage(text);
   return (
     <details className="block tool" onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       {expanded && <>
         {diffArtifactId && <DiffPreview artifactId={diffArtifactId} />}
-        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
+        {screenshot ? <ScreenshotPreview artifactId={screenshot.artifactId} mimeType={screenshot.mimeType} /> : !text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
       </>}
     </details>
   );
@@ -136,19 +138,20 @@ const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, s
  *   guestName: string | null,
  *   assistantName: string,
  *   sessionId?: string | null,
+ *   onFollowup?: ((prompt: string) => void) | null,
  * }} MessageArticleProps
  */
-const MessageArticle = memo(function MessageArticle(/** @type {MessageArticleProps} */ { message, text, status, committedBytes, renderedBytes, run, guestName, assistantName, sessionId }) {
+const MessageArticle = memo(function MessageArticle(/** @type {MessageArticleProps} */ { message, text, status, committedBytes, renderedBytes, run, guestName, assistantName, sessionId, onFollowup }) {
   const assistant = message.role === "assistant";
   return <article data-message-id={message.id} className={`message ${message.role} ${message.kind}${status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
     {message.role === 'user' && run?.attachments?.length > 0 && <div className="message-attachments">{run.attachments.map((attachment, index) => !attachment.mimeType.startsWith('image/') ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
     {message.role === 'user' && run?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{run.taskReferences.map(task => <button type="button" key={task.url} title={`${task.team?.name ?? 'Personal'} · ${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>{task.team?.name ?? 'Personal'} · r{task.revision} ↗</span></button>)}</div>}
     {message.role !== "user" && <div className="message-label">{assistant && !guestName && assistantName === "Jolo" && <JoloMark className="agent-mark" />}{assistant ? guestName ?? assistantName : message.role}{assistant && guestName && <span className="called-in">called in for this message</span>}</div>}
-    {!text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
+    {!text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} onFollowup={onFollowup} /> : <div className="message-text">{text}</div>}
   </article>;
 });
 
-function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
+function ActivityGroup({ messages, identity, runState, hasRunStatus = false, onReview = null }) {
   const working = messages.some((message) => message.status === "streaming");
   const tools = messages.filter((message) => message.kind === "tool").length;
   if (!tools && !messages.some((message) => message.text.trim())) {
@@ -162,10 +165,10 @@ function ActivityGroup({ messages, identity, runState, hasRunStatus = false }) {
   const label = `Task activity${tools ? ` · ${tools} ${tools === 1 ? 'action' : 'actions'}` : ' · Reasoning'}`;
   return <details className="activity-group"><summary><ActivityIcon name={runState === 'completed' ? 'check' : tools ? 'tools' : 'think'} /><span className="activity-label" title={identity}>{label}</span><span className="activity-line" /><Icon name="down" size={13} /></summary><div className="activity-steps">{messages.map((message) => message.kind === "tool"
     ? <ToolBlock key={message.id} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} diffArtifactId={message.diffArtifactId} />
-    : <ReasoningBlock key={message.id} text={message.text} status={message.status} />)}</div></details>;
+    : <ReasoningBlock key={message.id} text={message.text} status={message.status} />)}{messages.filter(message => message.changes?.length || message.diffArtifactId).map(message => <button className="activity-review-edit" key={`review:${message.id}`} onClick={() => onReview?.(message.runId, message.changes?.[0]?.newPath ?? message.changes?.[0]?.path, message.diffArtifactId)}><Icon name="fileDiff" size={14} />Review file edit</button>)}</div></details>;
 }
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, onOpenSession = null, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, onOpenSession = null, onFollowup = null, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
   const container = useRef(null);
   const follow = useRef(true);
   const lastScrollTop = useRef(0);
@@ -174,17 +177,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   const adjustedTop = useRef(null);
   const [changeCards, setChangeCards] = useState(() => readChangeCards(sessionId));
   const recordCounts = useCallback((runId, counts) => setChangeCards(cards => cards.map(card => card.runId === runId ? { ...card, counts } : card)), []);
-  const loadRunDiff = useCallback(async (path, file) => {
-    if (!file?.diffArtifactIds?.length) return { source: 'none', diff: '', truncated: false };
-    let diff = '', truncated = false;
-    for (const artifactId of file.diffArtifactIds) {
-      const response = await window.jolo.call('artifact.read', { artifactId, length: 64 * 1024 });
-      if (!response.ok) throw new Error(response.error.message);
-      diff += fileDiffSections(response.result.text, path);
-      truncated ||= !response.result.eof || response.result.text.includes('…');
-    }
-    return { source: 'artifact', diff, truncated };
-  }, []);
+  const loadRunDiff = loadRecordedDiff;
   const messages = projection ? projection.ordered() : [];
   const runs = projection ? [...projection.runs.values()] : [];
   const captureAnchor = () => {
@@ -201,6 +194,14 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     historyAnchor.current = captureAnchor();
     void history.loadOlder();
   };
+  useLayoutEffect(() => {
+    // Every selected transcript starts at its latest message, including a
+    // refreshed projection for the same chat. Subsequent hydration follows it.
+    follow.current = true;
+    historyAnchor.current = null;
+    adjustedTop.current = null;
+    touchY.current = null;
+  }, [sessionId, projection]);
   useLayoutEffect(() => {
     const el = container.current;
     if (!el) return;
@@ -247,6 +248,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     setChangeCards(cards => updateChangeCards(cards, JSON.parse(changesSignature)));
   }, [changesSignature]);
   useEffect(() => { saveChangeCards(sessionId, changeCards); }, [sessionId, changeCards]);
+  const delegated = useDelegatedTasks(sessionId, Boolean(activeRun));
   const identityFor = run => activityIdentity(run, { assistantName, assistantAgentId, providerModel, agents });
   const groups = [];
   for (const message of messages) {
@@ -263,8 +265,16 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
     if (end >= 0) groups.splice(end + 1, 0, { type: 'changes', id: `changes:${card.runId}`, runId: card.runId });
   }
+  for (const runId of new Set(delegated.tasks.map(task => task.parentRunId))) {
+    const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === runId);
+    if (end >= 0) groups.splice(end + 1, 0, { type: 'children', id: `children:${runId}`, runId });
+  }
   return <div className="conversation" ref={container} tabIndex={0}
-    onWheelCapture={event => { if (!event.ctrlKey && event.deltaY < 0) follow.current = false; }}
+    onWheelCapture={event => {
+      // Horizontal chat swipes carry vertical drift. Only vertical reading
+      // intent should detach the newly selected transcript from its end.
+      if (!event.ctrlKey && !event.shiftKey && event.deltaY < 0 && Math.abs(event.deltaY) > Math.abs(event.deltaX) * 1.5) follow.current = false;
+    }}
     onTouchStart={event => { touchY.current = event.touches[0]?.clientY ?? null; }}
     onTouchMove={event => {
       const y = event.touches[0]?.clientY;
@@ -282,12 +292,12 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     onScroll={() => {
     const el = container.current;
     if (historyAnchor.current && el.scrollTop !== adjustedTop.current) historyAnchor.current = captureAnchor();
-    // A small upward gesture must detach immediately, even within 100px of
-    // the end. Only a downward scroll all the way back resumes following.
-    if (el.scrollTop < lastScrollTop.current) follow.current = false;
-    else if (el.scrollTop > lastScrollTop.current && !history?.loading && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) follow.current = true;
+    // Input handlers detach following. A scroll event alone may come from
+    // browser anchoring or clamping as hydrated content changes size; treating
+    // that as user input leaves a newly opened chat stranded above the end.
+    if (el.scrollTop > lastScrollTop.current && !history?.loading && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) follow.current = true;
     lastScrollTop.current = el.scrollTop;
-    if (el.scrollTop < 100 && !history?.error) loadOlder();
+    if (!follow.current && el.scrollTop < 100 && !history?.error) loadOlder();
   }}>
     <div className={`transcript${messages.length ? "" : " empty-transcript"}`}>
       {history?.hasOlder && <div className="history-loader">
@@ -296,12 +306,13 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
       </div>}
       {!messages.length && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
+        if (group.type === 'children') return <DelegatedTasks key={group.id} tasks={delegated.tasks.filter(task => task.parentRunId === group.runId)} error={delegated.error} onCancel={delegated.cancel} onOpenSession={onOpenSession} />;
         if (group.type === 'changes') {
           const card = changeCards.find(card => card.runId === group.runId);
           return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={loadRunDiff} onReview={onReview} />;
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
-        if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
+        if (group.type === "activity") return <ActivityGroup onReview={onReview} key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;
         if (message.loadError) return <div key={message.id} className="message" role="alert"><p>Couldn’t load saved {message.kind === "tool" ? "tool output" : message.kind === "reasoning" ? "reasoning" : "message"}.</p><button onClick={() => { void projection.fill(message.id).catch(() => {}); }}>Retry loading</button></div>;
@@ -309,9 +320,8 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         const run = projection?.runs.get(message.runId);
         const calledIn = run?.agentId ?? null;
         const guestName = calledIn === "jolo" ? "Jolo" : calledIn ? agents.find((entry) => entry.id === calledIn)?.displayName ?? calledIn : null;
-        return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} run={run} guestName={guestName} assistantName={assistantName} sessionId={sessionId} />;
+        return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} run={run} guestName={guestName} assistantName={assistantName} sessionId={sessionId} onFollowup={onFollowup} />;
       })}
-      {sessionId && <DelegatedTasks sessionId={sessionId} working={Boolean(activeRun)} onOpenSession={onOpenSession} />}
     </div>
   </div>;
 }

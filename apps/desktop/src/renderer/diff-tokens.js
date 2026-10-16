@@ -16,7 +16,7 @@ function headerPath(value) {
 }
 
 /** Split syntax spans at line breaks, keeping multiline strings/comments styled on every line. */
-function tokenLines(nodes) {
+export function tokenLines(nodes) {
   const lines = [[]];
   const visit = (nodes, parents = []) => {
     for (const node of nodes) {

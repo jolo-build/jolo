@@ -5,6 +5,7 @@
 // the user's prompt becomes a message, the agent's tool calls become invocations and tool messages, its
 // permission questions become Jolo permission records decided by policy or by the user, and the turn
 // ends with usage recorded. This module holds those parts so each adapter is only its protocol.
+import { agentEdits, recordAgentEdits } from './edit-records.js';
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -18,7 +19,8 @@ export const hostedEnvironment = (supervisor, extra = {}) => supervisor.hostedEn
 export const GRACE_MS = 2_000;
 export const TOOL_DISPLAY_MAX_BYTES = 4 * 1024;
 export const RESULT_DISPLAY_MAX = 600;
-const OUTPUT_DISPLAY_MAX = 4 * 1024;
+const OUTPUT_HEAD_BYTES = 2 * 1024;
+const OUTPUT_TAIL_BYTES = 2 * 1024;
 const PREVIEW_CHUNK = 16 * 1024;
 
 const canonical = (value) => JSON.stringify(value, (_key, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v));
@@ -99,8 +101,15 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
   ctx.appendText(userMessage, run.prompt);
   ctx.finishMessage(userMessage, "complete");
 
-  const tools = new Map(); // the agent's call id -> { invocationId, messageId, name, startedAt, bytes, shown, truncated }
+  const recordedEditCalls = new Set();
+  const tools = new Map(); // the agent's call id -> invocation, message, and bounded output preview
   const appendBounded = (messageId, text) => { for (let i = 0; i < text.length; i += PREVIEW_CHUNK) ctx.appendText(messageId, text.slice(i, i + PREVIEW_CHUNK)); };
+  // Messages are append-only: stream the head, then flush the rolling tail on completion or interruption.
+  const flushToolOutput = (tool) => {
+    const omitted = tool.outputBytes - tool.shown - tool.tail.length;
+    if (omitted > 0) appendBounded(tool.messageId, `\n[... ${omitted} bytes omitted ...]\n`);
+    if (tool.tail.length) appendBounded(tool.messageId, tool.tail.toString("utf8"));
+  };
   const qualified = (name) => `${manifest.id}:${name}`;
   /**
    * The grant that admits one process call, spent when it was a single-use approval; throws PermissionRequired
@@ -177,22 +186,46 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       });
       const messageId = ctx.startMessage("tool", "tool");
       ctx.appendText(messageId, `${shown.slice(0, TOOL_DISPLAY_MAX_BYTES)}\n`);
-      tools.set(String(callId), { invocationId: invocation.id, messageId, name, startedAt: Date.now(), bytes: 0, shown: 0, truncated: false });
+      tools.set(String(callId), { invocationId: invocation.id, messageId, name, input, startedAt: Date.now(), bytes: 0, outputBytes: 0, shown: 0, headClosed: false, tail: Buffer.alloc(0), truncated: false });
       return messageId;
     },
+    recordEdits(callId, provider, value) {
+      const tool = tools.get(String(callId));
+      if (!tool || recordedEditCalls.has(String(callId))) return;
+      try {
+        const edits = agentEdits(provider, value, tool, workspace.path);
+        if (!edits.length) return;
+        recordAgentEdits({ storage, sessionId: session.id, runId: run.id, tool, edits });
+        recordedEditCalls.add(String(callId));
+      } catch { /* Missing review data must not fail an already applied edit. */ }
+    },
     hasTool: (callId) => tools.has(String(callId)),
-    /** Output the tool produced while running: shown up to a bound, counted in full. */
+    /** Keep the first and last 2 KiB of streamed output; count all bytes received. */
     toolOutput(callId, text) {
       const tool = tools.get(String(callId));
       if (!tool || !text) return;
-      const bytes = Buffer.byteLength(text);
-      tool.bytes += bytes;
-      const room = OUTPUT_DISPLAY_MAX - tool.shown;
-      if (room <= 0) { tool.truncated = true; return; }
-      const piece = text.slice(0, room);
-      appendBounded(tool.messageId, piece);
-      tool.shown += Buffer.byteLength(piece);
-      if (piece.length < text.length) tool.truncated = true;
+      const buffer = Buffer.from(text, "utf8");
+      tool.bytes += buffer.length;
+      tool.outputBytes += buffer.length;
+      let start = 0;
+      if (!tool.headClosed) {
+        start = Math.min(OUTPUT_HEAD_BYTES - tool.shown, buffer.length);
+        while (start > 0 && start < buffer.length && (buffer[start] & 0xc0) === 0x80) start--;
+        if (start) appendBounded(tool.messageId, buffer.subarray(0, start).toString("utf8"));
+        tool.shown += start;
+        tool.headClosed = start < buffer.length || tool.shown === OUTPUT_HEAD_BYTES;
+      }
+      if (start < buffer.length) {
+        // Preserve short output whole even when a character straddles the head's byte boundary.
+        const maxTail = tool.outputBytes <= OUTPUT_HEAD_BYTES + OUTPUT_TAIL_BYTES
+          ? OUTPUT_HEAD_BYTES + OUTPUT_TAIL_BYTES - tool.shown : OUTPUT_TAIL_BYTES;
+        const rest = buffer.subarray(start);
+        const tail = rest.length >= maxTail ? rest : Buffer.concat([tool.tail, rest]);
+        let offset = Math.max(0, tail.length - maxTail);
+        while (offset < tail.length && (tail[offset] & 0xc0) === 0x80) offset++;
+        tool.tail = Buffer.from(tail.subarray(offset)); // copy so a large delta is not retained
+      }
+      tool.truncated = tool.outputBytes > tool.shown + tool.tail.length;
     },
     /**
      * The tool call ended: close its message, settle the invocation, and say how it went.
@@ -203,6 +236,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
     toolFinished(callId, { text = "", isError = false, status = isError ? "error" : "ok", errorCode } = {}) {
       const tool = tools.get(String(callId));
       if (!tool) return;
+      flushToolOutput(tool);
       if (text) {
         const shown = text.slice(0, RESULT_DISPLAY_MAX);
         appendBounded(tool.messageId, `${shown}${text.length > shown.length ? "…" : ""}\n`);
@@ -220,7 +254,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
     /** The turn is over: whatever is still open was interrupted; usage is recorded; nothing was verified. */
     finish({ usage }) {
       if (scratchDir) rmSync(scratchDir, { recursive: true, force: true });
-      for (const [callId, tool] of tools) { ctx.finishMessage(tool.messageId, "interrupted"); tools.delete(callId); }
+      for (const [callId, tool] of tools) { flushToolOutput(tool); ctx.finishMessage(tool.messageId, "interrupted"); tools.delete(callId); }
       const recorded = {
         inputTokens: Math.max(0, usage.inputTokens | 0), outputTokens: Math.max(0, usage.outputTokens | 0),
         attempts: Math.max(1, usage.attempts | 0), iterations: Math.max(0, usage.iterations | 0),

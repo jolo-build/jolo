@@ -3,12 +3,16 @@
 // beyond one bounded `git status` per workspace, cached briefly.
 import { capture } from "../processes/capture.js";
 import path from "node:path";
+import { createHash, randomUUID } from 'node:crypto';
 import { TERMINAL_RUN_STATES, WORKING_RUN_STATES, BOARD_ATTENTION } from "@jolo/protocol";
 
 const GIT_CACHE_MS = 5_000;
 const GIT_TIMEOUT_MS = 2_000;
 const ATTENTION_ORDER = Object.fromEntries(BOARD_ATTENTION.map((name, index) => [name, index]));
 const RUNNING = new Set(WORKING_RUN_STATES);
+// Task rows do not contain tool activity, transcript text, git status, or file changes.
+const TASK_EVENTS = new Set(['session.created', 'session.updated', 'session.deleted', 'run.state', 'run.usage', 'workspace.viewed', 'workspace.created', 'workspace.removed']);
+const revisionHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 const clip = (text, max) => { const t = String(text ?? "").replace(/\s+/g, " ").trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 
@@ -56,7 +60,20 @@ function taskAnswerer({ session, run }) {
  */
 export function createBoard({ storage, env, log }) {
   const gitCache = new Map(); // workspace path -> { at, value }
+  // A new service has a new epoch, so reconnecting after an engine restart cannot reuse stale lists.
+  const taskEpoch = randomUUID(), taskRevisions = new Map();
+  let taskSequence = 0, unknownTaskRevision = 0;
   storage.events.on("event", event => {
+    if (TASK_EVENTS.has(event.type)) {
+      const sequence = ++taskSequence;
+      const session = event.payload.session ?? (event.sessionId && storage.getSession(event.sessionId));
+      const workspaceId = event.payload.workspaceId ?? event.payload.workspace?.id ?? session?.workspaceId;
+      if (workspaceId) taskRevisions.set(workspaceId, sequence);
+      // Deleted sessions are no longer returned by getSession. Their event still names the project.
+      else if (event.payload.projectId) {
+        for (const workspace of storage.listWorkspaces(event.payload.projectId)) taskRevisions.set(workspace.id, sequence);
+      } else unknownTaskRevision = sequence;
+    }
     const invalidate = event.type === "files.changed" || event.type === "workspace.removed" ||
       (event.type === "run.state" && (TERMINAL_RUN_STATES.includes(event.payload.state) || event.payload.state === "awaiting_permission"));
     if (!invalidate) return;
@@ -94,7 +111,7 @@ export function createBoard({ storage, env, log }) {
     const run = latest?.run ?? null;
     const session = run ? storage.getSession(run.sessionId) : project.preferences.standalone ? storage.listSessions({ projectId: project.id, limit: 1 })[0] : null;
     const pendingRecord = run && (run.state === "awaiting_permission" || run.state === "paused") ? storage.pendingPermissionForRun(run.id) : null;
-    const pendingPermission = pendingRecord ? { permissionId: pendingRecord.id, tool: pendingRecord.tool, summary: pendingRecord.request.summary ?? pendingRecord.tool, ...(pendingRecord.request.argv ? { argv: pendingRecord.request.argv } : {}), ...(pendingRecord.request.script ? { script: pendingRecord.request.script } : {}), cwd: path.resolve(workspace.path, pendingRecord.request.cwd || '.'), createdAt: pendingRecord.createdAt } : null;
+    const pendingPermission = pendingRecord ? { permissionId: pendingRecord.id, tool: pendingRecord.tool, summary: pendingRecord.request.summary ?? pendingRecord.tool, ...(pendingRecord.request.argv ? { argv: pendingRecord.request.argv } : {}), ...(pendingRecord.request.script ? { script: pendingRecord.request.script } : {}), cwd: path.resolve(workspace.path, pendingRecord.request.cwd || '.'), createdAt: pendingRecord.createdAt, ...(pendingRecord.request.kind ? { kind: pendingRecord.request.kind } : {}), ...(pendingRecord.request.decisions ? { decisions: pendingRecord.request.decisions } : {}) } : null;
     const actions = run ? storage.recentToolActivity(run.id, 3) : [];
     const { attention, reason } = attentionFor(run, workspace);
     const stopped = run && (TERMINAL_RUN_STATES.includes(run.state) || run.state === "paused");
@@ -105,6 +122,8 @@ export function createBoard({ storage, env, log }) {
       rootPath: project.rootPath,
       name: project.preferences.standalone ? 'Chat' : path.basename(project.rootPath) || project.rootPath,
       workspaceId: workspace.id,
+      tasksRevision: revisionHash([taskEpoch, unknownTaskRevision, taskRevisions.get(workspace.id) ?? 0,
+        project.id, project.rootPath, project.preferences.standalone === true, workspace.path, workspace.branch, workspace.mode]),
       taskCount: storage.countSessionsForWorkspace(workspace.id, 'open'),
       working: storage.workspaceHasWorkingRuns(workspace.id),
       workspace: { id: workspace.id, mode: workspace.mode, branch: workspace.branch, path: workspace.path },
@@ -133,7 +152,11 @@ export function createBoard({ storage, env, log }) {
       // A folder remains available even before its first chat is created.
       const rows = storage.transaction(() => storage.listProjects().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace))));
       rows.sort((a, b) => ATTENTION_ORDER[a.attention] - ATTENTION_ORDER[b.attention] || (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || a.name.localeCompare(b.name));
-      return { projects: rows, generatedAt: new Date().toISOString() };
+      // Stable across board ordering and changes that do not affect the task lists. Including membership
+      // also invalidates global lists when a folder is removed or a standalone chat is linked to a folder.
+      const taskRevision = rows => revisionHash(rows.map(row => [row.workspaceId, row.tasksRevision]).sort((a, b) => a[0].localeCompare(b[0])));
+      return { projects: rows, generatedAt: new Date().toISOString(),
+        tasksRevision: taskRevision(rows), standaloneTasksRevision: taskRevision(rows.filter(row => row.standalone)) };
     },
     /**
      * Every open task across every project, for a task list that is not scoped to one project (§5.1). The

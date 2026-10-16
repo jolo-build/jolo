@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { ModelLogo } from './brand.jsx';
 import { effortLabel, modelEfforts, effortForModel, modelLabel } from '../model-options.js';
+import { modelChatIssue } from '@jolo/protocol/schemas';
+import { decisionModeFor } from '../decision-model.js';
 
 /** Quick access to the same saved model preferences used by Settings. */
 export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange }) {
@@ -56,20 +58,24 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
   }, [open]);
   useEffect(() => {
     if (!open || (activeAgentId === 'jolo' && !preset)) { setLoading(false); return; }
-    if (reports[source] && !refresh) { setLoading(false); return; }
+    if (reports[source] && !refresh && (agent || !selectedModel || reports[source].models.some(m => m.id === selectedModel))) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true); setError('');
-    latest.current.call(agent ? 'agent.models' : 'provider.models', agent ? { agentId: activeAgentId, refresh: Boolean(refresh) } : { preset, refresh: Boolean(refresh) })
+    latest.current.call(agent ? 'agent.models' : 'provider.models', agent ? { agentId: activeAgentId, refresh: Boolean(refresh) } : { preset, refresh: Boolean(refresh), ...(selectedModel ? { model: selectedModel } : {}) })
       .then(result => { if (!cancelled) setReports(current => ({ ...current, [source]: result })); })
       .catch(error => { if (!cancelled) setError(error.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, source, refresh]);
+  }, [open, source, refresh, selectedModel]);
   const dismiss = () => { panel.current.hidePopover(); opener.current?.focus(); };
   const save = async (model, nextEffort, nextView = view) => {
     if (busy.current) return;
+    const issue = !agent && modelChatIssue(report?.models.find(entry => entry.id === model));
+    const selectedPreset = presets.find(entry => entry.id === preset);
+    const decision = !agent && (selectedPreset?.protocol === 'typesafe' || report?.models.find(entry => entry.id === model)?.outputModalities?.includes("decisions"));
+    if (issue && !decision) { setError(issue); return; }
     busy.current = true; setSaving(true); setError('');
-    try { await onSave({ agentId: activeAgentId, preset, model: model || null, effort: nextEffort || null }); if (alive.current) { if (browsingModels) dismiss(); else setView(nextView); } }
+    try { await onSave({ agentId: activeAgentId, preset, model: model || null, effort: decision ? null : nextEffort || null, mode: decision ? decisionModeFor(selectedPreset, nativeModel) : undefined }); if (alive.current) { if (browsingModels) dismiss(); else setView(nextView); } }
     catch (error) { if (alive.current) setError(error.message); }
     finally { busy.current = false; if (alive.current) { setSaving(false); setPreview(undefined); } }
   };
@@ -112,7 +118,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
   const focusSource = () => panel.current.querySelector('.model-provider-list button[aria-pressed=true]')?.focus();
   return <>
     <button ref={trigger} type="button" className="model-select" aria-label="Choose model" aria-haspopup="dialog" aria-expanded={open && browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} title={modelLabel(currentLabel)} onClick={event => { event.preventDefault(); show('models', event.currentTarget); }}><ModelLogo model={currentModel} agentId={agentId} preset={nativeModel?.preset} /><span>{modelLabel(currentLabel)}</span><Icon name="down" size={12} /></button>
-    <button ref={effortTrigger} type="button" className="model-effort-select" aria-label="Choose reasoning effort" aria-haspopup="dialog" aria-expanded={open && !browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} onClick={event => { event.preventDefault(); show('effort', event.currentTarget); }}>{effortLabel(currentEffort)}<Icon name="down" size={12} /></button>
+    <button hidden={["decisions", "decision-browser"].includes(nativeModel?.mode) && agentId === "jolo"} ref={effortTrigger} type="button" className="model-effort-select" aria-label="Choose reasoning effort" aria-haspopup="dialog" aria-expanded={open && !browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} onClick={event => { event.preventDefault(); show('effort', event.currentTarget); }}>{effortLabel(currentEffort)}<Icon name="down" size={12} /></button>
     <div ref={panel} id={id} className={`model-popover${browsingModels ? ' model-browser' : ''}`} popover="auto" role="dialog" aria-label="Model and reasoning effort" onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); }
       // Enter in a popover must never submit the surrounding message composer.
@@ -153,6 +159,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
             if (event.key === 'ArrowDown') { event.preventDefault(); panel.current.querySelector('.model-choices button:not(:disabled)')?.focus(); }
             if (event.key === 'ArrowLeft' && !query) { event.preventDefault(); focusSource(); }
           }} /><button type="button" aria-label="Refresh models" title="Refresh models" disabled={loading || saving} onClick={() => setRefresh(value => value + 1)}><Icon name="refresh" size={14} /></button></div>
+          {error && <p className="model-error" role="alert">{error}</p>}
           <div className="model-choices" role="group" aria-label="Available models" onKeyDown={event => {
             if (event.key === 'ArrowLeft') { event.preventDefault(); focusSource(); }
             if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
@@ -165,10 +172,13 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
           }}>
             {term && sources.filter(entry => entry.key !== source && entry.name.toLowerCase().includes(term)).map(entry => <button type="button" key={entry.key} disabled={saving} onClick={() => { browse(entry); setQuery(''); search.current?.focus(); }}><span><strong>{entry.name}</strong><small>Browse models</small></span><Icon name="chevron" size={14} /></button>)}
             {agent && canModel && !term && <button type="button" aria-pressed={!selectedModel} disabled={saving || !agent.available} onClick={() => save(null, null)}><span><strong>Default</strong><small>{agentName} chooses the model</small></span>{!selectedModel && <Icon name="check" size={15} />}</button>}
-            {choices.map(model => <button type="button" key={model.id} data-model={model.id} aria-pressed={selectedModel === model.id} disabled={saving || !canModel || !sources.find(entry => entry.key === source)?.available} onClick={() => save(model.id, effortForModel(report, model.id, effort))}><span><strong>{modelLabel(model.displayName || model.id)}</strong></span>{selectedModel === model.id && <Icon name="check" size={15} />}</button>)}
+            {choices.map(model => {
+              const decision = !agent && model.outputModalities?.includes('decisions');
+              const selected = selectedModel === model.id;
+              return <button type="button" key={model.id} data-model={model.id} aria-pressed={selected} disabled={saving || !canModel || (!decision && !agent && Boolean(modelChatIssue(model))) || !sources.find(entry => entry.key === source)?.available} onClick={() => save(model.id, decision ? null : effortForModel(report, model.id, effort))}><span><strong>{modelLabel(model.displayName || model.id)}</strong>{decision ? <small>Browser control or structured decisions</small> : !agent && modelChatIssue(model) && <small>{modelChatIssue(model)}</small>}</span>{selected && <Icon name="check" size={15} />}</button>;
+            })}
             {loading && <p className="model-status" role="status">Loading models…</p>}
             {!loading && !choices.length && <p className="model-status" role="status">{term ? 'No matching models for this provider.' : report?.note ?? 'Choose a provider or connect one in Settings.'}</p>}
-            {error && <p className="model-error" role="alert">{error}</p>}
           </div>
         </div>
       </div>}

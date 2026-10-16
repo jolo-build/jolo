@@ -48,6 +48,8 @@ export async function serve(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.main) {
-  const task = process.argv[2] === 'jolo-mcp' ? import('./hosted-mcp.js').then(module => module.runHostedMcp()).then(() => 0) : serve();
+  const task = process.argv[2] === 'jolo-mcp' ? import('./hosted-mcp.js').then(module => module.runHostedMcp()).then(() => 0)
+    : process.argv[2] === 'screen-input' ? import('./screen/input.js').then(module => module.runScreenInput())
+    : serve();
   task.then((code) => process.exit(code), (error) => { process.stderr.write(`${error?.stack ?? error}\n`); process.exit(1); });
 }

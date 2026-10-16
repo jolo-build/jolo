@@ -1,5 +1,5 @@
 // Resolve a model once, then construct its protocol adapter. Credentials are never persisted.
-import { ModelRefSchema, ProtocolError } from '@jolo/protocol';
+import { ModelRefSchema, ProtocolError, modelChatIssue } from '@jolo/protocol';
 import { createFakeProvider, loadFakeScript } from './fake.js';
 import { createOpenAIProvider } from './openai.js';
 import { createChatProvider } from './openai-chat.js';
@@ -8,6 +8,7 @@ import { createGeminiProvider } from './gemini.js';
 import { createProviderCatalog } from './presets.js';
 import { createProviderDirectory } from './listing.js';
 import { demoProviderEnabled } from './mode.js';
+import { isDecisionProtocol } from './decisions.js';
 
 export const ADAPTERS = Object.freeze({ 'openai-responses': createOpenAIProvider, 'openai-chat': createChatProvider, anthropic: createAnthropicProvider, gemini: createGeminiProvider });
 export const FAKE_MODEL = Object.freeze({ preset: 'fake', model: 'fake', effort: null, contextWindowTokens: null, maxOutputTokens: null });
@@ -70,7 +71,15 @@ export class ProviderFactory {
     const config = this.settings.get();
     try {
       const ref = resolveModelRef(config, session, execution);
-      return { pending: true, ref, endpoint: this.preset(ref.preset, config) };
+      const endpoint = this.preset(ref.preset, config);
+      const chatRef = ref.chatModel ?? config.model?.chatModel ?? config.model;
+      let chatProvider = null;
+      if (ref.mode !== 'decision-browser' && (ref.mode === 'decisions' || endpoint.listing === 'openrouter') && chatRef && !chatRef.mode && (chatRef.preset !== ref.preset || chatRef.model !== ref.model)) {
+        // An unrelated missing default must not prevent using an ordinary chat model.
+        // If it is needed as a companion, its error is reported when the turn resolves.
+        try { chatProvider = { pending: true, ref: chatRef, endpoint: this.preset(chatRef.preset, config) }; } catch { /* resolve on use */ }
+      }
+      return { pending: true, ref, endpoint, ...(chatProvider ? { chatProvider } : {}) };
     } catch (error) {
       // An unconfigured native run is still recorded and fails visibly in its conversation.
       if (error.code === 'unavailable') return null;
@@ -80,8 +89,14 @@ export class ProviderFactory {
   /** @this {ConstructedFactory} */
   async resolve(ref, config = /** @type {ConstructedFactory} */ (this).settings?.get() ?? {}, endpoint = null) {
     const preset = endpoint ?? this.preset(ref.preset, config);
-    const { models } = await this.directory.list(preset);
+    const { models } = await this.directory.list(preset, { model: ref.model });
     const reported = models.find(m => m.id === ref.model);
+    if (preset.protocol === 'typesafe' || ref.mode === "decisions" || ref.mode === 'decision-browser' || reported?.outputModalities?.includes("decisions")) {
+      if (preset.protocol !== 'typesafe' && preset.listing !== "openrouter") throw new ProtocolError("unavailable", "Direct decision models require a TypeSafe or OpenRouter endpoint");
+      return { ...preset, protocol: preset.protocol === 'typesafe' ? 'typesafe' : "openrouter-decisions", name: preset.id, preset: preset.id, model: ref.model, ref, supportsTools: false, supportsReasoning: false };
+    }
+    const issue = modelChatIssue(reported);
+    if (issue) throw new ProtocolError('unavailable', `${ref.model}: ${issue}`);
     if (preset.listing === 'ollama' && !ref.contextWindowTokens && !reported?.contextWindowTokens) throw new ProtocolError('invalid_params', 'Ollama did not report its configured context size; set num_ctx in its Modelfile or enter a context override matching the server configuration');
     const capabilities = resolveCapabilities(ref, reported, preset, this.learned.get(`${ref.preset}:${preset.baseUrl}:${ref.model}`));
     if (capabilities.supportsTools === false) throw new ProtocolError('unavailable', `${ref.model} reports no tool support; choose a model that can use tools`);
@@ -108,7 +123,15 @@ export class ProviderFactory {
       selection = { preset: selection.name, model: selection.model, effort: selection.reasoningEffort, contextWindowTokens: selection.contextWindowTokens, maxOutputTokens: selection.maxOutputTokens };
     }
     const ref = ModelRefSchema.parse(selection ?? FAKE_MODEL);
-    const effective = resolved?.pending ? await this.resolve(ref, config, resolved.endpoint) : resolved ?? await this.resolve(ref, config);
+    let effective = resolved?.pending ? await this.resolve(ref, config, resolved.endpoint) : resolved ?? await this.resolve(ref, config);
+    if (resolved && !resolved.pending && effective.listing === 'openrouter') {
+      const { models } = await this.directory.list(effective, { model: effective.model });
+      const entry = models.find(m => m.id === effective.model);
+      if (entry?.outputModalities?.includes("decisions")) effective = await this.resolve(ref, config, effective);
+      const issue = modelChatIssue(entry);
+      if (issue && effective.protocol !== "openrouter-decisions") throw new ProtocolError('unavailable', `${effective.model}: ${issue}`);
+    }
+    if (isDecisionProtocol(effective.protocol)) return { settings: { ...effective, ...(resolved?.chatProvider ? { chatProvider: resolved.chatProvider } : {}) }, configured: true, provider: null };
     // Revalidate persisted run resolutions too: a development run can be resumed by a release build.
     if (effective.protocol === 'fake' && !demoProviderEnabled(this.env)) throw new ProtocolError('unavailable', 'the demo provider is only available in development mode');
     if (effective.protocol === 'fake') return { settings: effective, configured: Boolean(selection), provider: createFakeProvider({ steps: Number(this.env.JOLO_FAKE_STEPS ?? 20), delayMs: Number(this.env.JOLO_FAKE_DELAY_MS ?? 100), script: loadFakeScript(this.env), ...effective }) };

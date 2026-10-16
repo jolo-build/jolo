@@ -24,6 +24,8 @@ export function themeStyle(id) {
   const theme = builtinTheme(id);
   if (!theme || theme.id === 'terminal') return {};
   const c = theme.colors;
+  const onAccent = luminance(c.accent) > .179 ? '#000000' : '#ffffff';
+  const accentContrast = onAccent === '#000000' ? '#ffffff' : '#000000';
   return {
     colorScheme: luminance(c.background) < .5 ? 'dark' : 'light',
     '--startup-bg': c.background, '--startup-text': c.text, '--startup-muted': c.muted,
@@ -34,7 +36,8 @@ export function themeStyle(id) {
     '--field': mix(c.background, c.text, .08),
     '--field-focus': mix(c.background, c.text, .14),
     '--text': c.text, '--muted': c.muted,
-    '--accent': c.accent, '--on-accent': luminance(c.accent) > .179 ? '#000000' : '#ffffff',
+    '--accent': c.accent, '--on-accent': onAccent,
+    '--accent-hover': mix(c.accent, accentContrast, .12), '--accent-pressed': mix(c.accent, accentContrast, .22),
     '--highlight': c.accent, '--tint': mix(c.background, c.accent, .15),
     '--green': c.success, '--green-bg': mix(c.background, c.success, .12),
     '--red': c.error, '--red-bg': mix(c.background, c.error, .12), '--warning': c.warning,
@@ -82,6 +85,8 @@ export function terminalTheme(id, dark) {
     ? { background: '#191a1c', foreground: '#ededee', cursor: '#ededee', selectionBackground: '#282f47' }
     : { background: '#fcfcfb', foreground: '#242629', cursor: '#292c30', selectionBackground: '#edf1ff' };
   const c = theme.colors;
+  const onAccent = luminance(c.accent) > .179 ? '#000000' : '#ffffff';
+  const accentContrast = onAccent === '#000000' ? '#ffffff' : '#000000';
   return {
     background: c.background, foreground: c.text, cursor: c.text, cursorAccent: c.background,
     selectionBackground: mix(c.background, c.accent, .3),

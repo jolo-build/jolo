@@ -18,6 +18,7 @@ export class EventRepository {
     const p = event.payload;
     this.statements.upsertSummary.run(event.runId, event.at);
     if (event.type === 'files.changed') {
+      this.db.query('INSERT OR IGNORE INTO run_change_events(seq,run_id,payload) VALUES(?1,?2,?3)').run(Number(event.eventSeq), event.runId, JSON.stringify(p));
       for (const change of p.changes ?? []) {
         if (change.newPath) this.statements.deleteChangedPath.run(event.runId, change.path);
         this.statements.insertChangedPath.run(event.runId, change.newPath ?? change.path);
@@ -45,6 +46,8 @@ export class EventRepository {
   recentTools(runId, limit) {
     return this.statements.recentTools.all(runId, limit).reverse();
   }
+  changeEvents(runId) { return this.db.query('SELECT payload FROM run_change_events WHERE run_id=?1 ORDER BY seq DESC LIMIT 200').all(runId).reverse().map(row => JSON.parse(row.payload)); }
   changedPaths(runId) { return this.statements.changedPaths.all(runId).map(row => row.path); }
   lastAt(runId) { return this.statements.lastAt.get(runId)?.last_at ?? null; }
+  close() { for (const statement of Object.values(this.statements)) statement.finalize(); }
 }

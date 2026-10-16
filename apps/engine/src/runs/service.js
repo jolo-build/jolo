@@ -88,6 +88,9 @@ export class RunService {
       if (expectedSessionRevision !== undefined && expectedSessionRevision !== session.revision) {
         throw new ProtocolError("conflict", `session revision is ${session.revision}, expected ${expectedSessionRevision}`, { revision: session.revision });
       }
+      const agentId = execution && Object.hasOwn(execution, "agentId") ? execution.agentId : session.agentId;
+      const choice = agentId ? session.agentModels?.[agentId] : null;
+      if (choice && !execution?.pinned) execution = { ...(execution ?? {}), model: execution?.model ?? choice.model, effort: execution?.effort ?? choice.effort, agentId, pinned: true };
       const images = validateAttachments(this.storage, sessionId, attachments);
       this.storage.assignSessionTitle(sessionId, prompt);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });

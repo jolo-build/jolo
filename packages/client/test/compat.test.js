@@ -51,6 +51,16 @@ async function stubEngine({ helloExtra = {}, strict = false } = {}) {
 
 const options = (socketPath) => ({ socketPath, token: 'owner-token-1234567890', clientKind: 'test' });
 
+test('hello preserves browser operation negotiation, including future operations', async () => {
+  const operations = ['navigate', 'pointer', 'future-operation'];
+  const stub = await stubEngine({ helloExtra: { supportedBrowserOperations: operations } });
+  try {
+    const client = await connect(options(stub.socketPath));
+    expect(client.hello.supportedBrowserOperations).toEqual(operations);
+    await client.close();
+  } finally { await stub.close(); }
+});
+
 test('an engine that predates negotiation gets a legacy subscribe', async () => {
   const stub = await stubEngine({ strict: true }); // an unknown eventTypes field is rejected outright
   try {

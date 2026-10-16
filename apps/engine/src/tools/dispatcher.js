@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import path from 'node:path';
 import os from 'node:os';
-import { ProtocolError } from "@jolo/protocol";
+import { LIMITS, ProtocolError } from "@jolo/protocol";
 import { TOOL_RESULT_MAX_BYTES } from "./registry.js";
 import { PermissionRequired } from "../permissions/service.js";
 
 const EXCERPT_BYTES = 32 * 1024;
+const RESULT_IMAGES_MAX = 4; // Tool-result previews are separate from user uploads.
 
 const canonical = (value) => JSON.stringify(value, Object.keys(value ?? {}).sort());
 
@@ -16,7 +17,7 @@ export class ToolDispatcher {
    * The last collaborators are what a given deployment happens to host: an engine without a
    * browser, a process supervisor, a patch directory, a search index or a scheduler simply leaves
    * them out, and the tools that need them report themselves unavailable.
-   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, supervisor?: any, patchesDir?: string | null, search?: any, schedules?: () => any, delegations?: () => any }} options
+   * @param {{ registry: any, permissions: any, storage: any, log: any, env: { path: string, ripgrep: string | null, git: string | null }, browser?: any, screen?: any, decisions?: any, supervisor?: any, patchesDir?: string | null, search?: any, schedules?: () => any, delegations?: () => any }} options
    */
   constructor(options) {
     this.registry = options.registry;
@@ -25,6 +26,8 @@ export class ToolDispatcher {
     this.log = options.log;
     this.env = options.env;
     this.browser = options.browser ?? null; // BrowserBroker; absent in headless-only configurations
+    this.screen = options.screen ?? null; // ScreenBroker; a desktop registers the display it can drive
+    this.decisions = options.decisions ?? null;
     this.supervisor = options.supervisor ?? null;
     this.patchesDir = options.patchesDir ?? null;
     this.search = options.search ?? null;
@@ -33,6 +36,8 @@ export class ToolDispatcher {
   }
 
   hasBrowser(workspaceId) { return Boolean(this.browser?.hasBrowser(workspaceId)); }
+  hasScreen() { return Boolean(this.screen?.hasScreen()); }
+  isScreenTool(name) { return Boolean(this.registry.get(name)?.screenOperation); }
   executionClass(name) { return this.registry.get(name)?.executionClass; }
   searchContext(workspace, signal) { return { workspace: { id: workspace.id, root: workspace.path }, env: this.env, search: this.search, signal }; }
 
@@ -52,6 +57,8 @@ export class ToolDispatcher {
       return fail(error, "error");
     }
     const argumentDigest = `sha256:${createHash("sha256").update(canonical(args)).digest("hex")}`;
+    // Never ask the user to consent to a screen nobody is providing.
+    if (tool.screenOperation && !this.hasScreen()) return fail(new ProtocolError("unavailable", "no Jolo desktop is providing this Mac's screen; screen tools are unavailable"), "error");
     try {
       grant = this.permissions.authorize({ toolClass: tool.executionClass, workspaceId: workspace.id, runId: run.id, approvedPermissionId, argumentDigest, toolName: tool.name });
     } catch (error) {
@@ -81,6 +88,7 @@ export class ToolDispatcher {
       this.storage.updateInvocation(invocation.id, { state: "running" });
       const leaseMs = deadlineMs ?? tool.deadlineMs;
       const ctx = {
+        decisions: this.decisions,
         workspace,
         sessionId: run.sessionId,
         runId: run.id,
@@ -103,9 +111,11 @@ export class ToolDispatcher {
           hooks.onChanges?.(changes);
         },
         recordCheck: (check) => hooks.onCheck?.({ invocationId: invocation.id, at: new Date().toISOString(), ...check }),
-        browser: this.browser ? { execute: (operation, operationArgs) => this.browser.execute({ workspaceId: workspace.id, invocationId: invocation.id, operation, args: operationArgs, leaseMs: Math.max(1_000, leaseMs - 500), signal: controller.signal }) } : null,
+        browser: this.browser ? { execute: (operation, operationArgs) => this.browser.execute({ workspaceId: workspace.id, sessionId: run.sessionId, invocationId: invocation.id, operation, args: operationArgs, leaseMs: Math.max(1_000, leaseMs - 500), signal: controller.signal }) } : null,
+        screen: this.screen ? { execute: (operation, operationArgs) => this.screen.execute({ runId: run.id, invocationId: invocation.id, operation, args: operationArgs, leaseMs: Math.max(1_000, leaseMs - 500), signal: controller.signal }) } : null,
       };
       if (tool.browserOperation && !ctx.browser) throw new ProtocolError("unavailable", "browser tools are not available in this engine", { code: "browser_host_unavailable" });
+      if (tool.screenOperation && !ctx.screen) throw new ProtocolError("unavailable", "screen control is not available in this engine", { code: "screen_host_unavailable" });
       if (tool.executionClass === "process" && !ctx.supervisor) throw new ProtocolError("unavailable", "command execution is not available in this engine");
       result = await tool.execute(ctx, args);
       if (tool.executionClass === 'process') this.search?.invalidate(workspace.root);
@@ -125,6 +135,11 @@ export class ToolDispatcher {
     return this.reject({ run, call, error: new ProtocolError("permission_denied", reason), status: "denied", startedAt: Date.now() });
   }
 
+  /** Record a call that was deliberately not executed, so a resumed run never replays it blind. */
+  skip({ run, call, reason }) {
+    return this.reject({ run, call, error: new ProtocolError("interrupted", reason, { code: "not_executed" }), status: "cancelled", startedAt: Date.now() });
+  }
+
   storeArtifact(sessionId, kind, buffer) {
     return this.storage.transaction(() => {
       const artifact = this.storage.createArtifact({ sessionId, kind });
@@ -138,10 +153,15 @@ export class ToolDispatcher {
   }
 
   complete({ run, call, tool, result, startedAt, invocation }) {
-    let payload = { ok: true, ...result };
+    // Images ride beside the JSON: the text keeps their artifact metadata for clients, and the
+    // model receives the pixels as tool-result content (§7.1). Never base64 in the transcript.
+    const { images: attached, ...fields } = result ?? {};
+    const images = (Array.isArray(attached) ? attached : []).filter(image => image?.artifactId && image.mimeType && image.bytes).slice(0, RESULT_IMAGES_MAX)
+      .map(({ artifactId, mimeType, width, height, bytes }) => ({ artifactId, mimeType, width, height, bytes }));
+    let payload = { ok: true, ...fields };
     let output = JSON.stringify(payload);
     let truncated = false;
-    let resultArtifactId = result?.artifactId;
+    let resultArtifactId = fields.artifactId;
     if (Buffer.byteLength(output) > TOOL_RESULT_MAX_BYTES) {
       const full = Buffer.from(output, "utf8");
       resultArtifactId = this.storeArtifact(run.sessionId, "tool-output", full);
@@ -154,11 +174,11 @@ export class ToolDispatcher {
       this.storage.updateInvocation(invocation.id, { state: "completed", exitData: { status: "ok", durationMs, truncated }, resultArtifactId: resultArtifactId ?? null });
       this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "tool.completed", payload: { invocationId: invocation.id, callId: call.callId, name: tool.name, status: "ok", durationMs, resultBytes: Buffer.byteLength(output), truncated, ...(resultArtifactId ? { resultArtifactId } : {}) } });
     });
-    return { invocationId: invocation.id, status: "ok", output, truncated, resultArtifactId: resultArtifactId ?? null };
+    return { invocationId: invocation.id, status: "ok", output, truncated, resultArtifactId: resultArtifactId ?? null, images };
   }
 
   reject({ run, call, error, status, startedAt, invocation = null }) {
-    const code = error?.details?.code === "browser_host_unavailable" ? "browser_host_unavailable" : error instanceof ProtocolError ? error.code : status === "timeout" ? "timeout" : status === "cancelled" ? "interrupted" : "internal";
+    const code = ["browser_host_unavailable", "screen_host_unavailable", "user_input", "not_executed", "missing_accessibility", "missing_screen_recording"].includes(error?.details?.code) ? error.details.code : error instanceof ProtocolError ? error.code : status === "timeout" ? "timeout" : status === "cancelled" ? "interrupted" : "internal";
     const message = error instanceof ProtocolError ? error.message : status === "timeout" ? "tool exceeded its deadline" : status === "cancelled" ? "run cancelled" : "tool failed";
     if (!(error instanceof ProtocolError) && status === "error") this.log.error("tool crashed", { name: call.name, error: String(error?.stack ?? error) });
     const output = JSON.stringify({ ok: false, error: { code, message, ...(error instanceof ProtocolError && error.details ? { details: error.details } : {}) } });
@@ -175,7 +195,7 @@ export class ToolDispatcher {
       this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "tool.completed", payload: { invocationId, callId: call.callId, name: call.name.slice(0, 100), status: status === "unavailable" ? "error" : status, durationMs, resultBytes: Buffer.byteLength(output), truncated: false, errorCode: code } });
       invocation = { id: invocationId };
     });
-    return { invocationId: invocation.id, status, output, truncated: false, resultArtifactId: null, hostLost: Boolean(error?.hostUnavailable) };
+    return { invocationId: invocation.id, status, output, truncated: false, resultArtifactId: null, images: [], hostLost: Boolean(error?.hostUnavailable && !error?.screenHost), screenLost: Boolean(error?.screenHost), userInterrupted: Boolean(error?.userInterrupted) };
   }
 }
 

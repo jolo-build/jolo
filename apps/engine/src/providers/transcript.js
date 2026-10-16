@@ -28,6 +28,14 @@ export function completeToolCalls(items) {
     .filter(item => item.kind === 'tool_call' && !answered.has(item.payload.callId))
     .map(item => ({ ...item, kind: 'tool_result', payload: { callId: item.payload.callId, output: JSON.stringify({ ok: false, error: 'This tool call was interrupted before it ran. Call it again if its result is still needed.' }) } }))]);
 }
+/** A tool result's text as the model reads it: a result whose images were pruned says so (§7.2). */
+export function resultText(payload) {
+  if (!payload.imagesOmitted) return payload.output;
+  const what = payload.imagesOmitted === 1 ? 'The image this call returned was' : `The ${payload.imagesOmitted} images this call returned were`;
+  return `${payload.output}\n[${what} removed from the context to save space; take a new screenshot if you need to see the page.]`;
+}
+/** The images a hydrated tool result carries; stored metadata without pixels is never sent. */
+export const resultImages = payload => (payload.images ?? []).filter(image => image.data);
 // Preserve ordering within an assistant turn; merge adjacent roles for Messages/GenerateContent.
 export function appendContent(messages, role, parts, field = 'content') {
   if (!parts.length) return;

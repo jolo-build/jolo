@@ -56,6 +56,8 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
       nodeIntegrationInSubFrames: false,
       nodeIntegrationInWorker: false,
       contextIsolation: true,
+      // Agent-owned pages must continue rendering while their chat is hidden.
+      backgroundThrottling: false,
       sandbox: true,
       webSecurity: true,
       webviewTag: false,
@@ -83,7 +85,15 @@ export function installBrowserHost(window, { log, onGuest, sessionForPartition }
     });
     guest.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     guest.session.setPermissionCheckHandler(() => false);
-    guest.setWindowOpenHandler(() => ({ action: "deny" }));
+    // Keep new-window links inside the same conversation and workspace partition.
+    guest.setWindowOpenHandler(({ url }) => {
+      let parsed;
+      try { parsed = new URL(url); } catch { return { action: "deny" }; }
+      if (ALLOWED_SCHEMES.has(parsed.protocol) && !window.webContents.isDestroyed()) {
+        window.webContents.send('jolo:browserNewTab', { guestId: id, url: parsed.href });
+      }
+      return { action: "deny" };
+    });
     guest.session.on("will-download", (event) => event.preventDefault());
     guest.on("will-navigate", (event, url) => {
       let parsed;

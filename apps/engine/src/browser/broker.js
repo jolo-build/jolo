@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { ProtocolError } from "@jolo/protocol";
 import { newId } from "../storage/index.js";
 
+const RECONNECT_GRACE_MS = 15_000;
+
 export class HostUnavailableError extends ProtocolError {
   constructor(message) {
     super("unavailable", message, { code: "browser_host_unavailable" });
@@ -20,6 +22,7 @@ export class BrowserBroker {
     /** @type {Map<string, { resolve, reject, capability, timer }>} */
     this.pending = new Map();
     this.openers = new Map(); // desktop connection -> workspaces displayed in its panes
+    this.recentOpeners = new Map(); // workspace -> reconnect deadline after a desktop restart
     this.pendingOpens = new Map();
   }
 
@@ -31,41 +34,67 @@ export class BrowserBroker {
   }
 
   hasBrowser(workspaceId) {
-    return this.hasHost(workspaceId) || [...this.openers].some(([conn, workspaces]) => !conn.closed && workspaces.has(workspaceId));
+    if (this.hasHost(workspaceId) || [...this.openers].some(([conn, workspaces]) => !conn.closed && workspaces.has(workspaceId))) return true;
+    const reconnectUntil = this.recentOpeners.get(workspaceId) ?? 0;
+    if (reconnectUntil > Date.now()) return true;
+    this.recentOpeners.delete(workspaceId);
+    return false;
   }
 
   setOpener(conn, workspaceIds) {
     if (!this.openers.has(conn)) conn.closeHooks.add(() => {
+      const reconnectUntil = Date.now() + RECONNECT_GRACE_MS;
+      for (const workspaceId of this.openers.get(conn) ?? []) this.recentOpeners.set(workspaceId, reconnectUntil);
       this.openers.delete(conn);
-      for (const entry of this.pendingOpens.values()) if (entry.conn === conn) entry.finish(new HostUnavailableError('desktop disconnected while opening the browser'));
+      for (const entry of this.pendingOpens.values()) {
+        if (entry.conn !== conn) continue;
+        entry.conn = null;
+      }
     });
     const workspaces = new Set(workspaceIds);
     this.openers.set(conn, workspaces);
+    for (const workspaceId of workspaces) this.recentOpeners.delete(workspaceId);
     for (const entry of this.pendingOpens.values()) if (entry.conn === conn && !workspaces.has(entry.workspaceId)) entry.finish(new HostUnavailableError('workspace pane closed while opening the browser'));
+    for (const entry of this.pendingOpens.values()) if (!entry.conn && workspaces.has(entry.workspaceId)) entry.attach(conn);
     return { registered: workspaces.size > 0 };
   }
 
-  open({ workspaceId, invocationId, leaseMs, signal }) {
+  open({ workspaceId, sessionId, invocationId, leaseMs, signal }) {
     leaseMs = Math.min(15_000, leaseMs); // Native run budgets can exceed the pane-opening protocol's bound.
     const conn = [...this.openers].find(([conn, workspaces]) => !conn.closed && workspaces.has(workspaceId))?.[0];
     if (!conn) {
       // Hosts without the newer pane-opening protocol can still reuse an attached tab.
       if (this.hasHost(workspaceId)) return Promise.resolve({ result: this.tab(this.capabilityFor(workspaceId, 'navigate')) });
-      throw new HostUnavailableError('open this workspace in Jolo desktop to use its inline browser');
+      const reconnectUntil = this.recentOpeners.get(workspaceId) ?? 0;
+      if (reconnectUntil <= Date.now()) {
+        this.recentOpeners.delete(workspaceId);
+        throw new HostUnavailableError('open this workspace in Jolo desktop to use its inline browser');
+      }
     }
     return new Promise((resolve, reject) => {
+      let entry;
       const finish = (error, capability) => {
         clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         this.pendingOpens.delete(invocationId);
-        if (error) { conn.notify('browser.cancel', { invocationId, reason: 'browser opening cancelled' }); reject(error); }
+        if (error) { entry.conn?.notify('browser.cancel', { invocationId, reason: 'browser opening cancelled' }); reject(error); }
         else resolve({ result: this.tab(capability) });
       };
       const onAbort = () => finish(new ProtocolError('interrupted', 'run cancelled'));
-      const timer = setTimeout(() => finish(new HostUnavailableError('inline browser did not open within the lease')), leaseMs);
-      this.pendingOpens.set(invocationId, { conn, workspaceId, finish });
+      const timer = setTimeout(() => finish(new HostUnavailableError(entry.conn ? 'inline browser did not open within the lease' : 'open this workspace in Jolo desktop to use its inline browser')), leaseMs);
+      entry = {
+        conn: null,
+        workspaceId,
+        finish,
+        attach(opener) {
+          if (this.conn || opener.closed) return;
+          this.conn = opener;
+          opener.notify('browser.open', { invocationId, workspaceId, ...(sessionId ? { sessionId } : {}), leaseMs });
+        },
+      };
+      this.pendingOpens.set(invocationId, entry);
       signal.addEventListener('abort', onAbort, { once: true });
-      conn.notify('browser.open', { invocationId, workspaceId, leaseMs });
+      if (conn) entry.attach(conn);
     });
   }
 
@@ -134,11 +163,11 @@ export class BrowserBroker {
    * `invocationId` and `leaseMs` identify and bound a call the host has to answer, so the two
    * operations that never reach the host are allowed to omit them: an aborted signal throws first,
    * and `tabs` is answered from the broker's own record of what is attached.
-   * @param {{ workspaceId: string, invocationId?: string, operation: string, args: Record<string, unknown>, leaseMs?: number, signal: AbortSignal }} request
+   * @param {{ workspaceId: string, sessionId?: string, invocationId?: string, operation: string, args: Record<string, unknown>, leaseMs?: number, signal: AbortSignal }} request
    */
-  execute({ workspaceId, invocationId, operation, args, leaseMs, signal }) {
+  execute({ workspaceId, sessionId, invocationId, operation, args, leaseMs, signal }) {
     if (signal.aborted) throw new ProtocolError('interrupted', 'run cancelled');
-    if (operation === 'open') return this.open({ workspaceId, invocationId, leaseMs, signal });
+    if (operation === 'open') return this.open({ workspaceId, sessionId, invocationId, leaseMs, signal });
     if (operation === 'tabs') return Promise.resolve({ result: { tabs: [...this.capabilities.values()].filter(cap => cap.workspaceId === workspaceId && !cap.conn.closed).map(cap => this.tab(cap)), canOpen: [...this.openers].some(([conn, workspaces]) => !conn.closed && workspaces.has(workspaceId)) } });
     const capability = this.capabilityFor(workspaceId, operation, args.tabId);
     const argumentDigest = `sha256:${createHash("sha256").update(JSON.stringify(args)).digest("hex")}`;

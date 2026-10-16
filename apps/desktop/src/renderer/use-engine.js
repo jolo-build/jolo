@@ -1,6 +1,8 @@
 import { subscribePaneEvents } from "./engine-events.js";
 import { requestId as createRequestId, TERMINAL } from "@jolo/client/run-state";
 import { sessionForSend, queuedExecution } from "./session-send.js";
+import { readChatNavigation } from './chat-navigation.js';
+import { stopAndDeleteSession } from './session-actions.js';
 import { SessionHistory } from './session-history.js';
 import { uploadImages } from './image-attachments.js';
 import { newSessionModelChoice } from './last-model-choice.js';
@@ -162,6 +164,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     }
     next.seed(page);
     older.seed(page);
+    // Initial navigation paints immediately; streaming updates remain batched.
+    clearTimeout(paintTimer.current);
+    paintTimer.current = null;
+    bump();
     for (const message of page.messages) if (message.committedBytes > 0) void next.fill(message.id);
   }, [redraw, refreshSchedules]);
 
@@ -177,9 +183,17 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     setHistoryState("open");
     setProject(opened);
     try { localStorage.setItem("jolo.lastProject", path); } catch { /* optional */ }
-    const [list] = await Promise.all([refreshSessions(opened.projectId), refreshWorkspaces(opened.projectId)]);
-    if (request !== projectRequest.current) return opened;
-    await selectSession(Object.hasOwn(options, "sessionId") ? options.sessionId : list[0]?.id ?? null);
+    const lists = Promise.all([refreshSessions(opened.projectId), refreshWorkspaces(opened.projectId)]);
+    if (Object.hasOwn(options, "sessionId")) {
+      // Rail navigation already knows the target. Sidebar/worktree lists must
+      // not delay loading its transcript or hold the swipe navigation lock.
+      void lists.catch(error => { if (request === projectRequest.current) setError(error.message); });
+      await selectSession(options.sessionId);
+    } else {
+      const [list] = await lists;
+      if (request !== projectRequest.current) return opened;
+      await selectSession(list[0]?.id ?? null);
+    }
     return opened;
   }, [refreshSessions, refreshWorkspaces, selectSession]);
 
@@ -239,7 +253,8 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (action === "rename") params.title = title;
     if (action === "archive") params.archived = session.state !== "archived";
     try {
-      await call(`session.${action}`, params);
+      if (action === 'delete') await stopAndDeleteSession(call, session.id);
+      else await call(`session.${action}`, params);
       if (action !== "rename" && sessionRef.current === session.id) await selectSession(null);
     } finally {
       await refreshSessions();
@@ -247,7 +262,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   }, [refreshSessions, selectSession]);
 
   /** A model/agent choice changes the answerer, never the conversation identity. */
-  const send = useCallback(async (prompt, /** @type {{ agentId?: string | null, queue?: boolean, attachments?: any[] }} */ { agentId, queue = false, attachments = [] } = {}) => {
+  const send = useCallback(async (prompt, /** @type {{ agentId?: string | null, model?: any, agentModels?: any, queue?: boolean, attachments?: any[] }} */ { agentId, model, agentModels, queue = false, attachments = [] } = {}) => {
     setError(null);
     const previousSessionId = sessionRef.current;
     const previousProjectId = projectRef.current?.projectId;
@@ -256,12 +271,17 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const knownSession = targetSessionId ? sessionsRef.current.find(item => item.id === targetSessionId) : undefined;
     // Keep a new task's composer mounted until upload and send succeed, so a
     // failed first send retains both its text and pasted images for retry.
-    const session = queue && sessionRef.current ? (knownSession ?? { id: sessionRef.current }) : await sessionForSend({ call, sessionId: targetSessionId, session: knownSession, agentId, prompt, newSession: async (title, options) => {
+    let session = queue && sessionRef.current ? (knownSession ?? { id: sessionRef.current }) : await sessionForSend({ call, sessionId: targetSessionId, session: knownSession, agentId, prompt, newSession: async (title, options) => {
       const created = await newSession(title, { ...options, deferSelection: true });
       draft.id = created.id; // Retry the same draft in the same task after an interrupted upload.
       sessionPanelScopes.current.set(created.id, draft.panelScope);
       return created;
     } });
+    if (!previousSessionId && (model || agentModels)) {
+      session = (await call("session.page", { sessionId: session.id })).session;
+      if (model) session = (await call("session.setModel", { sessionId: session.id, model, expectedRevision: session.revision })).session;
+      if (agentModels) session = (await call("session.setAgent", { sessionId: session.id, agentId: session.agentId, agentModels, expectedRevision: session.revision })).session;
+    }
     if (session.revision !== undefined) {
       sessionsRef.current = sessionsRef.current.map(item => item.id === session.id ? session : item);
       setSessions(sessionsRef.current);
@@ -382,7 +402,13 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (!path && restoreLastProject) {
       try { path = localStorage.getItem("jolo.lastProject"); } catch { /* optional */ }
     }
-    if (initialNewChat || initialTask || path) void (initialNewChat ? newChat() : initialTask ? openFromBoard(initialTask) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
+    let restoredChat = null;
+    if (restoreLastProject && !initialProject && !initialTask && !initialNewChat) {
+      const saved = readChatNavigation(window.sessionStorage);
+      const selected = saved.entries[saved.index];
+      if (selected?.rootPath === path) restoredChat = selected;
+    }
+    if (initialNewChat || initialTask || path) void (initialNewChat ? newChat() : initialTask ? openFromBoard(initialTask) : restoredChat ? openFromBoard(restoredChat).catch(() => openProject(path)) : openProject(path, initialProject ? { sessionId: null } : {})).catch((error) => setError(error.message)).finally(() => setRestoringProject(false));
     else setRestoringProject(false);
   }, [engine.connected, initialProject, initialTask, initialNewChat, restoreLastProject, openProject, openFromBoard, newChat]);
 

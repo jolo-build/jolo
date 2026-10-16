@@ -66,11 +66,11 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
             </button>
             {!archived && <button className="sidebar-workspace-new" onClick={() => onNewWorkspaceTask(row)} aria-label={`New task in ${name}`} title={`New task in ${name}`}><Icon name="plus" size={13} /></button>}
           </div>
-          {open && visible && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
+          {open && visible && <WorkspaceChats key={historyState} row={row} revision={row.tasksRevision ?? board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
         </div>;
       })}
       {!rows.length && <p className="sidebar-empty">{board ? 'No workspaces yet.' : 'Loading workspaces…'}</p>}
-      {visible && <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
+      {visible && <RecentChats key={`recents-${historyState}`} call={call} revision={board?.standaloneTasksRevision ?? board?.generatedAt} state={historyState} sessionId={sessionId}
         selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />}
     </nav>
     <div className="side-bottom"><button className="sidebar-open-folder" onClick={onOpenFolder}><Icon name="folderPlus" size={16} /><span>Open folder</span></button><button className="settings-link" onClick={onSettings}><Icon name="settings" size={16} /><span>Settings</span></button></div>

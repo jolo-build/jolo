@@ -12,6 +12,7 @@ import { TextAttachment } from './text-attachment.jsx';
 
 const RADIUS = 6;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const composerDrafts = new Map();
 const tokens = (value) => (value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value));
 const limitLevel = (used) => (used >= 90 ? ' full' : used >= 75 ? ' warn' : '');
 /** How long until a window resets, short enough to sit beside its name; the exact time is in its tooltip. */
@@ -149,12 +150,24 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ draftKey = null, decisionMode = false, decisionBrowser = false, onDecisionModeChange = null, decisionChatModel = null, standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usageTabs = [], onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
   const lastQueued = useRef(null);
-  const [text, setText] = useState(initialText);
+  const [text, setText] = useState(() => initialText || (draftKey ? composerDrafts.get(draftKey) ?? '' : ''));
+  const textRef = useRef(text);
+  textRef.current = text;
+  useEffect(() => {
+    if (!draftKey) return;
+    if (text) composerDrafts.set(draftKey, text);
+    else composerDrafts.delete(draftKey);
+  }, [draftKey, text]);
+  useEffect(() => () => {
+    if (!draftKey) return;
+    if (textRef.current) composerDrafts.set(draftKey, textRef.current);
+    else composerDrafts.delete(draftKey);
+  }, [draftKey]);
   useEffect(() => {
     if (!initialText) return;
     input.current?.focus();
@@ -203,7 +216,7 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       for (const file of files) {
         if (!mounted.current) return;
         const image = await readFileAttachment(file);
-        if (attachmentsRef.current.filter(item => item.mimeType === image.mimeType || (image.mimeType.startsWith('image/') && item.mimeType.startsWith('image/'))).length >= 4) throw new Error('Attach up to 4 images, 4 text files, and 4 other files per message.');
+        if (!image.mimeType.startsWith('image/') && attachmentsRef.current.filter(item => item.mimeType === image.mimeType).length >= 4) throw new Error('Attach up to 4 text files and 4 other files per message.');
         if (mounted.current) updateAttachments([...attachmentsRef.current, image]);
       }
     }).catch(error => { if (mounted.current) setAttachmentError(error.message); }).finally(() => {
@@ -296,6 +309,7 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
     if (!prompt || disabled || submitting.current || pendingPastes.current) return;
     submitting.current = true;
     setSending(true);
+    if (draftKey) composerDrafts.delete(draftKey);
     setText('');
     if (images.length) updateAttachments([]);
     try {
@@ -319,7 +333,7 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
         <button type="button" disabled={disabled} onClick={() => onRemoveQueued?.(run.id)} aria-label="Remove queued message" title="Remove queued message"><Icon name="close" size={12} /></button>
       </li>)}</ul>
     </section>}
-    <form className="composer" onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = disabled || sending ? 'none' : 'copy'; } }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); } }} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <form className="composer" data-has-draft={Boolean(text || attachments.length || readingImages)} data-swipe-blocked={Boolean(attachments.length || readingImages)} onDragOver={event => { if (Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = disabled || sending ? 'none' : 'copy'; } }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); } }} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
     {attachments.length > 0 && <div className="composer-attachments" aria-label="Attachments">{attachments.map(image => <div className={`composer-attachment${!image.mimeType.startsWith('image/') ? ' text-file' : ''}`} key={image.id}>
       {!image.mimeType.startsWith('image/') ? <TextAttachment attachment={image} /> : <img src={image.dataUrl} alt={image.name} />}
       <button type="button" disabled={sending} onClick={() => { updateAttachments(attachmentsRef.current.filter(entry => entry.id !== image.id)); setAttachmentError(''); lastQueued.current = null; }} aria-label={`Remove ${image.name}`} title={`Remove ${image.name}`}><Icon name="close" size={12} /></button>
@@ -336,7 +350,8 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
-    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
+
+    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now'  : decisionBrowser ? `Tell ${model} what to do in the browser…` : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
       onSelect={(e) => setCaret(/** @type {HTMLTextAreaElement} */ (e.target).selectionStart ?? 0)}
@@ -362,9 +377,17 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
       <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
+      {decisionMode && <label className="composer-mode" title={decisionBrowser ? `${model} controls the browser using values supplied in your instruction.` : `Chat with ${decisionChatModel || 'your configured chat model'}; ${model} handles structured decisions.`}>
+        <Icon name={decisionBrowser ? "browser" : "chat"} size={13} />
+        <select aria-label="Decision model use" value={decisionBrowser ? "decision-browser" : "decisions"} disabled={disabled || running || !onDecisionModeChange} onChange={event => onDecisionModeChange?.(event.target.value)}>
+          <option value="decisions">Chat</option><option value="decision-browser">Browser</option>
+        </select>
+        <Icon name="down" size={11} />
+      </label>}
       <span className="composer-divider" aria-hidden="true" />
       <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
+      {decisionMode && !decisionBrowser && <button type="button" className="composer-example" title="Insert a structured JSON example" aria-label="Insert decision example" disabled={disabled || Boolean(text.trim())} onClick={() => { setText(JSON.stringify({ state: "Help! My payouts have been failing for 3 days.", questions: { is_urgent: { type: "noul", instructions: "Does this message convey urgency?", criteria: { true: "Explicitly time-sensitive", false: "No urgency expressed" } }, department: { type: "choice", instructions: "Which team should handle this?", criteria: { billing: "Payments, invoicing, refunds", technical: "Bugs, outages, integrations", sales: "Pricing, upgrades, new accounts" } }, frustration: { type: "score", instructions: "How frustrated is the customer?", criteria: ["Calm", "Frustrated", "Very angry"] } } }, null, 2)); input.current?.focus(); }}><span className="composer-example-icon" aria-hidden="true">{'{ }'}</span><span className="composer-example-label">Example</span></button>}
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}

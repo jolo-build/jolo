@@ -41,7 +41,7 @@ jolo run --model openai/<model-id> "Explain this repository"
 
 Token limits are optional: `--context-window` and `--max-output` override discovery and conservative defaults. `--effort` sets reasoning effort. Model IDs may contain slashes, such as `openrouter/vendor/model`. `jolo provider set <preset> --base-url <url>` configures an endpoint without changing the selected model. The legacy `provider set openai --model …` command remains available for one release.
 
-`/model <preset>` configures a provider and can find models. Saving selects it for the current task and sets the profile default; selecting a hosted agent keeps the conversation. API keys go only through the credential RPC.
+`/model <preset>` configures a provider and can find models. Saving selects it for the current chat only, including its reasoning effort; selecting a hosted agent keeps the conversation. API keys go only through the credential RPC.
 
 ## Everyday use
 

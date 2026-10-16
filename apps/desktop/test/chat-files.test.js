@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openChatFile, previewChatFile } from '../src/main/chat-files.js';
+import { listChatFiles, openChatFile, previewChatFile } from '../src/main/chat-files.js';
 import { createFilePreviewStore } from '../src/main/file-preview-store.js';
 import { parseInline } from '@jolo/markdown';
 import { automaticFileReference, fileReference, webReference } from '@jolo/markdown/file-links';
@@ -117,7 +117,7 @@ test('file previews read Markdown and code, serve media privately, and keep unkn
     await writeFile(path.join(root, 'report.pdf'), '%PDF-1.7\nfixture');
     await writeFile(path.join(root, 'large.txt'), 'a'.repeat(300 * 1024));
     expect(await previewChatFile(call, { sessionId: 's', path: 'PLAN.md:1' })).toMatchObject({ kind: 'markdown', text: '# The plan\n', truncated: false });
-    expect(await previewChatFile(call, { sessionId: 's', path: path.join(root, 'app.js') })).toMatchObject({ kind: 'text', text: 'export const ready = true;' });
+    expect(await previewChatFile(call, { sessionId: 's', path: path.join(root, 'app.js') })).toMatchObject({ kind: 'text', text: 'export const ready = true;', diffTarget: { workspaceId: 'w', path: 'app.js' } });
     expect(await previewChatFile(call, { sessionId: 's', path: 'Dockerfile' })).toMatchObject({ kind: 'text', text: 'FROM scratch' });
     expect(await previewChatFile(call, { sessionId: 's', path: 'archive.zip' })).toMatchObject({ kind: 'details', size: 4 });
     expect(await previewChatFile(call, { sessionId: 's', path: 'large.txt' })).toMatchObject({ kind: 'text', truncated: true });
@@ -141,6 +141,37 @@ test('file previews read Markdown and code, serve media privately, and keep unkn
     expect(store.response(new Request(url)).status).toBe(404);
     expect(store.response(new Request('jolo-file-preview://preview/PLAN.md')).status).toBe(404);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('project file listings are lazy, sorted, bounded to the workspace, and omit Git internals', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jolo-project-files-'));
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'jolo-project-files-outside-'));
+  const call = async method => method === 'session.page' ? { session: { projectId: 'p', workspaceId: 'w' } } : { workspaces: [{ id: 'w', path: root, present: true }] };
+  try {
+    await mkdir(path.join(root, 'src'), { recursive: true });
+    await mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await mkdir(path.join(root, '.git'), { recursive: true });
+    await writeFile(path.join(root, 'README.md'), '# Project');
+    await writeFile(path.join(root, 'app.ts'), 'export {}');
+    await writeFile(path.join(root, 'src', 'main.ts'), 'export const main = true');
+    await writeFile(path.join(root, '.git', 'config'), 'secret metadata');
+    await symlink(outside, path.join(root, 'external'));
+    expect(await listChatFiles(call, { sessionId: 's' })).toEqual({
+      directory: '', total: 5, truncated: false, entries: [
+        { name: 'node_modules', path: 'node_modules', type: 'directory' },
+        { name: 'src', path: 'src', type: 'directory' },
+        { name: 'app.ts', path: 'app.ts', type: 'file' },
+        { name: 'external', path: 'external', type: 'symlink' },
+        { name: 'README.md', path: 'README.md', type: 'file' },
+      ],
+    });
+    expect(await listChatFiles(call, { sessionId: 's', path: 'src' })).toMatchObject({ entries: [{ name: 'main.ts', path: 'src/main.ts', type: 'file' }] });
+    await expect(listChatFiles(call, { sessionId: 's', path: '../' })).rejects.toThrow('outside the workspace');
+    await expect(listChatFiles(call, { sessionId: 's', path: 'external' })).rejects.toThrow('outside the workspace');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
 });
 
 
@@ -276,4 +307,30 @@ test('property names in the reported context-window analysis stay text while sou
   expect(html).not.toContain('https://factory.learned');
   expect(html).toContain('title="Open index.js:67"');
   expect(html.match(/<a /g)).toHaveLength(1);
+});
+
+
+test('HTML previews are sandboxed and explicit external actions preserve native file paths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jolo-html-preview-'));
+  const call = async method => method === 'session.page' ? { session: { projectId: 'p', workspaceId: 'w' } } : { workspaces: [{ id: 'w', path: root, present: true }] };
+  try {
+    const target = path.join(root, 'Plan%20draft.html');
+    const html = '<!doctype html><h1>Plan</h1><script>window.ready = true;</script>';
+    await writeFile(target, html);
+    const store = createFilePreviewStore(call);
+    const preview = await store.prepare({ sessionId: null, projectId: 'p', workspaceId: 'w', path: target, nativePath: true });
+    expect(preview).toMatchObject({ kind: 'html', text: html, canOpenExternally: true, projectId: 'p', workspaceId: 'w' });
+    const response = store.response(new Request(/** @type {any} */ (preview).url));
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(response.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
+    expect(response.headers.get('content-security-policy')).toContain("connect-src 'none'");
+    expect(await response.text()).toBe(html);
+    const opened = [], revealed = [];
+    const shell = { openPath: async file => { opened.push(file); return ''; }, showItemInFolder: file => revealed.push(file) };
+    await openChatFile(call, shell, { projectId: 'p', workspaceId: 'w', path: target, nativePath: true });
+    await openChatFile(call, shell, { projectId: 'p', workspaceId: 'w', path: target, nativePath: true, action: 'reveal' });
+    expect(opened).toEqual([preview.path]); expect(revealed).toEqual([preview.path]);
+    store.release(/** @type {any} */ (preview).url);
+    expect(store.response(new Request(/** @type {any} */ (preview).url)).status).toBe(404);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

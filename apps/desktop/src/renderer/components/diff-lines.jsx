@@ -1,10 +1,10 @@
 import { lazy, Suspense, memo } from 'react';
-import { diffLineKind } from '../diff-lines.js';
+import { numberedDiffLines } from '../diff-lines.js';
 
 function PlainDiff({ text, context = true }) {
-  return text.split('\n').map((line, index) => {
-    const kind = diffLineKind(line);
-    return context || kind !== 'context' ? <div className={`diff-line ${kind}`} key={index}><code>{line}</code></div> : null;
+  return numberedDiffLines(text).map((line, index) => {
+    const kind = line.kind;
+    return context || kind !== 'context' ? <div className={`diff-line ${kind}`} key={index}><span className="diff-number">{line.before}</span><span className="diff-number">{line.after}</span><code>{line.text}</code></div> : null;
   });
 }
 // Both halves of this pair take the same props, so name them once: the highlighter and the plain

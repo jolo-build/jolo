@@ -119,6 +119,14 @@ export class SessionProjection {
       this.runs.set(run.id, { ...this.runs.get(run.id), ...run, agentId: run.agentId ?? run.execution?.agentId ?? null });
       if (cursor) this.runSeq.set(run.id, cursor);
     }
+    // Replay durable edit metadata onto the messages in this page. Text remains lazy.
+    const editsByMessage = new Map();
+    for (const incoming of runs) for (const event of this.runs.get(incoming.id)?.changeEvents ?? []) {
+      if (!event.messageId || !this.messages.has(event.messageId)) continue;
+      const previous = editsByMessage.get(event.messageId) ?? { changes: [], diffArtifactId: null };
+      editsByMessage.set(event.messageId, { changes: [...previous.changes, ...event.changes], diffArtifactId: event.diffArtifactId ?? previous.diffArtifactId });
+    }
+    for (const [id, edit] of editsByMessage) Object.assign(this.messages.get(id), edit);
     if (advanceCursor && cursor && BigInt(cursor) > BigInt(this.lastSeq)) this.lastSeq = cursor;
     this.onChange();
   }

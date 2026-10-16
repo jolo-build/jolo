@@ -39,6 +39,11 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   assert.equal(delegations[0].execution.effort, 'high');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /Child result:.*fake-large.*high/);
   writeFileSync(path.join(results, 'delegation-result.png'), (await window.webContents.capturePage()).toPNG());
+  await type('Follow up without starting another child');
+  await evaluate("document.querySelector('.composer-submit').click()");
+  await waitFor("[...document.querySelectorAll('.message.user')].at(-1)?.textContent.includes('Follow up without')", 'follow-up visible');
+  assert(await evaluate("Boolean(document.querySelector('.delegated-tasks').compareDocumentPosition([...document.querySelectorAll('.message.user')].at(-1)) & Node.DOCUMENT_POSITION_FOLLOWING)"), 'child task must stay with the turn that spawned it');
+  await waitFor("window.__joloSmoke.state().runState === 'completed'", 'follow-up completed');
   await evaluate("document.querySelector('.delegated-open').click()");
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(delegations[0].sessionId)}`, 'child opens its own conversation');
   await waitFor("window.__joloSmoke.state().assistantText.includes('fake-large')", 'child transcript loaded');

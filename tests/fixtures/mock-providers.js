@@ -16,15 +16,17 @@ export const PROTOCOLS = ['openai-responses', 'openai-chat', 'anthropic', 'gemin
  *   signature?: string,
  *   reasoningChunks?: any[],
  *   callId?: string,
+ *   toolset?: string,
  * }} WireTurn
  */
 
 /**
- * Render one turn of a vendor's streaming wire format.
+ * Render one turn of a vendor's streaming wire format. `toolset` marks the Messages tool call as a
+ * member of that vendor toolset (the computer toolset), which only the anthropic wire can express.
  * @param {string} protocol one of {@link PROTOCOLS}
  * @param {WireTurn} [options]
  */
-export function wireTurn(protocol, { tool = false, incomplete = false, text = 'Fixture answer.', toolName = 'list_files', args = { path: '.' }, signature = 'SIGNED-FIXTURE', reasoningChunks, callId = 'call1' } = {}) {
+export function wireTurn(protocol, { tool = false, incomplete = false, text = 'Fixture answer.', toolName = 'list_files', args = { path: '.' }, signature = 'SIGNED-FIXTURE', reasoningChunks, callId = 'call1', toolset } = {}) {
   if (protocol === 'openai-responses') return named([
     ...(tool ? [
       { type: 'response.reasoning_summary_text.delta', item_id: 'r1', delta: 'Inspect files.' },
@@ -53,7 +55,7 @@ export function wireTurn(protocol, { tool = false, incomplete = false, text = 'F
       { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Inspect files.' } },
       { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature } },
       { type: 'content_block_stop', index: 0 },
-      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'call1', name: toolName, input: {} } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: callId, name: toolName, input: {}, ...(toolset ? { toolset_name: toolset } : {}) } },
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(args).slice(0,4) } },
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(args).slice(4) } },
       { type: 'content_block_stop', index: 1 },

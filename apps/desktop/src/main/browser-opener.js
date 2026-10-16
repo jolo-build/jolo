@@ -5,16 +5,17 @@ import { BrowserOpenSchema, BrowserOpenerSchema } from '@jolo/protocol';
 /**
  * One open request while its guest attaches. The lease timer is hung on the entry a moment after it is
  * made, which is why it is optional here, and `acknowledged` turns true when the renderer reports the pane.
- * @typedef {{ invocationId: string, workspaceId: string, leaseMs: number, expiresAt: number, controller: AbortController, acknowledged: boolean, timer?: ReturnType<typeof setTimeout> }} PendingOpen
+ * @typedef {{ invocationId: string, workspaceId: string, sessionId?: string, tabId?: string, leaseMs: number, expiresAt: number, controller: AbortController, acknowledged: boolean, timer?: ReturnType<typeof setTimeout> }} PendingOpen
  */
 
-export function createBrowserOpener({ bridge, agent, send, isOverlayActive, waitForOverlay = null, log }) {
+export function createBrowserOpener({ bridge, agent, send, isOverlayActive, waitForOverlay = null, log, retryMs = 500 }) {
   let workspaceIds = [];
   /** @type {string[] | null} */
   let publishedIds = null;
   /** @type {string[] | null} */
   let inFlightIds = null;
   let publishing = Promise.resolve();
+  let retryTimer = null;
   const pending = new Map();
   const publish = () => {
     const ids = workspaceIds;
@@ -30,7 +31,18 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
     });
     return publishing;
   };
-  const publishInBackground = () => publish().catch(error => log.warn('browser opener registration failed', { error: String(error?.message ?? error) }));
+  const publishInBackground = () => {
+    clearTimeout(retryTimer); retryTimer = null;
+    return publish().catch(error => {
+      log.warn('browser opener registration failed', { error: String(error?.message ?? error) });
+      // A transient rejection must not leave a visible chat without an opener
+      // until its workspace changes or the user restarts the whole app.
+      if (workspaceIds.length && bridge.client && !bridge.client.closed && bridge.client.connected !== false && !retryTimer) {
+        retryTimer = setTimeout(() => { retryTimer = null; void publishInBackground(); }, retryMs);
+        retryTimer.unref?.();
+      }
+    });
+  };
   const finish = (entry, result, reply = true) => {
     if (!pending.delete(entry.invocationId)) return;
     clearTimeout(entry.timer);
@@ -40,24 +52,25 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
   };
   const ready = entry => {
     if (!entry.acknowledged) return;
-    const host = [...agent.hosts.values()].find(host => host.workspaceId === entry.workspaceId && host.capabilityId && !host.guest.isDestroyed());
+    const hosts = [...agent.hosts.values()].filter(host => host.workspaceId === entry.workspaceId && (!entry.tabId || host.tabId === entry.tabId) && !host.guest.isDestroyed());
+    const host = hosts.find(host => host.capabilityId);
     if (host) finish(entry, { capabilityId: host.capabilityId });
+    else if (hosts.length && hosts.every(host => host.registrationError)) finish(entry, { error: hosts[0].registrationError });
   };
   agent.onRegistered(() => { for (const entry of pending.values()) ready(entry); });
+  agent.onRegistrationFailed?.(() => { for (const entry of pending.values()) ready(entry); });
   const open = (entry) => {
     if (!pending.has(entry.invocationId)) return;
     if (!workspaceIds.includes(entry.workspaceId)) return finish(entry, { error: 'open this workspace in Jolo desktop to use its inline browser' });
-    // Reserve the browser while waiting for approval and while its guest attaches.
-    if ([...pending.values()].some(other => other.workspaceId !== entry.workspaceId)
-      || [...agent.hosts.values()].some(host => host.workspaceId !== entry.workspaceId && !host.guest.isDestroyed())) {
-      return finish(entry, { errorCode: 'browser_busy', error: 'the inline browser is open or opening in another workspace; its page has been left untouched' });
-    }
+    // Each workspace has its own guest and capability. Another workspace's retained
+    // page must neither block this request nor be closed to satisfy it.
     if (isOverlayActive()) {
       if (!waitForOverlay) return finish(entry, { error: 'a host dialog is open; browser opening is suspended' });
       void waitForOverlay(entry.controller.signal).then(() => open(entry)).catch(() => {});
       return;
     }
-    send('jolo:browserOpen', { invocationId: entry.invocationId, workspaceId: entry.workspaceId, expiresAt: entry.expiresAt });
+    agent.retryRegistration?.(entry.workspaceId);
+    send('jolo:browserOpen', { invocationId: entry.invocationId, workspaceId: entry.workspaceId, ...(entry.sessionId ? { sessionId: entry.sessionId } : {}), expiresAt: entry.expiresAt });
   };
   return {
     setWorkspaces(params) {
@@ -83,6 +96,7 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
       while (publishedIds !== workspaceIds) await publish();
     },
     onDisconnected() {
+      clearTimeout(retryTimer); retryTimer = null;
       publishedIds = null;
       inFlightIds = null;
       for (const entry of pending.values()) finish(entry, {}, false);
@@ -100,6 +114,8 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
       const entry = pending.get(params?.invocationId);
       if (!entry) return;
       if (typeof params.error === 'string') return finish(entry, { error: params.error.slice(0, 1000), ...(params.errorCode === 'browser_busy' ? { errorCode: params.errorCode } : {}) });
+      if (entry.sessionId && typeof params.tabId !== 'string') return finish(entry, { error: 'The desktop did not identify the browser tab for this chat; restart Jolo to update it.' });
+      entry.tabId = typeof params.tabId === 'string' ? params.tabId : undefined;
       entry.acknowledged = true;
       ready(entry);
     },

@@ -1,5 +1,6 @@
 import { ProtocolError } from '@jolo/protocol';
 import { newId } from '../storage/index.js';
+import { readResultImages } from '../attachments.js';
 
 /** Browser access uses the run in the credential, never a model-supplied run id. */
 export function browserCallHandler({ storage, runs, dispatcher, settingsService }) {
@@ -22,16 +23,10 @@ export function browserCallHandler({ storage, runs, dispatcher, settingsService 
       const result = await dispatcher.invoke({ run, workspace: { id: workspace.id, root: workspace.path }, call: { callId: newId('browser'), name, arguments: args }, signal: controller.signal,
         deadlineMs: Math.min(dispatcher.registry.get(name).deadlineMs, settingsService.get().budgets.toolDeadlineMs) });
       const value = JSON.parse(result.output);
-      // One MCP content list: the tool's own JSON as text, and for a screenshot the image beside it.
+      // One MCP content list: the tool's own JSON as text, and the images it returned beside it.
       /** @type {Array<{ type: string, text?: string, mimeType?: string, data?: string }>} */
       const content = [{ type: 'text', text: result.output }];
-      if (name === 'browser_screenshot' && result.status === 'ok' && value.artifactId) {
-        const artifact = storage.getArtifact(value.artifactId);
-        if (artifact?.sessionId === run.sessionId && artifact.kind === 'screenshot' && artifact.committedBytes <= 1024 * 1024) {
-          const { buffer } = storage.readArtifact(artifact, 0, artifact.committedBytes, artifact.committedBytes);
-          content.push({ type: 'image', mimeType: 'image/png', data: buffer.toString('base64') });
-        }
-      }
+      for (const image of readResultImages(storage, run.sessionId, result.images ?? [])) content.push({ type: 'image', mimeType: image.mimeType, data: image.data });
       return { content, structuredContent: value, isError: result.status !== 'ok' };
     } finally {
       conn.closeHooks.delete(cancel);

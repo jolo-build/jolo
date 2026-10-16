@@ -2,6 +2,9 @@
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { Conversation } from '../../src/renderer/components/conversation.jsx';
+import { StopIndicator } from '../../src/renderer/components/stop-indicator.jsx';
+import { BoardTask } from '../../src/renderer/components/board.jsx';
+import { Icon } from '../../src/renderer/components/icon.jsx';
 import { longSequence } from '../../../../packages/markdown/test/fixtures/long-sequence.js';
 
 const host = document.createElement('main');
@@ -11,18 +14,57 @@ const root = createRoot(host);
 const fixtureWindow = /** @type {any} */ (window);
 fixtureWindow.jolo = { call: async () => ({ ok: true, result: {} }) };
 const message = { id: 'streaming', runId: 'run', role: 'assistant', kind: 'text', text: '', status: 'streaming', committedBytes: 0, renderedBytes: 0 };
-const projection = { ordered: () => [message], runs: new Map([['run', { id: 'run', state: 'model' }]]) };
+let messages = [message], onFollowup = null;
+const projection = { ordered: () => messages, runs: new Map([['run', { id: 'run', state: 'model' }]]) };
 const render = text => {
   message.text = text;
   message.committedBytes = message.renderedBytes = text.length;
-  flushSync(() => root.render(<Conversation {...(/** @type {any} */ ({ projection, sessionId: 'layout-fixture', hasProject: true }))} />));
+  flushSync(() => root.render(<Conversation {...(/** @type {any} */ ({ projection, sessionId: 'layout-fixture', hasProject: true, onFollowup }))} />));
 };
+fixtureWindow.showProgressFixture = () => flushSync(() => root.render(<>
+  {[16, 20, 32].map(size => <StopIndicator key={size} size={size} />)}
+  <Icon name="spinner" size={15} className="activity-spin" />
+  <Icon name="spinner" size={16} className="activity-icon activity-spin" />
+  <Icon name="think" size={16} className="activity-icon activity-pulse" />
+  <BoardTask task={{ sessionId: 'progress', title: 'Working', run: { state: 'model' } }} row={{}} now={Date.now()} onOpen={() => {}} />
+</>));
 const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 const check = (condition, description) => { if (!condition) throw new Error(description); };
 const near = (a, b) => Math.abs(a - b) <= 2;
 const gap = chat => chat.scrollHeight - chat.clientHeight - chat.scrollTop;
 
 async function run() {
+  fixtureWindow.showProgressFixture();
+  await frames();
+  const progress = [...host.querySelectorAll('.stop-progress-rotor, .board-progress-rotor, .activity-spin, .activity-pulse')];
+  check(progress.length === 7 && progress.every(node => node instanceof HTMLSpanElement), 'Progress animation must target HTML layers');
+  for (const rotor of progress) {
+    const bounds = rotor.getBoundingClientRect(), svg = rotor.querySelector('svg').getBoundingClientRect();
+    check(near(bounds.width, svg.width) && near(bounds.height, svg.height), 'Progress layer and SVG have different sizes');
+    check(!rotor.querySelector('svg').getAnimations({ subtree: true }).length, 'Progress animation still targets an SVG root or child');
+  }
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) check(progress.every(node => node.getAnimations().length === 1), 'Progress layer stopped animating');
+  const prompts = [];
+  onFollowup = prompt => prompts.push(`first:${prompt}`);
+  let completedReads = 0;
+  const completed = { id: 'completed', runId: 'prior', get role() { completedReads++; return 'assistant'; }, kind: 'text', status: 'complete', text: 'Finished answer.\n\n::codex-followup[Continue]{prompt="Continue the task"}', committedBytes: 100, renderedBytes: 100 };
+  messages = [completed, message];
+  render('Streaming answer 0');
+  await frames();
+  const initialReads = completedReads;
+  check(initialReads > 0, 'Completed message did not render');
+  for (let tick = 1; tick <= 12; tick++) { render(`Streaming answer ${tick}`); await frames(); }
+  check(completedReads === initialReads, 'Streaming re-rendered a completed message');
+  check(host.querySelector('[data-message-id="streaming"]').textContent.includes('Streaming answer 12'), 'Memoization froze streamed text');
+  host.querySelector('.md-followup').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  onFollowup = prompt => prompts.push(`latest:${prompt}`);
+  render(message.text);
+  host.querySelector('.md-followup').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  check(prompts.join('|') === 'first:Continue the task|latest:Continue the task', 'Follow-up used a stale callback');
+  onFollowup = null;
+  render(message.text);
+  check(!host.querySelector('.md-followup'), 'Removed follow-up callback left an enabled action');
+  messages = [message];
   // Stub only the OS clipboard boundary: exercise the actual rendered controls
   // without replacing the user's clipboard while this smoke suite runs.
   const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
@@ -113,7 +155,7 @@ async function run() {
   await frames();
   check(near(chat.scrollTop, keyboardTop), 'Asynchronous growth overrode keyboard scrolling');
   growing.remove();
-  fixtureWindow.chatLayoutChecks = [...copyChecks, 'Streaming respects small upward gestures and reading older text; returning to the end resumes following', 'Asynchronous content resizing follows only while the reader stays at the end'];
+  fixtureWindow.chatLayoutChecks = ['Progress indicators animate HTML layers rather than SVG children at multiple sizes', 'Streaming skips completed messages while updating live text and using the latest follow-up action', ...copyChecks, 'Streaming respects small upward gestures and reading older text; returning to the end resumes following', 'Asynchronous content resizing follows only while the reader stays at the end'];
 
   render(`\`\`\`mermaid\n${longSequence}\n\`\`\``);
   await frames();

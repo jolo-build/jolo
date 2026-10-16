@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RUNNING } from '@jolo/client/board';
-import { useWorkspaceTasks } from '../use-workspace-tasks.js';
 
-export function TaskRail({ call, revision, sessionId, onOpen }) {
-  const { result, error, retry, loadMore, loading } = useWorkspaceTasks({ call, revision });
+export function TaskRail({ tasks, sessionId, onOpen }) {
+  const { result, error, retry, loadMore, loading } = tasks;
   const [hover, setHover] = useState(null);
   const rows = result?.tasks ?? [];
   return <nav className="task-rail" aria-label="Switch tasks and chats">

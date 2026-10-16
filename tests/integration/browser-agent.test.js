@@ -17,22 +17,40 @@ import { HostDialogs } from '../../apps/desktop/src/main/host-dialogs.js';
  */
 
 /**
+ * A native image standing in for Electron's: a capture at device resolution whose crops and resizes
+ * are recorded, so a case can check the geometry the host applied.
+ * @param {number} width @param {number} height @param {any[]} log
+ * @returns {any}
+ */
+function fakeImage(width, height, log) {
+  return {
+    getSize: () => ({ width, height }),
+    resize: ({ width: w, height: h }) => { log.push({ resize: [w, h] }); return fakeImage(w, h, log); },
+    crop: rect => { log.push({ crop: rect }); return fakeImage(rect.width, rect.height, log); },
+    toPNG: () => Buffer.alloc(64, 1),
+  };
+}
+
+/**
  * @param {(method: string, args: any) => Promise<any>} [send] answers any CDP command the fixture
  *   does not handle itself, which is how a case stalls or redirects one command.
+ * @param {any} [dialogs] host dialogs whose overlay gates input
+ * @param {{ width: number, height: number } | null} [capture] the device-pixel size a screenshot captures
  */
-async function fixture(send = async () => ({}), dialogs = null) {
-  const calls = [], replies = [], cursors = [];
+async function fixture(send = async () => ({}), dialogs = null, capture = null) {
+  const calls = [], replies = [], cursors = [], images = [];
   let overlay = false;
   /** @type {FakeGuest} */
-  const guest = Object.assign(new EventEmitter(), { id: 1, getURL: () => 'http://fixture/', getTitle: () => 'Fixture', isDestroyed: () => false });
+  const guest = Object.assign(new EventEmitter(), { id: 1, getURL: () => 'http://fixture/', getTitle: () => 'Fixture', isDestroyed: () => false, invalidate() {} });
   guest.debugger = Object.assign(new EventEmitter(), { async sendCommand(method, args) {
     calls.push({ method, args });
     if (method === 'Accessibility.getFullAXTree') return { nodes: [{ nodeId: '1', role: { value: 'textbox' }, name: { value: 'Name' }, backendDOMNodeId: 11 }] };
     if (method === 'DOM.resolveNode') return { object: { objectId: 'field' } };
     return send(method, args);
   } });
-  // No case here takes a screenshot, so the dependency bag deliberately leaves out `nativeImage`.
-  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ onCursor: payload => cursors.push(payload), bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => dialogs ? dialogs.active : overlay, waitForOverlay: dialogs ? signal => dialogs.wait(signal) : null }));
+  // Only the screenshot cases pass a capture size; the others leave `nativeImage` out on purpose.
+  const nativeImage = capture ? { createFromBuffer: () => fakeImage(capture.width, capture.height, images) } : undefined;
+  const agent = createBrowserAgent(/** @type {Parameters<typeof createBrowserAgent>[0]} */ ({ onCursor: payload => cursors.push(payload), nativeImage, bridge: { async rawCall(method, params) { if (method === 'browser.result') replies.push(params); return { capabilityId: 'cap' }; } }, log: { info() {}, warn() {} }, isOverlayActive: () => dialogs ? dialogs.active : overlay, waitForOverlay: dialogs ? signal => dialogs.wait(signal) : null }));
   const host = agent.attach(guest, 'ws');
   await Promise.resolve();
   let sequence = 0;
@@ -40,8 +58,92 @@ async function fixture(send = async () => ({}), dialogs = null) {
     const invocationId = `i${++sequence}`;
     return { invocationId, done: agent.handleExecute({ invocationId, capabilityId: 'cap', navigationRevision: host.navigationRevision, operation, arguments: args, leaseMs }) };
   };
-  return { calls, replies, cursors, guest, host, agent, execute, overlay: value => { overlay = value; } };
+  return { calls, replies, cursors, images, guest, host, agent, execute, overlay: value => { overlay = value; } };
 }
+
+/** A 1000×500 CSS viewport captured at device pixel ratio 2, with an editable element focused unless told otherwise. */
+function visionFixture({ focused = true } = {}) {
+  return fixture(async method => {
+    if (method === 'Page.captureScreenshot') return { data: 'AAAA' };
+    if (method === 'Page.getLayoutMetrics') return { cssVisualViewport: { clientWidth: 1000, clientHeight: 500 } };
+    if (method === 'Runtime.evaluate') return { result: { value: focused } };
+    return {};
+  }, null, { width: 2000, height: 1000 });
+}
+
+test('a screenshot fixes the coordinate space; pointer input is mapped through it and refused before one exists', async () => {
+  const f = await visionFixture();
+  await f.execute('pointer', { action: 'click', x: 1, y: 1 }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'error', error: { code: 'no_screenshot' } });
+  await f.execute('screenshot').done;
+  const shot = f.replies.at(-1);
+  expect(shot.screenshot).toMatchObject({ width: 1280, height: 640, mimeType: 'image/png' }); // 2000×1000 within 1280×800
+  expect(shot.result).toMatchObject({ scale: 1.28, viewport: { width: 1000, height: 500 } });
+  expect(f.images).toEqual([{ resize: [1280, 640] }]);
+  await f.execute('pointer', { action: 'click', x: 640, y: 320, modifiers: ['Control'] }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'ok', result: { action: 'click', x: 500, y: 250 } });
+  const mouse = f.calls.filter(call => call.method === 'Input.dispatchMouseEvent').map(call => call.args);
+  expect(mouse.map(args => args.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased']);
+  expect(mouse[1]).toMatchObject({ x: 500, y: 250, button: 'left', clickCount: 1, modifiers: 2 });
+  f.calls.length = 0;
+  await f.execute('pointer', { action: 'double_click', x: 0, y: 0 }).done;
+  expect(f.calls.filter(call => call.method === 'Input.dispatchMouseEvent').map(call => call.args.clickCount)).toEqual([undefined, 1, 1, 2, 2]);
+  f.calls.length = 0;
+  await f.execute('pointer', { action: 'right_click', x: 10, y: 10 }).done;
+  expect(f.calls.find(call => call.args?.type === 'mousePressed').args).toMatchObject({ button: 'right', buttons: 2 });
+  await f.execute('pointer', { action: 'click', x: 1281, y: 10 }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'error', error: { code: 'outside_viewport' } });
+  expect(f.cursors.at(-1)).toMatchObject({ visible: false });
+});
+
+test('drag, coordinate scrolling, zoom and wait work in screenshot space', async () => {
+  const f = await visionFixture();
+  await f.execute('screenshot').done;
+  f.calls.length = 0;
+  await f.execute('pointer', { action: 'drag', x: 0, y: 0, toX: 1280, toY: 640 }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'ok', result: { action: 'drag', x: 0, y: 0, toX: 1000, toY: 500 } });
+  const drag = f.calls.filter(call => call.method === 'Input.dispatchMouseEvent').map(call => call.args);
+  expect(drag.map(args => args.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseMoved', 'mouseMoved', 'mouseMoved', 'mouseMoved', 'mouseReleased']);
+  expect(drag[3]).toMatchObject({ x: 500, y: 250, buttons: 1 });
+  expect(drag.at(-1)).toMatchObject({ x: 1000, y: 500, buttons: 0 });
+  f.calls.length = 0;
+  await f.execute('scroll', { x: 128, y: 64, deltaY: 300 }).done;
+  expect(f.calls.find(call => call.args?.type === 'mouseWheel').args).toMatchObject({ x: 100, y: 50, deltaY: 300 });
+  f.images.length = 0;
+  await f.execute('zoom', { x0: 0, y0: 0, x1: 640, y1: 320 }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'ok', result: { region: [0, 0, 640, 320], scale: 1.563 }, screenshot: { width: 1000, height: 500 } });
+  expect(f.images).toEqual([{ crop: { x: 0, y: 0, width: 1000, height: 500 } }]); // half the screenshot is half the capture, kept at device resolution
+  await f.execute('zoom', { x0: 1280, y0: 640, x1: 1290, y1: 650 }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'error', error: { code: 'outside_viewport' } });
+  const started = Date.now();
+  await f.execute('wait', { ms: 120 }).done;
+  expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+  expect(f.replies.at(-1)).toMatchObject({ status: 'ok', result: { waitedMs: 120 } });
+});
+
+test('typing without a reference needs a focused editable, and keys cover shifted characters and combinations', async () => {
+  const unfocused = await visionFixture({ focused: false });
+  await unfocused.execute('type', { text: 'x' }).done;
+  expect(unfocused.replies.at(-1)).toMatchObject({ status: 'error', error: { code: 'invalid_target' } });
+  expect(unfocused.calls.some(call => call.method === 'Input.insertText')).toBe(false);
+  const f = await visionFixture();
+  await f.execute('type', { text: 'hello', submit: true }).done;
+  expect(f.replies.at(-1)).toMatchObject({ status: 'ok', result: { typed: 5, submitted: true } });
+  expect(f.calls.find(call => call.method === 'Input.insertText').args).toEqual({ text: 'hello' });
+  f.calls.length = 0;
+  await f.execute('press', { key: '?', modifiers: [], repeat: 2 }).done;
+  const keys = f.calls.filter(call => call.method === 'Input.dispatchKeyEvent').map(call => call.args);
+  expect(keys).toHaveLength(4);
+  expect(keys[0]).toMatchObject({ type: 'keyDown', key: '?', code: 'Slash', windowsVirtualKeyCode: 191, modifiers: 8, text: '?' });
+  f.calls.length = 0;
+  await f.execute('press', { key: 's', modifiers: ['Control'] }).done;
+  const combo = f.calls.find(call => call.method === 'Input.dispatchKeyEvent').args;
+  expect(combo).toMatchObject({ key: 's', code: 'KeyS', modifiers: 2 });
+  expect(combo.text).toBeUndefined();
+  f.calls.length = 0;
+  await f.execute('press', { key: 'F5', modifiers: [] }).done;
+  expect(f.calls.find(call => call.method === 'Input.dispatchKeyEvent').args).toMatchObject({ key: 'F5', code: 'F5', windowsVirtualKeyCode: 116 });
+});
 
 test('read-only browser work shows a busy cursor before any pointer input and clears on cancellation', async () => {
   for (const cancel of [false, true]) {

@@ -15,6 +15,7 @@ const SyntaxCode = lazy(/** @type {() => Promise<{ default: SyntaxCodeComponent 
 
 const ChatSession = createContext(null);
 const WebBase = createContext(null);
+const FollowupAction = createContext(null);
 function WebLink({ href, children }) {
   return <a href={href} title={href} onClick={event => { event.preventDefault(); event.stopPropagation(); void window.jolo.openExternal(href); }}>{children}</a>;
 }
@@ -64,6 +65,38 @@ function FileText({ text }) {
   return referenceTokens(text).map((part, index) => <Reference key={index} value={part}>{part}</Reference>);
 }
 
+function directiveLabel(node) {
+  const explicit = node.label || node.attributes.label || node.attributes.title;
+  if (explicit) return explicit;
+  const path = node.attributes.path || node.attributes.file;
+  if (path) return path.split(/[\\/]/).at(-1) || path;
+  return node.name.replace(/^codex-/, '').replace(/[-_]+/g, ' ').replace(/^\p{Ll}/u, value => value.toUpperCase());
+}
+
+const directiveRenderers = {
+  'codex-file-citation': ({ node }) => {
+    const path = node.attributes.path;
+    if (typeof path !== 'string' || !path || path.length > 4096 || /[\x00-\x1f\x7f]/.test(path)) return null;
+    const name = node.label || path.split(/[\\/]/).at(-1) || path;
+    const purpose = node.attributes.purpose?.slice(0, 40);
+    return <span className="md-directive md-file-citation"><FileLink reference={path} urlEncoded={false}>{name}</FileLink>{purpose && <span>{purpose}</span>}</span>;
+  },
+  'codex-followup': ({ node, followup }) => {
+    const prompt = node.attributes.prompt?.trim();
+    if (!node.label || !prompt) return null;
+    return followup
+      ? <button type="button" className="md-directive md-followup" title={prompt} onClick={() => followup(prompt)}>{node.label}</button>
+      : <span className="md-directive md-directive-fallback">{node.label}</span>;
+  },
+};
+
+function Directive({ node }) {
+  const followup = useContext(FollowupAction);
+  const render = directiveRenderers[node.name];
+  const rendered = render?.({ node, followup });
+  return rendered ?? <span className="md-directive md-directive-fallback" title={node.name}>{directiveLabel(node)}</span>;
+}
+
 /** Safe React rendering of the shared markdown model (§5.1): no HTML, links open externally. */
 function Inline({ nodes, linkify = true }) {
   return nodes.map((node, i) => {
@@ -77,6 +110,7 @@ function Inline({ nodes, linkify = true }) {
       case "strong": return <strong key={i}><Inline nodes={node.children} linkify={linkify} /></strong>;
       case "em": return <em key={i}><Inline nodes={node.children} linkify={linkify} /></em>;
       case "link": return <Reference key={i} value={node.rawHref ?? node.href} explicit><Inline nodes={node.children} linkify={false} /></Reference>;
+      case 'directive': return <Directive key={i} node={node} />;
       default: return null;
     }
   });
@@ -95,10 +129,11 @@ function CodeBlock({ block }) {
 function MarkdownEmbed({ block, depth }) {
   const sessionId = useContext(ChatSession);
   const webBaseUrl = useContext(WebBase);
+  const onFollowup = useContext(FollowupAction);
   const [source, setSource] = useState(false);
   return <div className="md-embed">
     <div className="md-code-language"><span>{block.language}</span><span className="grow" /><CopyCodeButton text={block.text} /><button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Rendered" : "Source"}</button></div>
-    {source ? <pre className="md-code" data-language={block.language}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre> : <div className="md-embed-body"><Markdown text={block.text} cacheKey={block.text.length} depth={depth + 1} sessionId={sessionId} webBaseUrl={webBaseUrl} /></div>}
+    {source ? <pre className="md-code" data-language={block.language}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre> : <div className="md-embed-body"><Markdown text={block.text} cacheKey={block.text.length} depth={depth + 1} sessionId={sessionId} webBaseUrl={webBaseUrl} onFollowup={onFollowup} /></div>}
   </div>;
 }
 
@@ -143,10 +178,12 @@ const Block = memo(function Block(/** @type {{ block: any, depth: number, sessio
  *   sessionId?: string | null,
  *   streaming?: boolean,
  *   webBaseUrl?: string | null,
+ *   onFollowup?: ((prompt: string) => void) | null,
  * }} MarkdownProps
  */
-export const Markdown = memo(function Markdown(/** @type {MarkdownProps} */ { text, cacheKey, depth = 0, sessionId, streaming = false, webBaseUrl = null }) {
+export const Markdown = memo(function Markdown(/** @type {MarkdownProps} */ { text, cacheKey, depth = 0, sessionId, streaming = false, webBaseUrl = null, onFollowup = null }) {
+  const inheritedFollowup = useContext(FollowupAction);
   const cache = useMemo(() => new Map(), [cacheKey]); // completed blocks are parsed once per message
   const { blocks } = useMemo(() => parseDocument(text, { cache }), [text, cache]);
-  return <ChatSession.Provider value={sessionId}><WebBase.Provider value={webBaseUrl}><div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div></WebBase.Provider></ChatSession.Provider>;
+  return <ChatSession.Provider value={sessionId}><WebBase.Provider value={webBaseUrl}><FollowupAction.Provider value={onFollowup ?? inheritedFollowup}><div className="md">{blocks.map((block, i) => <Block key={i} block={block} depth={depth} sessionId={sessionId} streaming={streaming} />)}</div></FollowupAction.Provider></WebBase.Provider></ChatSession.Provider>;
 });

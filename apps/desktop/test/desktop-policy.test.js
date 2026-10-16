@@ -199,3 +199,39 @@ test('refresh targets the visible browser from its page or toolbar and the deskt
   await key({ key: 'F5' });
   expect([reloads, desktopReloads]).toEqual([3, 2]);
 });
+
+
+test('accessibility pages continue beyond the first node limit with fresh actionable refs', () => {
+  const children = Array.from({ length: 320 }, (_, index) => ({ nodeId: `n${index}`, parentId: 'root', role: { value: 'heading' }, name: { value: `Exhibitor ${index}` }, backendDOMNodeId: index + 100 }));
+  const nodes = [{ nodeId: 'root', role: { value: 'RootWebArea' }, name: { value: 'Exhibitors' }, childIds: children.map(node => node.nodeId) }, ...children];
+  const first = projectAX(nodes, { snapshotId: 's1', navigationRevision: 1, maxNodes: 150 });
+  const next = projectAX(nodes, { snapshotId: 's2', navigationRevision: 1, maxNodes: 150, offset: first.snapshot.nextOffset, referenceStart: 150 });
+  const last = projectAX(nodes, { snapshotId: 's3', navigationRevision: 1, maxNodes: 150, offset: next.snapshot.nextOffset, referenceStart: 300 });
+  expect([...first.snapshot.nodes, ...next.snapshot.nodes, ...last.snapshot.nodes].map(node => node.name)).toEqual(['Exhibitors', ...children.map(node => node.name.value)]);
+  expect(next.references.get('e151')).toBe(249);
+  expect(next.snapshot.nodes[0].parentRef).toBeUndefined();
+  expect(last.snapshot.truncated).toBe(false);
+  expect(last.snapshot.nextOffset).toBeNull();
+});
+
+test('new-window URLs route to their originating inline guest and reject unsafe schemes', () => {
+  const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: (channel, payload) => messages.push({ channel, payload }) });
+  const messages = [], sessions = new Map(), handlers = new Map();
+  const sessionForPartition = key => {
+    if (!sessions.has(key)) sessions.set(key, Object.assign(new EventEmitter(), { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }));
+    return sessions.get(key);
+  };
+  installBrowserHost({ webContents: contents }, { log, sessionForPartition, onGuest: null });
+  for (const [id, workspace] of [[1, 'a'], [2, 'b']]) {
+    contents.emit('will-attach-webview', { preventDefault() {} }, {}, { src: 'https://example.com', partition: `jolo-browser-${workspace}` });
+    const guest = Object.assign(new EventEmitter(), { id, session: sessionForPartition(`jolo-browser-${workspace}`), debugger: { attach() {}, sendCommand: async () => {} }, setWindowOpenHandler(handler) { handlers.set(id, handler); }, setZoomMode() {}, async setVisualZoomLevelLimits() {} });
+    contents.emit('did-attach-webview', {}, guest);
+  }
+  expect(handlers.get(1)({ url: 'https://example.com/new' })).toEqual({ action: 'deny' });
+  expect(handlers.get(2)({ url: 'http://localhost:3000/new' })).toEqual({ action: 'deny' });
+  for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,hello', 'malformed']) handlers.get(1)({ url });
+  expect(messages).toEqual([
+    { channel: 'jolo:browserNewTab', payload: { guestId: 1, url: 'https://example.com/new' } },
+    { channel: 'jolo:browserNewTab', payload: { guestId: 2, url: 'http://localhost:3000/new' } },
+  ]);
+});

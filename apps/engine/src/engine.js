@@ -1,3 +1,4 @@
+import { createDecisionService } from './providers/decisions.js';
 import { TaskService } from './account/tasks.js';
 import { createExecutorRouter } from "./agents/executor.js";
 import { createRpcHandlers } from "./rpc/handlers.js";
@@ -17,6 +18,7 @@ import { ToolDispatcher, resolveToolEnvironment } from "./tools/dispatcher.js";
 import { createProviderCatalog } from './providers/presets.js';
 import { ProviderFactory } from "./providers/index.js";
 import { BrowserBroker } from "./browser/broker.js";
+import { ScreenBroker } from "./screen/broker.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { TerminalService } from "./terminal/service.js";
 import { createBoard } from "./board/index.js";
@@ -96,27 +98,29 @@ export function createEngine(options) {
     permissions = new PermissionService({ storage });
     account.chatSync = new ChatSync({ account, storage, paths, permissions });
     void account.chatSync.run();
+    const providerFactory = new ProviderFactory({ credentials, catalog: providerCatalog, settings: settingsService, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
+    const decisions = createDecisionService({ settings: settingsService, providers: providerFactory, credentials, fetchImpl: options.fetchImpl });
     const registry = new ToolRegistry();
     browser = new BrowserBroker({ storage, log });
+    const screen = new ScreenBroker({ storage, log });
     const toolEnv = resolveToolEnvironment(options.env ?? process.env);
     search = new TgrepService({ directory: path.join(paths.dataDir, 'search', 'tgrep-v1'), env: toolEnv, log });
     supervisor = new ProcessSupervisor({ storage, log, env: toolEnv, recoveryDir: paths.recoveryDir, baseEnv: options.env ?? process.env });
     supervisor.reconcile();
     terminals = new TerminalService({ storage, supervisor, lifetime, log, shell: (options.env ?? process.env).JOLO_SHELL ?? null });
-    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules, delegations: () => delegations });
+    dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, screen, decisions, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules, delegations: () => delegations });
     board = createBoard({ storage, env: toolEnv, log });
     worktrees = createWorktreeService({ storage, permissions, paths, env: toolEnv, terminals, log });
     try {
       const taken = await worktrees.reconcile(); // checkouts made but never handed over, before any client can list them (§14.1)
       if (taken.removed || taken.parked) log.info("reconciled worktrees from a previous boot", taken);
     } catch (error) { log.warn("could not reconcile worktrees from a previous boot", { error: String(error) }); }
-    const providerFactory = new ProviderFactory({ credentials, catalog: providerCatalog, settings: settingsService, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
     const catalog = createCatalog({ dir: paths.agentsDir, env: toolEnv, shell: (options.env ?? process.env).JOLO_SHELL ?? (options.env ?? process.env).SHELL ?? null, settings: settingsService, log });
     agentModels = createModelDirectory({ catalog, supervisor, build, log });
     agentLimits = createLimitDirectory({ catalog, supervisor, build, log });
     agents = new AgentService({ catalog, terminals, storage, log });
-    const jolo = createAgentExecutor({ storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });
-    const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
+    const jolo = createAgentExecutor({ decisions, storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });
+    const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, screen, search: toolEnv.tgrep ? search : null, log });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
       mcpConfig,
       providerFactory, settings: settingsService, native: jolo,
@@ -134,7 +138,7 @@ export function createEngine(options) {
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, screen, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.

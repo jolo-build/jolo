@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
+import { scriptedHost, PNG_BASE64 } from "../fixtures/scripted-browser-host.js";
 
 const engines = [];
 const homes = [];
@@ -9,40 +11,6 @@ afterEach(async () => {
   for (const engine of engines.splice(0)) await engine.stop();
   for (const dir of homes.splice(0)) removeHome(dir);
 });
-
-// 1x1 transparent PNG
-const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-/** A scripted browser host speaking the same socket protocol as the Electron main process. */
-async function scriptedHost(engine, workspaceId, behaviour) {
-  const client = await engine.connect({ clientKind: "desktop" });
-  const received = [];
-  let navigationRevision = 1;
-  client.onNotification("browser.execute", async (params) => {
-    received.push(params);
-    const reply = (body) => client.call("browser.result", { invocationId: params.invocationId, ...body });
-    if (behaviour === "vanish") { await client.close(); return; }
-    switch (params.operation) {
-      case "navigate": navigationRevision += 1; return reply({ status: "ok", result: { url: params.arguments.url, title: "Fixture", navigationRevision }, navigationRevision });
-      case "snapshot": return reply({ status: "ok", result: { snapshotId: `snap_${navigationRevision}`, navigationRevision, truncated: false, nodes: [{ ref: "e1", role: "RootWebArea", name: "Fixture" }, { ref: "e2", parentRef: "e1", role: "button", name: "Click" }] } });
-      case "click": return reply({ status: params.arguments.ref === "e2" ? "ok" : "error", ...(params.arguments.ref === "e2" ? { result: { ref: "e2", x: 10, y: 10, navigationRevision } } : { error: { code: "unknown_reference", message: `unknown reference ${params.arguments.ref}` } }) });
-      case "screenshot": return reply({ status: "ok", result: { url: "http://fixture/", navigationRevision }, screenshot: { base64: PNG_BASE64, width: 1, height: 1, mimeType: "image/png" } });
-      case "network": return reply({ status: "ok", result: { navigationRevision, url: "http://fixture/", entries: [{ method: "GET", url: "http://fixture/", status: 200, type: "Document", size: 120 }], truncated: false } });
-      default: return reply({ status: "error", error: { code: "unsupported", message: params.operation } });
-    }
-  });
-  let capabilityId;
-  const register = async () => { ({ capabilityId } = await client.call("browser.register", { workspaceId, tabId: "tab_1", navigationRevision, url: "about:blank", title: "", operations: ["navigate", "snapshot", "click", "type", "screenshot", "network"] })); };
-  if (behaviour === 'closed') {
-    client.onNotification('browser.open', async params => {
-      received.push({ operation: 'open' });
-      await register();
-      await client.call('browser.openResult', { invocationId: params.invocationId, capabilityId });
-    });
-    await client.call('browser.setOpener', { workspaceIds: [workspaceId] });
-  } else await register();
-  return { client, received, get capabilityId() { return capabilityId; } };
-}
 
 async function setup({ script, behaviour = "ok", withHost = true }) {
   const home = tempHome(); homes.push(home);
@@ -58,7 +26,7 @@ async function setup({ script, behaviour = "ok", withHost = true }) {
   const { run } = await client.call("run.start", { sessionId: session.id, requestId: "req_b", prompt: "open the page and click" });
   await waitFor(() => events.some((e) => e.type === "run.state" && ["completed", "failed", "paused", "cancelled"].includes(e.payload.state)), { label: "run finished", timeoutMs: 20_000 });
   const snapshot = await client.call("run.snapshot", { runId: run.id });
-  return { client, host, events, run: snapshot.run, messages: snapshot.messages, read: async (m, encoding = "utf8") => client.call("artifact.read", { artifactId: m.artifactId, encoding }) };
+  return { client, engine, session, host, events, run: snapshot.run, messages: snapshot.messages, read: async (m, encoding = "utf8") => client.call("artifact.read", { artifactId: m.artifactId, encoding }) };
 }
 
 describe("agent browser control through the engine broker", () => {
@@ -99,6 +67,37 @@ describe("agent browser control through the engine broker", () => {
     expect(image.text).toBe(PNG_BASE64);
     expect(events.some((e) => e.type === "tool.started" && e.payload.name === "browser_click")).toBe(true);
     await host.client.close();
+  });
+
+  test("computer-use operations reach the host with their coordinates, and screenshots are recorded on the transcript without base64", async () => {
+    const script = [
+      { toolCalls: [{ name: "browser_screenshot", arguments: {} }] },
+      { toolCalls: [{ name: "browser_pointer", arguments: { action: "double_click", x: 40, y: 50, modifiers: ["Shift"] } }, { name: "browser_type", arguments: { text: "hello" } }, { name: "browser_press", arguments: { key: "Enter", repeat: 2 } }] },
+      { toolCalls: [{ name: "browser_zoom", arguments: { x0: 0, y0: 0, x1: 80, y1: 60 } }, { name: "browser_wait", arguments: { ms: 100 } }, { name: "browser_scroll", arguments: { x: 5, y: 6, deltaY: 200 } }] },
+      { toolCalls: [{ name: "browser_pointer", arguments: { action: "drag", x: 1, y: 2 } }] },
+      { text: ["Done.\n"] },
+    ];
+    const { engine, session, host, events, run } = await setup({ script });
+    expect(run.state).toBe("completed");
+    expect(host.received.map((r) => r.operation)).toEqual(["screenshot", "pointer", "type", "press", "zoom", "wait", "scroll"]);
+    expect(host.received[1].arguments).toEqual({ action: "double_click", x: 40, y: 50, modifiers: ["Shift"] });
+    expect(host.received[2].arguments).toEqual({ text: "hello", submit: false });
+    expect(host.received[3].arguments).toMatchObject({ key: "Enter", repeat: 2, modifiers: [] });
+    expect(host.received[6].arguments).toMatchObject({ x: 5, y: 6, deltaY: 200 });
+    const completed = events.filter((e) => e.type === "tool.completed").map((e) => e.payload);
+    expect(completed.map((r) => `${r.name}:${r.status}`)).toEqual(["browser_screenshot:ok", "browser_pointer:ok", "browser_type:ok", "browser_press:ok", "browser_zoom:ok", "browser_wait:ok", "browser_scroll:ok", "browser_pointer:error"]);
+    expect(completed.at(-1).errorCode).toBe("invalid_params"); // a drag without a destination never reaches the host
+    expect(JSON.stringify(events)).not.toContain(PNG_BASE64);
+    await host.client.close();
+    await engine.stop();
+    const db = new Database(engine.paths.databasePath, { readonly: true });
+    try {
+      const results = db.query("SELECT payload FROM conversation_items WHERE session_id = ?1 AND kind = 'tool_result' ORDER BY ordinal").all(session.id).map((row) => JSON.parse(row.payload));
+      expect(results[0].images).toEqual([{ artifactId: expect.stringMatching(/^art/), mimeType: "image/png", width: 1, height: 1, bytes: 70 }]);
+      expect(results[4].images).toHaveLength(1); // zoom
+      expect(results[1].images).toBeUndefined();
+      expect(JSON.stringify(results)).not.toContain(PNG_BASE64);
+    } finally { db.close(); }
   });
 
   test("without an attached host, browser tools are not declared and calls are denied", async () => {

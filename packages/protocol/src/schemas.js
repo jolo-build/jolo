@@ -27,7 +27,7 @@ export const ERROR_CODES = Object.freeze([
 
 import { RUN_STATES, TERMINAL_RUN_STATES } from "./run-state.js";
 export { RUN_STATES, TERMINAL_RUN_STATES, WORKING_RUN_STATES } from "./run-state.js";
-export const PAUSE_REASONS = Object.freeze(["permission", "budget", "browser_host_unavailable", "user"]);
+export const PAUSE_REASONS = Object.freeze(["permission", "budget", "browser_host_unavailable", "user", "screen_host_unavailable"]);
 
 export const LIMITS = Object.freeze({
   promptBytes: 64 * 1024,
@@ -94,7 +94,7 @@ export const ImageAttachmentSchema = z.object({
 export const TextAttachmentSchema = ImageAttachmentSchema.extend({ mimeType: z.literal('text/plain'), bytes: z.number().int().min(1).max(LIMITS.textAttachmentBytes) });
 export const FileAttachmentSchema = ImageAttachmentSchema.extend({ mimeType: z.literal('application/octet-stream'), bytes: z.number().int().min(1).max(LIMITS.fileAttachmentBytes) });
 export const AttachmentSchema = z.union([ImageAttachmentSchema, TextAttachmentSchema, FileAttachmentSchema]);
-const ImageAttachmentsSchema = z.array(AttachmentSchema).max(LIMITS.imageAttachments + LIMITS.textAttachments + LIMITS.fileAttachments);
+const ImageAttachmentsSchema = z.array(AttachmentSchema);
 
 export const WebTaskSummarySchema = z.object({
   key: z.string().regex(/^[A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14}$/), title: z.string().min(1).max(200),
@@ -107,8 +107,11 @@ export const WebTaskSummarySchema = z.object({
 export const WebTaskSchema = WebTaskSummarySchema.extend({description: z.string().max(8192)});
 export const TaskReferenceSummarySchema = WebTaskSummarySchema.extend({url:z.string().url().max(2048),origin:z.string().url().max(2048),accountId:Id});
 
+export const FileChangeEventSchema = z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) });
+
 export const RunSchema = z.object({
   changedPaths: z.array(z.string()).optional(),
+  changeEvents: z.array(FileChangeEventSchema).optional(),
   id: Id,
   sessionId: Id,
   requestId: Id,
@@ -128,7 +131,10 @@ export const RunSchema = z.object({
   updatedAt: IsoTimestamp,
 });
 
+const ChatAgentModelsSchema = z.record(Id, z.object({ model: z.string().min(1).max(200).nullable().default(null), effort: z.string().min(1).max(40).nullable().default(null) }));
+
 export const SessionSchema = z.object({
+  agentModels: ChatAgentModelsSchema.default({}),
   model: ModelRefSchema.nullable().default(null),
   id: Id,
   projectId: Id,
@@ -194,7 +200,8 @@ export const ResponseSchema = z.union([
 
 export const NotificationSchema = z.object({
   jsonrpc: z.literal("2.0"),
-  method: z.enum(["event", "preview", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
+  // Screen notifications reach only a connection that registered a screen capability.
+  method: z.enum(["event", "preview", "browser.execute", "browser.open", "browser.cancel", "screen.execute", "screen.cancel", "terminal.output", "terminal.state"]),
   params: z.record(z.string(), z.unknown()),
 });
 
@@ -545,9 +552,10 @@ export const EventPayloadSchemas = Object.freeze({
   "plan.task.updated": z.object({ planId: Id, task: PlanTaskSchema }),
   "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
   "schedule.updated": z.object({ schedule: ScheduleSchema }),
-  "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
+  // `decisions` narrows what the user may choose; absent means every decision applies (§10.1).
+  "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision, kind: z.enum(["process", "screen"]).optional(), decisions: z.array(z.enum(["allow_once", "allow_run", "allow_project", "deny"])).min(1).max(4).optional() }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
-  "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
+  "files.changed": FileChangeEventSchema,
   "run.verification": z.object({ status: z.enum(["passed", "failed", "not_run", "interrupted", "stale"]), checks: z.array(z.object({ invocationId: Id, argv: z.array(z.string()), exitCode: z.number().int().nullable(), signal: z.string().nullable(), at: IsoTimestamp })) }),
   "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative() }),
   "run.usage": UsageSchema,
@@ -578,6 +586,8 @@ const HelloResult = z.object({
   supportedMethods: z.array(z.string()),
   /** Present when the engine understands `eventTypes` on events.subscribe; absent on older engines. */
   supportedEventTypes: z.array(z.string()).optional(),
+  /** Omitted by engines before browser-operation negotiation. Accept future operation names. */
+  supportedBrowserOperations: z.array(z.string().min(1).max(64)).max(64).optional(),
   frameLimits: z.object({ maxFrameBytes: z.number().int(), maxBufferedBytes: z.number().int() }),
 });
 
@@ -658,7 +668,7 @@ export const MethodSchemas = {
     result: z.object({ session: SessionSchema }),
   },
   "session.setAgent": {
-    params: z.object({ sessionId: Id, agentId: Id.nullable(), expectedRevision: Revision }),
+    params: z.object({ sessionId: Id, agentId: Id.nullable(), agentModels: ChatAgentModelsSchema.optional(), model: ModelRefSchema.optional(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
   "session.archive": {
@@ -719,7 +729,9 @@ export const MethodSchemas = {
 
 // ---- Browser host (§5.3, §11.3): the host registers an ephemeral capability; the engine dispatches admitted operations.
 
-export const BROWSER_OPERATIONS = Object.freeze(["navigate", "snapshot", "click", "type", "screenshot", "network", "fill", "press", "scroll", "hover", "select", "history"]);
+// `zoom`, `pointer` and `wait` are the computer-use operations: they work in the pixel space of the
+// latest screenshot rather than on accessibility references (§5.3).
+export const BROWSER_OPERATIONS = Object.freeze(["navigate", "snapshot", "click", "type", "screenshot", "network", "fill", "press", "scroll", "hover", "select", "history", "zoom", "pointer", "wait"]);
 
 export const BrowserExecuteSchema = z.object({
   invocationId: Id,
@@ -732,7 +744,23 @@ export const BrowserExecuteSchema = z.object({
 });
 
 export const BrowserCancelSchema = z.object({ invocationId: Id, reason: z.string().max(200) });
-export const BrowserOpenSchema = z.object({ invocationId: Id, workspaceId: Id, leaseMs: z.number().int().positive().max(30_000) });
+
+// ---- Screen host: whole-desktop control. The desktop registers the display it can drive; the engine
+// admits each operation under a per-task consent grant and dispatches it to that one live host.
+
+export const SCREEN_OPERATIONS = Object.freeze(["screenshot", "zoom", "pointer", "type", "press", "scroll", "wait", "windows", "activate"]);
+export const SCREEN_IMAGE_TYPES = Object.freeze(["image/png", "image/jpeg"]);
+const ScreenImageSchema = z.object({ base64: z.string().max(1_400_000), width: z.number().int().positive(), height: z.number().int().positive(), mimeType: z.enum(SCREEN_IMAGE_TYPES) });
+
+export const ScreenExecuteSchema = z.object({
+  invocationId: Id,
+  capabilityId: Id,
+  runId: Id,
+  operation: z.enum(SCREEN_OPERATIONS),
+  arguments: z.record(z.string(), z.unknown()),
+  leaseMs: z.number().int().positive(),
+});
+export const BrowserOpenSchema = z.object({ invocationId: Id, workspaceId: Id, sessionId: Id.optional(), leaseMs: z.number().int().positive().max(30_000) });
 export const BrowserOpenerSchema = z.object({ workspaceIds: z.array(Id).max(64) });
 
 export const DelegationModelSchema = z.object({
@@ -772,6 +800,35 @@ Object.assign(MethodSchemas, {
     result: z.object({ capabilityId: Id, navigationRevision: z.number().int().nonnegative() }),
   },
   "browser.unregister": { params: z.object({ capabilityId: Id }), result: z.object({ capabilityId: Id }) },
+  'screen.register': {
+    params: z.object({
+      platform: z.enum(['darwin']),
+      display: z.object({ id: z.number().int(), width: z.number().int().positive(), height: z.number().int().positive(), scale: z.number().positive().max(8) }),
+      operations: z.array(z.enum(SCREEN_OPERATIONS)).min(1),
+      permissions: z.object({ accessibility: z.boolean(), screenRecording: z.boolean() }),
+    }),
+    result: z.object({ capabilityId: Id }),
+  },
+  'screen.update': {
+    params: z.object({ capabilityId: Id, permissions: z.object({ accessibility: z.boolean(), screenRecording: z.boolean() }) }),
+    result: z.object({ capabilityId: Id }),
+  },
+  'screen.unregister': { params: z.object({ capabilityId: Id }), result: z.object({ capabilityId: Id }) },
+  'screen.result': {
+    params: z.object({
+      invocationId: Id,
+      // `interrupted` means the user touched the mouse or keyboard since the agent's previous action.
+      status: z.enum(['ok', 'error', 'cancelled', 'interrupted']),
+      result: z.record(z.string(), z.unknown()).optional(),
+      error: z.object({ code: z.string().max(64), message: z.string().max(1000) }).optional(),
+      screenshot: ScreenImageSchema.optional(),
+    }),
+    result: z.object({ accepted: z.boolean() }),
+  },
+  'screen.call': {
+    params: z.object({ workspaceId: Id, name: z.enum(SCREEN_OPERATIONS.map(operation => `screen_${operation}`)), arguments: z.record(z.string(), z.unknown()).default({}) }),
+    result: z.object({ content: z.array(z.union([z.object({ type: z.literal('text'), text: z.string() }), z.object({ type: z.literal('image'), data: z.string().max(1_400_000), mimeType: z.enum(SCREEN_IMAGE_TYPES) })])), structuredContent: z.record(z.string(), z.unknown()).optional(), isError: z.boolean() }),
+  },
   "browser.result": {
     params: z.object({
       invocationId: Id,
@@ -884,7 +941,7 @@ Object.assign(MethodSchemas, {
     result: z.object({ files: z.array(z.object({ path: z.string(), newPath: z.string().optional(), op: z.enum(['create', 'replace', 'delete', 'rename']), revision: z.string() })), source: z.enum(['git', 'none']), truncated: z.boolean() }),
   },
   "provider.presets": { params: z.object({}), result: z.object({ presets: z.array(ProviderEntrySchema).max(100) }) },
-  "provider.models": { params: z.object({ preset: PresetId, refresh: z.boolean().default(false) }), result: ProviderModelsSchema },
+  "provider.models": { params: z.object({ preset: PresetId, refresh: z.boolean().default(false), model: z.string().trim().min(1).max(200).optional() }), result: ProviderModelsSchema },
   "settings.get": { params: z.object({}), result: z.object({ settings: SettingsSchema }) },
   "settings.update": {
     // agents is a patch: an entry merges into that agent's settings, and null forgets the agent entirely.
@@ -912,7 +969,7 @@ Object.assign(MethodSchemas, {
 export const BOARD_ATTENTION = Object.freeze(["needs_you", "done", "running", "idle"]);
 
 const BoardActionSchema = z.object({ invocationId: Id, name: z.string().max(64), preview: z.string().max(200), status: z.string().max(20), at: IsoTimestamp });
-const BoardPermissionSchema = z.object({ permissionId: Id, tool: z.string().max(64), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), createdAt: IsoTimestamp });
+const BoardPermissionSchema = z.object({ permissionId: Id, tool: z.string().max(64), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), createdAt: IsoTimestamp, kind: z.enum(["process", "screen"]).optional(), decisions: z.array(z.enum(["allow_once", "allow_run", "allow_project", "deny"])).min(1).max(4).optional() });
 const BoardRunSchema = z.object({
   id: Id, sessionId: Id, state: RunStateSchema, revision: Revision, pauseReason: PauseReasonSchema.nullable(), failure: z.string().nullable(),
   prompt: z.string(), createdAt: IsoTimestamp, updatedAt: IsoTimestamp,
@@ -928,6 +985,7 @@ export const BoardRowSchema = z.object({
   name: z.string(),
   workspaceId: Id,
   taskCount: z.number().int().nonnegative().optional(),
+  tasksRevision: z.string().optional(),
   working: z.boolean().optional(),
   workspace: z.object({ id: Id, mode: z.enum(["direct", "worktree"]), branch: z.string().nullable(), path: z.string() }),
   lastViewedAt: IsoTimestamp.nullable(),
@@ -965,7 +1023,7 @@ export const BoardTaskSchema = z.object({
 });
 
 Object.assign(MethodSchemas, {
-  "board.list": { params: z.object({}), result: z.object({ projects: z.array(BoardRowSchema), generatedAt: IsoTimestamp }) },
+  "board.list": { params: z.object({}), result: z.object({ projects: z.array(BoardRowSchema), generatedAt: IsoTimestamp, tasksRevision: z.string().optional(), standaloneTasksRevision: z.string().optional() }) },
   "board.tasks": {
     params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
     result: z.object({ tasks: z.array(BoardTaskSchema), generatedAt: IsoTimestamp, hasMore: z.boolean().optional(), nextCursor: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).nullable().optional() }),

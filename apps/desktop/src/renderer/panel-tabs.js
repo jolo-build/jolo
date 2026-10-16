@@ -33,6 +33,7 @@ export class PanelTabs {
     });
   }
   removeType(scope, type) { this.change(scope, value => { const items = value.items.filter(item => item.panelType !== type); return { ...value, items, activeId: items.some(item => item.id === value.activeId) ? value.activeId : items.at(-1)?.id ?? null }; }); }
+  hideBrowser(scope) { if (this.get(scope).context === 'browser') this.setContext(scope, null); }
   reset(scope) { this.change(scope, empty); }
   clear() {
     const items = [...this.scopes.values()].flatMap(value => value.items);

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { everyLabel, pauseDescription, screenshotArtifactId, untilLabel, workspacePath } from '../src/renderer/presentation.js';
+import { everyLabel, pauseDescription, screenshotArtifactId, screenshotImage, untilLabel, workspacePath } from '../src/renderer/presentation.js';
 
 test('workspace paths abbreviate the actual home without confusing sibling or outside folders', () => {
   expect(workspacePath('/Users/me/work/jolo', '/Users/me')).toBe('~/work/jolo');
@@ -38,6 +38,14 @@ test('a hosted screenshot call reports its artifact under any bridge prefix', ()
   expect(screenshotArtifactId(`other/tool {}\n${result}`)).toBeNull();
   expect(screenshotArtifactId('browser_screenshot {}\n{"ok":true,"mimeType":"text/plain"}')).toBeNull();
   expect(screenshotArtifactId('browser_screenshot {}\nnot json')).toBeNull();
+  // Screen captures and zooms are JPEG and show the same way.
+  const jpeg = '{"ok":true,"mimeType":"image/jpeg","artifactId":"art_2"}';
+  for (const head of ['screen_screenshot', 'mcp__jolo__screen_zoom', 'browser_zoom']) expect(screenshotImage(`${head} {}\n${jpeg}`)).toEqual({ artifactId: 'art_2', mimeType: 'image/jpeg' });
+  expect(screenshotImage(`screen_pointer {}\n${jpeg}`)).toBeNull();
+});
+
+test('pauses from screen control say what happened', () => {
+  expect(pauseDescription({ pauseReason: 'screen_host_unavailable' })).toBe('Task paused: Jolo desktop stopped providing the screen.');
 });
 
 test('budget pauses explain which limit stopped the task', () => {
@@ -46,4 +54,10 @@ test('budget pauses explain which limit stopped the task', () => {
   expect(pauseDescription({ pauseReason: 'budget', failure: 'iteration budget reached' })).toContain('task reached its step limit');
   expect(pauseDescription({ pauseReason: 'budget' })).toBe('Task paused: the task reached a limit.');
   expect(pauseDescription({ pauseReason: 'user' })).toBe('Task paused: user');
+});
+
+
+test('a browser pause shows its actionable reason instead of blaming the user', () => {
+  const failure = 'The browser model returned an invalid response twice. Resume to retry from the current page.';
+  expect(pauseDescription({ pauseReason: 'user', failure })).toBe(`Task paused: ${failure}`);
 });

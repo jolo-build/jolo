@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { ensureFontLoaded, stackFor } from "../fonts.js";
 import { Icon } from './icon.jsx';
 import { terminalTheme } from '../themes.js';
+import { wordMotion } from '../terminal-keys.js';
 
 const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
@@ -96,6 +97,13 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
         setStatus(error.message);
       }
     })();
+    instance.attachCustomKeyEventHandler((event) => {
+      const motion = wordMotion(event, window.jolo?.platform);
+      if (!motion) return true;
+      event.preventDefault();
+      instance.input(motion);
+      return false;
+    });
     const inputDisposable = instance.onData((data) => { if (terminalId.current) call("terminal.input", { terminalId: terminalId.current, data }).catch((error) => setStatus(error.message)); });
     const resizeDisposable = instance.onResize(({ cols, rows }) => { if (terminalId.current) call("terminal.resize", { terminalId: terminalId.current, cols, rows }).catch(() => {}); });
     // One hook per workspace: split panes each own a terminal, and one closing must not blind the others.

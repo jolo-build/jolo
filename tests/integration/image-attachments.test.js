@@ -12,10 +12,11 @@ async function boot() {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, 'repo'), dir = path.join(home, 'data/t/agents');
   mkdirSync(repo); mkdirSync(dir, { recursive: true });
-  for (const [id, transport] of [['claude', 'claude-stream'], ['codex', 'codex-app-server'], ['acp', 'acp'], ['no-images', 'acp']]) {
+  for (const [id, transport] of [['claude', 'claude-stream'], ['codex', 'codex-app-server'], ['acp', 'acp'], ['no-images', 'acp'], ['grok', 'acp']]) {
     const binary = path.join(home, `agent-${id}`);
-    const fixture = id === 'no-images' ? 'acp' : id;
-    writeFileSync(binary, `#!/bin/sh\n${id === 'acp' ? 'export FAKE_ACP_IMAGES=1\n' : ''}exec "${process.execPath}" "${path.join(ROOT, 'tests/fixtures', `fake-${fixture}.js`)}" "$@"\n`);
+    const fixture = id === 'no-images' || id === 'grok' ? 'acp' : id;
+    const env = [id === 'acp' ? 'export FAKE_ACP_IMAGES=1' : '', id === 'grok' ? 'export FAKE_ACP_GROK=1' : ''].filter(Boolean).join('\n');
+    writeFileSync(binary, `#!/bin/sh\n${env ? `${env}\n` : ''}exec "${process.execPath}" "${path.join(ROOT, 'tests/fixtures', `fake-${fixture}.js`)}" "$@"\n`);
     chmodSync(binary, 0o755);
     writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, displayName: id, binary, transport, ...(transport === 'acp' ? { args: ['--acp'] } : {}) }));
   }
@@ -123,7 +124,7 @@ test('unfinished, cross-task, invalid-type and oversized uploads are rejected; a
 
 test('Claude, Codex and image-capable ACP receive actual images; unsupported ACP fails explicitly', async () => {
   const { client, session } = await boot();
-  for (const agent of ['claude', 'codex', 'acp', 'no-images']) {
+  for (const agent of ['claude', 'codex', 'acp', 'grok', 'no-images']) {
     const s = await session(agent);
     const image = await upload(client, s.id);
     const { run } = await client.call('run.start', { sessionId: s.id, requestId: `image-${agent}`, prompt: 'image-check', attachments: [image] });
@@ -153,4 +154,16 @@ test('binary files reach Codex as readable persisted paths and remain scoped to 
   const other = await session('codex');
   await expect(client.call('run.start', { sessionId: other.id, requestId: 'foreign-file', prompt: 'file-check', attachments: [file] })).rejects.toMatchObject({ code: 'invalid_params' });
   await expect(client.call('run.start', { sessionId: chat.id, requestId: 'too-many-files', prompt: 'file-check', attachments: Array(5).fill(file) })).rejects.toMatchObject({ code: 'limit_exceeded' });
+}, 20000);
+
+test('a single message delivers twenty uploaded images without a count cap', async () => {
+  const { client, session } = await boot();
+  const chat = await session('claude');
+  const attachments = [];
+  for (let index = 0; index < 20; index++) attachments.push({ ...await upload(client, chat.id), name: `Image ${index + 1}.png` });
+  const { run } = await client.call('run.start', { sessionId: chat.id, requestId: 'many-images', prompt: 'image-check', attachments });
+  const result = await finish(client, run.id);
+  expect(result.run.state).toBe('completed');
+  expect(result.text).toContain(`Images received: ${attachments.map(() => `image/png:${PNG.length}`).join(', ')}`);
+  expect((await client.call('session.page', { sessionId: chat.id })).runs[0].attachments).toEqual(attachments);
 }, 20000);

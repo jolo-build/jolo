@@ -1,6 +1,32 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Conversation } from '../src/renderer/components/conversation.jsx';
+import { WorkspacePane } from '../src/renderer/components/workspace-pane.jsx';
+import { EngineProvider } from '../src/renderer/engine-context.jsx';
+import { Children, useState } from 'react';
+
+function findComponent(element, type) {
+  if (element?.type === type) return element;
+  for (const child of Children.toArray(element?.props?.children)) {
+    const found = findComponent(child, type);
+    if (found) return found;
+  }
+}
+
+test('workspace follow-up callback stays stable across unrelated renders', () => {
+  const callbacks = [];
+  function Probe() {
+    const [revision, update] = useState(0);
+    const tree = Reflect.get(WorkspacePane, 'type')({ pane: { id: 'pane-2' }, hosts: {}, active: false, visible: true });
+    callbacks.push(findComponent(tree, Conversation)?.props.onFollowup);
+    if (revision < 3) update(revision + 1);
+    return null;
+  }
+  renderToStaticMarkup(<EngineProvider><Probe /></EngineProvider>);
+  expect(callbacks).toHaveLength(4);
+  expect(typeof callbacks[0]).toBe('function');
+  for (const callback of callbacks) expect(callback).toBe(callbacks[0]);
+});
 
 /**
  * A message as the projection holds one, with only the fields a test cares about. The projection

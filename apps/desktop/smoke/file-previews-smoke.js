@@ -8,6 +8,8 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
   shell.openPath = async target => { external.push(target); return ''; };
   shell.showItemInFolder = target => { external.push(target); };
   try {
+    writeFileSync(path.join(project, 'src/app.js'), 'export const answer = 42;\nexport const changed = true;\n');
+    writeFileSync(path.join(project, 'preview.html'), '<!doctype html><h1>Implementation plan</h1><button onclick="this.textContent=String(++window.clicks)">Try it</button><script>window.clicks=0;</script>');
     writeFileSync(path.join(project, 'PLAN.md'), '# Project plan\n\n- Build the preview\n- Keep files inside Jolo\n');
     writeFileSync(path.join(project, 'My Report.txt'), 'Encoded path opened correctly.');
     writeFileSync(path.join(project, 'location.js'), Array.from({ length: 150 }, (_, i) => `// Line ${i + 1}: ${'x'.repeat(120)}`).join('\n'));
@@ -25,6 +27,12 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source toggle');
     await click('app.js');
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('export const answer = 42')", 'code opens internally');
+    await waitFor("document.querySelectorAll('.panel-item-content:not([hidden]) .file-preview-source .syntax-token').length > 0", 'source syntax colors');
+    await evaluate("Array.from(document.querySelectorAll('.panel-item-content:not([hidden]) .file-heading [role=tab]')).find(b=>b.textContent==='Diff').click()");
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .diff-line.add')?.textContent.includes('export const changed = true')", 'file tab shows Git additions');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .diff .syntax-token.keyword')", 'diff syntax colors');
+    writeFileSync(path.join(results, 'file-preview-diff.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("Array.from(document.querySelectorAll('.panel-item-content:not([hidden]) .file-heading [role=tab]')).find(b=>b.textContent==='Source').click()");
     await click('location.js');
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-source-location')?.textContent.startsWith('// Line 120:')", 'source location highlighted');
     await waitFor("(() => { const node = document.querySelector('.panel-item-content:not([hidden]) .file-source-caret'); if (!node) return false; const target = node.getBoundingClientRect(); const view = node.closest('.file-preview-content').getBoundingClientRect(); return target.top >= view.top && target.bottom <= view.bottom && target.left >= view.left && target.right <= view.right; })()", 'line and column scrolled into view');
@@ -53,6 +61,30 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source view retained');
     writeFileSync(path.join(results, 'file-preview-markdown.png'), (await window.webContents.capturePage()).toPNG());
     if (external.length) throw new Error(`File links escaped Jolo: ${external.join(', ')}`);
+    await click('preview.html');
+    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) .file-html-preview'))", 'HTML opens as rendered preview');
+    const htmlUrl = await evaluate("document.querySelector('.panel-item-content:not([hidden]) .file-html-preview').src");
+    let htmlFrame;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      htmlFrame = window.webContents.mainFrame.framesInSubtree.find(frame => frame.url === htmlUrl);
+      if (htmlFrame && await htmlFrame.executeJavaScript("document.readyState === 'complete' && Boolean(document.querySelector('h1'))")) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    if (!htmlFrame) throw new Error('HTML frame missing');
+    const htmlResult = await htmlFrame.executeJavaScript("(() => { document.querySelector('button').click(); let isolated = false; try { isolated = !parent.jolo; } catch { isolated = true; } return { title: document.querySelector('h1').textContent, clicked: window.clicks, isolated, bridge: typeof window.jolo }; })()");
+    if (htmlResult.title !== 'Implementation plan' || htmlResult.clicked !== 1 || !htmlResult.isolated || htmlResult.bridge !== 'undefined') throw new Error('HTML preview did not render interactively in isolation');
+    await evaluate("document.querySelector('.panel-item-content:not([hidden]) .file-open-trigger').click()");
+    await waitFor("document.querySelectorAll('.file-app-menu:popover-open .file-app-list button img').length > 0", 'compatible applications have icons');
+    await waitFor("Array.from(document.querySelectorAll('.file-app-menu:popover-open button')).some(b => b.textContent === 'Choose another app…')", 'another app option');
+    const appNames = await evaluate("Array.from(document.querySelectorAll('.file-app-menu:popover-open .file-app-list button span')).map(n => n.textContent)");
+    if (appNames.includes('Source viewer') || appNames.includes('Jolo preview')) throw new Error('Internal viewers appeared as external applications');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    writeFileSync(path.join(results, 'file-apps-html.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("document.querySelector('.file-app-menu:popover-open').hidePopover()");
+    if (external.length) throw new Error('Dismissing Open with opened an external file');
+    await evaluate("Array.from(document.querySelectorAll('.panel-item-content:not([hidden]) .file-modes button')).find(b => b.textContent === 'Source').click()");
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('<!doctype html>')", 'HTML source tab');
+    report.checks.push('Open with shows compatible installed applications with icons, plus folder, GitHub and Save as actions');
     const fixture = new BrowserWindow({ show: false, width: 1200, height: 1100, webPreferences: { sandbox: true, nodeIntegration: false } });
     try {
       await fixture.loadURL('data:text/html,<title>File link regression checks</title>');

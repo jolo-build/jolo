@@ -35,6 +35,18 @@ async function setup(protocol, options = {}, presetOptions = {}, model = { prese
   return { client, mock, session, events, start, finish, home };
 }
 
+test('Responses nested billing errors retain the provider message without retrying or exposing credentials', async () => {
+  const error = { type: 'insufficient_quota', code: 'credit_balance_exhausted', message: 'You have no credits remaining. fixture-secret-key' };
+  for (const event of [{ type: 'error', error }, { type: 'response.failed', response: { error } }]) {
+    const { mock, start, finish, events } = await setup('openai-responses', { raw: `data: ${JSON.stringify(event)}\n\n` });
+    const result = await finish(await start());
+    expect(result.run.state).toBe('failed');
+    expect(result.run.failure).toBe('provider quota: You have no credits remaining. [redacted]');
+    expect(mock.requests).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain('fixture-secret-key');
+  }
+});
+
 for (const protocol of PROTOCOLS) describe(`${protocol} harness conformance`, () => {
   test('text, discovery, usage and endpoint authentication', async () => {
     const { client, mock, start, finish, events } = await setup(protocol);

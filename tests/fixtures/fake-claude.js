@@ -56,7 +56,7 @@ const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
   out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, description: extra.description ?? toolName, permission_suggestions: [], tool_use_id: extra.toolUseId } });
 });
 
-async function turn(prompt, images = []) {
+async function turn(prompt, images = [], requestUuid = null) {
   const received = prompt;
   prompt = prompt.split("\n\nCurrent request:\n").at(-1);
   out({ type: "system", subtype: "init", session_id: sessionId, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
@@ -80,11 +80,36 @@ async function turn(prompt, images = []) {
       return { denied: true, message: decision.message };
     }
     const result = await produce(decision.updatedInput ?? input);
-    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: result.content, is_error: Boolean(result.isError) }] }, session_id: sessionId });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: result.content, is_error: Boolean(result.isError) }] }, tool_use_result: result.fileResult, session_id: sessionId });
     return { denied: false, content: result.content };
   };
   let turns = 1;
   let match;
+  if (prompt === 'mention-background') {
+    const result = (text, uuid, turns = 1) => out({ type: 'result', subtype: 'success', is_error: false, result: text, user_message_uuid: uuid, session_id: sessionId, num_turns: turns, usage: { input_tokens: turns * 10, output_tokens: turns * 7 } });
+    // A resumed Claude session flushes old task results before the new request.
+    result('', 'old-notification', 0);
+    result('Old task completed.', 'old-request');
+    await Bun.sleep(100);
+    out({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'reviewer', task_type: 'local_agent', description: 'Review' }] });
+    out({ type: 'system', subtype: 'task_started', task_id: 'reviewer' });
+    say('Review in progress.');
+    result('Review in progress.', requestUuid);
+    // Wait beyond the host transport's two-second termination grace period.
+    await Bun.sleep(2300);
+    out({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    out({ type: 'system', subtype: 'task_notification', task_id: 'reviewer', status: 'completed' });
+    // Empty coalesced notification results must not cut off the final synthesis.
+    result('', 'notification', 0);
+    await Bun.sleep(100);
+    say('Final review: the requested design is consistent.');
+    result('Final review: the requested design is consistent.', 'notification-final');
+    return;
+  }
+  if (prompt === 'result-only'  || prompt === 'empty-result') {
+    out({ type: 'result', subtype: 'success', is_error: false, result: prompt === 'result-only' ? 'Final review delivered only in the result.' : '', session_id: sessionId, num_turns: 1, usage: { input_tokens: 10, output_tokens: 7 } });
+    return;
+  }
   if (prompt === 'subagent-review') {
     const parentId = 'toolu_reviewer';
     const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
@@ -114,7 +139,7 @@ async function turn(prompt, images = []) {
   } else if (prompt === 'browser-discovery') {
     say(offersBrowser(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo) ? 'Browser tools available' : 'Browser tools unavailable');
   } else if (prompt === 'browser-check') {
-    if (!valueOf('--append-system-prompt')?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    if (!valueOf('--append-system-prompt')?.includes('dedicated browser tools')) throw new Error('Jolo browser instructions missing');
     const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo;
     if (!offersBrowser(config)) say('Browser tools unavailable');
     else {
@@ -143,7 +168,7 @@ async function turn(prompt, images = []) {
     say(outcome.denied ? `I could not run it: ${outcome.message}` : `The command printed: ${outcome.content}`);
   } else if ((match = prompt.match(/^write (\S+) (.+)$/s))) {
     turns = 2;
-    const outcome = await tool("Write", { file_path: match[1], content: match[2] }, async (input) => { await Bun.write(input.file_path, input.content); return { content: `Wrote ${input.file_path}` }; });
+    const outcome = await tool("Write", { file_path: match[1], content: match[2] }, async (input) => { const file = Bun.file(input.file_path); const originalFile = await file.exists() ? await file.text() : null; await Bun.write(input.file_path, input.content); return { content: `Wrote ${input.file_path}`, fileResult: { type: originalFile === null ? 'create' : 'update', originalFile } }; });
     say(outcome.denied ? `I could not write it: ${outcome.message}` : "Written.");
   } else if ((match = prompt.match(/^read (\S+)$/))) {
     turns = 2;
@@ -175,7 +200,7 @@ for await (const chunk of Bun.stdin.stream()) {
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
-    else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image")).then(() => {
+    else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image"), message.uuid).then(() => {
       // Large echoed attachments can fill the pipe; flush the result before exiting.
       process.stdout.write('', () => process.exit(0));
     }, (error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); });
