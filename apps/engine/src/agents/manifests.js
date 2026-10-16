@@ -31,7 +31,11 @@ export const TRANSPORT_MODEL_SUPPORT = Object.freeze({
   "claude-stream": Object.freeze({ model: "flag", effort: "flag" }),
   "codex-app-server": Object.freeze({ model: "protocol", effort: "protocol" }),
   acp: Object.freeze({ model: "flag", effort: "flag" }),
+  "antigravity-stream": Object.freeze({ model: "flag", effort: "flag" }),
 });
+
+/** The transports that can say how much of the signed-in plan is used (Claude's get_usage, Codex's account/rateLimits/read, Antigravity's /usage). */
+export const LIMIT_REPORTING = Object.freeze(new Set(["claude-stream", "codex-app-server", "antigravity-stream"]));
 
 export const BUILTIN_MANIFESTS = Object.freeze([
   // These speak a structured protocol: replies, tool calls and permission questions arrive as data, so they answer
@@ -41,7 +45,7 @@ export const BUILTIN_MANIFESTS = Object.freeze([
   hostedAgent("codex", "Codex", "codex", "OpenAI's coding agent CLI, driven through its app-server.", "codex-app-server"),
   hostedAgent("grok", "Grok CLI", "grok", "xAI's coding agent CLI, driven through the Agent Client Protocol.", "acp", ["--permission-mode", "default", "agent", "stdio"], { modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }),
   hostedAgent("devin", "Devin CLI", "devin", "Cognition’s local coding agent, using your Devin CLI login through ACP.", "acp", ["acp"], { modelArgs: ["--model", "{model}"], modelArgsPosition: "after" }),
-  hostedAgent("gemini", "Gemini CLI", "gemini", "Google's coding agent CLI, driven through the Agent Client Protocol.", "acp", ["--acp"], { modelArgs: ["-m", "{model}"] }),
+  hostedAgent("antigravity", "Antigravity CLI", "agy", "Google's Antigravity agent CLI, driven through its print-mode stream.", "antigravity-stream", [], { modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }),
   {
     id: "shell",
     displayName: "Login shell",

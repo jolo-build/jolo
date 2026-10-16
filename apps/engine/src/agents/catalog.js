@@ -8,19 +8,31 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { AgentManifestSchema, ProtocolError } from "@jolo/protocol";
-import { BUILTIN_MANIFESTS, TRANSPORT_MODEL_SUPPORT } from "./manifests.js";
+import { BUILTIN_MANIFESTS, LIMIT_REPORTING, TRANSPORT_MODEL_SUPPORT } from "./manifests.js";
 import { compileRules } from "./status.js";
 
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const NO_CONFIG = Object.freeze({ model: null, effort: null });
 
+const binaryCache = new Map();
+
 function resolveBinary(name, toolPath) {
   if (!name) return null;
   if (name.includes("/")) { try { return statSync(name).isFile() ? name : null; } catch { return null; } }
+  const key = `${toolPath}\0${name}`;
+  const cached = binaryCache.get(key);
+  if (cached) {
+    try { if (statSync(cached).isFile()) return cached; } catch { binaryCache.delete(key); }
+  }
   for (const dir of toolPath.split(":")) {
     if (!dir) continue;
     const candidate = path.join(dir, name);
-    try { if (statSync(candidate).isFile()) return candidate; } catch { /* next */ }
+    try {
+      if (statSync(candidate).isFile()) {
+        binaryCache.set(key, candidate);
+        return candidate;
+      }
+    } catch { /* next */ }
   }
   return null;
 }
@@ -88,6 +100,7 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
           statusModel: manifest.statusModel, transport: manifest.transport,
           available: Boolean(resolvedPath), resolvedPath, source: manifest.source,
           model, effort, supportsModel: support.model !== "none", supportsEffort: support.effort !== "none",
+          supportsLimits: LIMIT_REPORTING.has(manifest.transport),
         };
       });
     },

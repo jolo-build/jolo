@@ -1,4 +1,4 @@
-const ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode'];
 export const effortLabel = value => ({ xhigh: 'Extra high' }[value] ?? (value ? value.charAt(0).toUpperCase() + value.slice(1) : 'Default'));
 
 // Never offer another model's effort levels for the selected model.

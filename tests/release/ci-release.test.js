@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { DESKTOP_TARGETS, TARGETS, validateTag, verifyRelease, publishRelease } from '../../scripts/ci-release.js';
+import { createDmg } from '../../apps/desktop/scripts/dmg.js';
 
 function fixture(version = '1.2.3') {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'jolo-ci-release-'));
@@ -96,4 +97,80 @@ test('a failed upload leaves the release as a draft', () => clean(fixture(), dir
 test('a published release cannot be overwritten and an older tag cannot replace latest', () => {
   clean(fixture(), directory => expect(() => publishRelease(directory, { version: '1.2.3', repo: 'jolo-build/jolo', ghImpl: () => JSON.stringify({ draft: false }) })).toThrow('already published'));
   clean(fixture(), directory => expect(() => publishRelease(directory, { version: '1.2.3', repo: 'jolo-build/jolo', ghImpl: args => args[1].endsWith('/latest') ? JSON.stringify({ tag_name: 'v2.0.0' }) : null })).toThrow('must be newer'));
+});
+
+async function dmgFixture(check, command = argv => {}) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'jolo-dmg-test-'));
+  const target = path.join(root, 'Jolo.app'), file = path.join(root, 'jolo.dmg');
+  mkdirSync(target);
+  writeFileSync(path.join(target, 'main.js'), 'app');
+  const calls = [], delays = [], warnings = [];
+  let staging;
+  const options = {
+    run(argv) {
+      calls.push(argv);
+      if (argv[0] === 'ditto') {
+        staging = path.dirname(argv[2]);
+        cpSync(argv[1], argv[2], { recursive: true });
+      } else if (argv[1] === 'create') {
+        expect(readFileSync(path.join(staging, 'Jolo.app/main.js'), 'utf8')).toBe('app');
+        expect(readlinkSync(path.join(staging, 'Applications'))).toBe('/Applications');
+        expect(existsSync(file)).toBe(false);
+        writeFileSync(file, 'image');
+      }
+      command(argv);
+    },
+    async sleep(ms) { delays.push(ms); },
+    warn(message) { warnings.push(message); },
+  };
+  try {
+    await check({ create: () => createDmg(target, file, options), calls, delays, warnings, file });
+    expect(existsSync(staging)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('DMG creation preserves the app and Applications link and verifies before returning', async () => {
+  await dmgFixture(async ({ create, calls, delays, file }) => {
+    await create();
+    expect(readFileSync(file, 'utf8')).toBe('image');
+    expect(calls.at(-1)).toEqual(['hdiutil', 'verify', file]);
+    expect(delays).toHaveLength(0);
+  });
+});
+
+test('busy DMG creation retries with backoff and removes each partial image', async () => {
+  let attempts = 0;
+  await dmgFixture(async ({ create, calls, delays, warnings }) => {
+    await create();
+    expect(attempts).toBe(3);
+    expect(delays).toEqual([1000, 2000]);
+    expect(warnings).toHaveLength(2);
+    expect(calls.filter(argv => argv[1] === 'verify')).toHaveLength(1);
+  }, argv => {
+    if (argv[1] === 'create' && ++attempts < 3) throw new Error('hdiutil failed: hdiutil: create failed - Resource busy');
+  });
+});
+
+test.each(['Resource busy', 'Permission denied'])('DMG creation eventually fails on %s without verifying a partial image', async message => {
+  await dmgFixture(async ({ create, calls, delays, file }) => {
+    await expect(create()).rejects.toThrow(message);
+    expect(calls.filter(argv => argv[1] === 'create')).toHaveLength(message === 'Resource busy' ? 5 : 1);
+    expect(delays).toEqual(message === 'Resource busy' ? [1000, 2000, 4000, 8000] : []);
+    expect(calls.some(argv => argv[1] === 'verify')).toBe(false);
+    expect(existsSync(file)).toBe(false);
+  }, argv => {
+    if (argv[1] === 'create') throw new Error(`hdiutil failed: ${message}`);
+  });
+});
+
+test('verification errors fail the build without retrying creation', async () => {
+  await dmgFixture(async ({ create, calls, delays }) => {
+    await expect(create()).rejects.toThrow('verify failed');
+    expect(calls.filter(argv => argv[1] === 'create')).toHaveLength(1);
+    expect(delays).toHaveLength(0);
+  }, argv => {
+    if (argv[1] === 'verify') throw new Error('hdiutil verify failed: Resource busy');
+  });
 });

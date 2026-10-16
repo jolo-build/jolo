@@ -43,7 +43,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const [themeMenu, setThemeMenu] = useState(false);
   const [themeBusy, setThemeBusy] = useState(false);
   const size = useWindowSize();
-  const { revision, redraw } = useTick(50); // batch incoming model updates; direct input stays responsive
+  const { revision, redraw } = useTick(16); // batch incoming model updates; direct input stays responsive
   const projection = useMemo(() => new SessionProjection({ readArtifact: (artifactId, offset, length) => client.call("artifact.read", { artifactId, offset, length }), maxTextBytes: 512 * 1024, onChange: redraw }), [client]);
   const [session, setSession] = useState(initialSession);
   const [draftAgent, setDraftAgent] = useState(draftAgentId);

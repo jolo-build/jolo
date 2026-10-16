@@ -25,6 +25,19 @@ test('changing a model within the same agent does not switch or recreate the ses
   expect(calls).toEqual(['session.page']);
 });
 
+test('sending with the current session agent avoids a redundant session.page round-trip', async () => {
+  const known = { id: 'existing', agentId: 'codex', revision: 3 };
+  const result = await sessionForSend({
+    sessionId: known.id,
+    session: known,
+    agentId: 'codex',
+    prompt: 'continue',
+    newSession() { throw new Error('new session'); },
+    call() { throw new Error('must not call session.page when agentId already matches'); },
+  });
+  expect(result).toBe(known);
+});
+
 test('an unfinished-run conflict propagates without creating a replacement session', async () => {
   await expect(sessionForSend({ sessionId: 'existing', agentId: null, prompt: 'continue', newSession() { throw new Error('replacement session'); }, call: async method => {
     if (method === 'session.page') return { session: { id: 'existing', agentId: 'codex', revision: 3 } };

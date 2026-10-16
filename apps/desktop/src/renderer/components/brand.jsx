@@ -9,7 +9,7 @@ export function JoloLogo({ className = "" }) {
 }
 
 // Brand artwork from Lobe Icons; bundled with its MIT license in assets/brand/agents.
-const agentLogos = { claude: 'claude-color', codex: 'openai', grok: 'grok', gemini: 'gemini-color' };
+const agentLogos = { claude: 'claude-color', codex: 'openai', grok: 'grok', gemini: 'gemini-color', antigravity: 'antigravity-color' };
 export function AgentLogo({ agentId }) {
   const logo = agentLogos[agentId];
   if (!logo) return <span className="agent-logo-fallback" aria-hidden="true">{agentId.slice(0, 1).toUpperCase()}</span>;

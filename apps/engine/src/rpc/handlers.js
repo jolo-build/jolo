@@ -19,7 +19,7 @@ import { linkChatFolder } from '../account/chat-context.js';
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
  * a single method stands in for the few that method touches and names this type as it does so.
  * @typedef {{
- *   storage: any, settingsService: any, providerFactory: any, agentModels: any, credentials: any,
+ *   storage: any, settingsService: any, providerFactory: any, agentModels: any, agentLimits: any, credentials: any,
  *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, screen?: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
@@ -28,7 +28,7 @@ import { linkChatFolder } from '../account/chat-context.js';
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, screen = null, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dispatcher, browser, screen = null, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -327,6 +327,11 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     "agent.models": ({ agentId, refresh }, conn) => {
       requireInteractive(conn, "asking an agent for its models is for interactive clients");
       return agentModels.list(agentId, { refresh });
+    },
+    // So does asking how much of its plan is left.
+    "agent.limits": ({ agentId, refresh }, conn) => {
+      requireInteractive(conn, "asking an agent for its usage limits is for interactive clients");
+      return agentLimits.read(agentId, { refresh });
     },
     "agent.start": (params, conn) => {
       // Launching another vendor's CLI is a user action, like opening a terminal: never a model tool (§4.3).

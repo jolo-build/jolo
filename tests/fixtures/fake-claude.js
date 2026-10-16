@@ -17,9 +17,35 @@ const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
 const MODELS = [
   { value: "default", resolvedModel: "fake-default", displayName: "Default (recommended)", description: "the everyday choice", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
-  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "max"] },
+  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"] },
   { value: "haiku", resolvedModel: "fake-haiku", displayName: "Haiku", description: "the quick one" },
 ];
+// The parts of a get_usage answer Jolo reads, in the shape Claude Code 2.1 sends.
+const USAGE = {
+  subscription_type: "max", rate_limits_available: true,
+  rate_limits: {
+    five_hour: { utilization: 16, resets_at: "2026-10-14T22:49:59.786341+00:00" },
+    seven_day: { utilization: 44, resets_at: "2026-10-19T06:59:59.786360+00:00" },
+    seven_day_opus: null, seven_day_sonnet: null,
+    model_scoped: [{ display_name: "Fable", utilization: 91, resets_at: "2026-10-19T06:59:59.786515+00:00" }],
+  },
+  behaviors: null,
+};
+// FAKE_CLAUDE_USAGE scripts the get_usage answer: unset sends USAGE, "error" refuses the request, "api-key" is how an
+// API-key sign-in answers (no plan limits), "unavailable" is how Claude answers while its usage endpoint fails with
+// nothing cached (rate_limits: null), "long" names a model and a plan past what agent.limits may carry, "hang"
+// never answers, and "exit" leaves without answering.
+const USAGE_MODE = process.env.FAKE_CLAUDE_USAGE ?? "";
+const answerUsage = (requestId) => {
+  if (USAGE_MODE === "error") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "fake-claude: usage endpoint returned 503" } });
+  if (USAGE_MODE === "api-key") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { subscription_type: null, rate_limits_available: false, rate_limits: null, behaviors: null } } });
+  if (USAGE_MODE === "unavailable") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { ...USAGE, rate_limits: null } } });
+  if (USAGE_MODE === "long") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { ...USAGE, subscription_type: "p".repeat(200), rate_limits: { ...USAGE.rate_limits, model_scoped: [{ display_name: "m".repeat(200), utilization: 7, resets_at: null }] } } } });
+  if (USAGE_MODE === "hang") return; // stays silent, as a CLI stuck before its answer would
+  if (USAGE_MODE === "exit") { process.stderr.write("fake-claude: scripted exit before answering get_usage\n"); process.exit(3); }
+  if (USAGE_MODE) { process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_USAGE ${JSON.stringify(USAGE_MODE)}\n`); process.exit(64); }
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: USAGE } });
+};
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const pending = new Map();
@@ -40,6 +66,8 @@ async function turn(prompt, images = [], requestUuid = null) {
     for (const piece of text.match(text.length > 32768 ? /.{1,4096}/gsu : /.{1,12}/gsu) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
     out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, session_id: sessionId });
+    // The final usage of the call arrives on message_delta, as Claude Code 2.1 sends it: this is how full the window is.
+    out({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 40000, output_tokens: 5 } }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
   };
   const tool = async (name, input, produce) => {
@@ -156,7 +184,7 @@ async function turn(prompt, images = [], requestUuid = null) {
   } else {
     say(resumed ? `Continuing session ${sessionId}: ${prompt}` : `You said: ${prompt}`);
   }
-  out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 } });
+  out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
 }
 
 let buffered = "";
@@ -169,6 +197,7 @@ for await (const chunk of Bun.stdin.stream()) {
     if (!line.trim()) continue;
     const message = JSON.parse(line);
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS } } });
+    else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
     else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image"), message.uuid).then(() => {

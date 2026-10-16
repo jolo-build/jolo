@@ -49,6 +49,12 @@ async function boot({ clientKind = "test" } = {}) {
 }
 
 describe("Claude Code through its structured stream", () => {
+  test('Claude reports how full its window is, from its own usage report', async () => {
+    const { runTo } = await boot();
+    const turn = await runTo('hello', 'hello');
+    expect(turn.usage).toMatchObject({ contextUsed: 41007, contextWindow: 1_000_000, agentId: 'claude' });
+  }, 30_000);
+
   test('subagent review reports stay in tool activity without corrupting or duplicating the parent reply', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {

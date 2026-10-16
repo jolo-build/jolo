@@ -1,7 +1,7 @@
 {
   "name": "jolo-cli",
   "version": "0.2.5",
-  "description": "Terminal CLI for working with coding agents — Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider.",
+  "description": "Terminal CLI for working with coding agents — Claude Code, Codex, Devin CLI, Grok CLI, Antigravity CLI, or your own API provider.",
   "homepage": "https://jolo.build",
   "repository": {
     "type": "git",

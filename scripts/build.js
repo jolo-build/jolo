@@ -99,6 +99,7 @@ if (!cliOnly) {
   cpSync(path.join(ROOT, "apps/desktop/dist"), path.join(app, "dist"), { recursive: true });
   cpSync(path.join(ROOT, "apps/desktop/src/main/browser-zoom-preload.cjs"), path.join(app, "browser-zoom-preload.cjs"));
   cpSync(path.join(ROOT, "apps/desktop/src/preload/index.cjs"), path.join(app, "preload", "index.cjs"));
+  cpSync(path.join(ROOT, "apps/desktop/src/main/update-helper.js"), path.join(app, "update-helper.js"));
   cpSync(path.join(lib, "engine.js"), path.join(app, "engine", "engine.js"));
   cpSync(path.join(lib, bunExe), path.join(app, "engine", bunExe));
   chmodSync(path.join(app, "engine", bunExe), 0o755);

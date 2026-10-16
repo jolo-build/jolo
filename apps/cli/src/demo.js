@@ -46,7 +46,7 @@ export async function commandDemo({ flags }) {
   await say(700, "");
 
   await say(0, "  Ready for the real thing:");
-  await say(150, "    1. Install an agent — Claude Code, Codex, Devin CLI, Grok CLI, or Gemini CLI — or run " + bold("jolo provider set") + " to use an API provider.");
+  await say(150, "    1. Install an agent — Claude Code, Codex, Devin CLI, Grok CLI, or Antigravity CLI — or run " + bold("jolo provider set") + " to use an API provider.");
   await say(150, "    2. Run " + bold("jolo .") + " inside a project and ask your first question.");
   await say(150, `    3. The full guide lives at ${bold("https://docs.jolo.build")}.`);
   await say(200, "");

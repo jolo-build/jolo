@@ -108,7 +108,7 @@ export async function connect(options) {
         reject(Object.assign(new Error(`timeout: ${method}`), { code: "unavailable" }));
       // Account operations include bounded HTTP requests (10s each), and logout can
       // make several in sequence. Let their useful errors reach the caller first.
-      }, method === "agent.models" || method === "events.subscribe" ? Math.max(requestTimeoutMs, 65_000) : method.startsWith("account.") ? Math.max(requestTimeoutMs, 45_000) : requestTimeoutMs);
+      }, method === "agent.models" || method === "agent.limits" || method === "events.subscribe" ? Math.max(requestTimeoutMs, 65_000) : method.startsWith("account.") ? Math.max(requestTimeoutMs, 45_000) : requestTimeoutMs);
       pending.set(id, { resolve, reject, timer, method });
       try {
         const frame = encodeFrame({ jsonrpc: "2.0", id, method, params: checked.value });

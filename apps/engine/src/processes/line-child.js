@@ -21,9 +21,10 @@ export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId,
   };
   const later = (fn, ms) => { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); return timer; };
   const terminate = ({ graceful = false } = {}) => {
+    if (!graceful) kill('SIGTERM');
     if (terminating) return;
     terminating = true;
-    if (graceful) later(() => kill('SIGTERM'), graceMs); else kill('SIGTERM');
+    if (graceful) later(() => kill('SIGTERM'), graceMs);
     later(() => kill('SIGKILL'), (graceful ? 2 : 1) * graceMs);
   };
   const write = message => {
@@ -89,12 +90,13 @@ export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId,
     end() { try { child.stdin.end(); } catch {} },
     async settle() {
       // Always clean up descendants, including ones that inherited the pipes.
-      terminate({ graceful: true });
+      try { child.stdin.end(); } catch {}
+      terminate({ graceful: false });
       let timer;
       try {
         await Promise.race([
           Promise.allSettled([child.exited, stdout, stderr]),
-          new Promise(resolve => { timer = setTimeout(resolve, 2 * graceMs + 250); }),
+          new Promise(resolve => { timer = setTimeout(resolve, 300); }),
         ]);
       } finally {
         clearTimeout(timer);

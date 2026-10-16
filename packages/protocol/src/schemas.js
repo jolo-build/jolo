@@ -61,6 +61,8 @@ export const UsageSchema = z.object({
   iterations: z.number().int().nonnegative().default(0),
   contextUsed: z.number().int().nonnegative().nullable().default(null),
   contextWindow: z.number().int().positive().nullable().default(null),
+  /** The agent whose window contextUsed/contextWindow describe, when a hosted agent answered the run. */
+  agentId: Id.nullable().optional(),
 });
 
 export const RunNoteSchema = z.object({
@@ -313,8 +315,8 @@ export const AGENT_STATUSES = Object.freeze(["starting", "working", "needs_input
 export const AGENT_STATUS_SOURCES = Object.freeze(["process", "screen", "silence"]);
 export const AGENT_LIMITS = Object.freeze({ maxRules: 40, maxAgents: 8, minIdleMs: 500, maxIdleMs: 120_000 });
 /** pty: a terminal Jolo watches. The rest are structured transports, driven turn by turn as a Jolo session: Claude Code's
- *  stream, Codex's app-server, or the Agent Client Protocol spoken by any agent that offers it. */
-export const AGENT_TRANSPORTS = Object.freeze(["pty", "claude-stream", "codex-app-server", "acp"]);
+ *  stream, Codex's app-server, the Agent Client Protocol spoken by any agent that offers it, or Antigravity's print-mode stream. */
+export const AGENT_TRANSPORTS = Object.freeze(["pty", "claude-stream", "codex-app-server", "acp", "antigravity-stream"]);
 
 export const AgentRuleSchema = z.object({
   id: z.string().min(1).max(64),
@@ -387,6 +389,8 @@ export const AgentCatalogEntrySchema = z.object({
   effort: z.string().nullable(),
   supportsModel: z.boolean(),
   supportsEffort: z.boolean(),
+  /** Whether this agent can report the signed-in plan's usage limits (agent.limits). */
+  supportsLimits: z.boolean(),
 });
 
 export const AgentSessionSchema = z.object({
@@ -1035,6 +1039,18 @@ Object.assign(MethodSchemas, {
       efforts: z.array(z.string().max(40)),
       source: z.enum(["agent", "none"]),
       note: z.string().max(300).nullable(),
+    }),
+  },
+  // The signed-in account's usage windows, as the agent reports them; starting it makes this interactive too.
+  "agent.limits": {
+    params: z.object({ agentId: Id, refresh: z.boolean().optional().default(false) }),
+    result: z.object({
+      agentId: Id,
+      windows: z.array(z.object({ label: z.string().max(120), usedPercent: z.number().min(0), resetsAt: IsoTimestamp.nullable() })).max(20),
+      plan: z.string().max(80).nullable(),
+      source: z.enum(["agent", "none"]),
+      note: z.string().max(300).nullable(),
+      checkedAt: IsoTimestamp,
     }),
   },
   "agent.start": {

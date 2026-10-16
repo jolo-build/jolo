@@ -38,6 +38,20 @@ export function describeTool(toolName, input) {
   return { summary: `${toolName}${target ? ` ${target}` : ""}`, script: `${toolName} ${JSON.stringify(input ?? {})}` };
 }
 
+/**
+ * One call's usage as Claude Code itself merges it: message_start carries what was sent, and a message_delta's
+ * input counts replace those only when positive, since some providers send them empty; the output is the delta's.
+ */
+const mergedUsage = (start, delta) => ({
+  input_tokens: delta.input_tokens > 0 ? delta.input_tokens : start?.input_tokens ?? 0,
+  cache_creation_input_tokens: delta.cache_creation_input_tokens > 0 ? delta.cache_creation_input_tokens : start?.cache_creation_input_tokens ?? 0,
+  cache_read_input_tokens: delta.cache_read_input_tokens > 0 ? delta.cache_read_input_tokens : start?.cache_read_input_tokens ?? 0,
+  output_tokens: delta.output_tokens ?? start?.output_tokens ?? 0,
+});
+
+/** How full the window was at one model call: everything it was sent, plus what it wrote back into the window. */
+const contextOf = (call) => (call ? (call.input_tokens ?? 0) + (call.cache_creation_input_tokens ?? 0) + (call.cache_read_input_tokens ?? 0) + (call.output_tokens ?? 0) : null);
+
 /** The stream-json host mode, as the binary spells it. Exported so model discovery can open the same channel. */
 export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
   binary, ...extraArgs, "--print", "--verbose",
@@ -68,9 +82,11 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const hosted = mcpConfig?.(workspace, run);
       const mcpServers = hosted ? { jolo: hosted.server } : {};
       const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), hosted?.hasScreen ? screenInstructions({ hosted: true }) : '', standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
-      const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
-      const images = readImages(storage, run);
-      const content = images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
+      const contentPromise = handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) })
+        .then(prompt => {
+          const images = readImages(storage, run);
+          return images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
+        });
       const env = hostedEnvironment(supervisor, turn.environment);
 
       const requestUuid = randomUUID();
@@ -78,13 +94,16 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       let hasTaskSnapshot = false, requestAnswered = false, awaitingFinal = false;
       const state = {
         blocks: new Map(), // stream block index -> { kind, messageId }
-        usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
         result: null, failure: null, hasText: false,
+        model: null, // the main model as Claude names it in its usage report
+        lastCall: null, // the main thread's latest model call, which is how full the window is now
       };
       let link;
       try {
         link = spawnLineChild({ argv, cwd: workspace.path, env, signal, log, agentId: manifest.id });
       } catch (error) {
+        contentPromise.catch(() => {});
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
@@ -126,10 +145,11 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         if (message.parent_tool_use_id != null && message.type !== 'control_request') return;
         switch (message.type) {
           case "control_response":
-            if (message.response?.request_id === "jolo-init") link.write({ type: "user", uuid: requestUuid, message: { role: "user", content } });
+            if (message.response?.request_id === "jolo-init") link.write({ type: "user", uuid: requestUuid, message: { role: "user", content: await contentPromise } });
             return;
           case "control_request": return onControlRequest(message);
           case "system":
+            if (message.subtype === "init" && message.model) state.model = message.model;
             if (message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
               hasTaskSnapshot = true;
               backgroundTasks.clear();
@@ -154,6 +174,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
               const block = state.blocks.get(event.index);
               finishBlock(block, "complete");
               if (block) state.blocks.set(event.index, { ...block, messageId: null, done: true });
+            } else if (event.type === "message_start" && event.message?.usage) {
+              state.lastCall = event.message.usage;
+            } else if (event.type === "message_delta" && event.usage) {
+              state.lastCall = mergedUsage(state.lastCall, event.usage);
             } else if (event.type === "message_stop") {
               state.blocks.clear();
             }
@@ -184,6 +208,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             state.usage.inputTokens += (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
             state.usage.outputTokens += usage.output_tokens ?? 0;
             state.usage.iterations += message.num_turns ?? 0;
+            const window = message.modelUsage?.[state.model]?.contextWindow;
+            state.usage.contextUsed = contextOf(state.lastCall);
+            state.usage.contextWindow = Number.isInteger(window) && window > 0 ? window : null;
             if (!requestAnswered || emptyNotification) return;
             state.result = message;
             // Some CLI turns deliver their answer only in the final result.
@@ -197,7 +224,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             if (!message.is_error && backgroundTasks.size) { awaitingFinal = true; ctx.transition('tools'); return; }
             awaitingFinal = false;
             link.end();
-            link.terminate({ graceful: true });
+            link.terminate();
             return;
           }
           default: return; // rate_limit_event, keep_alive, hooks: nothing Jolo needs
@@ -207,7 +234,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       ctx.transition("model");
       link.write({ type: "control_request", request_id: "jolo-init", request: { subtype: "initialize" } });
       try {
-        for await (const message of link.messages()) await onMessage(message);
+        for await (const message of link.messages()) {
+          await onMessage(message);
+          if (state.result && !awaitingFinal) break;
+        }
       } catch (error) {
         state.failure = String(error?.message ?? error);
       }

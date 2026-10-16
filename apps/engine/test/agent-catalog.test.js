@@ -7,7 +7,7 @@ import { BUILTIN_MANIFESTS } from "../src/agents/manifests.js";
 
 // Stand-ins on a PATH of their own, so what this machine happens to have installed cannot change the result.
 const bin = mkdtempSync(path.join(os.tmpdir(), "jolo-bin-"));
-for (const name of ["claude", "codex", "grok", "gemini", "devin"]) {
+for (const name of ["claude", "codex", "grok", "devin"]) {
   const file = path.join(bin, name);
   writeFileSync(file, "#!/bin/sh\nexit 0\n");
   chmodSync(file, 0o755);
@@ -45,8 +45,8 @@ describe("choosing a model for a hosted agent", () => {
     const listed = catalogWith({ claude: { model: "fable", effort: "high" } }).list();
     expect(listed.find((entry) => entry.id === "claude")).toMatchObject({ model: "fable", effort: "high", supportsModel: true, supportsEffort: true });
     expect(listed.find((entry) => entry.id === "codex")).toMatchObject({ model: null, supportsModel: true, supportsEffort: true });
-    // Gemini takes a model but publishes no effort option, and the catalog says so rather than guessing.
-    expect(listed.find((entry) => entry.id === "gemini")).toMatchObject({ supportsModel: true, supportsEffort: false });
+    // Devin takes a model but publishes no effort option, and the catalog says so rather than guessing.
+    expect(listed.find((entry) => entry.id === "devin")).toMatchObject({ supportsModel: true, supportsEffort: false });
   });
 
   test("an explicit override beats the setting, and a null asks for the agent's own default", () => {

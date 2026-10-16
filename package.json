@@ -1,7 +1,7 @@
 {
   "name": "jolo",
   "private": true,
-  "version": "0.2.6",
+  "version": "0.2.9",
   "type": "module",
   "workspaces": [
     "apps/*",
@@ -65,7 +65,7 @@
     "ink@7.1.1": "patches/ink@7.1.1.patch"
   },
   "overrides": {
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "undici": "7.29.1"
   },
   "license": "MIT",

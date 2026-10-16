@@ -12,6 +12,7 @@ const browserCursorListeners = new Set();
 const browserNewTabListeners = new Set();
 const closeListeners = new Set();
 const scrollGestureListeners = new Set();
+const updateListeners = new Set();
 const browserOpens = new Set();
 
 ipcRenderer.on("jolo:events", (_event, batch) => {
@@ -25,6 +26,7 @@ ipcRenderer.on("jolo:focus", (_event, payload) => { for (const listener of focus
 ipcRenderer.on("jolo:notice", (_event, payload) => { for (const listener of noticeListeners) listener(payload); }); // news for a window the user is looking at
 ipcRenderer.on('jolo:closeRequest', (_event, payload) => { for (const listener of closeListeners) listener(payload); });
 ipcRenderer.on('jolo:browserNewTab', (_event, payload) => { for (const listener of browserNewTabListeners) listener(payload); });
+ipcRenderer.on('jolo:update:state', (_event, state) => { for (const listener of updateListeners) listener(state); });
 ipcRenderer.on('jolo:browserCursor', (_event, payload) => { for (const listener of browserCursorListeners) listener(payload); });
 ipcRenderer.on('jolo:browserOpenCancel', (_event, { invocationId }) => browserOpens.delete(invocationId));
 ipcRenderer.on('jolo:browserOpen', (_event, payload) => {
@@ -74,6 +76,9 @@ contextBridge.exposeInMainWorld("jolo", {
   saveImage: params => ipcRenderer.invoke('jolo:image:save', { artifactId: params.artifactId, name: params.name }),
   openExternal: (url) => ipcRenderer.invoke("jolo:openExternal", url),
   checkForUpdate: desktopApi ? (options) => ipcRenderer.invoke("jolo:update:check", { force: Boolean(options?.force) }) : undefined,
+  downloadUpdate: desktopApi ? () => ipcRenderer.invoke('jolo:update:download') : undefined,
+  installUpdate: desktopApi ? () => ipcRenderer.invoke('jolo:update:install') : undefined,
+  onUpdate: listener => { updateListeners.add(listener); return () => updateListeners.delete(listener); },
   resync: () => ipcRenderer.invoke("jolo:resync"),
   setOverlay: (active) => ipcRenderer.send("jolo:overlay", Boolean(active)),
   smoke: process.env.JOLO_DESKTOP_SMOKE === "1",

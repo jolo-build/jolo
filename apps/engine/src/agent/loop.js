@@ -94,7 +94,7 @@ export function createAgentExecutor(deps) {
         storage.insertItem({ sessionId: session.id, runId: run.id, kind: "user_message", groupId: newId("grp"), payload: { text: askedOf(run, storage), ...(run.attachments?.length ? { attachments: run.attachments } : {}) }, messageId: userMessage });
       }
 
-      const usage = { inputTokens: 0, outputTokens: 0, attempts: 0, iterations: 0, contextUsed: null, contextWindow: null, ...(resuming ? run.usage ?? {} : {}) };
+      const usage = { inputTokens: 0, outputTokens: 0, attempts: 0, iterations: 0, contextUsed: null, contextWindow: null, ...(resuming ? run.usage ?? {} : {}), agentId: 'jolo' };
       // The iteration budget bounds one attempt the way the active-time budget does; a resume starts a
       // fresh count, so resuming a budget-paused run does not instantly re-pause (§6.4).
       if (resuming) usage.iterations = 0;

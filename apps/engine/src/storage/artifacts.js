@@ -51,7 +51,6 @@ export class ArtifactStore {
         return writer.bytes;
       },
       flush: () => {
-        fsyncSync(fd);
         return writer.bytes;
       },
       close: () => {

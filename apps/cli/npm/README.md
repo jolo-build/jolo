@@ -29,7 +29,7 @@ Or run a single task:
 jolo run --agent claude "Explain this repository" --path /path/to/project
 ```
 
-Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider — install and sign in to your agent separately. Jolo keeps your chats, files, terminal, and a browser in one workspace; a companion desktop app is at [jolo.build](https://jolo.build).
+Use Claude Code, Codex, Devin CLI, Grok CLI, Antigravity CLI, or your own API provider — install and sign in to your agent separately. Jolo keeps your chats, files, terminal, and a browser in one workspace; a companion desktop app is at [jolo.build](https://jolo.build).
 
 ## How this package works
 

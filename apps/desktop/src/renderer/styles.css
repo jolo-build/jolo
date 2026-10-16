@@ -505,13 +505,31 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .usage-ring .usage-fill { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
 .usage-ring.warn .usage-fill { stroke: var(--warning); }
 .usage-ring.full .usage-fill { stroke: var(--red); }
-.usage-panel { position: fixed; z-index: 60; min-width: 210px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); }
+.usage-panel { position: fixed; z-index: 60; width: 288px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); }
 .usage-panel .usage-head { font-size: 12px; font-weight: 550; margin-bottom: 6px; }
 .usage-panel dl { display: grid; gap: 3px; margin: 0 0 6px; }
 .usage-panel dl > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
 .usage-panel dt { color: var(--muted); }
 .usage-panel dd { margin: 0; font-family: var(--mono); font-size: 11px; }
-.usage-panel .hint { font-size: 11px; }
+.usage-panel .hint { font-size: 11px; overflow-wrap: anywhere; }
+.usage-panel .usage-limits { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.usage-panel .usage-limits-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.usage-panel .usage-limits-head .usage-head { margin-bottom: 0; }
+.usage-panel .usage-plan { font-size: 11px; color: var(--muted); text-transform: capitalize; }
+/* One grid for every limit, so bars and percents line up whatever each reset says. */
+.usage-panel .usage-limit-list { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 5px; font-size: 12px; }
+.usage-panel .usage-limit { display: contents; }
+.usage-panel .usage-limit-top { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.usage-panel .usage-limit + .usage-limit > .usage-limit-top { margin-top: 7px; }
+.usage-panel .usage-limit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-panel .usage-limit-reset { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.usage-panel .usage-limit-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.usage-panel .usage-limit-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.usage-panel .usage-limit-percent { min-width: 4ch; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.usage-panel .usage-limit.warn .usage-limit-bar > span { background: var(--warning); }
+.usage-panel .usage-limit.full .usage-limit-bar > span { background: var(--red); }
+.usage-panel .usage-limit.full .usage-limit-percent { color: var(--red); }
+.usage-panel .usage-limits-stale { margin-top: 8px; }
 .composer-mode { position: relative; display: inline-flex; align-items: center; flex: none; height: 28px; color: var(--muted); border-radius: 6px; }
 .composer-mode > svg { position: absolute; pointer-events: none; }
 .composer-mode > svg:first-child { left: 6px; }
@@ -1001,6 +1019,11 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .file-modes [role=tab] { min-height: 30px; font-size: 12px; line-height: 18px; padding: 6px 10px; color: var(--muted); border: 0; border-radius: 8px; background: transparent; box-shadow: none; white-space: nowrap; }
 .file-modes [role=tab]:hover:not(:disabled):not([aria-selected=true]) { background: var(--hover); color: var(--text); }
 .file-modes [role=tab][aria-selected=true], .file-modes [role=tab][aria-selected=true]:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); box-shadow: none; }
+.usage-tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); }
+.usage-tabs [role=tab] { font-size: 11px; padding: 2px 8px; color: var(--muted); border-radius: 4px; }
+.usage-tabs [aria-selected=true] { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px #0000000f; }
+.usage-panel .usage-tabs { width: fit-content; max-width: 100%; overflow-x: auto; margin-bottom: 8px; }
+.usage-panel .usage-tabs [role=tab] { flex: none; border: 0; white-space: nowrap; }
 .md pre.md-code { padding: 10px 12px; overflow: auto; margin: 0; font: 12px/1.7 var(--mono); tab-size: 2; }
 .md pre.md-code code { font: inherit; background: none; border: 0; padding: 0; white-space: pre; overflow-wrap: normal; }
 :is(.md-code, .diff, .file-preview-source) .syntax-token.comment, :is(.md-code, .diff, .file-preview-source) .syntax-token.prolog, :is(.md-code, .diff, .file-preview-source) .syntax-token.doctype { color: var(--syntax-comment); }

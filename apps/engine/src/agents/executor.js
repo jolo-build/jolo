@@ -2,13 +2,14 @@ import { SELF_MENTION } from './mentions.js';
 import { createClaudeStreamExecutor } from './claude-stream.js';
 import { createCodexAppServerExecutor } from './codex-app-server.js';
 import { createAcpExecutor } from './acp.js';
+import { createAntigravityExecutor } from './antigravity-stream.js';
 import { rememberConversation } from './handoff.js';
 
 /** @typedef {{outcome: 'completed'|'failed'|'cancelled'|'paused', failure?: string, pauseReason?: 'permission'|'budget'|'user', detail?: string, permissionId?: string}} ExecutorResult */
 /** @typedef {{name: string, execute(ctx: object, answerer?: object): Promise<ExecutorResult>}} Executor */
 
 // All task-capable transports register their executor at this one boundary.
-export const EXECUTOR_FACTORIES = Object.freeze({ 'claude-stream': createClaudeStreamExecutor, 'codex-app-server': createCodexAppServerExecutor, acp: createAcpExecutor });
+export const EXECUTOR_FACTORIES = Object.freeze({ 'claude-stream': createClaudeStreamExecutor, 'codex-app-server': createCodexAppServerExecutor, acp: createAcpExecutor, 'antigravity-stream': createAntigravityExecutor });
 
 export function createExecutorRouter(deps) {
   const { storage, catalog, settings, native, interactiveClients, revoke } = deps;

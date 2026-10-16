@@ -84,11 +84,15 @@ const claudeLauncher = path.join(home, "fake-claude");
 writeFileSync(claudeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "..", "..", "tests", "fixtures", "fake-claude.js")}" "$@"\n`);
 chmodSync(claudeLauncher, 0o755);
 writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: claudeLauncher, transport: "claude-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }));
-// Codex's app-server and an ACP agent, likewise played by fixtures.
+// Codex's app-server, Antigravity's print-mode stream and an ACP agent, likewise played by fixtures.
 const codexLauncher = path.join(home, "fake-codex");
 writeFileSync(codexLauncher, `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "..", "..", "tests", "fixtures", "fake-codex.js")}" "$@"\n`);
 chmodSync(codexLauncher, 0o755);
 writeFileSync(path.join(agentsDir, "codex.json"), JSON.stringify({ id: "codex", displayName: "Codex", binary: codexLauncher, transport: "codex-app-server" }));
+const agyLauncher = path.join(home, "fake-agy");
+writeFileSync(agyLauncher, `#!/bin/sh\nexec "${process.execPath}" "${path.join(root, "..", "..", "tests", "fixtures", "fake-agy.js")}" "$@"\n`);
+chmodSync(agyLauncher, 0o755);
+writeFileSync(path.join(agentsDir, "antigravity.json"), JSON.stringify({ id: "antigravity", displayName: "Antigravity CLI", binary: agyLauncher, transport: "antigravity-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }));
 const acpLauncher = path.join(home, "fake-acp");
 writeFileSync(acpLauncher, `#!/bin/sh\nFAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))} exec "${process.execPath}" "${path.join(root, "..", "..", "tests", "fixtures", "fake-acp.js")}" "$@"\n`);
 chmodSync(acpLauncher, 0o755);

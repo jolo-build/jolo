@@ -39,7 +39,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const paintTimer = useRef(null);
   const redraw = useCallback(() => {
     if (paintTimer.current) return;
-    paintTimer.current = setTimeout(() => { paintTimer.current = null; bump(); }, 100);
+    paintTimer.current = setTimeout(() => { paintTimer.current = null; bump(); }, 16);
   }, []);
   useEffect(() => () => clearTimeout(paintTimer.current), []);
   const projection = useRef(null);
@@ -223,8 +223,14 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     setHistoryState("open");
     const preferredMode = workspaceId === current.workspaceId ? "direct" : "worktree";
     if (current.preferredMode !== preferredMode) { projectRef.current = { ...current, preferredMode }; setProject(projectRef.current); }
-    await Promise.all([refreshSessions(current.projectId), refreshWorkspaces(current.projectId)]);
-    if (!options.deferSelection) await selectSession(session.id);
+    setSessions([session, ...sessionsRef.current.filter(item => item.id !== session.id)]);
+    const refresh = Promise.all([refreshSessions(current.projectId), refreshWorkspaces(current.projectId)]);
+    if (options.deferSelection) {
+      void refresh;
+    } else {
+      await refresh;
+      await selectSession(session.id);
+    }
     return session;
   }, [refreshSessions, refreshWorkspaces, selectSession]);
 
@@ -261,9 +267,11 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const previousSessionId = sessionRef.current;
     const previousProjectId = projectRef.current?.projectId;
     const draft = draftSession.current;
+    const targetSessionId = sessionRef.current ?? draft.id;
+    const knownSession = targetSessionId ? sessionsRef.current.find(item => item.id === targetSessionId) : undefined;
     // Keep a new task's composer mounted until upload and send succeed, so a
     // failed first send retains both its text and pasted images for retry.
-    let session = queue && sessionRef.current ? { id: sessionRef.current } : await sessionForSend({ call, sessionId: sessionRef.current ?? draft.id, agentId, prompt, newSession: async (title, options) => {
+    let session = queue && sessionRef.current ? (knownSession ?? { id: sessionRef.current }) : await sessionForSend({ call, sessionId: targetSessionId, session: knownSession, agentId, prompt, newSession: async (title, options) => {
       const created = await newSession(title, { ...options, deferSelection: true });
       draft.id = created.id; // Retry the same draft in the same task after an interrupted upload.
       sessionPanelScopes.current.set(created.id, draft.panelScope);
@@ -281,12 +289,32 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const requestId = createRequestId();
     const execution = queue ? queuedExecution(agentId, sessionsRef.current.find(item => item.id === session.id)?.agentId, prompt) : undefined;
     const images = await uploadImages(call, session.id, attachments);
-    const { run } = await call("run.start", { sessionId: session.id, requestId, prompt, ...(images.length ? { attachments: images } : {}), ...(execution ? { execution } : {}) });
+    const optimisticId = `optimistic:${requestId}`;
+    if (sessionRef.current === session.id && projection.current) {
+      projection.current.runs.set(optimisticId, {
+        id: optimisticId,
+        sessionId: session.id,
+        state: queue ? "queued" : "preparing",
+        revision: 0,
+        prompt,
+        promptPreview: prompt.slice(0, 500),
+        agentId: execution?.agentId ?? null,
+        execution: execution ?? null,
+        attachments: images,
+      });
+      bump();
+    }
+    let run;
+    try {
+      ({ run } = await call("run.start", { sessionId: session.id, requestId, prompt, ...(images.length ? { attachments: images } : {}), ...(execution ? { execution } : {}) }));
+    } finally {
+      if (projection.current?.runs.delete(optimisticId)) redraw();
+    }
     if (!previousSessionId && !sessionRef.current && draftSession.current === draft && projectRef.current?.projectId === previousProjectId) await selectSession(session.id);
     if (sessionRef.current === session.id && projection.current) {
       const current = projection.current.runs.get(run.id);
       projection.current.runs.set(run.id, { ...run, ...current, prompt });
-      redraw();
+      bump();
     }
     return run;
   }, [newSession, selectSession, redraw]);
@@ -302,20 +330,32 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     return runs.find(run => run.state && !TERMINAL.has(run.state) && !["paused", "queued"].includes(run.state)) ?? runs.find(run => run.state === "queued") ?? null;
   };
 
+  /** This task's runs that recorded usage, each with the agent that answered it ('jolo' for Jolo's own loop). */
+  const answeredRuns = () => {
+    const sessionAgentId = sessionsRef.current.find((item) => item.id === sessionRef.current)?.agentId ?? null;
+    return (projection.current ? [...projection.current.runs.values()] : []).filter((run) => run.usage)
+      .map((run) => ({ run, agentId: run.usage.agentId ?? run.agentId ?? sessionAgentId ?? 'jolo' }));
+  };
+
   /**
-   * What this task has cost. Tokens add up across its runs; how full the context is does not, so that comes
-   * from the most recent run that reported it. Nothing is filled in that the model did not report.
+   * What one agent has cost in this task. Each agent keeps a window of its own, so its tokens add up over its
+   * own runs and how full its context is comes from its most recent run that reported it; another agent's run
+   * says nothing about it. Nothing is filled in that the model did not report.
    */
-  const usageSummary = () => {
-    const runs = (projection.current ? [...projection.current.runs.values()] : []).filter((run) => run.usage);
+  const usageSummary = (agentId) => {
+    const runs = answeredRuns().filter((entry) => entry.agentId === agentId).map((entry) => entry.run);
     const totals = runs.reduce((sum, run) => ({
       inputTokens: sum.inputTokens + (run.usage.inputTokens ?? 0),
       outputTokens: sum.outputTokens + (run.usage.outputTokens ?? 0),
       iterations: sum.iterations + (run.usage.iterations ?? 0),
     }), { inputTokens: 0, outputTokens: 0, iterations: 0 });
-    const latest = runs.filter((run) => run.usage.contextWindow > 0).at(-1) ?? null;
+    // A run written before usage named its agent may belong to another agent's window, so it never fills this one.
+    const latest = runs.filter((run) => run.usage.agentId === agentId && run.usage.contextWindow > 0).at(-1) ?? null;
     return { ...totals, runs: runs.length, contextUsed: latest?.usage.contextUsed ?? null, contextWindow: latest?.usage.contextWindow ?? null };
   };
+
+  /** The agents that have answered in this task, in the order they first did. */
+  const taskAgents = () => [...new Set(answeredRuns().map((entry) => entry.agentId))];
 
   const cancel = useCallback(async () => {
     const run = activeRun();
@@ -398,7 +438,12 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
           if (item.value.type.startsWith("plan.")) plansChanged = true;
           if (item.value.type.startsWith("schedule.") && item.value.sessionId === sessionRef.current) schedulesChanged = true;
           if (WORKSPACE_EVENTS.has(item.value.type) && item.value.payload.projectId === projectRef.current?.projectId || (item.value.type === "workspace.created" && item.value.payload.workspace?.projectId === projectRef.current?.projectId)) workspacesChanged = true;
-          if (item.value.sessionId === sessionRef.current && current) current.applyEvent(item.value);
+          if (item.value.sessionId === sessionRef.current && current) {
+            if (item.value.type === "run.state") {
+              for (const key of current.runs.keys()) if (key.startsWith("optimistic:")) current.runs.delete(key);
+            }
+            current.applyEvent(item.value);
+          }
           if (item.value.sessionId === sessionRef.current) {
             if (item.value.type === 'session.updated') {
               const session = item.value.payload.session;
@@ -440,7 +485,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     history: history.current,
     activeRun: activeRun(),
     queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued') : [],
-    usage: usageSummary(),
+    usageFor: usageSummary, taskAgents,
     pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
     board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
     plans, refreshPlans,

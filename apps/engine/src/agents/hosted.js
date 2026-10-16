@@ -1,7 +1,7 @@
 // What every hosted agent shares.
 //
 // An agent with a structured transport answers a Jolo run over newline-delimited JSON on its stdio. The
-// wire formats differ (Claude's stream, Codex's app-server, ACP), but the same things happen every turn:
+// wire formats differ (Claude's stream, Codex's app-server, ACP, Antigravity's print-mode stream), but the same things happen every turn:
 // the user's prompt becomes a message, the agent's tool calls become invocations and tool messages, its
 // permission questions become Jolo permission records decided by policy or by the user, and the turn
 // ends with usage recorded. This module holds those parts so each adapter is only its protocol.
@@ -258,7 +258,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       const recorded = {
         inputTokens: Math.max(0, usage.inputTokens | 0), outputTokens: Math.max(0, usage.outputTokens | 0),
         attempts: Math.max(1, usage.attempts | 0), iterations: Math.max(0, usage.iterations | 0),
-        contextUsed: usage.contextUsed ?? null, contextWindow: usage.contextWindow ?? null,
+        contextUsed: usage.contextUsed ?? null, contextWindow: usage.contextWindow ?? null, agentId: manifest.id,
       };
       storage.transaction(() => {
         storage.updateRunUsage(run.id, recorded);

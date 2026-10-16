@@ -294,7 +294,7 @@ async function commandAgent({ positional, flags }) {
     if (sub === "list") {
       const { agents } = await client.call("agent.catalog", {});
       if (json) out(JSON.stringify({ agents }));
-      else for (const agent of agents) out(`${agent.available ? "✓" : "·"} ${agent.id.padEnd(10)} ${agent.displayName.padEnd(16)} ${(agent.transport === "pty" ? "terminal" : "task").padEnd(9)} ${(agent.model ?? "-").padEnd(18)} ${agent.available ? agent.resolvedPath : `not installed (${agent.binary})`}`);
+      else for (const agent of agents) out(`${agent.available ? "✓" : "·"} ${agent.id.padEnd(12)} ${agent.displayName.padEnd(16)} ${(agent.transport === "pty" ? "terminal" : "task").padEnd(9)} ${(agent.model ?? "-").padEnd(18)} ${agent.available ? agent.resolvedPath : `not installed (${agent.binary})`}`);
       if (!json && agents.every((agent) => !agent.available)) err("no agent CLIs found on the engine's PATH");
       return EXIT.completed;
     }

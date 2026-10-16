@@ -4,6 +4,7 @@ const cacheKey = sessionId => `jolo.runChangeCards.v2.${sessionId}`;
 /** Only explicit run records can attribute a file. Working-tree status is shared by all chats. */
 export function updateChangeCards(cards, runs, { live = false } = {}) {
   const next = new Map(cards.map(card => [card.runId, card]));
+  let changed = false;
   for (const run of runs) {
     if (!live && !FINISHED.has(run.state)) continue;
     const previous = next.get(run.id);
@@ -20,12 +21,13 @@ export function updateChangeCards(cards, runs, { live = false } = {}) {
       files.delete(path); // latest touched file is last, even after repeated edits
       files.set(path, { ...change, invocationId: run.id, tool: 'run', diffArtifactIds: [...ids], revision: [...ids].join(':') });
     }
-    if (!files.size) { next.delete(run.id); continue; }
+    if (!files.size) { if (next.delete(run.id)) changed = true; continue; }
     const list = [...files.values()];
     if (previous && JSON.stringify(previous.files) === JSON.stringify(list)) continue;
     next.set(run.id, { runId: run.id, files: list, counts: [] });
+    changed = true;
   }
-  return [...next.values()].slice(-50);
+  return changed ? [...next.values()].slice(-50) : cards;
 }
 
 /** Extract this file's sections from immutable per-tool diffs, never the live Git diff. */

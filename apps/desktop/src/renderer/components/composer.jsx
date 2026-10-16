@@ -14,16 +14,66 @@ const RADIUS = 6;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const composerDrafts = new Map();
 const tokens = (value) => (value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value));
+const limitLevel = (used) => (used >= 90 ? ' full' : used >= 75 ? ' warn' : '');
+/** How long until a window resets, short enough to sit beside its name; the exact time is in its tooltip. */
+const untilReset = (iso) => {
+  const minutes = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000);
+  if (minutes <= 0) return 'resets now';
+  if (minutes < 60) return `resets in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `resets in ${hours}h ${minutes % 60}m` : `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+};
+
+/** The last plan limits each hosted agent reported, shared by every composer so a pane opens with numbers in it. */
+const knownLimits = new Map(); // agentId -> { report, error }
+
+/** Ask one agent for its limits and keep the answer; a failed answer keeps the last good numbers on screen. */
+const askLimits = (agentId, refresh) => engineCall('agent.limits', { agentId, refresh })
+  .then(report => {
+    const previous = knownLimits.get(agentId)?.report;
+    knownLimits.set(agentId, report.source !== 'agent' && previous?.windows.length ? { report: previous, error: report.note } : { report, error: null });
+  }, error => knownLimits.set(agentId, { report: knownLimits.get(agentId)?.report ?? null, error: error.message }));
 
 /**
- * How full the model's window is, and what the task has cost so far. The ring is only ever filled from a
- * number the model itself reported; when an agent does not report one, it stays empty and says so (§7.2).
+ * Plan limits, kept current in the background so nobody waits on an agent starting: the answering agent's are
+ * asked when it is chosen and afresh when a run ends, since a run is what moves them, and every tab's are asked
+ * when the usage panel opens. The last good answer stays on screen while a newer one is asked for.
  */
-function UsageButton({ usage, answererName }) {
+function usePlanLimits(currentId, tabIds, open, running) {
+  const [, setAnswers] = useState(0);
+  const redraw = () => setAnswers(count => count + 1);
+  const last = useRef({ currentId: null, running });
+  useEffect(() => {
+    const before = last.current;
+    last.current = { currentId, running };
+    const finished = before.running && !running;
+    if (currentId === 'jolo' || !(before.currentId !== currentId || finished)) return;
+    askLimits(currentId, finished).then(redraw); // the engine may still hold the numbers from before the run
+  }, [currentId, running]);
+  const hostedTabs = tabIds.filter(id => id !== 'jolo').join(',');
+  useEffect(() => {
+    if (!open || !hostedTabs) return;
+    for (const id of hostedTabs.split(',')) askLimits(id, false).then(redraw);
+  }, [open, hostedTabs]);
+  return (agentId) => (agentId === 'jolo' ? null : knownLimits.get(agentId) ?? null);
+}
+
+/** How full a window is, from a number the model reported, or null when it reported none. */
+const fillOf = (usage) => (usage?.contextWindow > 0 && usage.contextUsed !== null && usage.contextUsed !== undefined ? Math.min(1, usage.contextUsed / usage.contextWindow) : null);
+
+/**
+ * How full the answering model's window is, and what each agent has cost in this task. The ring is only ever
+ * filled from a number the model itself reported; when an agent does not report one, it stays empty and says
+ * so (§7.2). The panel has a tab per agent, so one called in by a mention can be checked too; for a hosted
+ * agent it also shows how much of the signed-in plan is left.
+ */
+function UsageButton({ tabs, currentId, running }) {
   const [at, setAt] = useState(null); // where to put the panel, and whether it is open at all
+  const [chosenTab, setChosenTab] = useState(null); // null: the answering agent's tab
   const wrap = useRef(null);
   const panel = useRef(null);
   const open = at !== null;
+  const limitsOf = usePlanLimits(currentId, tabs.map(tab => tab.id), open, running);
   useEffect(() => {
     if (!open) return;
     const dismiss = (event) => { if (!wrap.current?.contains(event.target) && !panel.current?.contains(event.target)) setAt(null); };
@@ -38,29 +88,52 @@ function UsageButton({ usage, answererName }) {
     if (open) { setAt(null); return; }
     const rect = wrap.current?.getBoundingClientRect();
     if (!rect) return;
-    setAt({ left: Math.max(8, Math.min(rect.left - 8, window.innerWidth - 236)), bottom: Math.max(8, window.innerHeight - rect.top + 8) });
+    setChosenTab(null); // it opens on the agent that is answering
+    setAt({ left: Math.max(8, Math.min(rect.left - 8, window.innerWidth - 296)), bottom: Math.max(8, window.innerHeight - rect.top + 8) });
   };
-  const known = usage?.contextWindow > 0 && usage?.contextUsed !== null && usage?.contextUsed !== undefined;
-  const fraction = known ? Math.min(1, usage.contextUsed / usage.contextWindow) : null;
-  const percent = known ? Math.round(fraction * 100) : null;
-  const level = fraction === null ? '' : fraction >= 0.9 ? ' full' : fraction >= 0.75 ? ' warn' : '';
-  const title = known ? `Context ${percent}% full · click for usage` : 'Usage · this agent does not report how full its context is';
-  return <span className="usage" ref={wrap}>
-    <button type="button" className={`usage-ring${level}`} aria-expanded={open} aria-label={title} title={title} onClick={toggle}>
-      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-        <circle cx="8" cy="8" r={RADIUS} className="usage-track" />
-        {fraction !== null && <circle cx="8" cy="8" r={RADIUS} className="usage-fill" strokeDasharray={`${(CIRCUMFERENCE * fraction).toFixed(2)} ${CIRCUMFERENCE.toFixed(2)}`} transform="rotate(-90 8 8)" />}
-      </svg>
-    </button>
-    {open && createPortal(<div className="usage-panel" role="dialog" aria-label="Model usage" ref={panel} style={{ left: `${at.left}px`, bottom: `${at.bottom}px` }}>
-      <div className="usage-head">{answererName}</div>
+  const current = tabs.find(tab => tab.id === currentId) ?? tabs[0];
+  const shown = tabs.find(tab => tab.id === chosenTab) ?? current;
+  const ring = fillOf(current?.usage);
+  const level = ring === null ? '' : ring >= 0.9 ? ' full' : ring >= 0.75 ? ' warn' : '';
+  const title = ring !== null ? `Context ${Math.round(ring * 100)}% full · click for usage` : 'Usage · this agent does not report how full its context is';
+  /** One agent's page: how full its window is, what it cost here, and how much of its plan is left. */
+  const pageOf = (tab) => {
+    const usage = tab.usage;
+    const fill = fillOf(usage);
+    const limits = limitsOf(tab.id);
+    return <div role="tabpanel" aria-label={tab.name}>
       <dl>
-        <div><dt>Context</dt><dd>{known ? `${tokens(usage.contextUsed)} of ${tokens(usage.contextWindow)} · ${percent}%` : 'not reported'}</dd></div>
+        <div><dt>Context</dt><dd>{fill !== null ? `${tokens(usage.contextUsed)} of ${tokens(usage.contextWindow)} · ${Math.round(fill * 100)}%` : 'not reported'}</dd></div>
         <div><dt>Tokens in</dt><dd>{usage?.inputTokens ? tokens(usage.inputTokens) : '—'}</dd></div>
         <div><dt>Tokens out</dt><dd>{usage?.outputTokens ? tokens(usage.outputTokens) : '—'}</dd></div>
         <div><dt>Model turns</dt><dd>{usage?.iterations ? String(usage.iterations) : '—'}</dd></div>
       </dl>
-      <div className="hint">{usage?.runs ? `Across ${usage.runs} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : 'Nothing has run in this task yet.'}</div>
+      <div className="hint">{usage?.runs ? `Across ${usage.runs} ${tab.name} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : `${tab.name} has not answered in this task yet.`}</div>
+      {tab.id !== 'jolo' && <section className="usage-limits" aria-label="Plan limits">
+        <div className="usage-limits-head"><span className="usage-head">Plan limits</span>{limits?.report?.plan ? <span className="usage-plan">{limits.report.plan}</span> : null}</div>
+        {limits?.report?.windows.length > 0
+          ? <div className="usage-limit-list">{limits.report.windows.map((limit, index) => <div className={`usage-limit${limitLevel(limit.usedPercent)}`} key={index}>
+            <span className="usage-limit-top"><span className="usage-limit-name" title={limit.label}>{limit.label}</span><span className="usage-limit-reset" title={limit.resetsAt ? `Resets ${new Date(limit.resetsAt).toLocaleString()}` : undefined}>{limit.resetsAt ? untilReset(limit.resetsAt) : ''}</span></span>
+            <span className="usage-limit-bar" role="meter" aria-label={`${limit.label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(limit.usedPercent))} aria-valuetext={`${Math.round(limit.usedPercent)}% used`}><span style={{ width: `${Math.min(100, limit.usedPercent)}%` }} /></span>
+            <span className="usage-limit-percent">{Math.round(limit.usedPercent)}%</span>
+          </div>)}</div>
+          : <div className="hint">{limits === null ? 'Checking…' : limits.error ?? limits.report?.note ?? 'Not reported.'}</div>}
+        {limits?.report?.windows.length > 0 && limits.error ? <div className="hint usage-limits-stale">{`Showing the last answer: ${limits.error}`}</div> : null}
+      </section>}
+    </div>;
+  };
+  return <span className="usage" ref={wrap}>
+    <button type="button" className={`usage-ring${level}`} aria-expanded={open} aria-label={title} title={title} onClick={toggle}>
+      <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+        <circle cx="8" cy="8" r={RADIUS} className="usage-track" />
+        {ring !== null && <circle cx="8" cy="8" r={RADIUS} className="usage-fill" strokeDasharray={`${(CIRCUMFERENCE * ring).toFixed(2)} ${CIRCUMFERENCE.toFixed(2)}`} transform="rotate(-90 8 8)" />}
+      </svg>
+    </button>
+    {open && shown && createPortal(<div className="usage-panel" role="dialog" aria-label="Model usage" ref={panel} style={{ left: `${at.left}px`, bottom: `${at.bottom}px`, maxHeight: `calc(100vh - ${at.bottom + 8}px)` }}>
+      {tabs.length > 1
+        ? <div className="usage-tabs" role="tablist" aria-label="Agents">{tabs.map(tab => <button type="button" role="tab" key={tab.id} aria-selected={tab.id === shown.id} onClick={() => setChosenTab(tab.id)}>{tab.name}</button>)}</div>
+        : <div className="usage-head">{shown.name}</div>}
+      {pageOf(shown)}
     </div>, document.body)}
   </span>;
 }
@@ -77,7 +150,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ draftKey = null, decisionMode = false, decisionBrowser = false, onDecisionModeChange = null, decisionChatModel = null, standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usage, onReview, onSettings, agents = [] }) {
+export function Composer({ draftKey = null, decisionMode = false, decisionBrowser = false, onDecisionModeChange = null, decisionChatModel = null, standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, usageTabs = [], onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -231,19 +304,24 @@ export function Composer({ draftKey = null, decisionMode = false, decisionBrowse
   }, [autoFocusOnType, disabled]);
   const submit = async () => {
     const images = attachmentsRef.current;
-    const prompt = text.trim() || (images.some(item => !item.mimeType.startsWith('image/')) ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
+    const submittedText = text;
+    const prompt = submittedText.trim() || (images.some(item => !item.mimeType.startsWith('image/')) ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
     if (!prompt || disabled || submitting.current || pendingPastes.current) return;
     submitting.current = true;
     setSending(true);
+    if (draftKey) composerDrafts.delete(draftKey);
+    setText('');
+    if (images.length) updateAttachments([]);
     try {
       const operation = onSend(prompt, { queue: running, ...(images.length ? { attachments: images } : {}) });
-      lastQueued.current = running ? { operation, at: Date.now(), draft: text } : null;
+      lastQueued.current = running ? { operation, at: Date.now(), draft: submittedText } : null;
       await operation;
-      if (draftKey) composerDrafts.delete(draftKey);
-      setText(current => current === text ? '' : current);
-      if (mounted.current) updateAttachments(attachmentsRef.current.filter(image => !images.includes(image)));
     }
-    catch { /* The app displays the error; retain the draft for retry. */ }
+    catch {
+      /* The app displays the error; retain the draft for retry. */
+      setText(current => current ? `${submittedText}\n${current}` : submittedText);
+      if (mounted.current && images.length) updateAttachments([...images, ...attachmentsRef.current.filter(image => !images.includes(image))]);
+    }
     finally { submitting.current = false; setSending(false); }
   };
   return <div className="compose-dock"><div className="compose-wrap"><div className="compose-column">
@@ -307,7 +385,7 @@ export function Composer({ draftKey = null, decisionMode = false, decisionBrowse
         <Icon name="down" size={11} />
       </label>}
       <span className="composer-divider" aria-hidden="true" />
-      <UsageButton usage={usage} answererName={answerer ?? answererName} />
+      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {decisionMode && !decisionBrowser && <button type="button" className="composer-example" title="Insert a structured JSON example" aria-label="Insert decision example" disabled={disabled || Boolean(text.trim())} onClick={() => { setText(JSON.stringify({ state: "Help! My payouts have been failing for 3 days.", questions: { is_urgent: { type: "noul", instructions: "Does this message convey urgency?", criteria: { true: "Explicitly time-sensitive", false: "No urgency expressed" } }, department: { type: "choice", instructions: "Which team should handle this?", criteria: { billing: "Payments, invoicing, refunds", technical: "Bugs, outages, integrations", sales: "Pricing, upgrades, new accounts" } }, frustration: { type: "score", instructions: "How frustrated is the customer?", criteria: ["Calm", "Frustrated", "Very angry"] } } }, null, 2)); input.current?.focus(); }}><span className="composer-example-icon" aria-hidden="true">{'{ }'}</span><span className="composer-example-label">Example</span></button>}
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">

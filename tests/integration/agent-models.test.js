@@ -154,7 +154,8 @@ describe("choosing a model for each hosted agent", () => {
     expect(claude.models.map((model) => model.id)).toEqual(["default", "fable", "haiku"]);
     expect(claude.models[0]).toMatchObject({ displayName: "Default (recommended)", isDefault: true, efforts: ["low", "high"] });
     expect(claude.models[2].efforts).toEqual([]); // it said this one has no effort levels
-    expect(claude.efforts).toEqual(["low", "high", "max"]);
+    expect(claude.models[1].efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]); // xhigh is what ultracode needs
+    expect(claude.efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]);
 
     // Codex pages its answer, so the client has to follow the cursor; the hidden model is not offered.
     const codex = await client.call("agent.models", { agentId: "codex" });

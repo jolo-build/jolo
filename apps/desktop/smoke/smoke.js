@@ -571,6 +571,62 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     if (!placed.onScreen || placed.rows !== 4 || placed.clipped || !placed.onTop) throw new Error(`the usage panel is not fully shown: ${JSON.stringify(placed)}`);
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "usage.png"), (await window.webContents.capturePage()).toPNG());
+    // Hosted agents that report their plan get a tab of their own. The fixtures answer get_usage,
+    // account/rateLimits/read and /usage with fixed numbers (tests/fixtures/fake-claude.js, fake-codex.js, fake-agy.js).
+    const usagePage = () => evaluate(`(() => {
+      const node = document.querySelector(".usage-panel");
+      if (!node) return { open: false };
+      const box = node.getBoundingClientRect();
+      const page = node.querySelector("[role=tabpanel]");
+      return {
+        open: true,
+        tabs: [...node.querySelectorAll(".usage-tabs [role=tab]")].map((tab) => tab.textContent),
+        selected: node.querySelector(".usage-tabs [aria-selected=true]")?.textContent ?? null,
+        page: page?.getAttribute("aria-label") ?? null,
+        hasLimits: Boolean(page?.querySelector(".usage-limits")),
+        plan: page?.querySelector(".usage-limits .usage-plan")?.textContent ?? null,
+        note: page?.querySelector(".usage-limits > .hint")?.textContent ?? null,
+        limits: [...(page?.querySelectorAll(".usage-limits .usage-limit") ?? [])].map((row) => ({
+          name: row.querySelector(".usage-limit-name").textContent,
+          percent: row.querySelector(".usage-limit-percent").textContent,
+          meter: row.querySelector("[role=meter]").getAttribute("aria-valuenow"),
+        })),
+        onScreen: box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth,
+        clipped: node.scrollHeight > node.clientHeight + 1,
+      };
+    })()`);
+    const joloPage = await usagePage();
+    if (JSON.stringify(joloPage.tabs) !== JSON.stringify(["Jolo", "Claude Code", "Codex", "Antigravity CLI"])) throw new Error(`the usage panel should have a tab for Jolo and for each hosted agent that reports its plan: ${JSON.stringify(joloPage)}`);
+    if (joloPage.selected !== "Jolo" || joloPage.page !== "Jolo" || joloPage.hasLimits) throw new Error(`the usage panel should open on the answering agent, and Jolo's page has no plan limits: ${JSON.stringify(joloPage)}`);
+    const expectedLimits = [
+      { tab: "Claude Code", plan: "max", rows: [["5-hour", "16%"], ["Weekly", "44%"], ["Weekly · Fable", "91%"]] },
+      { tab: "Codex", plan: "pro", rows: [["5-hour", "17%"], ["Weekly", "40%"]] },
+      { tab: "Antigravity CLI", plan: null, rows: [["Weekly · Gemini", "3%"], ["5-hour · Gemini", "13%"], ["Weekly · Claude and GPT", "0%"], ["5-hour · Claude and GPT", "0%"]] },
+    ];
+    let previous = joloPage;
+    for (const expected of expectedLimits) {
+      // A real click, so the panel's outside-click dismissal sees it: a tab inside the portal must not close the panel.
+      const point = await evaluate(`(() => {
+        const tab = [...document.querySelectorAll(".usage-panel .usage-tabs [role=tab]")].find((node) => node.textContent === ${JSON.stringify(expected.tab)});
+        const box = tab.getBoundingClientRect();
+        return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+      })()`);
+      window.webContents.sendInputEvent({ type: "mouseMove", ...point });
+      window.webContents.sendInputEvent({ type: "mouseDown", ...point, button: "left", clickCount: 1 });
+      window.webContents.sendInputEvent({ type: "mouseUp", ...point, button: "left", clickCount: 1 });
+      await waitFor(`document.querySelector(".usage-panel [role=tabpanel]")?.getAttribute("aria-label") === ${JSON.stringify(expected.tab)}`, `usage panel switches to ${expected.tab}`);
+      // The probe may still be running: wait for rows or for a note, then compare against the fixture.
+      await waitFor(`(() => { const section = document.querySelector(".usage-panel [role=tabpanel] .usage-limits"); return Boolean(section?.querySelector(".usage-limit") || (section && section.querySelector(".hint")?.textContent !== "Checking…")); })()`, `${expected.tab} plan limits answered`);
+      const page = await usagePage();
+      if (!page.open || page.selected !== expected.tab || page.page === previous.page) throw new Error(`switching to ${expected.tab} did not change the usage page: ${JSON.stringify({ previous, page })}`);
+      if (page.plan !== expected.plan) throw new Error(`${expected.tab} should name the fixture's plan: ${JSON.stringify(page)}`);
+      if (JSON.stringify(page.limits.map((row) => [row.name, row.percent])) !== JSON.stringify(expected.rows)) throw new Error(`${expected.tab} plan limits do not match the fixture: ${JSON.stringify(page)}`);
+      if (page.limits.some((row) => `${row.meter}%` !== row.percent)) throw new Error(`${expected.tab} meters disagree with their labels: ${JSON.stringify(page.limits)}`);
+      if (!page.onScreen || page.clipped) throw new Error(`the usage panel left the screen on the ${expected.tab} tab: ${JSON.stringify(page)}`);
+      previous = page;
+    }
+    writeFileSync(path.join(results, "usage-limits.png"), (await window.webContents.capturePage()).toPNG());
+    report.checks.push("the usage panel has a tab per hosted agent that reports its plan; real clicks switch pages without closing the panel, and each page shows the fixture's plan and limit windows on screen");
     await evaluate('document.querySelector(".usage-ring").click()');
     await waitFor("!document.querySelector('.usage-panel')", "usage panel closes again");
     report.checks.push("the composer shows how full the model's context is as a ring in front of the answerer picker, and opens the task's token usage when clicked");

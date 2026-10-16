@@ -110,7 +110,7 @@ export function assetUrl(version, name, baseUrl = RELEASE_BASE_URL) {
 }
 
 /** Read a response body with a hard ceiling, so a wrong or hostile URL cannot exhaust memory. */
-async function bounded(response, limit, what) {
+async function bounded(response, limit, what, onProgress = (_received, _total) => {}) {
   if (!response.ok) throw new Error(`${what} request failed: HTTP ${response.status}`);
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) throw new Error(`${what} exceeds the size limit.`);
@@ -124,6 +124,7 @@ async function bounded(response, limit, what) {
     size += value.length;
     if (size > limit) { await reader.cancel(); throw new Error(`${what} exceeds the size limit.`); }
     chunks.push(value);
+    onProgress(size, declared > 0 ? declared : null);
   }
   return Buffer.concat(chunks);
 }
@@ -155,13 +156,13 @@ export async function fetchChecksum({ version, name, baseUrl = RELEASE_BASE_URL,
 
 /**
  * Download an archive and return it only when its bytes match the published checksum.
- * @param {{ version?: string, name?: string, sha256?: string, baseUrl?: string, fetchImpl?: FetchLike, maxBytes?: number, timeoutMs?: number }} [options]
+ * @param {{ version?: string, name?: string, sha256?: string, baseUrl?: string, fetchImpl?: FetchLike, maxBytes?: number, timeoutMs?: number, onProgress?: (received: number, total: number | null) => void }} [options]
  * @returns {Promise<Buffer>}
  */
-export async function downloadAsset({ version, name, sha256, baseUrl = RELEASE_BASE_URL, fetchImpl = fetch, maxBytes = MAX_ARCHIVE_BYTES, timeoutMs = 300_000 } = {}) {
+export async function downloadAsset({ version, name, sha256, baseUrl = RELEASE_BASE_URL, fetchImpl = fetch, maxBytes = MAX_ARCHIVE_BYTES, timeoutMs = 300_000, onProgress } = {}) {
   requireAssetName(name);
   if (!/^[0-9a-f]{64}$/.test(sha256 ?? "")) throw new Error("A published checksum is required before downloading a release.");
-  const bytes = await bounded(await fetchImpl(assetUrl(version, name, baseUrl), { signal: AbortSignal.timeout(timeoutMs) }), maxBytes, "Release download");
+  const bytes = await bounded(await fetchImpl(assetUrl(version, name, baseUrl), { signal: AbortSignal.timeout(timeoutMs) }), maxBytes, "Release download", onProgress);
   if (createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("Release checksum mismatch; the download was discarded.");
   return bytes;
 }

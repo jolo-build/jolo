@@ -11,7 +11,7 @@ const stop = () => {
   stopping = true;
   try { child.stdin.end(); } catch {}
   kill("SIGTERM");
-  setTimeout(() => { kill("SIGKILL"); process.exit(1); }, 1500);
+  setTimeout(() => { kill("SIGKILL"); process.exit(1); }, 250);
 };
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);

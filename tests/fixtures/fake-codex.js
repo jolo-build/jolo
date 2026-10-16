@@ -290,6 +290,21 @@ async function handle(message) {
       void runTurn(entry, turn, text, entry.resumed, (params.input ?? []).filter(part => part.type === "localImage")).catch((error) => { process.stderr.write(`fake-codex: ${error?.stack ?? error}\n`); process.exit(70); });
       return;
     }
+    case "account/rateLimits/read": {
+      // FAKE_CODEX_LIMITS scripts the answer: unset reports a 5-hour and a weekly window, "error" refuses the request,
+      // and "buckets" sends a weekly-only bucket (the shape 0.153.3 sent live) beside a named bucket of its own.
+      const mode = process.env.FAKE_CODEX_LIMITS ?? "";
+      if (mode === "error") return fail(-32603, "fake-codex: rate limits need a ChatGPT sign-in");
+      if (mode === "buckets") {
+        const plan = "self_serve_business_usage_based";
+        const weekly = { limitId: "codex", limitName: null, primary: { usedPercent: 17, windowDurationMins: 10080, resetsAt: 1792497649 }, secondary: null, credits: { hasCredits: true, unlimited: false, balance: "62500.0000000000" }, planType: plan, rateLimitReachedType: null };
+        const named = { limitId: "codex_spark", limitName: "Fake Spark", primary: { usedPercent: 3, windowDurationMins: 300, resetsAt: 1792018200 }, secondary: { usedPercent: 8, windowDurationMins: 10080, resetsAt: 1792497649 }, credits: null, planType: plan, rateLimitReachedType: null };
+        return reply({ rateLimits: weekly, rateLimitsByLimitId: { codex: weekly, codex_spark: named } });
+      }
+      if (mode) return fail(-32602, `fake-codex: unknown FAKE_CODEX_LIMITS ${JSON.stringify(mode)}`);
+      const bucket = { limitId: "codex", limitName: null, primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1792018200 }, secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1792497649 }, planType: "pro" };
+      return reply({ rateLimits: bucket, rateLimitsByLimitId: { codex: bucket } });
+    }
     case "model/list": {
       const cursor = params.cursor ?? null;
       if (cursor === "page-2") return reply({ data: MODELS.slice(1), nextCursor: null });

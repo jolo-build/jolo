@@ -6,7 +6,7 @@ import { ProtocolError, TERMINAL_RUN_STATES, LIMITS } from "@jolo/protocol";
 import { buildRunNote } from "./note.js";
 import { validateAttachments } from '../attachments.js';
 
-const COMMIT_INTERVAL_MS = 250;
+const COMMIT_INTERVAL_MS = 100;
 const COMMIT_BYTES = 32 * 1024;
 
 export class RunService {

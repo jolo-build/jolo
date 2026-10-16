@@ -2,7 +2,7 @@
 //
 // Jolo keeps no list of anyone's models: they change without notice, and a stale list is worse than none.
 // Each transport is asked over its own protocol instead — Claude answers its initialize, Codex has
-// model/list, an ACP agent publishes a model selector — so what the user picks from is what that install
+// model/list, an ACP agent publishes a model selector, Antigravity has a models command — so what the user picks from is what that install
 // actually offers today. Settings loads this automatically when opened; recent answers are shared
 // across interactive clients so opening another pane does not start the same agent again.
 import { tmpdir } from "node:os";
@@ -19,10 +19,80 @@ const CACHE_TTL_MS = 5 * 60_000;
 const text = (value, fallback = "") => (typeof value === "string" && value ? value : fallback);
 const efforts = (list) => [...new Set((Array.isArray(list) ? list : []).map((entry) => (typeof entry === "string" ? entry : text(entry?.reasoningEffort ?? entry?.id ?? entry?.value))).filter(Boolean))];
 
+/**
+ * Claude's levels plus "ultracode" where the model has xhigh: `--effort ultracode` runs xhigh with standing
+ * Workflow orchestration, and Claude Code gates ultracode on the same xhigh capability.
+ */
+const claudeEfforts = (levels) => (Array.isArray(levels) && levels.includes("xhigh") ? [...levels, "ultracode"] : levels);
+
 /** One model as Jolo offers it, whatever the vendor called its fields. */
 const model = ({ id, displayName, description, isDefault = false, efforts: levels = [] }) => ({
   id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20),
 });
+
+/** The thinking levels Antigravity's --effort accepts, from least to most. */
+const ANTIGRAVITY_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Antigravity lists a model once per thinking level ("gemini-4-argon-high", "Gemini 4 Argon (High)") and takes
+ * the level as --effort on the base name, so the variants become one model whose efforts are those levels.
+ * @param {any} listed `command.data.models` from `agy --output-format json models`
+ */
+export function antigravityModels(listed) {
+  const grouped = new Map(); // base id -> { displayName, levels }
+  for (const entry of Array.isArray(listed) ? listed : []) {
+    const id = text(entry?.id);
+    if (!id) continue;
+    const level = ANTIGRAVITY_EFFORTS.find((effort) => id.endsWith(`-${effort}`));
+    const base = level ? id.slice(0, -level.length - 1) : id;
+    const known = grouped.get(base) ?? { displayName: level ? text(entry.label, base).replace(/\s*\([^)]*\)$/, "") : text(entry.label, base), levels: [] };
+    if (level) known.levels.push(level);
+    grouped.set(base, known);
+  }
+  return [...grouped].map(([id, { displayName, levels }]) => model({ id, displayName, description: "", efforts: ANTIGRAVITY_EFFORTS.filter((effort) => levels.includes(effort)) }));
+}
+
+/**
+ * Start a hosted agent, ask it one thing, and stop it. `open` speaks first; `ask` returns the answer once it
+ * has one. The agent's own failure never throws: it comes back as `{ note, timedOut }` for the caller to word.
+ * @param {{ supervisor: any, log: any }} deps
+ * @param {any} manifest
+ * @param {string[]} argv
+ * @param {number} timeoutMs how long the agent has to answer, inside what its caller's client waits
+ * @param {{ open: (send: (message: any) => void) => void, ask: (message: any, send: (message: any) => void) => any }} steps
+ */
+export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs, { open, ask }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let link;
+  try {
+    link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
+  } catch (error) {
+    clearTimeout(timer);
+    return { note: `could not start ${manifest.displayName}: ${error?.message ?? error}`, timedOut: false };
+  }
+  let answer = null;
+  let failure = null;
+  try {
+    const send = (message) => link.write(message);
+    open(send);
+    for await (const message of link.messages()) {
+      answer = await ask(message, send);
+      if (answer) break;
+    }
+  } catch (error) {
+    failure = String(error?.message ?? error);
+  }
+  clearTimeout(timer);
+  link.terminate();
+  if (answer) {
+    void link.settle();
+    return answer;
+  }
+  const { exitCode, stderr } = await link.settle();
+  if (controller.signal.aborted) return { note: `${manifest.displayName} did not answer within ${timeoutMs / 1000} seconds`, timedOut: true };
+  return { note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without an answer${stderr ? `: ${stderr.slice(0, 200)}` : ""}`, timedOut: false };
+}
 
 /**
  * @param {{ catalog: any, supervisor: any, build?: string, log: any }} deps
@@ -31,35 +101,11 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
   const answered = new Map(); // agentId -> recent successful answer
   const pending = new Map(); // concurrent clients share one probe per agent
 
-  /** Start the agent, ask it, and stop it. `open` speaks first; `ask` returns the answer once it has one. */
-  const probe = async (manifest, argv, { open, ask }) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let link;
-    try {
-      link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
-    } catch (error) {
-      clearTimeout(timer);
-      return { models: [], note: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
-    }
-    let answer = null;
-    let failure = null;
-    try {
-      const send = (message) => link.write(message);
-      open(send);
-      for await (const message of link.messages()) {
-        answer = await ask(message, send);
-        if (answer) break;
-      }
-    } catch (error) {
-      failure = String(error?.message ?? error);
-    }
-    clearTimeout(timer);
-    link.terminate();
-    const { exitCode, stderr } = await link.settle();
-    if (answer) return answer;
-    if (controller.signal.aborted) return { models: [], note: `${manifest.displayName} did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds; type the model name it expects` };
-    return { models: [], note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without a model list${stderr ? `: ${stderr.slice(0, 200)}` : ""}` };
+  /** The shared probe; an agent too slow to answer leaves the model field as free text. */
+  const probe = async (manifest, argv, steps) => {
+    const result = await probeAgent({ supervisor, log }, manifest, argv, PROBE_TIMEOUT_MS, steps);
+    if (Array.isArray(result.models)) return result;
+    return { models: [], note: result.timedOut ? `${result.note}; type the model name it expects` : result.note };
   };
 
   /** Claude lists its models in the reply to the same initialize the adapter sends every turn. */
@@ -78,7 +124,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
             displayName: entry.displayName,
             description: [text(entry.description), text(entry.resolvedModel) && entry.resolvedModel !== entry.value ? `(${entry.resolvedModel})` : ""].filter(Boolean).join(" "),
             isDefault: entry.value === "default",
-            efforts: entry.supportsEffort ? entry.supportedEffortLevels : [],
+            efforts: entry.supportsEffort ? claudeEfforts(entry.supportedEffortLevels) : [],
           })),
           note: null,
         };
@@ -148,6 +194,19 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
     },
   });
 
+  /** Antigravity answers `models` with one JSON result when asked for JSON output. */
+  const fromAntigravity = (manifest) => {
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    return probe(manifest, [binary, ...extraArgs, "--output-format", "json", "models"], {
+      open: () => {},
+      ask: (message) => {
+        if (message.status && message.status !== "SUCCESS") return { models: [], note: `${manifest.displayName}: ${text(message.error, "did not list its models")}` };
+        const listed = message.command?.data?.models;
+        return Array.isArray(listed) ? { models: antigravityModels(listed), note: null } : null;
+      },
+    });
+  };
+
   return {
     /** Ask one agent what it can run. Never throws for a vendor's own failure: that becomes the note. */
     async list(agentId, { refresh = false } = {}) {
@@ -168,6 +227,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
           if (manifest.transport === "claude-stream") result = await fromClaude(manifest);
           else if (manifest.transport === "codex-app-server") result = await fromCodex(manifest);
           else if (manifest.transport === "acp") result = await fromAcp(manifest);
+          else if (manifest.transport === "antigravity-stream") result = await fromAntigravity(manifest);
           else result = { models: [], note: `Jolo cannot ask a ${manifest.transport} agent for its models` };
         } catch (error) {
           result = { models: [], note: String(error?.message ?? error).slice(0, 300) };
