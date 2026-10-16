@@ -121,9 +121,9 @@ test('a pane switch during run admission publishes the new workspace before proc
 });
 
 test('failed browser registration blocks run admission and can be retried', async () => {
-  let unavailable = true;
+  let unavailable = true, attempts = 0;
   const warnings = [];
-  const bridge = { async rawCall() { if (unavailable) throw new Error('desktop socket disconnected'); return {}; } };
+  const bridge = { async rawCall() { attempts++; if (unavailable) throw new Error('desktop socket disconnected'); return {}; } };
   const opener = createBrowserOpener({ bridge, agent: { hosts: new Map(), onRegistered() {} }, send() {}, isOverlayActive: () => false, log: { warn: (message, fields) => warnings.push(fields.error) } });
   opener.setWorkspaces({ workspaceIds: ['ws'] });
   await opener.onConnected();
@@ -131,6 +131,9 @@ test('failed browser registration blocks run admission and can be retried', asyn
   await expect(opener.beforeRun()).rejects.toThrow('desktop socket disconnected');
   unavailable = false;
   await opener.beforeRun();
+  expect(attempts).toBe(3);
+  await opener.beforeRun();
+  expect(attempts).toBe(3);
 });
 
 test('desktop opening needs both renderer acknowledgement and completed guest registration, in either order', async () => {

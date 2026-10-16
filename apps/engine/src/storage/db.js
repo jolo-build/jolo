@@ -29,7 +29,7 @@ const isBusy = (error) => error?.code === "SQLITE_BUSY" || /database is locked/i
 export function acquireDatabase(databasePath, { bootId, now = () => new Date().toISOString() }) {
   const db = new Database(databasePath, { create: true });
   try {
-    db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA cache_size = -4096; PRAGMA temp_store = FILE;");
+    db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA cache_size = -65536; PRAGMA temp_store = MEMORY; PRAGMA mmap_size = 268435456;");
     db.exec("BEGIN EXCLUSIVE");
     db.exec("CREATE TABLE IF NOT EXISTS engine_boot (id INTEGER PRIMARY KEY CHECK (id = 1), boots INTEGER NOT NULL, last_boot_id TEXT NOT NULL, last_boot_at TEXT NOT NULL)");
     db.query("INSERT INTO engine_boot (id, boots, last_boot_id, last_boot_at) VALUES (1, 1, ?1, ?2) ON CONFLICT(id) DO UPDATE SET boots = boots + 1, last_boot_id = excluded.last_boot_id, last_boot_at = excluded.last_boot_at").run(bootId, now());

@@ -83,13 +83,19 @@ export function parseInline(text) {
   const push = (node) => { if (buffer) { nodes.push({ type: "text", text: buffer }); buffer = ""; } if (node) nodes.push(node); };
   let i = 0;
   while (i < text.length) {
+    const ch = text[i];
+    if (ch !== "`" && ch !== "*" && ch !== "_" && ch !== "!" && ch !== "[" && ch !== "<" && ch !== "\\" && !(ch === "h" && (text.startsWith("http://", i) || text.startsWith("https://", i)))) {
+      buffer += ch;
+      i += 1;
+      continue;
+    }
     const rest = text.slice(i);
     let match;
-    if ((match = rest.match(/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/))) { push({ type: "code", text: match[2] }); i += match[0].length; continue; }
-    const underscoreBoundary = i === 0 || !/[\p{L}\p{N}_]/u.test(text[i - 1]);
-    if ((match = rest.match(/^\*\*([^*]+?)\*\*/)) || (underscoreBoundary && (match = rest.match(/^__([^_]+?)__(?![\p{L}\p{N}_])/u)))) { push({ type: "strong", children: parseInline(match[1]) }); i += match[0].length; continue; }
-    if ((match = rest.match(/^\*([^*\n]+?)\*/)) || (underscoreBoundary && (match = rest.match(/^_([^_\n]+?)_(?![\p{L}\p{N}_])/u)))) { push({ type: "em", children: parseInline(match[1]) }); i += match[0].length; continue; }
-    if ((match = rest.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/))) {
+    if (ch === "`" && (match = rest.match(/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/))) { push({ type: "code", text: match[2] }); i += match[0].length; continue; }
+    const underscoreBoundary = ch === "_" && (i === 0 || !/[\p{L}\p{N}_]/u.test(text[i - 1]));
+    if ((ch === "*" && (match = rest.match(/^\*\*([^*]+?)\*\*/))) || (underscoreBoundary && (match = rest.match(/^__([^_]+?)__(?![\p{L}\p{N}_])/u)))) { push({ type: "strong", children: parseInline(match[1]) }); i += match[0].length; continue; }
+    if ((ch === "*" && (match = rest.match(/^\*([^*\n]+?)\*/))) || (underscoreBoundary && (match = rest.match(/^_([^_\n]+?)_(?![\p{L}\p{N}_])/u)))) { push({ type: "em", children: parseInline(match[1]) }); i += match[0].length; continue; }
+    if ((ch === "!" || ch === "[") && (match = rest.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/))) {
       const target = classifyReference(match[2], { explicit: true });
       const href = target.kind === 'web' ? target.href : null;
       if (rest.startsWith('!') && /^jolo-artifact:[A-Za-z0-9_-]{1,128}$/.test(match[2])) push({ type: 'image', artifactId: match[2].slice('jolo-artifact:'.length), alt: match[1] || 'Generated image' });
@@ -99,10 +105,10 @@ export function parseInline(text) {
       else push({ type: "text", text: match[1] });
       i += match[0].length; continue;
     }
-    if ((match = rest.match(/^<(https?:\/\/[^>\s]+)>/))) { push({ type: "link", href: match[1], children: [{ type: "text", text: match[1] }] }); i += match[0].length; continue; }
-    if ((match = rest.match(/^https?:\/\/[^\s<>)]+/))) { push({ type: "link", href: match[0], children: [{ type: "text", text: match[0] }] }); i += match[0].length; continue; }
-    if (/^\\[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]/.test(rest)) { buffer += rest[1]; i += 2; continue; }
-    buffer += text[i];
+    if (ch === "<" && (match = rest.match(/^<(https?:\/\/[^>\s]+)>/))) { push({ type: "link", href: match[1], children: [{ type: "text", text: match[1] }] }); i += match[0].length; continue; }
+    if (ch === "h" && (match = rest.match(/^https?:\/\/[^\s<>)]+/))) { push({ type: "link", href: match[0], children: [{ type: "text", text: match[0] }] }); i += match[0].length; continue; }
+    if (ch === "\\" && /^\\[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]/.test(rest)) { buffer += rest[1]; i += 2; continue; }
+    buffer += ch;
     i += 1;
   }
   push(null);

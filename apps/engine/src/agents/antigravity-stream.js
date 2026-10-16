@@ -133,14 +133,17 @@ export function createAntigravityExecutor({ storage, catalog, permissions, super
           // The turn is over. Closing stdin ends agy (the guardian stops a child whose input ends, so not before), and
           // agy may otherwise wait on background tasks after answering.
           link.end();
-          link.terminate({ graceful: true });
+          link.terminate();
         }
       };
 
       ctx.transition("model");
       link.write({ event: "user", message: { content: `${instructions}\n\nCurrent request:\n${prompt}` } });
       try {
-        for await (const message of link.messages()) onMessage(message);
+        for await (const message of link.messages()) {
+          onMessage(message);
+          if (state.result) break;
+        }
       } catch (error) {
         state.failure = String(error?.message ?? error);
       }

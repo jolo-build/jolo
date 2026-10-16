@@ -37,7 +37,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const paintTimer = useRef(null);
   const redraw = useCallback(() => {
     if (paintTimer.current) return;
-    paintTimer.current = setTimeout(() => { paintTimer.current = null; bump(); }, 50);
+    paintTimer.current = setTimeout(() => { paintTimer.current = null; bump(); }, 16);
   }, []);
   useEffect(() => () => clearTimeout(paintTimer.current), []);
   const projection = useRef(null);
@@ -209,8 +209,14 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     setHistoryState("open");
     const preferredMode = workspaceId === current.workspaceId ? "direct" : "worktree";
     if (current.preferredMode !== preferredMode) { projectRef.current = { ...current, preferredMode }; setProject(projectRef.current); }
-    await Promise.all([refreshSessions(current.projectId), refreshWorkspaces(current.projectId)]);
-    if (!options.deferSelection) await selectSession(session.id);
+    setSessions([session, ...sessionsRef.current.filter(item => item.id !== session.id)]);
+    const refresh = Promise.all([refreshSessions(current.projectId), refreshWorkspaces(current.projectId)]);
+    if (options.deferSelection) {
+      void refresh;
+    } else {
+      await refresh;
+      await selectSession(session.id);
+    }
     return session;
   }, [refreshSessions, refreshWorkspaces, selectSession]);
 
@@ -246,9 +252,11 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const previousSessionId = sessionRef.current;
     const previousProjectId = projectRef.current?.projectId;
     const draft = draftSession.current;
+    const targetSessionId = sessionRef.current ?? draft.id;
+    const knownSession = targetSessionId ? sessionsRef.current.find(item => item.id === targetSessionId) : undefined;
     // Keep a new task's composer mounted until upload and send succeed, so a
     // failed first send retains both its text and pasted images for retry.
-    const session = queue && sessionRef.current ? { id: sessionRef.current } : await sessionForSend({ call, sessionId: sessionRef.current ?? draft.id, agentId, prompt, newSession: async (title, options) => {
+    const session = queue && sessionRef.current ? (knownSession ?? { id: sessionRef.current }) : await sessionForSend({ call, sessionId: targetSessionId, session: knownSession, agentId, prompt, newSession: async (title, options) => {
       const created = await newSession(title, { ...options, deferSelection: true });
       draft.id = created.id; // Retry the same draft in the same task after an interrupted upload.
       sessionPanelScopes.current.set(created.id, draft.panelScope);
@@ -261,12 +269,32 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const requestId = createRequestId();
     const execution = queue ? queuedExecution(agentId, sessionsRef.current.find(item => item.id === session.id)?.agentId, prompt) : undefined;
     const images = await uploadImages(call, session.id, attachments);
-    const { run } = await call("run.start", { sessionId: session.id, requestId, prompt, ...(images.length ? { attachments: images } : {}), ...(execution ? { execution } : {}) });
+    const optimisticId = `optimistic:${requestId}`;
+    if (sessionRef.current === session.id && projection.current) {
+      projection.current.runs.set(optimisticId, {
+        id: optimisticId,
+        sessionId: session.id,
+        state: queue ? "queued" : "preparing",
+        revision: 0,
+        prompt,
+        promptPreview: prompt.slice(0, 500),
+        agentId: execution?.agentId ?? null,
+        execution: execution ?? null,
+        attachments: images,
+      });
+      bump();
+    }
+    let run;
+    try {
+      ({ run } = await call("run.start", { sessionId: session.id, requestId, prompt, ...(images.length ? { attachments: images } : {}), ...(execution ? { execution } : {}) }));
+    } finally {
+      if (projection.current?.runs.delete(optimisticId)) redraw();
+    }
     if (!previousSessionId && !sessionRef.current && draftSession.current === draft && projectRef.current?.projectId === previousProjectId) await selectSession(session.id);
     if (sessionRef.current === session.id && projection.current) {
       const current = projection.current.runs.get(run.id);
       projection.current.runs.set(run.id, { ...run, ...current, prompt });
-      redraw();
+      bump();
     }
     return run;
   }, [newSession, selectSession, redraw]);
@@ -384,7 +412,12 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
           if (item.value.type.startsWith("plan.")) plansChanged = true;
           if (item.value.type.startsWith("schedule.") && item.value.sessionId === sessionRef.current) schedulesChanged = true;
           if (WORKSPACE_EVENTS.has(item.value.type) && item.value.payload.projectId === projectRef.current?.projectId || (item.value.type === "workspace.created" && item.value.payload.workspace?.projectId === projectRef.current?.projectId)) workspacesChanged = true;
-          if (item.value.sessionId === sessionRef.current && current) current.applyEvent(item.value);
+          if (item.value.sessionId === sessionRef.current && current) {
+            if (item.value.type === "run.state") {
+              for (const key of current.runs.keys()) if (key.startsWith("optimistic:")) current.runs.delete(key);
+            }
+            current.applyEvent(item.value);
+          }
           if (item.value.sessionId === sessionRef.current) {
             if (item.value.type === 'session.updated') {
               const session = item.value.payload.session;

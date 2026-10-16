@@ -14,13 +14,25 @@ import { compileRules } from "./status.js";
 const MANIFEST_MAX_BYTES = 64 * 1024;
 const NO_CONFIG = Object.freeze({ model: null, effort: null });
 
+const binaryCache = new Map();
+
 function resolveBinary(name, toolPath) {
   if (!name) return null;
   if (name.includes("/")) { try { return statSync(name).isFile() ? name : null; } catch { return null; } }
+  const key = `${toolPath}\0${name}`;
+  const cached = binaryCache.get(key);
+  if (cached) {
+    try { if (statSync(cached).isFile()) return cached; } catch { binaryCache.delete(key); }
+  }
   for (const dir of toolPath.split(":")) {
     if (!dir) continue;
     const candidate = path.join(dir, name);
-    try { if (statSync(candidate).isFile()) return candidate; } catch { /* next */ }
+    try {
+      if (statSync(candidate).isFile()) {
+        binaryCache.set(key, candidate);
+        return candidate;
+      }
+    } catch { /* next */ }
   }
   return null;
 }

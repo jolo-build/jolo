@@ -85,8 +85,11 @@ export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs,
   }
   clearTimeout(timer);
   link.terminate();
+  if (answer) {
+    void link.settle();
+    return answer;
+  }
   const { exitCode, stderr } = await link.settle();
-  if (answer) return answer;
   if (controller.signal.aborted) return { note: `${manifest.displayName} did not answer within ${timeoutMs / 1000} seconds`, timedOut: true };
   return { note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without an answer${stderr ? `: ${stderr.slice(0, 200)}` : ""}`, timedOut: false };
 }

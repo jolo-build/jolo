@@ -5,7 +5,7 @@
 const MAX_OUTSTANDING_BATCHES = 8;
 const MAX_OUTSTANDING_BYTES = 512 * 1024;
 const MAX_BUFFERED_EVENTS = 2_000;
-const FLUSH_INTERVAL_MS = 16;
+const FLUSH_INTERVAL_MS = 4;
 
 export function createRelay({ send, log }) {
   let nextId = 1;

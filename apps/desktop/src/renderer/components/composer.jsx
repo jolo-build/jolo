@@ -291,18 +291,23 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
   }, [autoFocusOnType, disabled]);
   const submit = async () => {
     const images = attachmentsRef.current;
-    const prompt = text.trim() || (images.some(item => !item.mimeType.startsWith('image/')) ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
+    const submittedText = text;
+    const prompt = submittedText.trim() || (images.some(item => !item.mimeType.startsWith('image/')) ? 'Please inspect the attached content.' : images.length ? 'Please inspect the attached images.' : '');
     if (!prompt || disabled || submitting.current || pendingPastes.current) return;
     submitting.current = true;
     setSending(true);
+    setText('');
+    if (images.length) updateAttachments([]);
     try {
       const operation = onSend(prompt, { queue: running, ...(images.length ? { attachments: images } : {}) });
-      lastQueued.current = running ? { operation, at: Date.now(), draft: text } : null;
+      lastQueued.current = running ? { operation, at: Date.now(), draft: submittedText } : null;
       await operation;
-      setText(current => current === text ? '' : current);
-      if (mounted.current) updateAttachments(attachmentsRef.current.filter(image => !images.includes(image)));
     }
-    catch { /* The app displays the error; retain the draft for retry. */ }
+    catch {
+      /* The app displays the error; retain the draft for retry. */
+      setText(current => current ? `${submittedText}\n${current}` : submittedText);
+      if (mounted.current && images.length) updateAttachments([...images, ...attachmentsRef.current.filter(image => !images.includes(image))]);
+    }
     finally { submitting.current = false; setSending(false); }
   };
   return <div className="compose-dock"><div className="compose-wrap"><div className="compose-column">

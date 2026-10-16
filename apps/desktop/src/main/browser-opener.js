@@ -10,11 +10,24 @@ import { BrowserOpenSchema, BrowserOpenerSchema } from '@jolo/protocol';
 
 export function createBrowserOpener({ bridge, agent, send, isOverlayActive, waitForOverlay = null, log }) {
   let workspaceIds = [];
+  /** @type {string[] | null} */
+  let publishedIds = null;
+  /** @type {string[] | null} */
+  let inFlightIds = null;
   let publishing = Promise.resolve();
   const pending = new Map();
   const publish = () => {
     const ids = workspaceIds;
-    publishing = publishing.catch(() => {}).then(() => bridge.rawCall('browser.setOpener', { workspaceIds: ids }));
+    if (publishedIds === ids || inFlightIds === ids) return publishing;
+    inFlightIds = ids;
+    publishing = publishing.catch(() => {}).then(() => bridge.rawCall('browser.setOpener', { workspaceIds: ids })).then(result => {
+      if (inFlightIds === ids) inFlightIds = null;
+      if (workspaceIds === ids) publishedIds = ids;
+      return result;
+    }, error => {
+      if (inFlightIds === ids) inFlightIds = null;
+      throw error;
+    });
     return publishing;
   };
   const publishInBackground = () => publish().catch(error => log.warn('browser opener registration failed', { error: String(error?.message ?? error) }));
@@ -50,18 +63,30 @@ export function createBrowserOpener({ bridge, agent, send, isOverlayActive, wait
     setWorkspaces(params) {
       const checked = BrowserOpenerSchema.safeParse(params);
       if (!checked.success) return;
-      workspaceIds = [...new Set(checked.data.workspaceIds)];
+      const nextIds = [...new Set(checked.data.workspaceIds)];
+      const unchanged = nextIds.length === workspaceIds.length && nextIds.every((id, index) => id === workspaceIds[index]);
+      if (!unchanged) {
+        workspaceIds = nextIds;
+        publishedIds = null;
+      }
       for (const entry of pending.values()) if (!workspaceIds.includes(entry.workspaceId)) finish(entry, { error: 'workspace pane closed while opening the browser' });
-      if (bridge.client && !bridge.client.closed) void publishInBackground();
+      if (bridge.client && !bridge.client.closed && publishedIds !== workspaceIds) void publishInBackground();
     },
-    onConnected: publishInBackground,
+    onConnected() {
+      publishedIds = null;
+      inFlightIds = null;
+      return publishInBackground();
+    },
     // Do not admit a run with a failed or stale pane registration. A pane can
     // change while its previous publication is still waiting on the socket.
     async beforeRun() {
-      let ids;
-      do { ids = workspaceIds; await publish(); } while (ids !== workspaceIds);
+      while (publishedIds !== workspaceIds) await publish();
     },
-    onDisconnected() { for (const entry of pending.values()) finish(entry, {}, false); },
+    onDisconnected() {
+      publishedIds = null;
+      inFlightIds = null;
+      for (const entry of pending.values()) finish(entry, {}, false);
+    },
     handleOpen(params) {
       const checked = BrowserOpenSchema.safeParse(params);
       if (!checked.success || pending.has(params.invocationId)) return;

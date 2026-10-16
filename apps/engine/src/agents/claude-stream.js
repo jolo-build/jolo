@@ -80,9 +80,11 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const hosted = mcpConfig?.(workspace, run);
       const mcpServers = hosted ? { jolo: hosted.server } : {};
       const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
-      const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
-      const images = readImages(storage, run);
-      const content = images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
+      const contentPromise = handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) })
+        .then(prompt => {
+          const images = readImages(storage, run);
+          return images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
+        });
       const env = hostedEnvironment(supervisor, turn.environment);
 
       const state = {
@@ -96,6 +98,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       try {
         link = spawnLineChild({ argv, cwd: workspace.path, env, signal, log, agentId: manifest.id });
       } catch (error) {
+        contentPromise.catch(() => {});
         turn.finish({ usage: state.usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
@@ -136,7 +139,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         if (message.parent_tool_use_id != null && message.type !== 'control_request') return;
         switch (message.type) {
           case "control_response":
-            if (message.response?.request_id === "jolo-init") link.write({ type: "user", message: { role: "user", content } });
+            if (message.response?.request_id === "jolo-init") link.write({ type: "user", message: { role: "user", content: await contentPromise } });
             return;
           case "control_request": return onControlRequest(message);
           case "system":
@@ -189,7 +192,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
               contextUsed: contextOf(state.lastCall), contextWindow: Number.isInteger(window) && window > 0 ? window : null,
             };
             link.end();
-            link.terminate({ graceful: true });
+            link.terminate();
             return;
           }
           default: return; // rate_limit_event, keep_alive, hooks: nothing Jolo needs
@@ -199,7 +202,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       ctx.transition("model");
       link.write({ type: "control_request", request_id: "jolo-init", request: { subtype: "initialize" } });
       try {
-        for await (const message of link.messages()) await onMessage(message);
+        for await (const message of link.messages()) {
+          await onMessage(message);
+          if (state.result) break;
+        }
       } catch (error) {
         state.failure = String(error?.message ?? error);
       }

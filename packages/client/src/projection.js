@@ -96,6 +96,8 @@ export class SessionProjection {
     this.messageSeq = new Map();
     this.runSeq = new Map();
     this.lastSeq = "0";
+    /** @type {ProjectedMessage[] | null} */
+    this.orderedMessages = null;
   }
 
   /**
@@ -104,6 +106,7 @@ export class SessionProjection {
    * @param {{ messages?: any[], runs?: any[], cursor?: string, advanceCursor?: boolean }} page
    */
   seed({ messages = [], runs = [], cursor, advanceCursor = true }) {
+    if (messages.length) this.orderedMessages = null;
     for (const message of messages) {
       if (cursor && BigInt(this.messageSeq.get(message.id) ?? "0") > BigInt(cursor)) continue;
       const existing = this.messages.get(message.id);
@@ -126,6 +129,7 @@ export class SessionProjection {
     const p = event.payload;
     switch (event.type) {
       case "message.started":
+        this.orderedMessages = null;
         this.messages.set(p.messageId, { id: p.messageId, runId: event.runId, role: p.role, kind: p.kind ?? "text", artifactId: p.artifactId, ordinal: p.ordinal, text: "", renderedBytes: 0, committedBytes: 0, status: "streaming" });
         break;
       case "message.committed":
@@ -265,7 +269,10 @@ export class SessionProjection {
   }
 
   ordered() {
-    return [...this.messages.values()].sort((a, b) => a.ordinal - b.ordinal);
+    if (!this.orderedMessages || this.orderedMessages.length !== this.messages.size) {
+      this.orderedMessages = [...this.messages.values()].sort((a, b) => a.ordinal - b.ordinal);
+    }
+    return this.orderedMessages;
   }
 
   toolsFor(runId) {
@@ -275,5 +282,13 @@ export class SessionProjection {
 
 function byteLength(text) {
   if (typeof Buffer !== "undefined") return Buffer.byteLength(text, "utf8");
-  return new TextEncoder().encode(text).length;
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { bytes += 4; i++; }
+    else bytes += 3;
+  }
+  return bytes;
 }

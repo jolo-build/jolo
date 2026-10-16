@@ -57,8 +57,18 @@ export class Storage {
       getSession: this.db.query("SELECT * FROM sessions WHERE id = ?1 AND deleted_at IS NULL"),
       getRun: this.db.query("SELECT * FROM runs WHERE id = ?1"),
       getRunByRequest: this.db.query("SELECT * FROM runs WHERE session_id = ?1 AND request_id = ?2"),
+      getRunTaskReferences: this.db.query("SELECT payload FROM run_task_references WHERE run_id = ?1 ORDER BY position"),
+      updateRunState: this.db.query("UPDATE runs SET state = ?1, revision = revision + 1, pause_reason = ?2, failure = ?3, updated_at = ?4 WHERE id = ?5"),
+      updateRunStateAttempt: this.db.query("UPDATE runs SET state = ?1, revision = revision + 1, pause_reason = ?2, failure = ?3, updated_at = ?4, attempt = attempt + 1 WHERE id = ?5"),
       getArtifact: this.db.query("SELECT * FROM artifacts WHERE id = ?1"),
+      insertArtifact: this.db.query("INSERT INTO artifacts (id, session_id, kind, storage_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5)"),
+      commitArtifactBytes: this.db.query("UPDATE artifacts SET committed_bytes = ?1 WHERE id = ?2"),
+      finalizeArtifact: this.db.query("UPDATE artifacts SET committed_bytes = ?1, finalized_hash = ?2 WHERE id = ?3"),
       getMessage: this.db.query("SELECT * FROM messages WHERE id = ?1"),
+      nextMessageOrdinal: this.db.query("SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM messages WHERE session_id = ?1"),
+      insertMessage: this.db.query("INSERT INTO messages (id, session_id, run_id, ordinal, role, kind, artifact_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"),
+      commitMessageBytes: this.db.query("UPDATE messages SET committed_bytes = ?1 WHERE id = ?2"),
+      finishMessage: this.db.query("UPDATE messages SET status = ?1, committed_bytes = ?2 WHERE id = ?3"),
     };
     this.repairUntitledSessions();
     } catch (error) { try { this.artifacts?.closeAll(); } catch {} this.db.close(); throw error; }
@@ -390,7 +400,7 @@ export class Storage {
   }
 
   getRunTaskReferences(runId) {
-    return this.db.query('SELECT payload FROM run_task_references WHERE run_id=?1 ORDER BY position').all(runId).map(row => JSON.parse(row.payload));
+    return this.statements.getRunTaskReferences.all(runId).map(row => JSON.parse(row.payload));
   }
 
   insertRun({ sessionId, requestId, prompt, execution = null, attachments = [], taskReferences = [] }) {
@@ -412,8 +422,7 @@ export class Storage {
 
   /** Transition with a monotonically increasing revision; stale expectations are rejected by callers. */
   updateRunState(id, state, { pauseReason = null, failure = null, newAttempt = false } = {}) {
-    const attempt = newAttempt ? ", attempt = attempt + 1" : "";
-    this.db.query(`UPDATE runs SET state = ?1, revision = revision + 1, pause_reason = ?2, failure = ?3, updated_at = ?4${attempt} WHERE id = ?5`).run(state, pauseReason, failure, now(), id);
+    (newAttempt ? this.statements.updateRunStateAttempt : this.statements.updateRunState).run(state, pauseReason, failure, now(), id);
     return this.getRun(id);
   }
 
@@ -447,7 +456,7 @@ export class Storage {
     if (extension && !['.png', '.jpg', '.gif', '.webp', '.txt', '.bin'].includes(extension)) throw new Error('unsupported artifact extension');
     const id = newId("art");
     const storageKey = `${sessionId}/${id}${extension}`;
-    this.db.query("INSERT INTO artifacts (id, session_id, kind, storage_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5)").run(id, sessionId, kind, storageKey, now());
+    this.statements.insertArtifact.run(id, sessionId, kind, storageKey, now());
     return mapArtifact(this.statements.getArtifact.get(id));
   }
 
@@ -456,20 +465,20 @@ export class Storage {
   }
 
   commitArtifactBytes(id, committedBytes) {
-    this.db.query("UPDATE artifacts SET committed_bytes = ?1 WHERE id = ?2").run(committedBytes, id);
+    this.statements.commitArtifactBytes.run(committedBytes, id);
   }
 
   finalizeArtifact(id, committedBytes, hash) {
-    this.db.query("UPDATE artifacts SET committed_bytes = ?1, finalized_hash = ?2 WHERE id = ?3").run(committedBytes, hash, id);
+    this.statements.finalizeArtifact.run(committedBytes, hash, id);
   }
 
   nextMessageOrdinal(sessionId) {
-    return this.db.query("SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM messages WHERE session_id = ?1").get(sessionId).ordinal;
+    return this.statements.nextMessageOrdinal.get(sessionId).ordinal;
   }
 
   insertMessage({ sessionId, runId, role, kind = "text", artifactId, ordinal }) {
     const id = newId("msg");
-    this.db.query("INSERT INTO messages (id, session_id, run_id, ordinal, role, kind, artifact_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").run(id, sessionId, runId, ordinal, role, kind, artifactId, now());
+    this.statements.insertMessage.run(id, sessionId, runId, ordinal, role, kind, artifactId, now());
     return this.getMessage(id);
   }
 
@@ -682,11 +691,11 @@ export class Storage {
   }
 
   commitMessageBytes(id, committedBytes) {
-    this.db.query("UPDATE messages SET committed_bytes = ?1 WHERE id = ?2").run(committedBytes, id);
+    this.statements.commitMessageBytes.run(committedBytes, id);
   }
 
   finishMessage(id, status, committedBytes) {
-    this.db.query("UPDATE messages SET status = ?1, committed_bytes = ?2 WHERE id = ?3").run(status, committedBytes, id);
+    this.statements.finishMessage.run(status, committedBytes, id);
     return this.getMessage(id);
   }
 

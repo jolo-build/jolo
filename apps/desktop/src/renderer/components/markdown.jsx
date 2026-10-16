@@ -102,7 +102,7 @@ function MarkdownEmbed({ block, depth }) {
   </div>;
 }
 
-function Block({ block, depth, sessionId, streaming }) {
+const Block = memo(function Block(/** @type {{ block: any, depth: number, sessionId?: string | null, streaming?: boolean }} */ { block, depth, sessionId, streaming }) {
   switch (block.type) {
     // The level is the document's own, pushed down so a fenced document never outranks the page around it.
     case "heading": { const Tag = /** @type {'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'} */ (`h${Math.min(6, block.level + 2)}`); return <Tag><Inline nodes={block.children} /></Tag>; }
@@ -128,7 +128,7 @@ function Block({ block, depth, sessionId, streaming }) {
     );
     default: return null;
   }
-}
+});
 
 /**
  * Every prop is a primitive, so a finished message whose text has not changed is skipped entirely when
