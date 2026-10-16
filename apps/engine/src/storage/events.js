@@ -49,4 +49,5 @@ export class EventRepository {
   changeEvents(runId) { return this.db.query('SELECT payload FROM run_change_events WHERE run_id=?1 ORDER BY seq DESC LIMIT 200').all(runId).reverse().map(row => JSON.parse(row.payload)); }
   changedPaths(runId) { return this.statements.changedPaths.all(runId).map(row => row.path); }
   lastAt(runId) { return this.statements.lastAt.get(runId)?.last_at ?? null; }
+  close() { for (const statement of Object.values(this.statements)) statement.finalize(); }
 }

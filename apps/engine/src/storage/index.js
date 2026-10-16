@@ -71,7 +71,7 @@ export class Storage {
       finishMessage: this.db.query("UPDATE messages SET status = ?1, committed_bytes = ?2 WHERE id = ?3"),
     };
     this.repairUntitledSessions();
-    } catch (error) { try { this.artifacts?.closeAll(); } catch {} this.db.close(); throw error; }
+    } catch (error) { try { this.close(); } catch {} throw error; }
   }
 
   /** Run `fn` in one transaction; durable events are published only after the outermost commit. */
@@ -747,7 +747,10 @@ export class Storage {
   }
 
   close() {
-    this.artifacts.closeAll();
+    this.artifacts?.closeAll();
+    // Retained statements must not keep the ownership lock after the database closes.
+    for (const statement of Object.values(this.statements ?? {})) statement.finalize();
+    this.eventRepository?.close();
     this.db.close();
   }
 }
