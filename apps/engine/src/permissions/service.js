@@ -3,7 +3,9 @@ import { EventEmitter } from "node:events";
 import path from 'node:path';
 import { ProtocolError } from "@jolo/protocol";
 
-export const SCOPES = Object.freeze({ inspect: "inspect", browse: "browse", edit: "edit", execute: "execute" });
+export const SCOPES = Object.freeze({ inspect: "inspect", browse: "browse", edit: "edit", execute: "execute", screen: "screen" });
+/** Whole-desktop control is consented to per task, never once per click and never for a project. */
+export const SCREEN_DECISIONS = Object.freeze(["allow_run", "deny"]);
 
 /** Permission displays use the session's workspace, never the engine's current directory. */
 export const permissionCwd = (workspacePath, cwd) => path.resolve(workspacePath, cwd || '.');
@@ -73,14 +75,34 @@ export class PermissionService {
       if (grant) return grant;
       throw new PermissionRequired(toolClass);
     }
+    if (toolClass === "screen") {
+      // Only a grant for this very task counts; screen grants are never created without a run.
+      const grant = this.storage.findGrantWithLifetime({ scope: SCOPES.screen, workspaceId, runId });
+      if (grant?.constraints?.runId === runId) return grant;
+      throw new PermissionRequired(toolClass);
+    }
     throw new ProtocolError("permission_denied", `unknown tool class ${toolClass}`);
+  }
+
+  /** Withdraw a run's screen consent; the next screen action asks the user again. */
+  revokeScreen(workspaceId, runId) {
+    const grant = this.storage.findGrantWithLifetime({ scope: SCOPES.screen, workspaceId, runId });
+    if (grant?.constraints?.runId === runId) this.storage.expireGrant(grant.id);
+  }
+
+  /** The pending screen consent request for a run, so a second tool call waits on it instead of asking again. */
+  pendingScreenRequest(runId) {
+    const pending = this.storage.pendingPermissionForRun(runId);
+    return pending?.request?.kind === "screen" ? pending : null;
   }
 
   request({ run, workspaceId, tool, argumentDigest, summary, cwd }) {
     cwd = permissionCwd(this.storage.getWorkspace(workspaceId).path, cwd);
+    const screen = tool.executionClass === "screen";
+    const narrowed = screen ? { kind: "screen", decisions: [...SCREEN_DECISIONS] } : {};
     const permission = this.storage.transaction(() => {
-      const created = this.storage.insertPermission({ runId: run.id, sessionId: run.sessionId, workspaceId, tool: tool.name, request: { argumentDigest, ...summary, cwd, isolation: "none" } });
-      this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "permission.requested", payload: { permissionId: created.id, runId: run.id, workspaceId, tool: tool.name, summary: summary.summary, ...(summary.argv ? { argv: summary.argv } : {}), ...(summary.script ? { script: summary.script } : {}), cwd, isolation: "none", revision: created.revision } });
+      const created = this.storage.insertPermission({ runId: run.id, sessionId: run.sessionId, workspaceId, tool: tool.name, request: { argumentDigest, ...summary, cwd, isolation: "none", ...narrowed } });
+      this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "permission.requested", payload: { permissionId: created.id, runId: run.id, workspaceId, tool: tool.name, summary: summary.summary, ...(summary.argv ? { argv: summary.argv } : {}), ...(summary.script ? { script: summary.script } : {}), cwd, isolation: "none", revision: created.revision, ...narrowed } });
       return created;
     });
     return permission;
@@ -94,10 +116,13 @@ export class PermissionService {
       if (permission.state !== "pending") throw new ProtocolError("conflict", `permission already ${permission.state}`, { state: permission.state });
       if (expectedRevision !== undefined && expectedRevision !== permission.revision) throw new ProtocolError("conflict", "permission revision moved", { revision: permission.revision });
       let grantId = null;
-      if (decision === "allow_once") grantId = this.storage.insertGrant({ scope: SCOPES.execute, constraints: { workspaceId: permission.workspaceId, runId: permission.runId, argumentDigest: permission.request.argumentDigest, toolName: permission.tool, once: true } }).id;
-      if (decision === "allow_run") grantId = this.grantScope(SCOPES.execute, { workspaceId: permission.workspaceId, runId: permission.runId }).grant.id;
-      if (decision === "allow_project") grantId = this.grantScope(SCOPES.execute, { workspaceId: permission.workspaceId }).grant.id;
-      if (grantId) this.storage.appendEvent({ type: "grant.created", payload: { grantId, scope: SCOPES.execute, workspaceId: permission.workspaceId } });
+      const screen = permission.request?.kind === "screen";
+      if (screen && !SCREEN_DECISIONS.includes(decision)) throw new ProtocolError("invalid_params", "screen control is approved for a whole task: choose Allow for this task or Deny");
+      const scope = screen ? SCOPES.screen : SCOPES.execute;
+      if (decision === "allow_once") grantId = this.storage.insertGrant({ scope, constraints: { workspaceId: permission.workspaceId, runId: permission.runId, argumentDigest: permission.request.argumentDigest, toolName: permission.tool, once: true } }).id;
+      if (decision === "allow_run") grantId = this.grantScope(scope, { workspaceId: permission.workspaceId, runId: permission.runId }).grant.id;
+      if (decision === "allow_project") grantId = this.grantScope(scope, { workspaceId: permission.workspaceId }).grant.id;
+      if (grantId) this.storage.appendEvent({ type: "grant.created", payload: { grantId, scope, workspaceId: permission.workspaceId } });
       const updated = this.storage.resolvePermission(permissionId, { state: decision === "deny" ? "denied" : "allowed", decision, grantId });
       this.storage.appendEvent({ sessionId: permission.sessionId, runId: permission.runId, type: "permission.resolved", payload: { permissionId, decision, revision: updated.revision, grantId } });
       return updated;

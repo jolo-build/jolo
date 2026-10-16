@@ -24,6 +24,8 @@ export function pauseDescription(run) {
     }[run.failure] ?? run.failure ?? 'the task reached a limit';
     return `Task paused: ${detail}.`;
   }
+  if (run.pauseReason === 'screen_host_unavailable') return 'Task paused: Jolo desktop stopped providing the screen.';
+  if (run.pauseReason === 'user' && run.failure) return `Task paused: ${run.failure}`;
   return `Task paused${run.pauseReason ? `: ${run.pauseReason.replaceAll('_', ' ')}` : ''}`;
 }
 
@@ -46,19 +48,23 @@ export function untilLabel(iso) {
 }
 
 /**
- * The artifact a finished hosted browser_screenshot call produced, for any spelling a transport
- * gives it: bare, MCP-prefixed, or server/tool. Returns null for anything else.
+ * The image a finished browser or screen screenshot or zoom call produced, for any spelling a
+ * transport gives it: bare, MCP-prefixed, or server/tool. Returns null for anything else.
  * @param {string} text the tool block's head + first line of output
+ * @returns {{ artifactId: string, mimeType: string } | null}
  */
-export function screenshotArtifactId(text) {
+export function screenshotImage(text) {
   const at = text.indexOf('\n');
   const [head, rest] = at < 0 ? [text, ''] : [text.slice(0, at), text.slice(at + 1)];
-  if (!/^(?:jolo_browser\/|jolo\/|mcp__jolo_browser__|mcp__jolo__)?browser_screenshot(?:\s|$)/.test(head)) return null;
+  if (!/^(?:jolo_browser\/|jolo\/|mcp__jolo_browser__|mcp__jolo__)?(?:browser|screen)_(?:screenshot|zoom)(?:\s|$)/.test(head)) return null;
   try {
     const parsed = JSON.parse(rest.split('\n', 1)[0]);
-    return parsed.ok && parsed.mimeType === 'image/png' && parsed.artifactId ? parsed.artifactId : null;
+    return parsed.ok && ['image/png', 'image/jpeg'].includes(parsed.mimeType) && parsed.artifactId ? { artifactId: parsed.artifactId, mimeType: parsed.mimeType } : null;
   } catch { return null; }
 }
+
+/** The artifact id alone, for callers that only need to know an image exists. */
+export const screenshotArtifactId = text => screenshotImage(text)?.artifactId ?? null;
 export const changeKey = (change) => `${change.invocationId}:${change.newPath ?? change.path}:${change.tool}:${change.revision ?? ''}`;
 export function verificationLabel(verification) {
   if (!verification || verification.status === 'not_run') return 'Not run';

@@ -81,7 +81,7 @@ test('model mentions complete without submitting and authorize a child on the se
   finally { await t.close(); }
 }, 30_000);
 
-test("/model configures the shared provider and hosted models without sending commands or secrets as tasks", async () => {
+test("/model saves chat-specific provider and hosted choices without sending commands or secrets as tasks", async () => {
   const t = await boot();
   try {
     await t.ready();
@@ -93,7 +93,8 @@ test("/model configures the shared provider and hosted models without sending co
     expect(t.output()).not.toContain("sk-terminal-secret-test");
     await t.select("Save"); t.type(ENTER); await t.seen("Model configuration saved");
     const settings = (await t.client.call("settings.get", {})).settings;
-    expect(settings.model).toMatchObject({ model: "test-model", contextWindowTokens: 64000, maxOutputTokens: 4000 });
+    expect(settings.model).toBeNull();
+    expect(t.text()).toContain("test-model");
     expect(JSON.stringify(settings)).not.toContain("sk-terminal-secret-test");
     expect((await t.client.call("credential.status", { provider: "openai" })).source).toBe("session");
     expect((await t.client.call("session.list", { projectId: t.project.projectId })).sessions).toHaveLength(0);
@@ -101,7 +102,8 @@ test("/model configures the shared provider and hosted models without sending co
     await t.prompt("/model jolo"); await t.seen("Models / Jolo provider");
     await t.edit("Model", "discard-this-model");
     t.type(ESC); await t.seen("Choose the agent for your prompts"); t.type(ESC); await t.ready();
-    expect((await t.client.call("settings.get", {})).settings.model.model).toBe("test-model");
+    expect((await t.client.call("settings.get", {})).settings.model).toBeNull();
+    expect(t.text()).toContain("test-model");
     t.type(UP); await new Promise((resolve) => setTimeout(resolve, 80));
     expect(t.selected()).not.toContain("/model");
 
@@ -109,7 +111,7 @@ test("/model configures the shared provider and hosted models without sending co
     await t.edit("Model", "custom-agent-model"); await t.edit("Effort", "high");
     t.screen.resize(54, 10); t.child.terminal.resize(54, 10); await t.seen("Models / Fixture Agent");
     await t.select("Save"); t.type(ENTER); await t.seen("Model configuration saved");
-    expect((await t.client.call("settings.get", {})).settings.agents.fixture).toEqual({ model: "custom-agent-model", effort: "high" });
+    expect((await t.client.call("settings.get", {})).settings.agents.fixture).toBeUndefined();
     t.screen.resize(100, 30); t.child.terminal.resize(100, 30); await t.ready();
     await t.prompt("/model jolo"); await t.seen("Models / Jolo provider");
     await t.select("Provider"); t.type("\x1b[D"); await t.seen("Provider  fake");
@@ -117,6 +119,7 @@ test("/model configures the shared provider and hosted models without sending co
     await t.prompt("actual task"); await t.seen("done: actual task");
     const sessions = (await t.client.call("session.list", { projectId: t.project.projectId })).sessions;
     expect(sessions).toHaveLength(1);
+    expect(sessions[0].agentModels.fixture).toEqual({ model: "custom-agent-model", effort: "high" });
     expect((await t.client.call("session.page", { sessionId: sessions[0].id })).runs.map((run) => run.prompt)).toEqual(["actual task"]);
     expect(t.screen.buffer.active.type).toBe("normal");
     expect(t.screen.modes.mouseTrackingMode).toBe("none");

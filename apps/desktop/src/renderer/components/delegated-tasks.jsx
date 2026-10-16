@@ -3,7 +3,7 @@ import { engineCall } from '../engine-context.jsx';
 import { Icon } from './icon.jsx';
 
 const finished = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
-export function DelegatedTasks({ sessionId, working, onOpenSession }) {
+export function useDelegatedTasks(sessionId, working) {
   const [tasks, setTasks] = useState([]), [error, setError] = useState('');
   useEffect(() => {
     if (!sessionId) return;
@@ -24,6 +24,15 @@ export function DelegatedTasks({ sessionId, working, onOpenSession }) {
     void refresh();
     return () => { live = false; clearTimeout(timer); };
   }, [sessionId, working]);
+  return { tasks, error, cancel: async task => {
+    try {
+      const { delegation } = await engineCall('delegation.call', { runId: task.parentRunId, name: 'delegation_cancel', arguments: { delegationId: task.id } });
+      setTasks(current => current.map(item => item.id === task.id ? delegation : item));
+    } catch (failure) { setError(failure.message); }
+  } };
+}
+
+export function DelegatedTasks({ tasks, error, onCancel, onOpenSession }) {
   if (!tasks.length) return null;
   return <section className="delegated-tasks" aria-label="Child tasks">
     <div className="delegated-heading">Child tasks</div>
@@ -32,12 +41,7 @@ export function DelegatedTasks({ sessionId, working, onOpenSession }) {
         <Icon name={task.state === 'completed' ? 'check' : finished.has(task.state) ? 'circle' : 'spinner'} size={14} />
         <span><strong>{task.title}</strong><small>{task.execution?.model} · {task.execution?.preset ?? task.execution?.agentId} · {task.state.replaceAll('_', ' ')}</small></span>
       </button>
-      {!finished.has(task.state) && <button type="button" onClick={async () => {
-        try {
-          const { delegation } = await engineCall('delegation.call', { runId: task.parentRunId, name: 'delegation_cancel', arguments: { delegationId: task.id } });
-          setTasks(current => current.map(item => item.id === task.id ? delegation : item));
-        } catch (failure) { setError(failure.message); }
-      }}>Stop</button>}
+      {!finished.has(task.state) && <button type="button" onClick={() => onCancel(task)}>Stop</button>}
       {task.failure && <p className="delegated-error">{task.failure}</p>}
     </div>)}
     {error && <p role="alert">{error}</p>}

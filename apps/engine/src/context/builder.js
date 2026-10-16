@@ -1,6 +1,7 @@
 // Context assembly under the model window and an independent byte cap.
 import { ProtocolError } from "@jolo/protocol";
 import { completeToolCalls } from "../providers/transcript.js";
+import { imageResultsKept } from "../attachments.js";
 
 export const REQUEST_MAX_BYTES = 2 * 1024 * 1024;
 export const COMPACT_AT_RATIO = 0.9; // compact when usage approaches the usable window (§7.2)
@@ -11,10 +12,14 @@ const SAFETY_MARGIN_RATIO = 0.02;
 /** Heuristic estimate; the active provider's tokenizer can replace it later. */
 export const estimateTokens = (text) => Math.ceil(Buffer.byteLength(String(text ?? ""), "utf8") / 4);
 
-function itemTokens(item) {
+const IMAGE_TOKENS = 4096;
+
+function itemTokens(item, withImages) {
   // Image encoding is hydrated later. Reserve a conservative vision allowance
   // per image rather than treating its base64 as millions of text tokens.
-  return estimateTokens(JSON.stringify(item.payload)) + 8 + (item.payload.attachments?.filter(item => item.mimeType.startsWith('image/')).length ?? 0) * 4096;
+  const images = item.kind === 'user_message' ? item.payload.attachments?.filter(item => item.mimeType.startsWith('image/')).length ?? 0
+    : withImages ? item.payload.images?.length ?? 0 : 0;
+  return estimateTokens(JSON.stringify(item.payload)) + 8 + images * IMAGE_TOKENS;
 }
 
 /**
@@ -39,7 +44,8 @@ export function buildRequest(input) {
     if (last && last.groupId === item.groupId) last.items.push(item);
     else groups.push({ groupId: item.groupId, items: [item] });
   }
-  const groupTokens = groups.map((g) => g.items.reduce((sum, item) => sum + itemTokens(item), 0));
+  const kept = imageResultsKept(input.items); // only the newest tool screenshots are sent as pixels (§7.2)
+  const groupTokens = groups.map((g) => g.items.reduce((sum, item) => sum + itemTokens(item, kept.has(item)), 0));
   let budget = usableInputTokens - fixedTokens;
   const included = [];
   let dropped = 0;

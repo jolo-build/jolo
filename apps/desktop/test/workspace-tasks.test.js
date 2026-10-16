@@ -19,3 +19,13 @@ test('workspace task loading uses its own cursor and refreshes every loaded page
 test('page failures remain visible to the task list for retry', async () => {
   await expect(readWorkspaceTasks(async () => { throw new Error('offline'); }, 'folder')).rejects.toThrow('offline');
 });
+
+test('the shared swipe and rail list includes every page in display order', async () => {
+  let page = 0;
+  const result = await readWorkspaceTasks(async () => {
+    page++;
+    return { tasks: [{ sessionId: `chat-${page}` }], hasMore: page < 3, nextCursor: page < 3 ? { sessionId: `chat-${page}` } : null };
+  }, undefined, Infinity);
+  expect(result).toEqual({ tasks: [{ sessionId: 'chat-1' }, { sessionId: 'chat-2' }, { sessionId: 'chat-3' }], hasMore: false });
+  expect(page).toBe(3);
+});

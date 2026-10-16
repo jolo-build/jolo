@@ -1,9 +1,18 @@
 // OpenAI Responses API adapter: streaming, function calls, stateless reasoning continuation (§7.1, §7.3).
 // Provider-native items (reasoning, function_call) are preserved verbatim for the next request.
 import { streamSse, incompleteStream, parseArguments, providerError } from './transport.js';
-import { portableItems } from './transcript.js';
+import { portableItems, resultImages, resultText } from './transcript.js';
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function streamError(payload, apiKey) {
+  const error = payload?.response?.error ?? payload?.error ?? payload;
+  const quota = [error?.code, error?.type].some(value => ['insufficient_quota', 'credit_balance_exhausted'].includes(value));
+  const result = providerError(quota || error?.code === 'rate_limit_exceeded' ? 429 : 400,
+    error?.message ?? error?.code ?? 'Provider returned an error without details', apiKey);
+  // Billing exhaustion needs user action; repeating the same paid request cannot resolve it.
+  return quota ? { ...result, category: 'quota', retryable: false } : result;
+}
 
 function toInput(items) {
   const input = [];
@@ -16,7 +25,14 @@ function toInput(items) {
       case "system_note": input.push({ role: "developer", content: item.payload.text }); break;
       case "reasoning": input.push(item.payload.native); break;
       case "tool_call": input.push({ type: "function_call", call_id: item.payload.callId, name: item.payload.name, arguments: JSON.stringify(item.payload.arguments ?? {}), ...(item.payload.native?.id ? { id: item.payload.native.id } : {}) }); break;
-      case "tool_result": input.push({ type: "function_call_output", call_id: item.payload.callId, output: item.payload.output }); break;
+      case "tool_result": {
+        // A function output is a string or a list of input parts, so a screenshot travels inside it.
+        const images = resultImages(item.payload);
+        input.push({ type: "function_call_output", call_id: item.payload.callId, output: images.length
+          ? [{ type: 'input_text', text: resultText(item.payload) }, ...images.map(image => ({ type: 'input_image', image_url: `data:${image.mimeType};base64,${image.data}`, detail: 'auto' }))]
+          : resultText(item.payload) });
+        break;
+      }
       default: break;
     }
   }
@@ -103,11 +119,11 @@ export function createOpenAIProvider(options) {
                 finished = true;
                 break;
               case "response.failed":
-                yield providerError(400, data.response?.error?.message ?? "response failed", options.apiKey);
+                yield streamError(data, options.apiKey);
                 finished = true;
                 break;
               case "error":
-                yield providerError(data?.code === "rate_limit_exceeded" ? 429 : 400, data?.message ?? "provider error", options.apiKey);
+                yield streamError(data, options.apiKey);
                 finished = true;
                 break;
               default:

@@ -4,7 +4,7 @@ import net from "node:net";
 import { timingSafeEqual } from "node:crypto";
 import {
   encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, toRpcError, ProtocolError,
-  PROTOCOL_VERSION, SCHEMA_VERSION, METHOD_NAMES, FRAME_MAX_BYTES, CONNECTION_BUFFER_MAX_BYTES, LIMITS, compareSeq, DEFAULT_EVENT_TYPES, EVENT_TYPES,
+  PROTOCOL_VERSION, SCHEMA_VERSION, METHOD_NAMES, FRAME_MAX_BYTES, CONNECTION_BUFFER_MAX_BYTES, LIMITS, compareSeq, DEFAULT_EVENT_TYPES, EVENT_TYPES, BROWSER_OPERATIONS,
 } from "@jolo/protocol";
 
 const HANDSHAKE_DEADLINE_MS = 5_000;
@@ -92,6 +92,7 @@ export function createRpcServer(options) {
       eventStreamId: storage.eventStreamId,
       supportedMethods: capability ? ["hello", ...capability.methods] : METHOD_NAMES,
       supportedEventTypes: [...EVENT_TYPES],
+      supportedBrowserOperations: [...BROWSER_OPERATIONS],
       frameLimits: { maxFrameBytes: FRAME_MAX_BYTES, maxBufferedBytes: CONNECTION_BUFFER_MAX_BYTES },
     };
   };

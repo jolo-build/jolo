@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 
 export const CONTEXT_PANELS = [
-  ['changes', 'Changes', 'changes'], ['browser', 'Browser', 'browser'], ['files', 'Files', 'file'],
+  ['edits', 'Code changes', 'fileDiff'], ['changes', 'Changes', 'changes'], ['browser', 'Browser', 'browser'], ['files', 'Files', 'file'],
   ['terminal', 'Terminal', 'terminal'], ['plans', 'Plans', 'plan'], ['schedules', 'Schedules', 'clock'], ['checks', 'Checks', 'circleCheck'],
 ];
 
@@ -25,7 +25,7 @@ export function PanelMenu({ selected, panels, disabled, details, onSelect, onHid
   const dismiss = () => { menu.current.hidePopover(); trigger.current.focus(); };
   return <>
     {/* The native invoker toggles without light-dismiss reopening the menu on a second click. */}
-    <button ref={trigger} className={compact ? 'panel-item-new' : selected ? 'active' : ''} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={() => {
+    <button ref={trigger} className={`panel-menu-trigger${compact ? ' panel-item-new' : ''}`} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={() => {
       const rect = trigger.current.getBoundingClientRect();
       menu.current.style.top = `${rect.bottom + 6}px`;
       menu.current.style.left = `${Math.max(8, Math.min(innerWidth - 252, rect.right - 244))}px`;

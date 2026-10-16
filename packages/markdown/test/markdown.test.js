@@ -25,6 +25,39 @@ describe("markdown model", () => {
     expect(parseInline("_emphasis_ and __strong__").map((node) => node.type)).toEqual(["em", "text", "strong"]);
   });
 
+  test('parses the generic Codex directive grammar into inert structured nodes', () => {
+    const path = '/Users/test/Library/Application Support/jolo/chat/output/review.xlsx';
+    expect(parseInline(`Done: :codex-file-citation{path="${path}" purpose="output"}`)).toEqual([
+      { type: 'text', text: 'Done: ' },
+      { type: 'directive', marker: 1, name: 'codex-file-citation', label: null, attributes: { path, purpose: 'output' } },
+    ]);
+    const source = '- :codex-followup[Analyze completed workbook]{prompt="Merge labels with hidden results."}\n- ::future-action[Open \\] result]{enabled=true count=2}';
+    const block = parseDocument(source).blocks[0];
+    expect(block.items.map(item => item.children[0])).toEqual([
+      { type: 'directive', marker: 1, name: 'codex-followup', label: 'Analyze completed workbook', attributes: { prompt: 'Merge labels with hidden results.' } },
+      { type: 'directive', marker: 2, name: 'future-action', label: 'Open ] result', attributes: { enabled: 'true', count: '2' } },
+    ]);
+    expect(renderPlain([block])).toBe('• Analyze completed workbook\n• Open ] result');
+  });
+
+  test('supports Codex quote modes and leaves malformed directives visible', () => {
+    expect(parseInline(String.raw`:::code-comment{title='Fix class' body="Keep \"x}\" literal." file="C:\Users\me\app.ts" start=10 priority=2}`)[0]).toEqual({
+      type: 'directive', marker: 3, name: 'code-comment', label: null,
+      attributes: { title: 'Fix class', body: 'Keep "x}" literal.', file: String.raw`C:\Users\me\app.ts`, start: '10', priority: '2' },
+    });
+    expect(parseInline(String.raw`::git-create-pr{cwd="C:\repo\" branch="feature/report" isDraft=true}`)[0]).toEqual({
+      type: 'directive', marker: 2, name: 'git-create-pr', label: null,
+      attributes: { cwd: 'C:\\repo\\', branch: 'feature/report', isDraft: 'true' },
+    });
+    for (const value of [
+      ':codex-file-citation{path="/tmp/a.xlsx" purpose nope}',
+      ':artifact{path=/tmp/a path=/tmp/b}',
+      '::::code-comment{title=comment}',
+      ':codex-followup[Run it]{prompt="unterminated}',
+    ]) expect(parseInline(value)).toEqual([{ type: 'text', text: value }]);
+    expect(parseInline('`:artifact{path=report.xlsx}`')[0]).toEqual({ type: 'code', text: ':artifact{path=report.xlsx}' });
+  });
+
   test("parses headings, paragraphs, lists, code, quotes, tables, and rules without producing HTML", () => {
     const text = "# Title\n\nSome **bold** and `code` with a [link](https://example.com) and <b>raw</b>.\n\n- one\n- two\n  - nested\n\n1. first\n2. second\n\n```js\nconst x = 1;\n```\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n";
     const { blocks } = parseDocument(text);
@@ -77,4 +110,15 @@ describe("markdown model", () => {
     expect(plain).toContain("• [x] done");
     expect(segment("a\n\n\n\nb").segments).toEqual(["a", "b"]);
   });
+});
+
+test('angle-bracket destinations preserve local paths with spaces and parentheses', () => {
+  const path = '/Users/vmcs/Library/Application Support/jolo/default/chats/chat-test/Experiment (final).md';
+  for (const title of ['', ' "Report title"']) {
+    const nodes = parseInline(`[Experiment report](<${path}>${title})`);
+    expect(nodes).toEqual([{ type: 'link', href: path, rawHref: path, local: true, ambiguous: false, children: [{ type: 'text', text: 'Experiment report' }] }]);
+  }
+  expect(parseInline('[Source](<https://example.com/report>)')[0]).toMatchObject({ type: 'link', href: 'https://example.com/report' });
+  expect(parseInline('[Bad](<javascript:alert(1)>)')).toEqual([{ type: 'text', text: 'Bad' }]);
+  expect(parseInline('`[Report](</tmp/My Report.md>)`')[0].type).toBe('code');
 });

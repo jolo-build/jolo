@@ -49,6 +49,20 @@ test('attention and ongoing work come first, followed by recent workspace activi
   expect(html).not.toContain('aria-label="Tasks in alpha"');
 });
 
+test('only running board indicators rotate an HTML wrapper, not an SVG child', () => {
+  for (const state of ['model', 'tools', 'queued', 'completed', 'paused', 'awaiting_permission', 'failed', 'cancelled']) {
+    const task = { sessionId: 'task', title: 'Task', updatedAt: '2026-09-11T10:00:00Z', run: { state } };
+    const html = renderToStaticMarkup(<BoardTask task={task} row={row('a', 'alpha')} now={Date.parse(task.updatedAt)} onOpen={() => {}} />);
+    if (['model', 'tools'].includes(state)) {
+      expect(html).toContain('<span class="board-progress-icon board-progress-rotor"><svg');
+      expect(html).toContain('class="board-progress-arc"');
+    } else {
+      expect(html).not.toContain('board-progress-rotor');
+      expect(html).not.toContain('board-progress-arc');
+    }
+  }
+});
+
 test('completed tasks keep an accessible status without a repeated badge; live labels hide tool internals', () => {
   const task = { sessionId: 'task', title: 'Review comments', updatedAt: '2026-09-11T10:00:00Z', attention: 'done', run: { state: 'completed' } };
   const html = renderToStaticMarkup(<BoardTask {...(/** @type {BoardTaskProps} */ ({ task, row: row('a', 'alpha'), now: Date.parse('2026-09-11T11:00:00Z') }))} />);

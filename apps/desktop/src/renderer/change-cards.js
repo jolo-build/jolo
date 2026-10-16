@@ -2,10 +2,10 @@ const FINISHED = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'pa
 const cacheKey = sessionId => `jolo.runChangeCards.v2.${sessionId}`;
 
 /** Only explicit run records can attribute a file. Working-tree status is shared by all chats. */
-export function updateChangeCards(cards, runs) {
+export function updateChangeCards(cards, runs, { live = false } = {}) {
   const next = new Map(cards.map(card => [card.runId, card]));
   for (const run of runs) {
-    if (!FINISHED.has(run.state)) continue;
+    if (!live && !FINISHED.has(run.state)) continue;
     const previous = next.get(run.id);
     if (!run.changedPaths) continue; // Older engines cannot reconstruct this history.
     const files = new Map(run.changedPaths.map(path => {
@@ -17,6 +17,7 @@ export function updateChangeCards(cards, runs) {
       if (!files.has(path)) continue;
       const ids = new Set(files.get(path).diffArtifactIds ?? []);
       if (event.diffArtifactId) ids.add(event.diffArtifactId);
+      files.delete(path); // latest touched file is last, even after repeated edits
       files.set(path, { ...change, invocationId: run.id, tool: 'run', diffArtifactIds: [...ids], revision: [...ids].join(':') });
     }
     if (!files.size) { next.delete(run.id); continue; }
@@ -31,7 +32,10 @@ export function updateChangeCards(cards, runs) {
 export function fileDiffSections(text, path) {
   return text.split(/(?=^diff --git )/m).filter(section => {
     const header = section.split('\n', 1)[0];
-    return header.endsWith(` b/${path}`);
+    const destination = /^\+\+\+ (.+)$/m.exec(section)?.[1];
+    let decoded = destination;
+    if (destination?.startsWith('"')) { try { decoded = JSON.parse(destination); } catch { /* retain literal */ } }
+    return decoded === `b/${path}` || header.endsWith(` b/${path}`) || header.endsWith(` "b/${path}"`);
   }).join('');
 }
 

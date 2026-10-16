@@ -30,6 +30,40 @@ test('a closed pane is discoverable only in advertised workspaces; opening waits
   expect(broker.pendingOpens.size).toBe(0);
 });
 
+test('browser opening survives a brief desktop restart for a workspace that was already open', async () => {
+  const broker = new BrowserBroker({ storage: { appendEvent() {} }, log: {} });
+  const before = connection(), after = connection();
+  broker.setOpener(before, ['one']);
+  for (const hook of before.closeHooks) hook();
+  expect(broker.hasBrowser('one')).toBe(true);
+
+  const opened = broker.execute(request('one', 'reconnect'));
+  expect(broker.pendingOpens.size).toBe(1);
+  expect(before.notifications).toHaveLength(0);
+
+  broker.setOpener(after, ['one']);
+  expect(after.notifications).toEqual([{ method: 'browser.open', params: { invocationId: 'reconnect', workspaceId: 'one', leaseMs: 1000 } }]);
+  const capability = register(broker, after, 'one');
+  broker.openResult(after, { invocationId: 'reconnect', capabilityId: capability.capabilityId });
+  expect((await opened).result.tabId).toBe('tab_one');
+  expect(broker.pendingOpens.size).toBe(0);
+});
+
+test('a pending browser open transfers to the replacement desktop connection', async () => {
+  const broker = new BrowserBroker({ storage: { appendEvent() {} }, log: {} });
+  const before = connection(), after = connection();
+  broker.setOpener(before, ['one']);
+  const opened = broker.execute(request('one', 'transfer'));
+  expect(before.notifications[0].method).toBe('browser.open');
+
+  for (const hook of before.closeHooks) hook();
+  expect(broker.pendingOpens.size).toBe(1);
+  broker.setOpener(after, ['one']);
+  const capability = register(broker, after, 'one');
+  broker.openResult(after, { invocationId: 'transfer', capabilityId: capability.capabilityId });
+  expect((await opened).result.tabId).toBe('tab_one');
+});
+
 test('cancel, closed workspace, timeout, and disconnect settle pending opens and reject late replies', async () => {
   for (const action of ['cancel', 'workspace', 'disconnect', 'timeout']) {
     const broker = new BrowserBroker({ storage: { appendEvent() {} }, log: {} });
@@ -42,7 +76,7 @@ test('cancel, closed workspace, timeout, and disconnect settle pending opens and
     expect(await outcome).toBeInstanceOf(Error);
     expect(broker.pendingOpens.size).toBe(0);
     expect(broker.openResult(conn, { invocationId: action, error: 'late' }).accepted).toBe(false);
-    expect(conn.notifications.at(-1).method).toBe('browser.cancel');
+    expect(conn.notifications.at(-1).method).toBe(action === 'disconnect' ? 'browser.open' : 'browser.cancel');
   }
 });
 
@@ -52,7 +86,7 @@ function desktopFixture(waitForDialog = false) {
   const bridge = { async rawCall(method, params) { calls.push({ method, params }); return {}; } };
   const opener = createBrowserOpener({ bridge, agent: { hosts, onRegistered(listener) { listeners.add(listener); } }, send: (method, params) => messages.push({ method, params }), isOverlayActive: () => dialogs.active, waitForOverlay: waitForDialog ? signal => dialogs.wait(signal) : null, log: { warn() {} } });
   const registerHost = (workspaceId = 'ws') => {
-    hosts.set(1, { workspaceId, capabilityId: 'cap', guest: { isDestroyed: () => false } });
+    hosts.set(workspaceId, { workspaceId, capabilityId: 'cap', guest: { isDestroyed: () => false } });
     for (const listener of listeners) listener();
   };
   opener.setWorkspaces({ workspaceIds: ['ws'] });
@@ -164,15 +198,17 @@ test('desktop cancels pending UI requests, refuses overlays and unadvertised wor
   expect(f.messages.filter(message => message.method === 'jolo:browserOpen')).toHaveLength(1);
 });
 
-test('chat cannot replace another workspace browser, including concurrent opens before attachment', () => {
+test('different workspaces can open independent browsers, including concurrent attachment', () => {
   for (const alreadyAttached of [false, true]) {
     const f = desktopFixture();
     f.opener.setWorkspaces({ workspaceIds: ['ws', 'other'] });
     if (alreadyAttached) f.registerHost('other');
     else f.opener.handleOpen({ invocationId: 'first', workspaceId: 'other', leaseMs: 1000 });
     f.opener.handleOpen({ invocationId: 'second', workspaceId: 'ws', leaseMs: 1000 });
-    expect(f.calls.at(-1)).toMatchObject({ method: 'browser.openResult', params: { invocationId: 'second', errorCode: 'browser_busy' } });
-    expect(f.messages.filter(message => message.method === 'jolo:browserOpen' && message.params.workspaceId === 'ws')).toHaveLength(0);
+    expect(f.messages.filter(message => message.method === 'jolo:browserOpen' && message.params.workspaceId === 'ws')).toHaveLength(1);
+    f.opener.acknowledge({ invocationId: 'second' });
+    f.registerHost('ws');
+    expect(f.calls.at(-1)).toMatchObject({ method: 'browser.openResult', params: { invocationId: 'second', capabilityId: 'cap' } });
     if (!alreadyAttached) {
       f.opener.acknowledge({ invocationId: 'first' });
       f.registerHost('other');
@@ -181,13 +217,19 @@ test('chat cannot replace another workspace browser, including concurrent opens 
   }
 });
 
-test('renderer reveals an existing page in the same workspace and refuses to evict another workspace', () => {
+test('renderer routes each workspace independently without evicting an existing browser', () => {
   const panes = new Map([['a', { workspaceId: 'ws', hasBrowser: true }], ['b', { workspaceId: 'ws', hasBrowser: false }], ['c', { workspaceId: 'other', hasBrowser: false }]]);
   expect(browserTarget(panes, 'ws', 'b')[0]).toBe('a');
-  expect(() => browserTarget(panes, 'other', 'c')).toThrow('another workspace');
-  panes.get('a').hasBrowser = false;
   expect(browserTarget(panes, 'other', 'c')[0]).toBe('c');
+  expect(panes.get('a').hasBrowser).toBe(true);
   expect(() => browserTarget(panes, 'missing', 'c')).toThrow('no longer open');
+});
+
+test('renderer routes background opens to a retained workspace without changing the active workspace', () => {
+  const pane = { workspaceId: 'current', browserWorkspaceIds: ['background', 'current'], hasBrowser: false };
+  const panes = new Map([['a', pane]]);
+  expect(browserTarget(panes, 'background', 'a')).toEqual(['a', pane]);
+  expect(pane.workspaceId).toBe('current');
 });
 
 test('busy replies leave other workspace operations pending and return a conflict', async () => {
@@ -217,4 +259,38 @@ test('stale and removed workspace ids do not poison valid opener registrations',
   await expect(handlers['browser.setOpener']({ workspaceIds: ['live'] }, { ...conn, capability: { runId: 'guest' } })).rejects.toMatchObject({ code: 'permission_denied' });
   expect(await handlers['browser.setOpener']({ workspaceIds: ['missing'] }, conn)).toEqual({ registered: false });
   expect(browser.hasBrowser('live')).toBe(false);
+});
+
+test('browser open carries its originating chat through the engine notification', async () => {
+  const broker = new BrowserBroker({ storage: { appendEvent() {} }, log: {} });
+  const desktop = connection();
+  broker.setOpener(desktop, ['shared']);
+  const opened = broker.execute({ ...request('shared', 'chat-open'), sessionId: 'origin-chat' });
+  expect(desktop.notifications[0].params.sessionId).toBe('origin-chat');
+  const cap = register(broker, desktop, 'shared');
+  broker.openResult(desktop, { invocationId: 'chat-open', capabilityId: cap.capabilityId });
+  await opened;
+});
+
+test('a background chat wins over the active chat and its browser in the same workspace', () => {
+  const panes = new Map([
+    ['active', { workspaceId: 'shared', sessionId: 'other', hasBrowser: true }],
+    ['owner', { workspaceId: 'different', sessionId: 'third', browserChatScopes: [{ workspaceId: 'shared', sessionId: 'origin' }] }],
+  ]);
+  expect(browserTarget(panes, 'shared', 'active', 'origin')[0]).toBe('owner');
+  expect(() => browserTarget(panes, 'shared', 'active', 'missing')).toThrow('chat is no longer open');
+});
+
+test('chat-specific open waits for the selected guest instead of any registered workspace guest', async () => {
+  const calls = [], messages = [], listeners = [];
+  const hosts = new Map([['other', { workspaceId: 'shared', tabId: 'tab_other', capabilityId: 'cap_other', guest: { isDestroyed: () => false } }]]);
+  const opener = createBrowserOpener({ bridge: { rawCall: async (method, params) => { calls.push({ method, params }); } }, agent: { hosts, onRegistered: fn => listeners.push(fn) }, send: (method, params) => messages.push({ method, params }), isOverlayActive: () => false, log: { warn() {} } });
+  opener.setWorkspaces({ workspaceIds: ['shared'] });
+  opener.handleOpen({ invocationId: 'open-origin', workspaceId: 'shared', sessionId: 'origin', leaseMs: 1000 });
+  expect(messages.find(m => m.method === 'jolo:browserOpen').params.sessionId).toBe('origin');
+  opener.acknowledge({ invocationId: 'open-origin', tabId: 'tab_origin' });
+  expect(calls.filter(c => c.method === 'browser.openResult')).toHaveLength(0);
+  hosts.set('origin', { workspaceId: 'shared', tabId: 'tab_origin', capabilityId: 'cap_origin', guest: { isDestroyed: () => false } });
+  for (const notify of listeners) notify();
+  expect(calls.find(c => c.method === 'browser.openResult').params.capabilityId).toBe('cap_origin');
 });

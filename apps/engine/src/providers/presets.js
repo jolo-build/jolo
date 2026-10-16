@@ -13,6 +13,8 @@ export const BUILTIN_PRESETS = Object.freeze([
   preset('anthropic', 'Anthropic', 'anthropic', 'https://api.anthropic.com/v1', 'anthropic', 'x-api-key', 'ANTHROPIC_API_KEY', { headers: { 'anthropic-version': '2023-06-01' }, thinkingBudgets: { low: 1024, medium: 2048, high: 3072 } }),
   preset('gemini', 'Gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemini', 'x-goog-api-key', 'GEMINI_API_KEY', { thinkingBudgets: { low: 1024, medium: 2048, high: 3072 } }),
   preset('openrouter', 'OpenRouter', 'openai-chat', 'https://openrouter.ai/api/v1', 'openrouter', 'bearer', 'OPENROUTER_API_KEY', { chatReasoning: { effortParameter: 'reasoning.effort' } }),
+  preset('typesafe', 'Jev (TypeSafe)', 'typesafe', 'https://api.typesafe.ai/v1', 'typesafe', 'bearer', 'TYPESAFE_API_KEY', { description: 'Direct Jev API for browser control and typed decisions.', defaults: { contextWindowTokens: 64_000, maxOutputTokens: 4096 } }),
+  preset('sifty', 'Sifty', 'typesafe', 'https://sifty.dev/v1', 'typesafe', 'none', null, { description: 'Syn decision models for browser control and typed decisions.', decisionLimits: { maxChoices: 26 }, defaults: { contextWindowTokens: 32_000, maxOutputTokens: 4096 } }),
   // The endpoint's listing carries no limits; its documentation states a 128K minimum context for every model.
   preset('deepseek', 'DeepSeek', 'openai-chat', 'https://api.deepseek.com', 'openai', 'bearer', 'DEEPSEEK_API_KEY', { chatReasoning: { thinkingToggle: true, requireReasoningContent: true }, defaults: { contextWindowTokens: 128_000, maxOutputTokens: 8192 } }),
   preset('xai', 'xAI', 'openai-chat', 'https://api.x.ai/v1', 'openai', 'bearer', 'XAI_API_KEY'),

@@ -1,7 +1,7 @@
 import { engineCommand as resolveEngineCommand } from "@jolo/launcher/executable";
 // Electron main process: windows, narrow IPC, engine client, bounded relay,
 // browser host. Owns no provider calls, workspace mutation, shell execution, or database.
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen as electronScreen, session, shell, systemPreferences } from "electron";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,11 +18,15 @@ import { newestSourceTime } from "./staleness.js";
 import { createEngineUpdates } from "./engine-updates.js";
 import { createReleaseUpdates } from "./release-updates.js";
 import { createVisualizationStore, VISUALIZATION_SCHEME } from './visualization-host.js';
-import { openChatFile, fileErrorResult } from './chat-files.js';
+import { fileApplicationChoices, fileApplicationAction } from './file-apps.js';
+import { openChatFile, fileErrorResult, listChatFiles } from './chat-files.js';
 import { createFilePreviewStore, FILE_PREVIEW_SCHEME } from './file-preview-store.js';
 import { saveArtifactImage } from './image-downloads.js';
 import { installCloseShortcuts } from './close-shortcuts.js';
 import { HostDialogs } from './host-dialogs.js';
+import { createScreenHost } from './screen-host.js';
+import { createScreenOverlay } from './screen-overlay.js';
+import { createScreenInputProcess } from './screen-input-process.js';
 
 protocol.registerSchemesAsPrivileged([{ scheme: VISUALIZATION_SCHEME, privileges: { standard: true, secure: true } }, { scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
 
@@ -71,6 +75,7 @@ class EngineBridge {
     this.window = window;
     this.agent = null; // browser agent, attached after construction
     this.browserOpener = null;
+    this.screen = null; // whole-desktop control host, macOS only, attached after construction
     this.attention = null; // notifications and the dock badge, attached after construction
     this.hostDialogs = new HostDialogs();
     this.paths = resolvePaths({ home: process.env.JOLO_HOME, profile: process.env.JOLO_PROFILE });
@@ -101,6 +106,7 @@ class EngineBridge {
         // so reconnect replay cannot recover them (often the final reply).
         this.agent?.onDisconnected();
         this.browserOpener?.onDisconnected();
+        this.screen?.onDisconnected();
         this.notify({ connected: false });
       });
       client.onReconnect(async () => {
@@ -108,22 +114,26 @@ class EngineBridge {
         void this.attention?.refresh();
         await this.agent?.onConnected();
         await this.browserOpener?.onConnected();
+        await this.screen?.onConnected();
       });
       client.onNotification("terminal.output", (params) => this.relay.push("terminal", params));
       client.onNotification("terminal.state", (params) => this.relay.push("event", { engineBootId: "local", eventSeq: "0", sessionId: null, runId: null, type: "terminal.state", payload: params, at: new Date().toISOString() }));
       client.onNotification("browser.execute", (params) => void this.agent?.handleExecute(params));
       client.onNotification('browser.open', params => this.browserOpener?.handleOpen(params));
       client.onNotification("browser.cancel", (params) => { this.agent?.handleCancel(params); this.browserOpener?.handleCancel(params); });
+      client.onNotification("screen.execute", (params) => void this.screen?.handleExecute(params));
+      client.onNotification("screen.cancel", (params) => this.screen?.handleCancel(params));
       const status = await client.call("engine.status", {});
       const after = this.lastSeq === "0" ? status.cursor : this.lastSeq; // first attach: live only; reconnect: replay from the last seen cursor
       await client.subscribe({ after }, {
-        onEvent: (event) => { this.lastSeq = event.eventSeq; this.relay.push("event", event); this.attention?.onEvent(event); },
+        onEvent: (event) => { this.lastSeq = event.eventSeq; this.relay.push("event", event); this.attention?.onEvent(event); this.screen?.onEvent(event); },
         onPreview: (preview) => this.relay.push("preview", preview),
       });
       this.notify({ connected: true, started, status });
       void this.attention?.refresh();
       await this.agent?.onConnected();
       await this.browserOpener?.onConnected();
+      await this.screen?.onConnected();
       return client;
     })().finally(() => { this.connecting = null; });
     return this.connecting;
@@ -155,6 +165,8 @@ class EngineBridge {
 
   async close() {
     this.attention?.dispose();
+    this.screen?.dispose();
+    this.screen = null;
     if (this.client) await this.client.close();
   }
 }
@@ -175,7 +187,7 @@ function createWindow() {
     } : {}),
     webPreferences: {
       // Preloads can reload from disk while a source-run main process remains old.
-      additionalArguments: ['--jolo-desktop-api=1'],
+      additionalArguments: ['--jolo-desktop-api=1', `--jolo-natural-scrolling=${process.platform === 'darwin' && systemPreferences.getUserDefault('com.apple.swipescrolldirection', 'boolean') ? '1' : '0'}`],
       preload: PRELOAD,
       sandbox: true,
       contextIsolation: true,
@@ -195,6 +207,9 @@ function createWindow() {
   nativeTheme.on("updated", updateBackground);
   window.once("closed", () => nativeTheme.removeListener("updated", updateBackground));
   installCloseShortcuts(window.webContents);
+  window.webContents.on('input-event', (_event, input) => {
+    if (input.type === 'gestureScrollBegin') window.webContents.send('jolo:scrollGestureBegin');
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
     try { if (["http:", "https:"].includes(new URL(url).protocol)) shell.openExternal(url); } catch { /* ignore */ }
     return { action: "deny" };
@@ -274,10 +289,25 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
     try { await openChatFile((method, args) => bridge.rawCall(method, args), shell, params ?? {}); return { ok: true }; }
     catch (error) { return fileErrorResult(error); }
   });
+  ipcMain.handle('jolo:fileApplications', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { return { ok: true, result: await fileApplicationChoices((method, args) => bridge.rawCall(method, args), { app }, params ?? {}) }; }
+    catch (error) { return fileErrorResult(error); }
+  });
+  ipcMain.handle('jolo:fileApplicationAction', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { await fileApplicationAction((method, args) => bridge.rawCall(method, args), { window, dialog, shell }, params ?? {}); return { ok: true }; }
+    catch (error) { return fileErrorResult(error); }
+  });
   ipcMain.handle('jolo:previewChatFile', async (event, params) => {
     if (!trusted(event)) throw new Error('untrusted sender');
     try { return { ok: true, result: await filePreviews.prepare(params ?? {}) }; }
     catch (error) { return fileErrorResult(error, 'Could not preview this file.'); }
+  });
+  ipcMain.handle('jolo:listChatFiles', async (event, params) => {
+    if (!trusted(event)) throw new Error('untrusted sender');
+    try { return { ok: true, result: await listChatFiles((method, args) => bridge.rawCall(method, args), params ?? {}) }; }
+    catch (error) { return fileErrorResult(error, 'Could not list this folder.'); }
   });
   ipcMain.handle('jolo:releaseChatFile', (event, url) => { if (!trusted(event)) throw new Error('untrusted sender'); filePreviews.release(url); });
   ipcMain.handle('jolo:pickChatFile', async (event, params) => {
@@ -362,6 +392,26 @@ app.whenReady().then(async () => {
     send: (channel, params) => { if (!window.isDestroyed()) window.webContents.send(channel, params); },
   });
   bridge.attention = createAttention({ bridge, window, log, smoke: SMOKE });
+  // Whole-desktop control: macOS, and never under automated smoke runs, which must not drive the real screen.
+  if (process.platform === 'darwin' && !SMOKE) {
+    try {
+      const engine = resolveEngineCommand({ engineDir: path.join(ROOT, "engine"), sourceEntry: ENGINE_ENTRY });
+      const serveAt = engine.indexOf('serve');
+      if (serveAt < 0) throw new Error('the engine command has no serve subcommand to replace');
+      const command = [...engine.slice(0, serveAt), 'screen-input', ...engine.slice(serveAt + 1)];
+      bridge.screen = createScreenHost({ bridge, log, electron: { desktopCapturer, screen: electronScreen, globalShortcut, systemPreferences },
+        overlay: createScreenOverlay({ BrowserWindow, log }), input: createScreenInputProcess({ command, log }),
+        reveal: () => {
+          if (window.isDestroyed()) return;
+          if (window.isMinimized()) window.restore();
+          window.show();
+          window.moveTop();
+          app.focus({ steal: true });
+          window.focus();
+        } });
+    } catch (error) { log.warn('screen control unavailable', { error: String(error?.message ?? error) }); }
+  }
+  app.once('will-quit', () => { bridge.screen?.dispose(); globalShortcut.unregisterAll(); });
   if (!PACKAGED_LAYOUT && !SMOKE) {
     const updates = createEngineUpdates({ roots: STALENESS_ROOTS, newestSourceTime, client: () => bridge.client, log,
       notice: body => { if (!window.isDestroyed()) window.webContents.send("jolo:notice", { kind: "engine", tone: "needs", title: "Engine update available", body, at: Date.now() }); },

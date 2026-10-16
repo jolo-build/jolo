@@ -282,6 +282,11 @@ describe("Codex through its app-server", () => {
     const inside = await runTo("req_patch", `patch ${path.join(repo, "made.txt")} hello from codex`);
     expect(inside.state).toBe("completed");
     expect(readFileSync(path.join(repo, "made.txt"), "utf8")).toBe("hello from codex");
+    const recorded = (await client.call('run.snapshot', { runId: inside.id })).run;
+    expect(recorded.changedPaths).toEqual(['made.txt']);
+    expect(recorded.changeEvents).toHaveLength(1);
+    const diff = await client.call('artifact.read', { artifactId: recorded.changeEvents[0].diffArtifactId });
+    expect(diff.text).toContain('+hello from codex');
     expect(events.some((e) => e.type === "permission.requested")).toBe(false); // no dialog for an in-workspace patch
     expect(events.find((e) => e.type === "tool.completed" && e.runId === inside.id).payload).toMatchObject({ name: "codex:fileChange", status: "ok" });
 
@@ -297,6 +302,8 @@ describe("Codex through its app-server", () => {
     answer = 'allow_once';
     const approved = await runTo('req_external_allowed', `patch ${path.join(home, 'approved.txt')} approved edit`);
     expect(readFileSync(path.join(home, 'approved.txt'), 'utf8')).toBe('approved edit');
+    expect((await client.call('run.snapshot', { runId: approved.id })).run.changedPaths[0]).toMatch(/\/approved.txt$/);
+    expect((await client.call('run.snapshot', { runId: outside.id })).run.changedPaths).toEqual([]);
     expect(events.some(e => e.type === 'permission.requested' && e.runId === approved.id)).toBe(true);
     answer = 'deny';
     const declined = await runTo("req_deny", "run touch should-not-exist");

@@ -3,6 +3,40 @@ import { Modal } from './modal.jsx';
 import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
 export function PermissionDialog({ request, onDecide, workspacePath = null }) {
+  if (request.kind === 'screen') return <ScreenPermissionDialog request={request} onDecide={onDecide} />;
+  return <CommandPermissionDialog request={request} onDecide={onDecide} workspacePath={workspacePath} />;
+}
+
+/** Consent to whole-desktop control: for this task or not at all, never for one click or a project. */
+function ScreenPermissionDialog({ request, onDecide }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(null);
+  const deciding = useRef(false);
+  const denyButton = useRef(null);
+  const decide = async (decision) => {
+    if (deciding.current) return;
+    deciding.current = true;
+    setPending(true); setError(null);
+    try { await onDecide(decision); }
+    catch (e) { deciding.current = false; setError(e.message); setPending(false); }
+  };
+  // Deliberately no Enter shortcut and focus starts on the refusal: taking over a computer is never a reflex.
+  return <Modal label="Screen control request" onClose={() => decide('deny')} initialFocus={denyButton} className="permission-modal">
+    <div className="modal-eyebrow"><Icon name="shield" />Screen control</div>
+    <h2>Let Jolo control your Mac?</h2>
+    <p className="muted">For this task, the agent will see your screen and move the mouse and type. It can reach every app and signed-in account on the screen.</p>
+    <ul className="hint permission-points">
+      <li>You'll see the cursor move, with a Jolo banner at the top of the screen.</li>
+      <li>Move the mouse or type to take over; the task pauses.</li>
+      <li>Press Option+Escape to stop the task at any time.</li>
+    </ul>
+    {request.tool && <p className="hint">First action: <code>{request.tool}</code></p>}
+    {error && <p className="negative" role="alert">{error}</p>}
+    <div className="modal-actions"><button ref={denyButton} className="outline" disabled={pending} onClick={() => decide('deny')}>Don’t allow</button><button className="primary" disabled={pending} onClick={() => decide('allow_run')}>{pending ? 'Applying…' : 'Allow for this task'}</button></div>
+  </Modal>;
+}
+
+function CommandPermissionDialog({ request, onDecide, workspacePath = null }) {
   const [scope, setScope] = useState('allow_once');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);

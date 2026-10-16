@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { BrowserCursor } from './browser-cursor.jsx';
 const ALLOWED = /^https?:\/\//i;
-export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, working = false, cursorKey = null }) {
+export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, onNewTab, working = false, cursorKey = null, onReady = null }) {
   const view = useRef(null);
   const editingAddress = useRef(false);
-  const callbacks = useRef({ onTitle, onNavigate });
-  callbacks.current = { onTitle, onNavigate };
+  const callbacks = useRef({ onTitle, onNavigate, onNewTab, onReady });
+  callbacks.current = { onTitle, onNavigate, onNewTab, onReady };
   const [address, setAddress] = useState(initialUrl ?? '');
   const [src] = useState(initialUrl && ALLOWED.test(initialUrl) ? initialUrl : 'about:blank');
   const [pageUrl, setPageUrl] = useState(initialUrl ?? 'about:blank');
@@ -18,9 +18,16 @@ export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, work
   const [loading, setLoading] = useState(src !== 'about:blank');
   useEffect(() => {
     const element = view.current;
+    const unsubscribeNewTab = window.jolo.onBrowserNewTab?.(({ guestId, url }) => {
+      try {
+        if (element.getWebContentsId() === guestId) callbacks.current.onNewTab?.(url);
+      } catch { /* guest may have been detached */ }
+    });
     const titleUpdated = (event) => { setTitle(event.title); callbacks.current.onTitle?.(event.title); };
     const navigated = (event) => { if (event.isMainFrame === false) return; setHasPage(event.url !== 'about:blank'); setPageUrl(event.url); if (!editingAddress.current) setAddress(event.url); callbacks.current.onNavigate?.(event.url); setNavigation({ back: element.canGoBack(), forward: element.canGoForward() }); setError(null); setLoadError(null); };
     const failed = (event) => { if (event.isMainFrame && event.errorCode !== -3) { setHasPage(false); setLoadError(event.errorDescription); } };
+    const ready = () => callbacks.current.onReady?.(element.getWebContentsId());
+    element.addEventListener('dom-ready', ready);
     const focused = () => window.dispatchEvent(new Event('jolo:browser-focus'));
     const started = () => { setLoading(true); setLoadError(null); };
     const stopped = () => setLoading(false);
@@ -31,7 +38,7 @@ export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, work
     element.addEventListener('focus', focused);
     element.addEventListener('did-start-loading', started);
     element.addEventListener('did-stop-loading', stopped);
-    return () => { element.removeEventListener('page-title-updated', titleUpdated); element.removeEventListener('did-navigate', navigated); element.removeEventListener('did-navigate-in-page', navigated); element.removeEventListener('did-fail-load', failed); element.removeEventListener('focus', focused); element.removeEventListener('did-start-loading', started); element.removeEventListener('did-stop-loading', stopped); };
+    return () => { element.removeEventListener('dom-ready', ready); callbacks.current.onReady?.(null); unsubscribeNewTab?.(); element.removeEventListener('page-title-updated', titleUpdated); element.removeEventListener('did-navigate', navigated); element.removeEventListener('did-navigate-in-page', navigated); element.removeEventListener('did-fail-load', failed); element.removeEventListener('focus', focused); element.removeEventListener('did-start-loading', started); element.removeEventListener('did-stop-loading', stopped); };
   }, []);
   const go = () => {
     let target = address.trim();
@@ -49,7 +56,7 @@ export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, work
     <form className="browser-bar" noValidate onSubmit={(event) => { event.preventDefault(); go(); }}><button type="button" onClick={() => { discardAddress(); view.current?.goBack(); }} aria-label="Back" disabled={!navigation.back}><Icon name="back" size={14} /></button><button type="button" onClick={() => { discardAddress(); view.current?.goForward(); }} aria-label="Forward" disabled={!navigation.forward}><Icon name="forward" size={14} /></button><button type="button" onClick={() => { if (loading) view.current?.stop(); else { discardAddress(); view.current?.reload(); } }} aria-label={loading ? 'Stop loading' : 'Reload'} title={loading ? 'Loading website — click to stop' : 'Reload'}><Icon name={loading ? 'spinner' : 'refresh'} className={loading ? 'activity-spin' : ''} size={14} /></button><input type="url" aria-label="Browser address" inputMode="url" autoCorrect="off" autoCapitalize="none" autoComplete="off" spellCheck={false} value={address === 'about:blank' ? '' : address} onChange={(event) => { editingAddress.current = true; setAddress(event.target.value); }} onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); discardAddress(); } }} placeholder="Enter a URL or localhost:3000" /><button type="submit" aria-label="Navigate"><Icon name="right" size={14} /></button></form>
     {error && <div className="panel-note negative" role="alert">{error}</div>}
     <div className="browser-content" aria-busy={loading} data-has-page={hasPage}>
-      <webview ref={view} src={src} partition={`jolo-browser-${workspaceId}`} title={title || 'Browser page'} />
+      <webview ref={view} allowpopups={/** @type {any} */ ('true')} src={src} partition={`jolo-browser-${workspaceId}`} title={title || 'Browser page'} />
       <BrowserCursor key={cursorKey} view={view} working={working} />
       {loadError ? <div className="browser-start browser-error panel-empty" role="alert">
         <Icon name="browser" size={30} />

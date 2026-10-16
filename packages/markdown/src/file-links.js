@@ -64,7 +64,7 @@ export function fileReference(raw, options = {}) {
 export function classifyReference(raw, { explicit = false, webBaseUrl = null } = {}) {
   const web = webReference(raw);
   if (web) return explicit || hasAutomaticWebSyntax(raw) ? { kind: 'web', href: web } : { kind: 'ambiguous' };
-  if (typeof raw !== 'string' || !raw || /\s/.test(raw) || raw.length > 4096 || CONTROL.test(raw)) return { kind: 'text' };
+  if (typeof raw !== 'string' || !raw || (!explicit && /\s/.test(raw)) || raw.length > 4096 || CONTROL.test(raw)) return { kind: 'text' };
   // Only an explicitly supplied document origin resolves website paths. Never
   // borrow the browser's current URL or a neighboring link in the conversation.
   if (webBaseUrl && (explicit || /[/?#]/.test(raw)) && !LOCATION.test(raw) && !/^(?:file:|sandbox:|~[\\/]|[a-z]:[\\/])/i.test(raw)) {

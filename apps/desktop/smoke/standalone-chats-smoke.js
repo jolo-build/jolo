@@ -82,5 +82,30 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   report.checks.push('F5 and Cmd/Ctrl+R from the composer reload the whole application document and retain chat history');
   report.checks.push('New chat works without a folder, receives replies, gets a title, and reopens from Recents with both turns after reload');
   report.checks.push('workspace folders remain separate from chats; folder task creation and standalone split panes both work');
+  // Measure actual renderer RPCs: timestamps and board-only updates must not fan out into task reads.
+  await evaluate('window.__joloSmoke.showBoard()');
+  await evaluate(`document.querySelector('.board-card[data-workspace-id="${workspaceTask.workspaceId}"] .board-expand[aria-expanded="false"]')?.click()`);
+  await waitFor(`Boolean(document.querySelector('.board-task[data-session-id="${backgroundChat.id}"]'))`, 'folder tasks loaded for refresh check');
+  await evaluate('new Promise(resolve => setTimeout(resolve, 800))');
+  const originalCall = bridge.call;
+  const taskReads = [];
+  bridge.call = async function(method, params) {
+    if (method === 'board.tasks') taskReads.push(params);
+    return originalCall.call(this, method, params);
+  };
+  try {
+    for (let index = 0; index < 5; index++) {
+      await evaluate('window.__joloSmoke.showBoard()');
+      await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    }
+    assert(taskReads.length === 0, `Unchanged board refreshes fetched task lists ${taskReads.length} times`);
+    const { session } = await bridge.rawCall('session.page', { sessionId: backgroundChat.id, limit: 1 });
+    await bridge.rawCall('session.rename', { sessionId: session.id, expectedRevision: session.revision, title: 'Renamed background task' });
+    await waitFor(`document.querySelector('.board-task[data-session-id="${session.id}"]')?.textContent.includes('Renamed background task')`, 'background rename updates its task list');
+    assert(taskReads.some(params => params.workspaceId === workspaceTask.workspaceId), 'Changed folder tasks were not refreshed');
+    assert(taskReads.some(params => !params.workspaceId && params.standalone === undefined), 'Global rail did not refresh');
+    assert(!taskReads.some(params => params.standalone === true), 'Folder rename unnecessarily refreshed standalone chats');
+    report.checks.push('Five unchanged board refreshes issue zero task-list RPCs; a background rename refreshes its folder and global rail without refetching standalone chats');
+  } finally { bridge.call = originalCall; }
   writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
 }

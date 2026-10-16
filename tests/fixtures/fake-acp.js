@@ -138,7 +138,7 @@ async function prompt(id, params) {
     return finish(`Permission: ${verdict}`);
   }
   if (text === 'browser-check') {
-    if (!received.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    if (!received.includes('dedicated browser tools')) throw new Error('Jolo browser instructions missing');
     if (!browserServer) return finish('Browser tools unavailable');
     const { browserMcpCheck } = await import('./browser-mcp-client.js');
     return finish(await browserMcpCheck(browserServer));
@@ -250,7 +250,7 @@ async function handle(message) {
     case "initialize":
       if (params.protocolVersion !== 1) return fail(-32602, "unsupported protocol version");
       client = params.clientCapabilities ?? {};
-      return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: [], agentInfo: { name: "fake-acp", version: "0.0.0" } });
+      return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: [], agentInfo: { name: "fake-acp", version: "0.0.0" }, ...(process.env.FAKE_ACP_GROK === "1" ? { _meta: { grokShell: true } } : {}) });
     case "session/new": {
       if (!client) return fail(-32002, "initialize first");
       browserServer = configuredBrowser(params);

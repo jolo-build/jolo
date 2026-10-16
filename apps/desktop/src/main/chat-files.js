@@ -3,8 +3,9 @@ import os from 'node:os';
 import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { parseFileReference } from '@jolo/markdown/file-links';
 
-const DOCUMENTS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.txt', '.md', '.csv', '.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp', '.rtf']);
+const DOCUMENTS = new Set(['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.txt', '.md', '.csv', '.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp', '.rtf']);
 const SEARCH_SKIP = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', '.next', '.cache', '.codex', '.agents']);
+const DIRECTORY_LIMIT = 2_000;
 
 export class ChatFileError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -19,6 +20,56 @@ function filesystemError(error, reference) {
 
 export function fileErrorResult(error, fallback = 'Could not open this file.') {
   return { ok: false, code: error?.code ?? 'FILE_OPEN_FAILED', error: String(error?.message ?? fallback) };
+}
+
+async function workspaceRoot(call, { sessionId, projectId, workspaceId }) {
+  if (!sessionId && (!projectId || !workspaceId)) throw new ChatFileError('FILE_INVALID_REFERENCE', 'A workspace is required.');
+  const session = sessionId ? (await call('session.page', { sessionId, limit: 1 })).session : { projectId, workspaceId };
+  const { workspaces } = await call('workspace.list', { projectId: session.projectId });
+  const workspace = workspaces.find(item => item.id === session.workspaceId && !item.removedAt && item.present);
+  if (!workspace) throw new ChatFileError('FILE_WORKSPACE_UNAVAILABLE', 'This chat’s workspace is unavailable.');
+  return { workspace, root: await realpath(workspace.path) };
+}
+
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/** A lazy, bounded directory listing for the renderer's project explorer. */
+export async function listChatFiles(call, params) {
+  const { root } = await workspaceRoot(call, params);
+  const reference = params.path ?? '';
+  if (typeof reference !== 'string' || reference.length > 4096 || /[\x00-\x1f\x7f]/.test(reference) || path.isAbsolute(reference)) {
+    throw new ChatFileError('FILE_INVALID_REFERENCE', 'This is not a supported workspace folder.');
+  }
+  const relative = reference.replaceAll('\\', '/').split('/').filter(Boolean).join(path.sep);
+  let target;
+  try { target = await realpath(path.resolve(root, relative)); }
+  catch (error) { throw filesystemError(error, reference || '.'); }
+  if (!inside(root, target)) throw new ChatFileError('FILE_OUTSIDE_WORKSPACE', 'This folder is outside the workspace.');
+  let entries;
+  try {
+    const info = await stat(target);
+    if (!info.isDirectory()) throw new ChatFileError('FILE_NOT_DIRECTORY', `This path is not a folder: ${reference}`);
+    entries = await readdir(target, { withFileTypes: true });
+  } catch (error) { throw filesystemError(error, reference || '.'); }
+  entries = entries.filter(entry => entry.name !== '.git').sort((left, right) => {
+    const leftDirectory = left.isDirectory(), rightDirectory = right.isDirectory();
+    if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;
+    return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
+  const directory = reference.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+  return {
+    directory,
+    total: entries.length,
+    truncated: entries.length > DIRECTORY_LIMIT,
+    entries: entries.slice(0, DIRECTORY_LIMIT).map(entry => ({
+      name: entry.name,
+      path: directory ? `${directory}/${entry.name}` : entry.name,
+      type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other',
+    })),
+  };
 }
 
 /** Agents often omit parent directories. Resolve a path suffix only when it has one match. */
@@ -45,16 +96,13 @@ async function findWorkspaceFile(root, name) {
   return matches[0] ?? null;
 }
 
-async function resolveChatFile(call, { sessionId, projectId, workspaceId, path: reference, urlEncoded = false, nativePath = false }) {
+export async function resolveChatFile(call, { sessionId, projectId, workspaceId, path: reference, urlEncoded = false, nativePath = false }) {
   const parsed = nativePath && typeof reference === 'string' && path.isAbsolute(reference) && reference.length <= 4096 && !/[\x00-\x1f\x7f]/.test(reference) ? { path: reference, line: undefined, column: undefined } : parseFileReference(reference, { explicit: true, urlEncoded });
   if ((!sessionId && (!projectId || !workspaceId)) || !parsed) throw new ChatFileError('FILE_INVALID_REFERENCE', 'This is not a supported file reference.');
   let requested = parsed.path;
   if (process.platform !== 'win32' && (/^[a-z]:[\\/]/i.test(requested) || requested.includes('\\'))) throw new ChatFileError('FILE_UNSUPPORTED_PLATFORM', 'This Windows path cannot be opened on this computer.');
   if (/^~[\\/]/.test(requested)) requested = path.join(os.homedir(), requested.slice(2));
-  const session = sessionId ? (await call('session.page', { sessionId, limit: 1 })).session : { projectId, workspaceId };
-  const { workspaces } = await call('workspace.list', { projectId: session.projectId });
-  const workspace = workspaces.find(item => item.id === session.workspaceId && !item.removedAt && item.present);
-  if (!workspace) throw new ChatFileError('FILE_WORKSPACE_UNAVAILABLE', 'This chat’s workspace is unavailable.');
+  const { workspace, root } = await workspaceRoot(call, { sessionId, projectId, workspaceId });
   let resolved = path.isAbsolute(requested) ? requested : path.resolve(workspace.path, requested);
   try { await stat(resolved); }
   catch (error) {
@@ -67,19 +115,21 @@ async function resolveChatFile(call, { sessionId, projectId, workspaceId, path: 
     const info = await stat(target);
     if (info.isDirectory()) throw new ChatFileError('FILE_IS_DIRECTORY', `This path is a folder: ${requested}`);
     if (!info.isFile()) throw new ChatFileError('FILE_NOT_REGULAR', `This is not a regular file: ${requested}`);
-    return { target, line: parsed.line, column: parsed.column };
+    const relative = path.relative(root, target);
+    const inWorkspace = relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    return { target, line: parsed.line, column: parsed.column, diffTarget: inWorkspace ? { workspaceId: workspace.id, path: relative } : null };
   } catch (error) { throw filesystemError(error, requested); }
 }
 
 export async function previewChatFile(call, params) {
-  const { target, line, column } = await resolveChatFile(call, params);
+  const { target, line, column, diffTarget } = await resolveChatFile(call, params);
   const file = await open(target, 'r').catch(error => { throw filesystemError(error, target); });
   try {
     const info = await file.stat();
     if (!info.isFile()) throw new ChatFileError('FILE_NOT_REGULAR', 'This is not a regular file.');
     const extension = path.extname(target).toLowerCase();
     const media = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.mp4': 'video/mp4', '.webm': 'video/webm' }[extension];
-    const details = { sessionId: params.sessionId, path: target, size: info.size, extension, line, column };
+    const details = { sessionId: params.sessionId, projectId: params.projectId, workspaceId: params.workspaceId, path: target, size: info.size, extension, line, column, diffTarget, canOpenExternally: DOCUMENTS.has(extension) };
     if (media && info.size > 32 * 1024 * 1024) return { ...details, kind: 'details', note: 'This file exceeds the 32 MiB media preview limit.' };
     const buffer = Buffer.alloc(Math.min(info.size, media ? 32 * 1024 * 1024 : 256 * 1024));
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
@@ -88,6 +138,7 @@ export async function previewChatFile(call, params) {
     let text;
     try { if (content.includes(0)) throw new Error(); text = new TextDecoder('utf-8', { fatal: true }).decode(content, { stream: info.size > bytesRead }); }
     catch { return { ...details, kind: 'details', note: 'A visual preview is not available for this file format.' }; }
+    if (/\.html?$/i.test(target) && info.size === bytesRead) return { ...details, kind: 'html', text, content, mime: 'text/html; charset=utf-8', truncated: false };
     return { ...details, kind: /\.(md|markdown|mdx)$/i.test(target) ? 'markdown' : 'text', text, truncated: info.size > bytesRead };
   } catch (error) { throw filesystemError(error, target); }
   finally { await file.close(); }
@@ -96,7 +147,7 @@ export async function previewChatFile(call, params) {
 export async function openChatFile(call, shell, params) {
   const { target } = await resolveChatFile(call, params);
   // Never launch a script, executable or application bundle from a model-generated link.
-  if (!DOCUMENTS.has(path.extname(target).toLowerCase())) { shell.showItemInFolder(target); return; }
+  if (params.action === 'reveal' || !DOCUMENTS.has(path.extname(target).toLowerCase())) { shell.showItemInFolder(target); return; }
   const error = await shell.openPath(target);
   if (error) throw new Error(error);
 }

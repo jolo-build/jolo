@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { streamSse, incompleteStream, providerError } from './transport.js';
-import { appendContent, itemGroups, nativeFor } from './transcript.js';
+import { appendContent, itemGroups, nativeFor, resultImages, resultText } from './transcript.js';
 
 export function geminiContents(request, options) {
   const messages = [], calls = new Map();
@@ -19,7 +19,12 @@ export function geminiContents(request, options) {
       if (item.kind === 'user_message' || item.kind === 'system_note') appendContent(messages, 'user', [{ text: p.text }, ...(p.images ?? []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))], 'parts');
       else if (item.kind === 'assistant_message') appendContent(messages, 'model', p.text ? [{ text: p.text }] : [], 'parts'); // an empty text part is rejected
       else if (item.kind === 'tool_call') appendContent(messages, 'model', [{ functionCall: { id: p.callId, name: p.name, args: p.arguments ?? {} }, thoughtSignature: 'skip_thought_signature_validator' }], 'parts');
-      else if (item.kind === 'tool_result') appendContent(messages, 'user', [{ functionResponse: { ...(calls.get(p.callId)?.id ? { id: calls.get(p.callId).id } : {}), name: calls.get(p.callId)?.name ?? 'unknown_tool', response: { output: p.output } } }], 'parts');
+      else if (item.kind === 'tool_result') {
+        // A function response carries its own multimodal parts, so a screenshot stays with its call.
+        const images = resultImages(p);
+        appendContent(messages, 'user', [{ functionResponse: { ...(calls.get(p.callId)?.id ? { id: calls.get(p.callId).id } : {}), name: calls.get(p.callId)?.name ?? 'unknown_tool', response: { output: resultText(p) },
+          ...(images.length ? { parts: images.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })) } : {}) } }], 'parts');
+      }
     }
   }
   return messages;

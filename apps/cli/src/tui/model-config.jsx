@@ -22,7 +22,7 @@ import { modelFields, modelForm, modelTargets, modelSettingsPatch, saveModelConf
  */
 
 /** A bounded live panel; secret fields remain masked throughout editing. */
-export function ModelConfig({ client, initialTarget, currentAgentId, rows, columns, paused, onClose }) {
+export function ModelConfig({ client, initialTarget, currentAgentId, session, rows, columns, paused, onClose }) {
   const [settings, setSettings] = useState(null);
   const [targets, setTargets] = useState([]);
   const [target, setTarget] = useState(null);
@@ -42,6 +42,7 @@ export function ModelConfig({ client, initialTarget, currentAgentId, rows, colum
       if (!mounted.current) return;
       if (config.status === "rejected") { setNote(config.reason.message); setBusy(false); return; }
       const entries = modelTargets(catalog.status === "fulfilled" ? catalog.value.agents : [], presets.status === "fulfilled" ? presets.value.presets : undefined);
+      config.value.settings = { ...config.value.settings, ...(session?.model ? { model: session.model } : {}), agents: { ...config.value.settings.agents, ...session?.agentModels } };
       setSettings(config.value.settings); setTargets(entries); setCursor(Math.max(0, entries.findIndex((entry) => entry.id === (currentAgentId ?? "jolo")))); setBusy(false); setNote(catalog.status === "rejected" ? "Agent catalog unavailable; Jolo provider can still be configured." : "");
       if (initialTarget) {
         const item = entries.find((entry) => entry.id === initialTarget || entry.preset === initialTarget);
@@ -58,7 +59,7 @@ export function ModelConfig({ client, initialTarget, currentAgentId, rows, colum
   const field = fields[index];
   const save = async () => {
     setBusy("saving"); setNote("Saving…");
-    try { selectedAgent(target); const message = await saveModelConfig(client, target, form); if (mounted.current) await onClose(message, { ...target, ...(target.preset || target.id === "jolo" ? { modelRef: modelSettingsPatch(target, form).model } : {}) }); }
+    try { selectedAgent(target); const message = await saveModelConfig(client, target, form); if (mounted.current) await onClose(message, { ...target, ...(target.preset || target.id === "jolo" ? { modelRef: modelSettingsPatch(target, form).model } : { agentModel: modelSettingsPatch(target, form).agents[target.id] }) }); }
     catch (error) { if (mounted.current) { setNote(error.message); setBusy(false); } }
   };
   const use = async (item) => {
@@ -139,7 +140,7 @@ export function ModelConfig({ client, initialTarget, currentAgentId, rows, colum
   if (rows < 8 || columns < 32) return <Text wrap="truncate-end">Enlarge terminal · Esc closes models</Text>;
   return <Box flexDirection="column" width="100%" borderStyle="round" borderColor="gray" paddingX={1}>
     <Text bold wrap="truncate-end">Models{target ? ` / ${clean(target.displayName)}` : ""}</Text>
-    <Text dimColor wrap="truncate-end">{(target?.id === "jolo" || target?.preset) ? "Profile default · applies to the next run" : target ? "Blank values use the agent’s default" : "Choose the agent for your prompts"}</Text>
+    <Text dimColor wrap="truncate-end">{(target?.id === "jolo" || target?.preset) ? "This chat · applies to the next run" : target ? "Blank values use the agent’s default" : "Choose the agent for your prompts"}</Text>
     {items.slice(start, start + count).map((item, offset) => <Text key={item.id} bold={start + offset === index} wrap="truncate-end">
       {start + offset === index ? "› " : "  "}{clean(item.label)}{valueFor(item) ? `  ${valueFor(item)}` : ""}{editing?.id === item.id ? " ▏" : ""}
     </Text>)}

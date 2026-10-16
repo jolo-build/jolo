@@ -58,6 +58,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   await evaluate(`window.__joloSmoke.openProject(${JSON.stringify(project)})`);
   await waitFor("window.__joloSmoke.state().projectId", "project opened");
   report.checks.push("renderer opened a project through the narrow bridge");
+  if (process.env.JOLO_CHAT_SWIPE_SMOKE === '1') {
+    const { runChatSwipeSmoke } = await import('./chat-swipe-smoke.js');
+    try {
+      await runChatSwipeSmoke({ window, bridge, evaluate, waitFor, report });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_DELEGATION_SMOKE === '1') {
     const { runDelegationSmoke } = await import('./delegation-smoke.js');
     try {
@@ -93,7 +101,15 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   if (process.env.JOLO_CHANGE_SUMMARY_SMOKE === '1') {
     const { runChangeSummarySmoke } = await import('./change-summary-smoke.js');
     try {
-      await runChangeSummarySmoke({ window, project, evaluate, waitFor, report, results });
+      await runChangeSummarySmoke({ window, bridge, project, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
+  if (process.env.JOLO_DECISION_BROWSER_SMOKE === '1') {
+    const { runDecisionBrowserSmoke } = await import('./decision-browser-smoke.js');
+    try {
+      await runDecisionBrowserSmoke({ window, bridge, evaluate, waitFor, report, results });
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }
     return;
@@ -162,6 +178,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     } finally { fixture.close(); }
     return;
   }
+  if (process.env.JOLO_SCREEN_SMOKE === '1') {
+    const { runScreenSmoke } = await import('./screen-smoke.js');
+    try {
+      await runScreenSmoke({ results, report, log });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_BOARD_SMOKE === '1') {
     const { runBoardSmoke } = await import('./board-smoke.js');
     try {
@@ -181,7 +205,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   if (process.env.JOLO_BROWSER_CHAT_SMOKE === '1') {
     try {
       await runBrowserChatSmoke({ bridge, browserHost, fixtureUrl, evaluate, waitFor, report, window, results });
-      await runBrowserContentionSmoke({ browserHost, project, evaluate, waitFor, report });
+      await runBrowserContentionSmoke({ bridge, browserHost, project, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'browser-chat.png'), (await window.webContents.capturePage()).toPNG());
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }

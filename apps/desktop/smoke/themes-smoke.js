@@ -48,6 +48,37 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
       throw new Error(`${error.message}; page=${JSON.stringify(state)}; console=${JSON.stringify(messages)}`);
     }
   };
+  const verifyButtons = async () => {
+    await evaluate(`(() => {
+      const probe = document.createElement('div'); probe.id = 'theme-buttons';
+      probe.style.cssText = 'position:fixed;top:80px;left:240px;z-index:99999;display:flex;gap:12px;padding:20px;background:var(--panel)';
+      probe.innerHTML = '<button class="primary">Save changes</button><button class="stop-button">Stop</button><button>Cancel</button><button class="primary" disabled>Saved</button>';
+      document.body.append(probe);
+    })()`);
+    const color = async index => evaluate(`(() => {
+      const button = document.querySelector('#theme-buttons').children[${index}], style = getComputedStyle(button);
+      const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+      const luminance = color => { context.clearRect(0,0,1,1); context.fillStyle=color; context.fillRect(0,0,1,1); return [...context.getImageData(0,0,1,1).data].slice(0,3).map(value => { const v=value/255; return v<=.04045?v/12.92:((v+.055)/1.055)**2.4; }).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0); };
+      const a=luminance(style.color), b=luminance(style.backgroundColor);
+      return { foreground:style.color, background:style.backgroundColor, contrast:(Math.max(a,b)+.05)/(Math.min(a,b)+.05) };
+    })()`);
+    try {
+      for (let index=0; index<4; index++) {
+        window.webContents.sendInputEvent({ type:'mouseMove', x:1, y:1 });
+        await evaluate('new Promise(resolve => setTimeout(resolve, 140))');
+        const before = await color(index);
+        const point = await evaluate(`(() => { const r=document.querySelector('#theme-buttons').children[${index}].getBoundingClientRect(); return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}; })()`);
+        window.webContents.sendInputEvent({ type:'mouseMove', ...point });
+        await waitFor(`document.querySelector('#theme-buttons').children[${index}].matches(':hover')`, 'button hovered');
+        await evaluate('new Promise(resolve => setTimeout(resolve, 140))');
+        const hovered = await color(index);
+        assert.equal(hovered.foreground, before.foreground, 'hover changed the label color');
+        if (index<2) assert(hovered.contrast >= 4.5, `filled button hover contrast ${hovered.contrast}`);
+        if (index===2) assert.notEqual(hovered.background, before.background, 'plain button needs hover feedback');
+        if (index===3) assert.equal(hovered.background, before.background, 'disabled button reacted to hover');
+      }
+    } finally { await evaluate("document.querySelector('#theme-buttons').remove()"); }
+  };
   const cssColor = hex => `rgb(${[1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16)).join(', ')})`;
   try {
     window.setSize(1200, 840);
@@ -95,8 +126,10 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
           && getComputedStyle(select).borderTopWidth === '1px'
           && getComputedStyle(select.querySelector('select')).backgroundColor !== getComputedStyle(document.body).backgroundColor;
       })()`), 'theme selector needs a visible boundary and the Fonts card needs spacing');
+      await verifyButtons();
       writeFileSync(path.join(results, `theme-${theme.id}.png`), (await window.webContents.capturePage()).toPNG());
     }
+    report.checks.push('Primary and Stop button hovers retain readable contrast; plain and disabled button states behave consistently across every palette');
     report.checks.push(`All ${BUILTIN_THEMES.length - 1} palettes color the interface, syntax, and the existing terminal even with the opposite OS appearance`);
     window.setSize(720, 560);
     await settle();

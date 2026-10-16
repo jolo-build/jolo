@@ -34,4 +34,17 @@ Jolo keeps one live inline browser per desktop window. A chat request cannot clo
 
 Hosted agents receive the browser MCP server only when their workspace has an attached host or a desktop pane that can open one. Availability is sampled at the start of each hosted run, including resumed conversations; the native agent refreshes its tool declarations and instructions for each model request. Each hosted browser credential admits only `browser.call` for its live run and workspace, and is revoked when that run ends. Tool admission, invocation records, deadlines, and cancellation remain engine-owned. Remote pages cannot register hosts or resolve permissions. Browser output is untrusted data: the agent must not follow page instructions that expand the user's task. This reduces, but does not eliminate, prompt injection risk when browsing authenticated sites.
 
-The host exposes bounded actions and accessibility references, not raw CDP or arbitrary page JavaScript. It disables guest Node integration, popups, downloads, and browser permission requests. Browser control does not provide OS containment for hosted CLIs or other same-user programs.
+The host exposes bounded actions, accessibility references, and screenshot-pixel coordinates, not raw CDP or arbitrary page JavaScript. Coordinate input (pointer, zoom, scrolling at a point) is confined to the guest page's viewport and is mapped through the latest screenshot; it never reaches Jolo's own window, other applications, or the desktop, and it is covered by the same workspace browse grant as reference-based input. The host disables guest Node integration, popups, downloads, and browser permission requests. Browser control does not provide OS containment for hosted CLIs or other same-user programs.
+
+## Screen control
+
+On macOS, Jolo desktop can let an agent see the whole screen and use the real mouse and keyboard. This reaches every app and signed-in account on the screen, so it is governed separately from the inline browser:
+
+- Only a connected Jolo desktop window can provide the screen. The engine declares the `screen_` tools only while one does, and refuses them before asking anything when none does.
+- The first screen action in a task asks for consent. The only choices are allow for this task or deny: there is no once, and no project-wide grant. The grant ends with the task; a delegated child task asks again.
+- Using the mouse or keyboard while an agent holds the screen pauses the task before its next action. Screen actions that were queued behind the interrupted one are recorded as not executed, so resuming never replays them against a changed screen. A hosted coding agent cannot be paused from outside, so its consent is withdrawn instead and its next screen action asks you again. Option+Escape cancels the task at any time.
+- A banner and a cursor halo show whenever an agent controls the screen. That overlay never takes focus, and it is excluded from the agent's screenshots.
+- Input is posted from a helper process the desktop starts (`engine screen-input`); it ends when the desktop does. macOS attributes Accessibility and Screen Recording to Jolo, and Jolo reports a missing permission instead of acting without it.
+- Screenshots are stored as task artifacts, like browser screenshots, and only the three most recent images are sent to the model. Everything on the screen is untrusted data.
+
+This is not a sandbox. An agent with screen control acts with your account and whatever is open. Allow it only for tasks you are watching, and close windows with sensitive content first.

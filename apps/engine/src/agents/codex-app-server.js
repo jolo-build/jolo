@@ -16,6 +16,7 @@ import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { codexMcpArgs } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { screenInstructions } from '../tools/screen.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages } from '../attachments.js';
 import { saveGeneratedImage } from './generated-images.js';
@@ -78,7 +79,7 @@ function itemOutcome(item) {
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, build?: string, log: any,
- *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean, hasScreen?: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
 export function createCodexAppServerExecutor({ storage, catalog, permissions, supervisor, build = "dev", log, mcpConfig, providerFactory = null, settings = null }) {
@@ -96,7 +97,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
       const env = hostedEnvironment(supervisor, turn.environment);
       const hosted = mcpConfig?.(workspace, run);
-      const developerInstructions = [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n');
+      const developerInstructions = [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), hosted?.hasScreen ? screenInstructions({ hosted: true }) : '', standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n');
 
       const state = {
         threadId: null, turnId: null, completed: null, failure: null, done: false,
@@ -260,6 +261,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         const outcome = itemOutcome(item);
         const text = item.type === "commandExecution" && state.streamed.has(item.id) ? outcome.text.split("\n").filter((line) => line.startsWith("exit ") || line === "declined").join("\n") : outcome.text;
         state.streamed.delete(item.id);
+        if (item.type === 'fileChange' && outcome.status === 'ok') turn.recordEdits(item.id, 'codex', item);
         turn.toolFinished(item.id, { text, status: outcome.status });
         if (item.type === 'imageGeneration' && !state.images.has(item.id)) {
           state.images.add(item.id);

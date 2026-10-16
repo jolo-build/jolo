@@ -13,11 +13,16 @@ export function usePanelTabs(scope, dispose = null) {
     retained: [...store.scopes].flatMap(([scope, value]) => value.items.map(item => ({ scope, item }))),
     active: visible.items.find(item => item.id === visible.activeId),
     select: id => store.select(scope, id),
+    selectInScope: (origin, id) => store.select(origin, id),
     add: item => store.add(scope, item),
+    addInScope: (origin, item) => store.add(origin, item),
     update: (id, patch) => store.update(scope, id, patch),
+    updateInScope: (origin, id, patch) => store.update(origin, id, patch),
     close: id => store.close(scope, id),
     reset: () => store.reset(scope),
+    hideBrowserInScope: origin => store.hideBrowser(origin),
     removeType: type => store.removeType(scope, type),
     setContext: context => store.setContext(scope, context),
+    setContextInScope: (origin, context) => store.setContext(origin, context),
   };
 }

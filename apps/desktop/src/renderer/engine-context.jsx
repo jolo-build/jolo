@@ -68,8 +68,8 @@ export function EngineProvider({ children }) {
     };
     const offEngine = window.jolo.onEngine((next) => { notified = true; receive(next); });
     void engineCall("engine.status", {}).then((status) => { if (!notified) receive({ connected: true, status }); }).catch((error) => { if (!notified) receive({ connected: false, error: error.message }); });
-    const offEvents = window.jolo.onEvents((items) => {
-      if (!timer && items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
+    const offEvents = window.jolo.onEvents((items, meta) => {
+      if (!timer && (meta?.resyncRequired || items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type)))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
       // A request that has been answered is no longer news, wherever it was answered.
       for (const item of items) {
         if (item.kind !== "event" || item.value.type !== "permission.resolved") continue;

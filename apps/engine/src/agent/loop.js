@@ -1,9 +1,13 @@
+import { executeDecisionTurn, isDirectDecisionPrompt } from "../decisions/direct.js";
+import { executeDecisionBrowser } from '../decisions/browser.js';
+import { ProtocolError } from '@jolo/protocol';
 import { delegationInstructions } from '../delegation/index.js';
 // Agent loop: bounded provider requests, batched tools, durable transcript items.
 // Imports no filesystem/process adapters; every tool goes through the dispatcher (§10.1).
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveModelRef } from '../providers/index.js';
+import { isDecisionProtocol } from '../providers/decisions.js';
 import { portableItems } from '../providers/transcript.js';
 import { buildRequest } from "../context/builder.js";
 import { compact, providerItems } from "../context/compaction.js";
@@ -36,7 +40,7 @@ function readRepoInstructions(root) {
 }
 
 /**
- * @param {{ storage: any, dispatcher: any, registry: any, providerFactory: any, settings: any, permissions: any, interactiveClients: () => number, log: any, sleepImpl?: typeof sleep }} deps
+ * @param {{ storage: any, dispatcher: any, registry: any, providerFactory: any, settings: any, permissions: any, interactiveClients: () => number, log: any, decisions?: any, sleepImpl?: typeof sleep }} deps
  */
 export function createAgentExecutor(deps) {
   const { storage, dispatcher, registry, providerFactory, settings, permissions, log } = deps;
@@ -52,8 +56,24 @@ export function createAgentExecutor(deps) {
       const config = settings.get();
       const savedProvider = storage.getRunProviderConfig?.(run.id);
       const ref = savedProvider?.ref ?? resolveModelRef(config, session, run.execution);
-      const { provider, settings: providerSettings, configured } = await providerFactory.create(ref, { resolved: savedProvider, config });
-      if (!savedProvider || savedProvider.pending) storage.setRunProviderConfig?.(run.id, providerSettings);
+      let { provider, settings: providerSettings, configured } = await providerFactory.create(ref, { resolved: savedProvider, config });
+      if (isDecisionProtocol(providerSettings.protocol) && (ref.mode === 'decision-browser' || (providerSettings.protocol === 'typesafe' && !ref.mode && !isDirectDecisionPrompt(run.prompt)))) {
+        if (!savedProvider || savedProvider.pending) storage.setRunProviderConfig?.(run.id, providerSettings);
+        return executeDecisionBrowser(ctx, { storage, decisions: deps.decisions, selection: providerSettings, dispatcher, permissions, interactiveClients, executeBatch, config, workspace, session });
+      }
+      if (isDecisionProtocol(providerSettings.protocol) && !isDirectDecisionPrompt(run.prompt)) {
+        const decisionModel = providerSettings;
+        const chatRef = decisionModel.chatProvider?.ref ?? ref.chatModel ?? config.model?.chatModel ?? config.model;
+        if (!chatRef || chatRef.mode || (chatRef.preset === ref.preset && chatRef.model === ref.model)) {
+          throw new ProtocolError('unavailable', 'This decision model needs a chat model for normal messages. Select a text model first, then select the decision model to use them together. You can also send a JSON decision request using Insert example.');
+        }
+        const chat = await providerFactory.create(chatRef, { config, resolved: decisionModel.chatProvider });
+        if (!chat.provider || isDecisionProtocol(chat.settings.protocol)) throw new ProtocolError('unavailable', 'The companion must be a text model with tool support. Select a chat model first, then select the decision model.');
+        provider = chat.provider; configured = chat.configured;
+        providerSettings = { ...chat.settings, decisionModel };
+      }
+      if (!savedProvider || savedProvider.pending || (isDecisionProtocol(savedProvider.protocol) && providerSettings.decisionModel)) storage.setRunProviderConfig?.(run.id, providerSettings);
+      if (isDecisionProtocol(providerSettings.protocol)) return executeDecisionTurn(ctx, { decisions: deps.decisions, storage, selection: providerSettings });
       const nativeRef = { protocol: providerSettings.protocol, preset: providerSettings.preset, model: providerSettings.model, baseUrl: providerSettings.baseUrl };
       if (!configured) log.warn("no provider configured; using the fake provider", { runId: run.id });
       const capabilities = provider.capabilities(providerSettings.model);
@@ -131,7 +151,7 @@ export function createAgentExecutor(deps) {
         let built;
         let contextItems = portableItems(providerItems(storage, session.id), nativeRef);
         const build = () => {
-          const tools = registry.declarations({ browserAvailable: dispatcher.hasBrowser(workspace.id) });
+          const tools = registry.declarations({ browserAvailable: dispatcher.hasBrowser(workspace.id), screenAvailable: dispatcher.hasScreen?.() ?? false, decisionAvailable: Boolean(providerSettings.decisionModel) });
           const instructions = [applicationInstructions({ workspaceRoot: workspace.path, toolNames: tools.map(tool => tool.name), standalone: storage.getProject?.(session.projectId)?.preferences?.standalone === true }), delegationInstructions(storage, run)].filter(Boolean).join('\n\n');
           return buildRequest({ capabilities, items: contextItems, tools, instructions, repoInstructions, sessionId: session.id, runId: run.id, reasoningEffort: providerSettings.reasoningEffort });
         };
@@ -248,6 +268,8 @@ async function modelTurn({ ctx, provider, providerSettings, request, usage, wait
           case "continuation_item":
             if (event.native?.type === "reasoning") outputs.push({ kind: "reasoning", native: event.native, messageId: reasoningMessage });
             else if (event.native?.type === "function_call") { const call = outputs.find((o) => o.kind === "tool_call" && o.callId === event.native.call_id); if (call) call.native = { id: event.native.id }; }
+            // A vendor toolset call was translated into a portable tool; the block replays as the model made it.
+            else if (event.native?.type === "tool_use") { const call = outputs.find((o) => o.kind === "tool_call" && o.callId === event.native.block?.id); if (call) call.native = { block: event.native.block }; }
             break;
           case "tool_call_delta":
             break;
@@ -320,7 +342,7 @@ async function executeBatch({ toolCalls, ctx, dispatcher, workspace, run, deadli
   let next = 0;
   const persistResult = (call, result, display) => {
     ctx.finishMessage(display, "complete");
-    storage.insertItem({ sessionId: session.id, runId: run.id, kind: "tool_result", groupId, payload: { callId: call.callId, invocationId: result.invocationId, output: result.output, truncated: result.truncated, resultArtifactId: result.resultArtifactId }, invocationId: result.invocationId, messageId: display });
+    storage.insertItem({ sessionId: session.id, runId: run.id, kind: "tool_result", groupId, payload: { callId: call.callId, invocationId: result.invocationId, output: result.output, truncated: result.truncated, resultArtifactId: result.resultArtifactId, ...(result.images?.length ? { images: result.images } : {}) }, invocationId: result.invocationId, messageId: display });
   };
   const runOne = async (call) => {
     const display = ctx.startMessage("tool", "tool");
@@ -339,6 +361,9 @@ async function executeBatch({ toolCalls, ctx, dispatcher, workspace, run, deadli
         if (displayed === 0 || !result.output.startsWith("{\"ok\":true")) ctx.appendText(display, `${result.output.slice(0, TOOL_DISPLAY_MAX_BYTES)}${result.output.length > TOOL_DISPLAY_MAX_BYTES ? "\n[display truncated]" : ""}\n`);
         else ctx.appendText(display, `\n${result.output.slice(0, 600)}${result.output.length > 600 ? "…" : ""}\n`);
         persistResult(call, result, display);
+        // The screen belongs to the user again: stop this batch at once rather than act on a stale picture.
+        if (result.userInterrupted) pause ??= { outcome: "paused", pauseReason: "user", detail: "you used the mouse or keyboard while Jolo controlled the screen; resume the task when you are ready" };
+        else if (result.screenLost) pause ??= { outcome: "paused", pauseReason: "screen_host_unavailable", detail: "Jolo desktop stopped providing the screen; reopen it and resume" };
         return result;
       }
       if (interactiveClients() === 0) {
@@ -379,6 +404,17 @@ async function executeBatch({ toolCalls, ctx, dispatcher, workspace, run, deadli
   };
   const concurrency = toolCalls.every(isRead) ? Math.min(READ_CONCURRENCY, toolCalls.length) : 1;
   await Promise.all(Array.from({ length: concurrency }, worker));
+  // Screen actions planned from a picture the user has since changed must never run on resume.
+  if (pause && results.some((r) => r?.userInterrupted || r?.screenLost)) {
+    toolCalls.forEach((call, index) => {
+      if (results[index] || !dispatcher.isScreenTool?.(call.name)) return;
+      const display = ctx.startMessage("tool", "tool");
+      ctx.appendText(display, `${call.name} ${JSON.stringify(call.arguments).slice(0, 200)}\n[not executed: the screen changed hands]\n`);
+      const skipped = dispatcher.skip({ run, call, reason: "Not executed: an earlier screen action in this turn was interrupted. Take a new screenshot before acting again." });
+      persistResult(call, skipped, display);
+      results[index] = { call, ...skipped };
+    });
+  }
   const hostLost = results.some((r) => r?.hostLost);
   if (!pause && hostLost) pause = { outcome: "paused", pauseReason: "browser_host_unavailable", detail: "the inline browser host went away; reopen the browser and resume" };
   return { results: results.filter(Boolean), pause };

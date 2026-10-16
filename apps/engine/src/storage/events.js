@@ -6,6 +6,7 @@ export class EventRepository {
     const p = event.payload;
     this.db.query('INSERT INTO run_event_summary(run_id,last_at) VALUES(?1,?2) ON CONFLICT(run_id) DO UPDATE SET last_at=excluded.last_at').run(event.runId, event.at);
     if (event.type === 'files.changed') {
+      this.db.query('INSERT OR IGNORE INTO run_change_events(seq,run_id,payload) VALUES(?1,?2,?3)').run(Number(event.eventSeq), event.runId, JSON.stringify(p));
       for (const change of p.changes ?? []) {
         if (change.newPath) this.db.query('DELETE FROM run_changed_paths WHERE run_id=?1 AND path=?2').run(event.runId, change.path);
         this.db.query('INSERT OR IGNORE INTO run_changed_paths(run_id,path) VALUES(?1,?2)').run(event.runId, change.newPath ?? change.path);
@@ -33,6 +34,7 @@ export class EventRepository {
   recentTools(runId, limit) {
     return this.db.query('SELECT invocation_id AS invocationId,name,preview,status,at FROM run_tool_activity WHERE run_id=?1 ORDER BY seq DESC LIMIT ?2').all(runId, limit).reverse();
   }
+  changeEvents(runId) { return this.db.query('SELECT payload FROM run_change_events WHERE run_id=?1 ORDER BY seq DESC LIMIT 200').all(runId).reverse().map(row => JSON.parse(row.payload)); }
   changedPaths(runId) { return this.db.query('SELECT path FROM run_changed_paths WHERE run_id=?1 ORDER BY path').all(runId).map(row => row.path); }
   lastAt(runId) { return this.db.query('SELECT last_at FROM run_event_summary WHERE run_id=?1').get(runId)?.last_at ?? null; }
 }

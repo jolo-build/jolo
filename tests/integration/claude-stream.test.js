@@ -199,6 +199,10 @@ describe("Claude Code through its structured stream", () => {
     const inside = await runTo("req_write", `write ${path.join(repo, "made.txt")} hello from claude`);
     expect(inside.state).toBe("completed");
     expect(readFileSync(path.join(repo, "made.txt"), "utf8")).toBe("hello from claude");
+    const recorded = (await client.call('run.snapshot', { runId: inside.id })).run;
+    expect(recorded.changedPaths).toEqual(['made.txt']);
+    expect(recorded.changeEvents).toHaveLength(1);
+    expect((await client.call('artifact.read', { artifactId: recorded.changeEvents[0].diffArtifactId })).text).toContain('+hello from claude');
     expect(events.some((e) => e.type === "permission.requested")).toBe(false); // no dialog for an in-workspace edit
 
     const outside = await runTo("req_escape", `write ${path.join(home, "escaped.txt")} nope`);
@@ -241,3 +245,35 @@ describe("Claude Code through its structured stream", () => {
     await expect(client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, agentId: "no-such-agent" })).rejects.toMatchObject({ code: "not_found" });
   }, 20_000);
 });
+
+test.each(['result-only', 'empty-result'])('Claude mention never completes without a visible answer: %s', async prompt => {
+  const { client, session, runTo, messagesOf, text } = await boot();
+  try {
+    await client.call('session.setAgent', { sessionId: session.id, agentId: null, expectedRevision: session.revision });
+    const run = await runTo('final-result', `@claude ${prompt}`);
+    expect(run.execution.agentId).toBe('claude');
+    const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant' && message.kind === 'text');
+    if (prompt === 'result-only') {
+      expect(run.state).toBe('completed');
+      expect(await Promise.all(replies.map(text))).toEqual(['Final review delivered only in the result.']);
+    } else {
+      expect(run.state).toBe('failed');
+      expect(run.failure).toContain('returned no response');
+      expect(replies).toHaveLength(0);
+    }
+    expect((await client.call('session.page', { sessionId: session.id })).session.agentId).toBeNull();
+  } finally { await client.close(); }
+}, 20000);
+
+test('mention waits for its own result and background reviewers despite stale and empty results', async () => {
+  const { client, session, runTo, messagesOf, text } = await boot();
+  try {
+    await client.call('session.setAgent', { sessionId: session.id, agentId: null, expectedRevision: session.revision });
+    const run = await runTo('background-review', '@claude mention-background');
+    expect(run.state).toBe('completed');
+    const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant' && message.kind === 'text');
+    expect(await Promise.all(replies.map(text))).toEqual(['Review in progress.', 'Final review: the requested design is consistent.']);
+    expect(run.usage.inputTokens).toBe(30);
+    expect(run.note.summary).toContain('Final review');
+  } finally { await client.close(); }
+}, 20000);

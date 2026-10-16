@@ -227,3 +227,60 @@ describe("choosing a model for each hosted agent", () => {
     await headless.close();
   }, 30_000);
 });
+
+
+test("chat model and effort selections are isolated, pinned per turn, and survive restart", async () => {
+  const { home, engine, client, project } = await boot();
+  const create = async () => (await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, agentId: "claude" })).session;
+  const a = await create(), b = await create();
+  const settings = (await client.call("settings.get", {})).settings;
+  const select = async (id, model, effort) => {
+    const current = (await client.call("session.page", { sessionId: id })).session;
+    return (await client.call("session.setAgent", { sessionId: id, agentId: "claude", agentModels: { claude: { model, effort } }, expectedRevision: current.revision })).session;
+  };
+  await select(a.id, "opus-test", "high");
+  await select(b.id, "sonnet-test", "low");
+  const { run: blocker } = await client.call("run.start", { sessionId: a.id, requestId: "req_chat_blocker", prompt: "sleep" });
+  const { run } = await client.call("run.start", { sessionId: a.id, requestId: "req_chat_model", prompt: "model", execution: { agentId: "claude" } });
+  expect(run.state).toBe("queued");
+  expect(run.execution).toMatchObject({ model: "opus-test", effort: "high", pinned: true });
+  await select(a.id, "next-model", null);
+  expect((await client.call("session.page", { sessionId: b.id })).session.agentModels.claude).toEqual({ model: "sonnet-test", effort: "low" });
+  expect((await create()).agentModels.claude).toBeUndefined();
+  expect((await client.call("settings.get", {})).settings).toEqual(settings);
+  await client.call("run.cancel", { runId: blocker.id });
+  await waitFor(async () => TERMINAL.includes((await client.call("run.snapshot", { runId: run.id })).run.state));
+  const snapshot = await client.call("run.snapshot", { runId: run.id });
+  expect(snapshot.run.state).toBe("completed");
+  const answer = snapshot.messages.filter(message => message.role === "assistant" && message.kind === "text").at(-1);
+  expect((await client.call("artifact.read", { artifactId: answer.artifactId })).text).toContain("Running opus-test at high");
+  await client.close(); await engine.stop();
+  const restarted = await startEngine({ home }); engines.push(restarted);
+  const next = await restarted.connect();
+  try {
+    expect((await next.call("session.page", { sessionId: a.id })).session.agentModels.claude).toEqual({ model: "next-model", effort: null });
+    expect((await next.call("session.page", { sessionId: b.id })).session.agentModels.claude).toEqual({ model: "sonnet-test", effort: "low" });
+  } finally { await next.close(); }
+});
+
+
+test("the main agent and model are saved atomically before a turn", async () => {
+  const { client, project } = await boot();
+  const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, agentId: "claude" });
+  const page = async () => (await client.call("session.page", { sessionId: session.id })).session;
+  const model = { preset: "openrouter", model: "~typesafe/jev-latest", mode: "decisions" };
+  await expect(client.call("session.setAgent", { sessionId: session.id, agentId: null, model: { ...model, preset: "unknown-provider" }, expectedRevision: session.revision })).rejects.toThrow();
+  expect(await page()).toEqual(session);
+  const selected = (await client.call("session.setAgent", { sessionId: session.id, agentId: null, model, expectedRevision: session.revision })).session;
+  expect(selected).toMatchObject({ agentId: null, model });
+  await expect(client.call("session.setAgent", { sessionId: session.id, agentId: "codex", expectedRevision: session.revision })).rejects.toMatchObject({ code: "conflict" });
+  expect(await page()).toEqual(selected);
+  const hosted = (await client.call("session.setAgent", { sessionId: session.id, agentId: "claude", agentModels: { claude: { model: "sonnet-test", effort: "low" } }, expectedRevision: selected.revision })).session;
+  expect(hosted).toMatchObject({ agentId: "claude", agentModels: { claude: { model: "sonnet-test", effort: "low" } } });
+  const { run } = await client.call("run.start", { sessionId: session.id, requestId: "busy-model-selection", prompt: "sleep" });
+  const running = await page();
+  await expect(client.call("session.setAgent", { sessionId: session.id, agentId: null, model, expectedRevision: running.revision })).rejects.toMatchObject({ code: "conflict", message: expect.stringContaining("Finish or stop") });
+  expect(await page()).toMatchObject({ agentId: hosted.agentId, model: hosted.model, agentModels: hosted.agentModels });
+  await client.call("run.cancel", { runId: run.id });
+  await client.close();
+});

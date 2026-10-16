@@ -1,8 +1,11 @@
 import { streamSse, incompleteStream, parseArguments, providerError } from './transport.js';
-import { appendContent, portableItems } from './transcript.js';
+import { appendContent, portableItems, resultImages, resultText } from './transcript.js';
+import { COMPUTER_TOOLSET_NAME, TOOLSET_DECLARATION, TOOLSET_REPLACES, declaresToolset, memberToTool, toolToMember } from '../browser/computer-toolset.js';
 
 export function anthropicMessages(request, options) {
   const messages = [];
+  const native = options.computerUse === 'native' && declaresToolset(request.tools);
+  const toolsetCalls = new Set(); // calls the model made through the computer toolset; their results name it
   for (const item of portableItems(request.items, { ...options, protocol: 'anthropic' })) {
     const p = item.payload;
     if (item.kind === 'user_message' || item.kind === 'system_note') appendContent(messages, 'user', [
@@ -11,8 +14,21 @@ export function anthropicMessages(request, options) {
     ]);
     else if (item.kind === 'assistant_message') appendContent(messages, 'assistant', p.text ? [{ type: 'text', text: p.text }] : []);
     else if (item.kind === 'reasoning' && p.native?.block) appendContent(messages, 'assistant', [p.native.block]);
-    else if (item.kind === 'tool_call') appendContent(messages, 'assistant', [{ type: 'tool_use', id: p.callId, name: p.name, input: p.arguments ?? {} }]);
-    else if (item.kind === 'tool_result') appendContent(messages, 'user', [{ type: 'tool_result', tool_use_id: p.callId, content: p.output }]);
+    else if (item.kind === 'tool_call') {
+      // A toolset call replays as the block the model made; a portable call made elsewhere is
+      // expressed as the member it corresponds to while the toolset stands in for that tool.
+      const member = native && TOOLSET_REPLACES.includes(p.name) ? toolToMember(p.name, p.arguments ?? {}) : null;
+      const block = p.native?.block?.toolset_name ? p.native.block : member ? { type: 'tool_use', id: p.callId, name: member.name, toolset_name: COMPUTER_TOOLSET_NAME, input: member.input } : null;
+      if (block) toolsetCalls.add(p.callId);
+      appendContent(messages, 'assistant', [block ?? { type: 'tool_use', id: p.callId, name: p.name, input: p.arguments ?? {} }]);
+    }
+    else if (item.kind === 'tool_result') {
+      const images = resultImages(p);
+      const text = resultText(p);
+      const content = images.length ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }))] : text;
+      const toolset = toolsetCalls.has(p.callId) ? { toolset_name: COMPUTER_TOOLSET_NAME, ...(text.startsWith('{"ok":false') ? { is_error: true } : {}) } : {};
+      appendContent(messages, 'user', [{ type: 'tool_result', tool_use_id: p.callId, content, ...toolset }]);
+    }
   }
   return messages;
 }
@@ -22,7 +38,11 @@ export function createAnthropicProvider(options) {
     capabilities: () => ({ contextWindowTokens: options.contextWindowTokens, maxOutputTokens: options.maxOutputTokens, supportsTools: true, supportsReasoning: options.supportsReasoning ?? true }),
     body(request) {
       const body = { model: options.model, system: [{ type: 'text', text: request.instructions, cache_control: { type: 'ephemeral' } }], messages: anthropicMessages(request, options), max_tokens: request.maxOutputTokens, stream: true };
-      if (request.tools.length) body.tools = request.tools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+      // With `computerUse: 'native'` the vendor toolset replaces the portable computer-use tools it
+      // covers (§5.3); the reference-based browser tools and every other tool stay as functions.
+      const native = options.computerUse === 'native' && declaresToolset(request.tools);
+      const declared = native ? request.tools.filter(t => !TOOLSET_REPLACES.includes(t.name)) : request.tools;
+      if (declared.length || native) body.tools = [...(native ? [TOOLSET_DECLARATION] : []), ...declared.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }))];
       const effort = request.reasoningEffort ?? options.reasoningEffort;
       // With thinking on, the API requires the newest tool-use turn to begin with its thinking block. After a
       // model change or an interrupted batch that block is gone, so this one request runs without thinking.
@@ -64,7 +84,16 @@ export function createAnthropicProvider(options) {
           if (!entry) continue;
           entry.stopped = true;
           const b = entry.block;
-          if (b.type === 'tool_use') yield { type: 'tool_call_complete', callId: b.id, name: b.name, arguments: entry.json ? parseArguments(entry.json) : b.input };
+          if (b.type === 'tool_use') {
+            const input = entry.json ? parseArguments(entry.json) : b.input;
+            if (b.toolset_name === COMPUTER_TOOLSET_NAME) {
+              // Translate the member into the portable tool the dispatcher admits; an unsupported member
+              // reaches the registry under a name it rejects, so the model reads a structured error.
+              const mapped = memberToTool(b.name, input);
+              yield { type: 'tool_call_complete', callId: b.id, name: mapped?.name ?? `computer_${b.name}`, arguments: mapped?.arguments ?? input };
+              yield { type: 'continuation_item', native: { type: 'tool_use', block: { type: 'tool_use', id: b.id, name: b.name, toolset_name: b.toolset_name, input } } };
+            } else yield { type: 'tool_call_complete', callId: b.id, name: b.name, arguments: input };
+          }
           else if (b.type === 'thinking' || b.type === 'redacted_thinking') {
             yield { type: 'reasoning_complete', itemId: String(index), blockId: String(index), status: b.type === 'redacted_thinking' ? 'redacted' : 'complete' };
             yield { type: 'continuation_item', native: { type: 'reasoning', block: b } };

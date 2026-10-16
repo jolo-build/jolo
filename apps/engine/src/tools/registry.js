@@ -9,12 +9,14 @@ import { editTools } from "./edit.js";
 import { commandTools } from "./command.js";
 import { scheduleTools } from "./schedules.js";
 import { delegationTools } from './delegation.js';
+import { screenTools } from './screen.js';
+import { decisionTools } from './decisions.js';
 
 export const TOOL_RESULT_MAX_BYTES = 64 * 1024;
 export const TOOL_ARGUMENT_MAX_BYTES = 1024 * 1024;
 
 export class ToolRegistry {
-  constructor(tools = [...fileTools, ...editTools, ...commandTools, ...gitTools, ...outputTools, ...browserTools, ...scheduleTools, ...delegationTools]) {
+  constructor(tools = [...fileTools, ...editTools, ...commandTools, ...gitTools, ...outputTools, ...browserTools, ...screenTools, ...scheduleTools, ...delegationTools, ...decisionTools]) {
     /** @type {Map<string, any>} */
     this.tools = new Map(tools.map((tool) => [tool.name, tool]));
   }
@@ -23,13 +25,18 @@ export class ToolRegistry {
     return this.tools.get(name) ?? null;
   }
 
-  names({ browserAvailable = false } = {}) {
-    return [...this.tools.values()].filter((tool) => browserAvailable || !tool.browserOperation).map((tool) => tool.name);
+  /** Host-bound tools appear only while their host can take them: a browser pane, or a desktop screen. */
+  available(tool, { browserAvailable = false, screenAvailable = false, decisionAvailable = false } = {}) {
+    return (browserAvailable || !tool.browserOperation) && (screenAvailable || !tool.screenOperation) && (decisionAvailable || !tool.decisionOperation);
   }
 
-  /** Provider-facing declarations: JSON Schema emitted from the Zod definitions. Browser tools appear only with a host. */
-  declarations({ browserAvailable = false } = {}) {
-    return [...this.tools.values()].filter((tool) => browserAvailable || !tool.browserOperation).map((tool) => {
+  names(hosts = {}) {
+    return [...this.tools.values()].filter((tool) => this.available(tool, hosts)).map((tool) => tool.name);
+  }
+
+  /** Provider-facing declarations: JSON Schema emitted from the Zod definitions. Host tools appear only with a host. */
+  declarations(hosts = {}) {
+    return [...this.tools.values()].filter((tool) => this.available(tool, hosts)).map((tool) => {
       const schema = z.toJSONSchema(tool.params);
       delete schema.$schema;
       const portable = node => {

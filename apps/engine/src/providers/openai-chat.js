@@ -1,11 +1,12 @@
 import { streamSse, incompleteStream, parseArguments, providerError } from './transport.js';
-import { itemGroups, nativeFor } from './transcript.js';
+import { itemGroups, nativeFor, resultImages, resultText } from './transcript.js';
 import { applyChatReasoning, chatReasoningFields, createChatReasoningCollector } from './chat-reasoning.js';
 
 export function chatMessages(request, options = {}) {
   const messages = [{ role: 'system', content: request.instructions }];
   for (const group of itemGroups(request.items)) {
     let assistant = null;
+    const pictures = []; // tool images, delivered after the group's tool messages
     const reasoning = group.items.reduce((fields, item) => {
       const native = nativeFor(item, { ...options, protocol: 'openai-chat' });
       return Object.assign(fields, chatReasoningFields(native?.chat));
@@ -23,8 +24,18 @@ export function chatMessages(request, options = {}) {
         }
         if (item.kind === 'assistant_message') assistant.content = (assistant.content ?? '') + p.text;
         else if (item.kind === 'tool_call') (assistant.tool_calls ??= []).push({ id: p.callId, type: 'function', function: { name: p.name, arguments: JSON.stringify(p.arguments ?? {}) } });
-      } else if (item.kind === 'tool_result') messages.push({ role: 'tool', tool_call_id: p.callId, content: p.output });
+      } else if (item.kind === 'tool_result') {
+        messages.push({ role: 'tool', tool_call_id: p.callId, content: resultText(p) });
+        const name = group.items.find(other => other.kind === 'tool_call' && other.payload.callId === p.callId)?.payload.name ?? 'tool';
+        for (const image of resultImages(p)) pictures.push({ name, image });
+      }
     }
+    // Chat tool messages are text on most endpoints. Every call of the turn is answered first, then
+    // one user message carries the pictures those answers refer to.
+    if (pictures.length) messages.push({ role: 'user', content: [
+      { type: 'text', text: `Images returned by ${pictures.map(p => p.name).filter((n, i, all) => all.indexOf(n) === i).join(', ')} in the tool results above, in order.` },
+      ...pictures.map(({ image }) => ({ type: 'image_url', image_url: { url: `data:${image.mimeType};base64,${image.data}` } })),
+    ] });
   }
   return messages;
 }

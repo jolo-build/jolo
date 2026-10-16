@@ -15,7 +15,7 @@ export function PanelItemTabs({ label, tabs, activeId, onSelect, onClose, newCon
       buttons[next]?.click(); buttons[next]?.focus();
     }}>
       {tabs.map(tab => <div className="panel-item-tab" key={tab.id} data-active={tab.id === activeId}>
-        <button id={`${paneId}-item-${encodeURIComponent(tab.id)}`} role="tab" aria-label={tab.title} aria-controls={`${paneId}-context-content`} data-panel-type={tab.panelType} aria-selected={tab.id === activeId} tabIndex={tab.id === activeId ? 0 : -1} title={tab.path || tab.url || tab.title} onClick={() => onSelect(tab.id)}><Icon name={tab.icon || 'file'} size={13} /><span>{tab.title}</span></button>
+        <button id={`${paneId}-item-${encodeURIComponent(tab.id)}`} role="tab" aria-label={tab.title} aria-controls={`${paneId}-context-content`} data-panel-type={tab.panelType} aria-selected={tab.id === activeId} tabIndex={tab.id === activeId ? 0 : -1} title={tab.path || tab.url || tab.title} onClick={() => onSelect(tab.id)}><Icon name={tab.icon || 'file'} size={13} className={tab.iconTone ? `project-file-icon ${tab.iconTone}` : ''} /><span>{tab.title}</span></button>
         {tab.closable !== false && <button className="panel-item-close" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} onClick={() => onClose(tab.id)}><Icon name="close" size={12} /></button>}
       </div>)}
     </div>

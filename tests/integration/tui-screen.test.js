@@ -274,7 +274,7 @@ test("startup stays fresh until a saved session is explicitly restored", async (
   }
 }, 30_000);
 
-test('model selection survives CLI restarts and explicit session restores keep their own agent', async () => {
+test('model selection belongs to the CLI chat and explicit session restores keep its model and effort', async () => {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, 'repo'); mkdirSync(repo);
   const agentsDir = path.join(home, 'data', 'default', 'agents'); mkdirSync(agentsDir, { recursive: true });
@@ -316,22 +316,13 @@ test('model selection survives CLI restarts and explicit session restores keep t
     await keys('\x1b[B', '› Save and use');
     await keys('\r', 'Model configuration saved');
     expect(visible()).toContain('codex · fake-large');
-    await quit();
-
-    await launch();
-    expect(visible()).toContain('codex · fake-large');
     client = await tryConnect(resolvePaths({ home }), { clientKind: 'test', build: 'test' });
-    expect((await client.call('settings.get', {})).settings.agents.codex).toMatchObject({ model: 'fake-large', effort: 'high' });
+    expect((await client.call('settings.get', {})).settings.agents.codex).toBeUndefined();
     expect((await client.call('session.list', {})).sessions).toHaveLength(0);
     await keys('model\r', 'Completed');
     const saved = (await client.call('session.list', {})).sessions[0];
     expect(saved.agentId).toBe('codex');
-    // Switching the fresh default does not require modifying the existing chat.
-    await quit();
-    await launch();
-    await keys('/model jolo\r', 'Profile default');
-    await keys('\x1b[B', '› Save and use');
-    await keys('\r', 'Model configuration saved');
+    expect(saved.agentModels.codex).toEqual({ model: 'fake-large', effort: 'high' });
     await quit();
     await launch();
     expect(visible()).toContain('Demo provider');

@@ -21,3 +21,25 @@ export function diffSummary(text) {
   }
   return { files: files.size, added, removed };
 }
+
+/** Real source line numbers reset at each hunk; metadata and truncated tails have none. */
+export function numberedDiffLines(text) {
+  let before = 0, after = 0, beforeLeft = 0, afterLeft = 0;
+  return text.split('\n').map(text => {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(text);
+    if (header) {
+      before = Number(header[1]); after = Number(header[3]);
+      beforeLeft = Number(header[2] ?? 1); afterLeft = Number(header[4] ?? 1);
+      return { text, kind: 'hunk', before: null, after: null };
+    }
+    if ((beforeLeft > 0 || afterLeft > 0) && /^[ +\-]/.test(text)) {
+      const kind = text[0] === '+' ? 'add' : text[0] === '-' ? 'remove' : 'context';
+      const row = { text, kind, before: kind === 'add' ? null : before++, after: kind === 'remove' ? null : after++ };
+      if (kind !== 'add') beforeLeft--;
+      if (kind !== 'remove') afterLeft--;
+      return row;
+    }
+    if (!text.startsWith('\\ No newline')) beforeLeft = afterLeft = 0;
+    return { text, kind: diffLineKind(text), before: null, after: null };
+  });
+}

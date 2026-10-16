@@ -14,12 +14,13 @@ const WRAPPER_ROLES = new Set(["generic", "none", "presentation"]);
  *   name: string,
  *   states?: Record<string, unknown>,
  *   value?: string,
+ *   nameTruncated?: boolean,
  * }} ProjectedNode
  */
 
 /**
  * @param {any[]} nodes raw Accessibility.getFullAXTree nodes
- * @param {{ snapshotId: string, navigationRevision: number, referenceStart?: number, maxNodes?: number, maxBytes?: number }} options
+ * @param {{ snapshotId: string, navigationRevision: number, referenceStart?: number, maxNodes?: number, maxBytes?: number, offset?: number }} options
  *   `referenceStart` continues the host's reference numbering, so references stay unique across snapshots;
  *   a caller projecting a tree on its own starts from zero.
  */
@@ -28,9 +29,10 @@ export function projectAX(nodes, options) {
   const maxBytes = options.maxBytes ?? 64 * 1024;
   const byId = new Map(nodes.map((node) => [node.nodeId, node]));
   const references = new Map();
-  const snapshot = { snapshotId: options.snapshotId, navigationRevision: options.navigationRevision, truncated: false, nodes: [] };
+  const offset = options.offset ?? 0;
+  const snapshot = { snapshotId: options.snapshotId, navigationRevision: options.navigationRevision, offset, nextOffset: null, truncated: false, nodes: [] };
   const seen = new Set();
-  let bytes = 0;
+  let bytes = 0, visited = 0;
   const role = (node) => node?.role?.value ?? "";
   const name = (node) => node?.name?.value ?? "";
   const visibleChildren = (node) => (node?.childIds ?? []).map((id) => byId.get(id)).filter((n) => n && !n.ignored && role(n) !== "InlineTextBox");
@@ -46,16 +48,21 @@ export function projectAX(nodes, options) {
     }
     const parent = byId.get(node.parentId);
     if (r === "StaticText" && parent && !parent.ignored && visibleChildren(parent).length === 1 && name(parent) === name(node) && name(node)) return;
+    if (visited++ < offset) {
+      for (const child of node.childIds ?? []) visit(byId.get(child), null);
+      return;
+    }
     const ref = `e${(options.referenceStart ?? 0) + snapshot.nodes.length + 1}`;
     /** @type {ProjectedNode} */
     const output = { ref, ...(parentRef ? { parentRef } : {}), role: r, name: name(node).slice(0, 200) };
+    if (name(node).length > 200) output.nameTruncated = true;
     /** @type {Record<string, unknown>} */
     const states = {};
     for (const property of node.properties ?? []) if (STATE_PROPERTIES.has(property.name)) states[property.name] = property.value?.value;
     if (Object.keys(states).length) output.states = states;
     if (node.value?.value !== undefined && node.value.value !== "") output.value = String(node.value.value).slice(0, 200);
     const cost = JSON.stringify(output).length + 1;
-    if (snapshot.nodes.length >= maxNodes || bytes + cost > maxBytes) { snapshot.truncated = true; return; }
+    if (snapshot.nodes.length >= maxNodes || bytes + cost > maxBytes) { snapshot.truncated = true; snapshot.nextOffset = offset + snapshot.nodes.length; return; }
     snapshot.nodes.push(output);
     bytes += cost;
     if (node.backendDOMNodeId) references.set(ref, node.backendDOMNodeId);

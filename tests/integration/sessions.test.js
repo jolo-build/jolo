@@ -69,3 +69,22 @@ test("archive and delete reject unfinished runs while rename remains available",
     removeHome(home);
   }
 }, 10_000);
+
+
+test("provider models and reasoning effort belong to their chat", async () => {
+  const home = tempHome(); let engine, client;
+  try {
+    engine = await startEngine({ home }); client = await engine.connect();
+    const { project, session: a } = await openSession(client, home);
+    const { session: b } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId });
+    const settings = (await client.call("settings.get", {})).settings;
+    const model = { preset: "openai", model: "chat-specific-model", effort: "high" };
+    await client.call("session.setModel", { sessionId: a.id, model, expectedRevision: a.revision });
+    expect((await client.call("session.page", { sessionId: b.id })).session.model).toEqual(b.model);
+    expect((await client.call("settings.get", {})).settings).toEqual(settings);
+    await client.close(); await engine.stop();
+    engine = await startEngine({ home }); client = await engine.connect();
+    expect((await client.call("session.page", { sessionId: a.id })).session.model).toMatchObject(model);
+    expect((await client.call("session.page", { sessionId: b.id })).session.model).toEqual(b.model);
+  } finally { await client?.close().catch(() => {}); await engine?.stop(); removeHome(home); }
+});

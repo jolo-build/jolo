@@ -3,7 +3,7 @@ import path from 'node:path';
 import { nativeTheme } from 'electron';
 import { hidePanel } from './panel-controls.js';
 
-export async function runChangeSummarySmoke({ window, project, evaluate, waitFor, report, results }) {
+export async function runChangeSummarySmoke({ window, bridge, project, evaluate, waitFor, report, results }) {
   await evaluate("window.__joloSmoke.send('Inspect the icons')");
   await waitFor("window.__joloSmoke.state().runState === 'completed'", 'inspection finished');
   if (await evaluate("document.querySelectorAll('.change-summary').length")) throw new Error('read-only reply claimed pre-existing workspace changes');
@@ -18,9 +18,21 @@ export async function runChangeSummarySmoke({ window, project, evaluate, waitFor
   await evaluate("document.querySelector('.change-summary-toggle').click()");
   await waitFor("document.querySelectorAll('.change-summary-files li').length === 3", 'file list collapses');
   await evaluate("document.querySelector('.change-summary-review').click()");
-  await waitFor("document.querySelector('.panel-item-tabs [aria-label=Changes]')?.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('.changes .diff .diff-line'))", 'Review opens the real diff panel');
+  await waitFor("document.querySelector('.panel-item-tabs [aria-label=\"Code changes\"]')?.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('.chat-changes .diff .diff-line'))", 'Review opens the real diff panel');
+  await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
+  await waitFor("document.querySelector('.header [aria-label=\"Panels\"]')?.getAttribute('aria-expanded') === 'true'", 'panel menu expanded');
+  if (!await evaluate("document.querySelector('.header [aria-label=\"Code changes\"]').getAttribute('aria-pressed') === 'true' && !document.querySelector('.header [aria-label=\"Panels\"]').classList.contains('active') && document.querySelector('.panel-menu:popover-open [aria-label=\"Code changes\"]').getAttribute('aria-checked') === 'true'")) throw new Error('panel launcher duplicates the changes toggle state');
+  await evaluate("document.querySelector('.panel-menu:popover-open [aria-label=\"Code changes\"]').click()");
+  await waitFor("document.querySelector('.header [aria-label=\"Panels\"]')?.getAttribute('aria-expanded') === 'false'", 'panel menu dismissed');
   writeFileSync(path.join(project, 'assets/icons/home.svg'), '<svg><!-- unrelated edit --></svg>\n<!-- extra line -->\n');
-  await evaluate("document.querySelector('[aria-label=\"Refresh working changes\"]').click()");
+  const recordedBefore = await evaluate("document.querySelector('.chat-change-diff').textContent");
+  await evaluate("document.querySelector('.chat-change-files button').click()");
+  await waitFor("Boolean(document.querySelector('.chat-change-diff .diff-line'))", 'recorded diff selected');
+  if ((await evaluate("document.querySelector('.chat-change-diff').textContent")).includes('unrelated edit')) throw new Error('recorded diff read live workspace');
+  if (!await evaluate("Boolean(document.querySelector('.chat-change-diff .diff-number'))")) throw new Error('diff line numbers absent');
+  window.setSize(1440, 900);
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  writeFileSync(path.join(results, 'chat-code-changes.png'), (await window.webContents.capturePage()).toPNG());
   if (await evaluate("document.querySelector('.change-summary-heading .diff-added').textContent") !== '+6') throw new Error('unrelated edits rewrote the card');
   await hidePanel(evaluate, waitFor);
   const theme = nativeTheme.themeSource;
@@ -38,6 +50,7 @@ export async function runChangeSummarySmoke({ window, project, evaluate, waitFor
   const previousRun = await evaluate("document.querySelector('.change-summary').dataset.runId");
   await evaluate("window.__joloSmoke.send('Check the icons again')");
   await waitFor("window.__joloSmoke.state().runState === 'model'", 'follow-up is working');
+  await waitFor("[...document.querySelectorAll('.message.user')].at(-1)?.textContent.includes('Check the icons again')", 'follow-up prompt rendered');
   const oldCardBeforePrompt = `(() => { const card = document.querySelector('.change-summary[data-run-id="${previousRun}"]'); const prompt = [...document.querySelectorAll('.message.user')].at(-1); return Boolean(card && prompt && (card.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING)); })()`;
   if (!await evaluate(oldCardBeforePrompt)) throw new Error('previous changes moved below the follow-up prompt');
   writeFileSync(path.join(project, 'assets/icons/home.svg'), '<svg><!-- another chat --></svg>\n');
@@ -48,13 +61,28 @@ export async function runChangeSummarySmoke({ window, project, evaluate, waitFor
   await waitFor("document.querySelectorAll('.change-summary').length === 2 && document.querySelectorAll('.change-summary')[1].querySelector('.diff-added')?.textContent === '+2' && document.querySelectorAll('.change-summary')[1].querySelector('.diff-removed')?.textContent === '−1'", 'follow-up counts only its own patch');
   if (!await evaluate(oldCardBeforePrompt)) throw new Error('previous card moved after follow-up completion');
   if (await evaluate("document.querySelector('.change-summary .diff-added').textContent") !== '+6') throw new Error('follow-up edits rewrote the previous result counts');
+  if (!await evaluate("document.querySelector('.inspector').hidden")) throw new Error('new edits reopened hidden panel');
   const sessionId = await evaluate('window.__joloSmoke.state().sessionId');
+  await evaluate(`localStorage.removeItem('jolo.runChangeCards.v2.' + ${JSON.stringify(sessionId)})`);
   window.webContents.reload();
   await waitFor('Boolean(window.__joloSmoke)', 'renderer reloaded');
   await evaluate(`window.__joloSmoke.openTarget(${JSON.stringify(project)}, ${JSON.stringify(sessionId)})`);
   await waitFor("document.querySelectorAll('.change-summary').length === 2", 'both result cards restored');
   if (!await evaluate(oldCardBeforePrompt)) throw new Error('reload detached previous changes from their reply');
-  if (await evaluate("document.querySelector('.change-summary .diff-added').textContent") !== '+6') throw new Error('reload lost the historical line counts');
+  await waitFor("document.querySelector('.change-summary .diff-added')?.textContent === '+6'", 'history loaded without renderer cache');
+  // Both chats share a workspace; only the owning chat may display these edits.
+  await evaluate("document.querySelector('.change-summary-files button').click()");
+  await waitFor("document.querySelector('.chat-change-heading code')?.textContent === 'run-icons/home.svg'", 'historical file selected');
+  await waitFor("Boolean(document.querySelector('.chat-change-diff .diff-line'))", 'historical diff loaded');
+  const ownerState = await evaluate('window.__joloSmoke.state()');
+  const { session: other } = await bridge.rawCall('session.create', { projectId: ownerState.projectId, workspaceId: ownerState.workspaceId, title: 'Other chat' });
+  await evaluate(`window.__joloSmoke.openTarget(${JSON.stringify(project)}, ${JSON.stringify(other.id)})`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(other.id)}`, 'other chat selected');
+  await evaluate("document.querySelector('.header [aria-label=\"Code changes\"]').click()");
+  await waitFor("document.querySelector('.chat-changes')?.textContent.includes('No recorded edits yet')", 'other chat has no inherited changes');
+  await evaluate(`window.__joloSmoke.openTarget(${JSON.stringify(project)}, ${JSON.stringify(sessionId)})`);
+  await waitFor("document.querySelector('.chat-change-heading code')?.textContent === 'run-icons/home.svg' && !document.querySelector('.inspector').hidden", 'selection and visibility restored in owning chat');
+  report.checks.push('Right-side recorded diff has line numbers and syntax colors; hide persists through edits; selections stay with their chat in a shared workspace; reload restores artifacts without browser cache.');
   report.checks.push('Changed files card shows tracked and untracked line totals, expands and collapses, opens Review, ignores unrelated edits, and fits a narrow window');
   report.checks.push('Previous changes stay above a follow-up prompt with frozen counts, after completion and reload; read-only turns have no card and attributed edits have their own card');
 }

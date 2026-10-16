@@ -4,21 +4,33 @@ import { projectAX } from "./ax-projection.js";
 import { BROWSER_OPERATIONS, FRAME_MAX_BYTES } from '@jolo/protocol';
 
 const OPERATIONS = BROWSER_OPERATIONS;
-const INPUT_OPERATIONS = new Set(['click', 'type', 'fill', 'press', 'scroll', 'hover', 'select']);
-const CURSOR_ACTIONS = { navigate: 'navigate', history: 'navigate', snapshot: 'inspect', screenshot: 'screenshot', network: 'network' };
+// Engines already running during a desktop update may predate computer use.
+// This is the exact operation set accepted before hello advertised capabilities.
+const LEGACY_OPERATIONS = ['navigate', 'snapshot', 'click', 'type', 'screenshot', 'network', 'fill', 'press', 'scroll', 'hover', 'select', 'history'];
+const INPUT_OPERATIONS = new Set(['click', 'type', 'fill', 'press', 'scroll', 'hover', 'select', 'pointer']);
+const CURSOR_ACTIONS = { navigate: 'navigate', history: 'navigate', snapshot: 'inspect', screenshot: 'screenshot', zoom: 'screenshot', network: 'network', wait: 'working' };
 const NETWORK_RING = 200;
 const SCREENSHOT_MAX_WIDTH = 1280;
 const SCREENSHOT_MAX_HEIGHT = 800;
 // Leave room for base64 expansion and the RPC envelope in both directions.
 const SCREENSHOT_MAX_BYTES = Math.min(1024 * 1024, Math.floor((FRAME_MAX_BYTES - 16 * 1024) * 3 / 4));
+const MODIFIER_FLAGS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+const MOUSE_BUTTONS = { left: 1, right: 2, middle: 4 };
+// Key names the engine validates, as Chromium's `key`, `code` and Windows virtual key codes (§5.3).
+const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, Insert: 45, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32, ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`F${i + 1}`, 112 + i])) };
+const PUNCTUATION = { '`': ['Backquote', 192], '-': ['Minus', 189], '=': ['Equal', 187], '[': ['BracketLeft', 219], ']': ['BracketRight', 221], '\\': ['Backslash', 220], ';': ['Semicolon', 186], "'": ['Quote', 222], ',': ['Comma', 188], '.': ['Period', 190], '/': ['Slash', 191] };
+const SHIFTED = { '~': '`', '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0', '_': '-', '+': '=', '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/' };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const round3 = value => Math.round(value * 1000) / 1000;
+const modifierMask = modifiers => modifiers.reduce((value, modifier) => value | (MODIFIER_FLAGS[modifier] ?? 0), 0);
 
 export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverlay = null, nativeImage, onCursor = null }) {
   /** @type {Map<number, any>} guest webContents id -> host record */
   const hosts = new Map();
   const inflight = new Map(); // invocationId -> { controller, host }
   const registeredListeners = new Set();
+  const registrationFailedListeners = new Set();
 
   function clearCursor(host) {
     host.cursor = null;
@@ -69,12 +81,19 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
 
   async function register(host) {
     if (host.guest.isDestroyed()) return;
+    host.registrationError = null;
     try {
-      const result = await bridge.rawCall("browser.register", { workspaceId: host.workspaceId, tabId: host.tabId, navigationRevision: host.navigationRevision, url: host.guest.getURL(), title: host.guest.getTitle(), operations: OPERATIONS });
+      const supported = bridge.client?.hello?.supportedBrowserOperations ?? LEGACY_OPERATIONS;
+      const operations = OPERATIONS.filter(operation => supported.includes(operation));
+      if (!operations.length) throw new Error('desktop and engine have no browser controls in common; restart Jolo to update both');
+      const result = await bridge.rawCall("browser.register", { workspaceId: host.workspaceId, tabId: host.tabId, navigationRevision: host.navigationRevision, url: host.guest.getURL(), title: host.guest.getTitle(), operations });
+      if (host.guest.isDestroyed()) { void bridge.rawCall('browser.unregister', { capabilityId: result.capabilityId }).catch(() => {}); return; }
       host.capabilityId = result.capabilityId;
       for (const listener of registeredListeners) listener(host);
       log.info("browser capability registered", { capabilityId: host.capabilityId, workspaceId: host.workspaceId });
     } catch (error) {
+      host.registrationError = `Inline browser registration failed: ${String(error?.message ?? error).slice(0, 800)}`;
+      for (const listener of registrationFailedListeners) listener(host);
       log.warn("browser registration failed", { error: String(error?.message ?? error) });
     }
   }
@@ -89,7 +108,8 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
   }
 
   function attach(guest, workspaceId) {
-    const host = { guest, workspaceId, tabId: `tab_${guest.id}`, navigationRevision: 0, capabilityId: null, snapshots: [], nextReference: 0, snapshotSequence: 0, queue: Promise.resolve(), network: [], requests: new Map() };
+    // `screenshotSpace` is the geometry of the latest screenshot: pointer coordinates are read in it (§5.3).
+    const host = { guest, workspaceId, tabId: `tab_${guest.id}`, navigationRevision: 0, capabilityId: null, snapshots: [], nextReference: 0, snapshotSequence: 0, queue: Promise.resolve(), network: [], requests: new Map(), screenshotSpace: null };
     hosts.set(guest.id, host);
     // Bounded network observation (§5.3): metadata only, a ring per tab, cleared on navigation.
     guest.debugger.on("message", (_event, method, params) => {
@@ -158,10 +178,15 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
           const { nodes } = await cdp(host, "Accessibility.getFullAXTree");
           if (navigationRevision !== host.navigationRevision) return { stale: true, message: 'the page navigated during the snapshot; take a new snapshot' };
           const snapshotId = `snap_${navigationRevision}_${++host.snapshotSequence}`;
-          const projected = projectAX(nodes, { snapshotId, navigationRevision, referenceStart: host.nextReference, maxNodes: args.maxNodes ?? 300 });
+          const projected = projectAX(nodes, { snapshotId, navigationRevision, referenceStart: host.nextReference, maxNodes: args.maxNodes ?? 300, offset: args.offset ?? 0 });
           host.nextReference += projected.snapshot.nodes.length;
           host.snapshots = [projected, ...host.snapshots].slice(0, 2); // active snapshot plus one predecessor (§5.3)
-          return { result: { ...projected.snapshot, url: host.guest.getURL(), title: host.guest.getTitle() } };
+          const metrics = await cdp(host, 'Page.getLayoutMetrics');
+          const viewport = metrics.cssLayoutViewport ?? metrics.layoutViewport;
+          const content = metrics.cssContentSize ?? metrics.contentSize;
+          // Scroll position is a convenience for the model; a snapshot without it is still a valid snapshot.
+          const scroll = viewport && content ? { y: viewport.pageY, height: viewport.clientHeight, contentHeight: content.height, atBottom: viewport.pageY + viewport.clientHeight >= content.height - 2 } : undefined;
+          return { result: { ...projected.snapshot, url: host.guest.getURL(), title: host.guest.getTitle(), ...(scroll ? { scroll } : {}) } };
         } finally {
           await host.guest.debugger.sendCommand('Accessibility.disable').catch(() => {});
         }
@@ -175,7 +200,9 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
         const point = await targetPoint(host, resolved.backendNodeId);
         await showCursor(host, point, 'move');
         await cdp(host, "Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
-        const hit = await cdp(host, "DOM.getNodeForLocation", { x: point.x, y: point.y, ignorePointerEventsNone: false });
+        // Mouse input uses viewport coordinates; DOM hit testing uses document coordinates.
+        const { cssVisualViewport: viewport } = await cdp(host, 'Page.getLayoutMetrics');
+        const hit = await cdp(host, "DOM.getNodeForLocation", { x: Math.round(point.x + viewport.pageX), y: Math.round(point.y + viewport.pageY), ignorePointerEventsNone: false });
         if (!(await contains(host, resolved.backendNodeId, hit.backendNodeId))) throw Object.assign(new Error("the target is obscured by another element"), { code: "obscured" });
         if (operation === 'hover') return { result: { ref: args.ref, ...point, navigationRevision: host.navigationRevision } };
         if (isOverlayActive()) throw Object.assign(new Error("a host dialog opened; browser input is suspended"), { code: "host_overlay" });
@@ -188,23 +215,41 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
       case "fill":
       case "type": {
         if (isOverlayActive()) throw Object.assign(new Error("a host dialog is open; browser input is suspended"), { code: "host_overlay" });
-        const resolved = resolveReference(host, args.ref, args.snapshotId);
-        if (resolved.stale) return { stale: true, message: "the page changed since that snapshot; take a new snapshot" };
-        if (resolved.missing) throw Object.assign(new Error(`unknown reference ${args.ref}`), { code: "unknown_reference" });
-        await cdp(host, "DOM.scrollIntoViewIfNeeded", { backendNodeId: resolved.backendNodeId });
-        await nodeCall(host, resolved.backendNodeId, function() {
-          if (this.disabled || this.readOnly || !(this.isContentEditable || this instanceof HTMLTextAreaElement || (this instanceof HTMLInputElement && ['text','search','email','url','tel','password','number'].includes(this.type)))) throw new Error('target is not an enabled editable field');
-          this.focus();
-        });
-        await showNodeCursor(host, resolved.backendNodeId, 'type');
-        if (operation === 'fill') await pressKey(host, 'a', [process.platform === 'darwin' ? 'Meta' : 'Control']);
-        if (args.text) await cdp(host, "Input.insertText", { text: args.text });
-        else if (operation === 'fill') await pressKey(host, 'Backspace', []);
+        let filled = false;
+        if (args.ref) {
+          const resolved = resolveReference(host, args.ref, args.snapshotId);
+          if (resolved.stale) return { stale: true, message: "the page changed since that snapshot; take a new snapshot" };
+          if (resolved.missing) throw Object.assign(new Error(`unknown reference ${args.ref}`), { code: "unknown_reference" });
+          await cdp(host, "DOM.scrollIntoViewIfNeeded", { backendNodeId: resolved.backendNodeId });
+          await nodeCall(host, resolved.backendNodeId, function() {
+            if (this.disabled || this.readOnly || !(this.isContentEditable || this instanceof HTMLTextAreaElement || (this instanceof HTMLInputElement && ['text','search','email','url','tel','password','number'].includes(this.type)))) throw new Error('target is not an enabled editable field');
+            this.focus();
+          });
+          await showNodeCursor(host, resolved.backendNodeId, 'type');
+          if (operation === 'fill') filled = await nodeCall(host, resolved.backendNodeId, function(text) {
+            if (!(this instanceof HTMLInputElement || this instanceof HTMLTextAreaElement)) return false;
+            // Set the referenced field itself: keyboard focus can return to the
+            // host composer while the browser cursor overlay is being updated.
+            // Use the native setter so React and other controlled inputs observe
+            // the ensuing input event rather than swallowing it as unchanged.
+            const prototype = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            Object.getOwnPropertyDescriptor(prototype, 'value').set.call(this, text);
+            this.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
+            this.dispatchEvent(new Event('change', { bubbles: true }));
+            if (this.value !== text) throw new Error('the field rejected the supplied value');
+            return true;
+          }, [args.text]);
+        } else await requireFocusedEditable(host); // a pointer click put the caret there
+        if (!filled) {
+          if (operation === 'fill') await pressKey(host, 'a', [process.platform === 'darwin' ? 'Meta' : 'Control']);
+          if (args.text) await cdp(host, "Input.insertText", { text: args.text });
+          else if (operation === 'fill') await pressKey(host, 'Backspace', []);
+        }
         if (args.submit) {
           await pressKey(host, 'Enter', []);
           await sleep(100);
         }
-        return { result: { ref: args.ref, typed: args.text.length, submitted: Boolean(args.submit), navigationRevision: host.navigationRevision } };
+        return { result: { ...(args.ref ? { ref: args.ref } : {}), typed: args.text.length, submitted: Boolean(args.submit), navigationRevision: host.navigationRevision } };
       }
       case 'press':
       case 'scroll':
@@ -222,10 +267,12 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
             await cdp(host, 'DOM.focus', { backendNodeId });
             await showNodeCursor(host, backendNodeId, 'type');
           }
-          await pressKey(host, args.key, args.modifiers ?? []);
+          for (let count = 0; count < (args.repeat ?? 1); count += 1) await pressKey(host, args.key, args.modifiers ?? []);
         } else if (operation === 'scroll') {
-          const { cssVisualViewport: viewport } = await cdp(host, 'Page.getLayoutMetrics');
-          const point = backendNodeId ? await targetPoint(host, backendNodeId) : { x: Math.floor(viewport.clientWidth / 2), y: Math.floor(viewport.clientHeight / 2) };
+          const viewport = await cssViewport(host);
+          const point = backendNodeId ? await targetPoint(host, backendNodeId)
+            : args.x !== undefined && args.y !== undefined ? screenshotPoint(host, args.x, args.y, viewport)
+            : { x: Math.floor(viewport.width / 2), y: Math.floor(viewport.height / 2) };
           await showCursor(host, point, 'scroll');
           await cdp(host, 'Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: args.deltaX ?? 0, deltaY: args.deltaY ?? 0 });
         } else {
@@ -259,41 +306,65 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
         return { result: { navigationRevision: host.navigationRevision, url: host.guest.getURL(), entries, truncated: host.network.length >= NETWORK_RING } };
       }
       case "screenshot": {
-        // One capture at a time per host (§5.3). CDP capture first; Electron's capturePage as the fallback.
-        if (host.capturing) throw Object.assign(new Error("another capture is in flight"), { code: "busy" });
-        host.capturing = true;
-        try {
-          const withTimeout = async (promise, ms, label) => {
-            let timer;
-            try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out`), { code: 'capture_timeout' })), ms); })]); }
-            finally { clearTimeout(timer); }
-          };
-          let image;
-          host.guest.invalidate(); // schedule a repaint so an idle compositor still produces a frame
-          try {
-            const shot = await withTimeout(cdp(host, "Page.captureScreenshot", { format: "png", fromSurface: true }), 8_000, "CDP capture");
-            image = nativeImage.createFromBuffer(Buffer.from(shot.data, "base64"));
-          } catch (error) {
-            if (signal.aborted) throw error;
-            log.warn("CDP capture failed; falling back to capturePage", { error: String(error?.message ?? error) });
-            image = await withTimeout(host.guest.capturePage(), 8_000, "capturePage");
-          }
-          let { width, height } = image.getSize();
-          let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / width, SCREENSHOT_MAX_HEIGHT / height);
-          let png = null;
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            const resized = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), quality: "good" }) : image;
-            png = resized.toPNG();
-            if (png.length <= SCREENSHOT_MAX_BYTES) {
-              const size = resized.getSize();
-              return { result: { url: host.guest.getURL(), title: host.guest.getTitle(), navigationRevision: host.navigationRevision }, screenshot: { base64: png.toString("base64"), width: size.width, height: size.height, mimeType: "image/png" } };
-            }
-            scale *= 0.7;
-          }
-          throw Object.assign(new Error('screenshot could not be reduced to fit the browser connection'), { code: 'limit_exceeded' });
-        } finally {
-          host.capturing = false;
+        const { image, viewport } = await captureViewport(host, signal);
+        const screenshot = encodeBounded(image);
+        // Later pointer coordinates are read in this image; the CSS size says whether it is still current.
+        host.screenshotSpace = { width: screenshot.width, height: screenshot.height, cssWidth: viewport.width, cssHeight: viewport.height };
+        const scale = viewport.width > 0 ? round3(screenshot.width / viewport.width) : 1;
+        return { result: { url: host.guest.getURL(), title: host.guest.getTitle(), navigationRevision: host.navigationRevision, scale, viewport }, screenshot };
+      }
+      case 'zoom': {
+        const { image, viewport } = await captureViewport(host, signal);
+        const size = image.getSize();
+        // The region arrives in screenshot pixels; the capture holds the viewport at device resolution.
+        const space = host.screenshotSpace && host.screenshotSpace.cssWidth === viewport.width && host.screenshotSpace.cssHeight === viewport.height
+          ? host.screenshotSpace : boundedSize(size);
+        const factor = size.width / space.width;
+        const clamp = (value, max) => Math.max(0, Math.min(max, Math.round(value * factor)));
+        const rect = { x: clamp(args.x0, size.width), y: clamp(args.y0, size.height) };
+        rect.width = clamp(args.x1, size.width) - rect.x;
+        rect.height = clamp(args.y1, size.height) - rect.y;
+        if (rect.width < 1 || rect.height < 1) throw Object.assign(new Error(`the region lies outside the ${space.width}×${space.height} screenshot`), { code: 'outside_viewport' });
+        const screenshot = encodeBounded(image.crop(rect));
+        return { result: { url: host.guest.getURL(), title: host.guest.getTitle(), navigationRevision: host.navigationRevision, region: [args.x0, args.y0, args.x1, args.y1], scale: round3(screenshot.width * factor / rect.width) }, screenshot };
+      }
+      case 'pointer': {
+        if (isOverlayActive()) throw Object.assign(new Error("a host dialog is open; browser input is suspended"), { code: "host_overlay" });
+        const viewport = await cssViewport(host);
+        const from = screenshotPoint(host, args.x, args.y, viewport);
+        const modifiers = modifierMask(args.modifiers ?? []);
+        await showCursor(host, from, args.action === 'move' ? 'move' : 'click');
+        await cdp(host, "Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y, modifiers });
+        if (args.action === 'move') return { result: { action: 'move', ...from, navigationRevision: host.navigationRevision } };
+        if (isOverlayActive()) throw Object.assign(new Error("a host dialog opened; browser input is suspended"), { code: "host_overlay" });
+        if (args.action === 'drag') {
+          const to = screenshotPoint(host, args.toX, args.toY, viewport);
+          await cdp(host, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1, modifiers });
+          for (const step of [0.25, 0.5, 0.75, 1]) await cdp(host, "Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(from.x + (to.x - from.x) * step), y: Math.round(from.y + (to.y - from.y) * step), button: "left", buttons: 1, modifiers });
+          // Release even if the drag navigated or the run was just cancelled.
+          await host.guest.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1, modifiers });
+          await showCursor(host, to, 'click');
+          await sleep(100);
+          return { result: { action: 'drag', ...from, toX: to.x, toY: to.y, navigationRevision: host.navigationRevision, url: host.guest.getURL() } };
         }
+        const button = args.action === 'right_click' ? 'right' : args.action === 'middle_click' ? 'middle' : 'left';
+        const clicks = args.action === 'double_click' ? 2 : args.action === 'triple_click' ? 3 : 1;
+        for (let count = 1; count <= clicks; count += 1) {
+          await cdp(host, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button, buttons: MOUSE_BUTTONS[button], clickCount: count, modifiers });
+          await host.guest.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: from.x, y: from.y, button, buttons: 0, clickCount: count, modifiers });
+        }
+        await showCursor(host, from, 'click');
+        await sleep(100);
+        return { result: { action: args.action, ...from, navigationRevision: host.navigationRevision, url: host.guest.getURL() } };
+      }
+      case 'wait': {
+        const ms = args.ms ?? 1000;
+        await new Promise((resolve, reject) => {
+          const onAbort = () => { clearTimeout(timer); reject(Object.assign(new Error('cancelled'), { code: 'cancelled' })); };
+          const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(undefined); }, ms);
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+        return { result: { waitedMs: ms, navigationRevision: host.navigationRevision, url: host.guest.getURL() } };
       }
       default:
         throw Object.assign(new Error(`unsupported operation ${operation}`), { code: "unsupported" });
@@ -328,16 +399,84 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
   }
 
   async function pressKey(host, key, modifiers) {
-    const codes = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32 };
-    const flags = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
-    const mask = modifiers.reduce((value, modifier) => value | flags[modifier], 0);
-    const code = /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : /^\d$/.test(key) ? `Digit${key}` : key;
+    // A shifted character names its unshifted key with Shift held; the `key` value stays the character.
+    const base = SHIFTED[key] ?? key;
+    const mask = modifierMask(modifiers) | (SHIFTED[key] || /^[A-Z]$/.test(key) ? MODIFIER_FLAGS.Shift : 0);
+    const code = /^[a-z]$/i.test(base) ? `Key${base.toUpperCase()}` : /^\d$/.test(base) ? `Digit${base}` : PUNCTUATION[base]?.[0] ?? base;
     const value = key === 'Space' ? ' ' : key;
-    const params = { key: value, code, windowsVirtualKeyCode: codes[key] ?? key.toUpperCase().charCodeAt(0), modifiers: mask };
+    const params = { key: value, code, windowsVirtualKeyCode: KEY_CODES[base] ?? PUNCTUATION[base]?.[1] ?? base.toUpperCase().charCodeAt(0), modifiers: mask };
     const text = (mask & 7) ? '' : key === 'Enter' ? '\r' : value.length === 1 ? value : '';
     await cdp(host, 'Input.dispatchKeyEvent', { type: 'keyDown', ...params, ...(text ? { text } : {}), ...((mask & 6) && key.toLowerCase() === 'a' ? { commands: ['selectAll'] } : {}) });
     // Release even if the key-down navigated or the run was just cancelled.
     await host.guest.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...params });
+  }
+
+  async function cssViewport(host) {
+    const { cssVisualViewport: viewport } = await cdp(host, 'Page.getLayoutMetrics');
+    return { width: viewport.clientWidth, height: viewport.clientHeight };
+  }
+
+  /** The element with keyboard focus must be an enabled editable field; a pointer click usually put it there. */
+  async function requireFocusedEditable(host) {
+    const { result } = await cdp(host, 'Runtime.evaluate', { returnByValue: true, expression: "(() => { const e = document.activeElement; if (!e || e === document.body || e.disabled || e.readOnly) return false; return Boolean(e.isContentEditable || e instanceof HTMLTextAreaElement || (e instanceof HTMLInputElement && ['text','search','email','url','tel','password','number'].includes(e.type))); })()" });
+    if (!result?.value) throw Object.assign(new Error('no editable field has keyboard focus; click a field first or pass a snapshot ref'), { code: 'invalid_target' });
+  }
+
+  /** Screenshot pixels → CSS pixels of the viewport, through the geometry of the latest screenshot. */
+  function screenshotPoint(host, x, y, viewport) {
+    const space = host.screenshotSpace;
+    if (!space) throw Object.assign(new Error('take a browser_screenshot first; coordinates are pixels of the latest screenshot'), { code: 'no_screenshot' });
+    if (space.cssWidth !== viewport.width || space.cssHeight !== viewport.height) throw Object.assign(new Error('the viewport changed since the last screenshot; take a new browser_screenshot'), { code: 'stale_screenshot' });
+    if (x > space.width || y > space.height) throw Object.assign(new Error(`(${x}, ${y}) lies outside the ${space.width}×${space.height} screenshot`), { code: 'outside_viewport' });
+    return { x: Math.round(x * viewport.width / space.width), y: Math.round(y * viewport.height / space.height) };
+  }
+
+  /** The size a capture is shown at: within the screenshot bounds, aspect preserved. */
+  function boundedSize({ width, height }) {
+    const scale = Math.min(1, SCREENSHOT_MAX_WIDTH / width, SCREENSHOT_MAX_HEIGHT / height);
+    return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  }
+
+  /** One capture at a time per host (§5.3). CDP capture first; Electron's capturePage as the fallback. */
+  async function captureViewport(host, signal) {
+    if (host.capturing) throw Object.assign(new Error("another capture is in flight"), { code: "busy" });
+    host.capturing = true;
+    try {
+      const withTimeout = async (promise, ms, label) => {
+        let timer;
+        try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out`), { code: 'capture_timeout' })), ms); })]); }
+        finally { clearTimeout(timer); }
+      };
+      let image;
+      host.guest.invalidate(); // schedule a repaint so an idle compositor still produces a frame
+      try {
+        const shot = await withTimeout(cdp(host, "Page.captureScreenshot", { format: "png", fromSurface: true }), 8_000, "CDP capture");
+        image = nativeImage.createFromBuffer(Buffer.from(shot.data, "base64"));
+      } catch (error) {
+        if (signal.aborted) throw error;
+        log.warn("CDP capture failed; falling back to capturePage", { error: String(error?.message ?? error) });
+        image = await withTimeout(host.guest.capturePage(), 8_000, "capturePage");
+      }
+      return { image, viewport: await cssViewport(host) };
+    } finally {
+      host.capturing = false;
+    }
+  }
+
+  /** Encode within the screenshot bounds and the connection's byte cap, shrinking until it fits. */
+  function encodeBounded(image) {
+    const { width, height } = image.getSize();
+    let scale = Math.min(1, SCREENSHOT_MAX_WIDTH / width, SCREENSHOT_MAX_HEIGHT / height);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const resized = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), quality: "good" }) : image;
+      const png = resized.toPNG();
+      if (png.length <= SCREENSHOT_MAX_BYTES) {
+        const size = resized.getSize();
+        return { base64: png.toString("base64"), width: size.width, height: size.height, mimeType: "image/png" };
+      }
+      scale *= 0.7;
+    }
+    throw Object.assign(new Error('screenshot could not be reduced to fit the browser connection'), { code: 'limit_exceeded' });
   }
 
   async function targetPoint(host, backendNodeId) {
@@ -428,6 +567,10 @@ export function createBrowserAgent({ bridge, log, isOverlayActive, waitForOverla
     handleExecute,
     handleCancel,
     onRegistered(listener) { registeredListeners.add(listener); return () => registeredListeners.delete(listener); },
+    onRegistrationFailed(listener) { registrationFailedListeners.add(listener); return () => registrationFailedListeners.delete(listener); },
+    retryRegistration(workspaceId) {
+      for (const host of hosts.values()) if (host.workspaceId === workspaceId && !host.capabilityId && host.registrationError) void register(host);
+    },
     async onConnected() { for (const host of hosts.values()) await register(host); },
     onDisconnected() { for (const entry of inflight.values()) entry.controller.abort(); for (const host of hosts.values()) { host.capabilityId = null; clearCursor(host); } },
     get hosts() { return hosts; },

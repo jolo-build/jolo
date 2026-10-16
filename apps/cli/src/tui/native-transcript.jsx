@@ -58,7 +58,11 @@ export function useNativeTranscript({ projection, revision, opened, width, showT
       printedOrdinal.current = message.ordinal;
     }
     if (permission && !printedPermissions.current.has(permission.permissionId)) {
-      items.push({ id: permission.permissionId, lines: [
+      items.push({ id: permission.permissionId, lines: permission.kind === "screen" ? [
+        ...plainTextLines("Let the agent control this Mac's screen, mouse and keyboard for this task?", width, { bold: true, color: "yellow" }),
+        ...plainTextLines(permission.summary, width, { dim: true }),
+        line("[1] Deny  [3] Allow for this task"), line(" "),
+      ] : [
         ...plainTextLines(`Allow the agent to run: ${permission.summary}`, width, { bold: true, color: "yellow" }),
         ...plainTextLines(`cwd ${permission.cwd} · isolation none (your user privileges)`, width, { dim: true }),
         line("[1] Deny  [2] Allow once"), line("[3] Allow task  [4] Allow project"), line(" "),

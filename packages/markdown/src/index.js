@@ -34,6 +34,102 @@ function endsVisualization(text, state) {
   return false;
 }
 
+function directiveAttributes(source, escapedQuotes) {
+  if (source.length > 8192) return null;
+  const values = {};
+  let offset = 0;
+  while (offset < source.length) {
+    while (/\s/.test(source[offset] ?? '')) offset++;
+    if (offset === source.length) break;
+    const key = source.slice(offset).match(/^[a-z0-9_-]+/i)?.[0];
+    if (!key || Object.hasOwn(values, key)) return null;
+    offset += key.length;
+    while (/\s/.test(source[offset] ?? '')) offset++;
+    if (source[offset++] !== '=') return null;
+    while (/\s/.test(source[offset] ?? '')) offset++;
+    const quote = source[offset] === '"' || source[offset] === "'" ? source[offset++] : null;
+    let value = '';
+    if (quote) {
+      let closed = false;
+      while (offset < source.length) {
+        const char = source[offset++];
+        if (char === '\n' || char === '\r') return null;
+        if (char === quote) { closed = true; break; }
+        if (escapedQuotes && char === '\\' && source[offset] === quote) {
+          value += quote;
+          offset++;
+        } else value += char;
+      }
+      if (!closed) return null;
+    } else {
+      const start = offset;
+      while (offset < source.length && !/[\s}]/.test(source[offset])) offset++;
+      if (offset === start) return null;
+      value = source.slice(start, offset);
+    }
+    if (value.length > 8000) return null;
+    values[key] = value;
+  }
+  return values;
+}
+
+function directiveBody(source, openAt, escapedQuotes) {
+  let quote = null;
+  for (let offset = openAt + 1; offset < Math.min(source.length, openAt + 8193); offset++) {
+    const char = source[offset];
+    if (char === '\n' || char === '\r') return null;
+    if (quote) {
+      if (escapedQuotes && char === '\\' && source[offset + 1] === quote) offset++;
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === '}') return { text: source.slice(openAt + 1, offset), end: offset + 1 };
+  }
+  return null;
+}
+
+function directiveLabel(source, openAt) {
+  let value = '';
+  for (let offset = openAt + 1; offset < Math.min(source.length, openAt + 4097); offset++) {
+    const char = source[offset];
+    if (char === '\n' || char === '\r') return null;
+    if (char === ']') return { text: value, end: offset + 1 };
+    if (char === '\\' && /[\\\]]/.test(source[offset + 1] ?? '')) value += source[++offset];
+    else value += char;
+  }
+  return null;
+}
+
+// Codex assistant annotations share a generic directive grammar: one to three
+// colons, an ASCII name, an optional display label, and an attribute object.
+// Names and attributes remain data here; renderers decide which behaviors they
+// understand and unknown directives degrade to readable text.
+function assistantDirective(source) {
+  const marker = source.match(/^:{1,3}/)?.[0];
+  if (!marker || source[marker.length] === ':') return null;
+  const name = source.slice(marker.length).match(/^[a-z][a-z0-9_-]*/i)?.[0];
+  if (!name) return null;
+  let offset = marker.length + name.length;
+  let label = null;
+  if (source[offset] === '[') {
+    const parsed = directiveLabel(source, offset);
+    if (!parsed) return null;
+    label = parsed.text.trim() || null;
+    offset = parsed.end;
+  }
+  if (source[offset] !== '{') return null;
+  // Backslash quoting supports prose attributes; literal quoting is required
+  // for trailing Windows separators. Try both without using the directive name.
+  for (const escapedQuotes of [true, false]) {
+    const body = directiveBody(source, offset, escapedQuotes);
+    const attributes = body && directiveAttributes(body.text, escapedQuotes);
+    if (attributes) return {
+      length: body.end,
+      node: { type: 'directive', marker: marker.length, name, label, attributes },
+    };
+  }
+  return null;
+}
+
 /** Split text into block segments at blank lines, keeping fenced code intact. */
 export function segment(text) {
   const lines = text.split("\n");
@@ -77,7 +173,7 @@ export function segment(text) {
   return { segments, openFence: Boolean(inFence), openVisualization: Boolean(inVisualization) };
 }
 
-export function parseInline(text) {
+export function parseInline(text, { directives = true } = {}) {
   const nodes = [];
   let buffer = "";
   const push = (node) => { if (buffer) { nodes.push({ type: "text", text: buffer }); buffer = ""; } if (node) nodes.push(node); };
@@ -85,17 +181,20 @@ export function parseInline(text) {
   while (i < text.length) {
     const rest = text.slice(i);
     let match;
+    const directive = directives && text[i - 1] !== ':' && assistantDirective(rest);
+    if (directive) { push(directive.node); i += directive.length; continue; }
     if ((match = rest.match(/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/))) { push({ type: "code", text: match[2] }); i += match[0].length; continue; }
     const underscoreBoundary = i === 0 || !/[\p{L}\p{N}_]/u.test(text[i - 1]);
     if ((match = rest.match(/^\*\*([^*]+?)\*\*/)) || (underscoreBoundary && (match = rest.match(/^__([^_]+?)__(?![\p{L}\p{N}_])/u)))) { push({ type: "strong", children: parseInline(match[1]) }); i += match[0].length; continue; }
     if ((match = rest.match(/^\*([^*\n]+?)\*/)) || (underscoreBoundary && (match = rest.match(/^_([^_\n]+?)_(?![\p{L}\p{N}_])/u)))) { push({ type: "em", children: parseInline(match[1]) }); i += match[0].length; continue; }
-    if ((match = rest.match(/^!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/))) {
-      const target = classifyReference(match[2], { explicit: true });
+    if ((match = rest.match(/^!?\[([^\]]*)\]\((<[^<>\r\n]+>|[^)\s]+)(?:\s+"[^"]*")?\)/))) {
+      const destination = match[2].startsWith('<') && match[2].endsWith('>') ? match[2].slice(1, -1) : match[2];
+      const target = classifyReference(destination, { explicit: true });
       const href = target.kind === 'web' ? target.href : null;
-      if (rest.startsWith('!') && /^jolo-artifact:[A-Za-z0-9_-]{1,128}$/.test(match[2])) push({ type: 'image', artifactId: match[2].slice('jolo-artifact:'.length), alt: match[1] || 'Generated image' });
+      if (rest.startsWith('!') && /^jolo-artifact:[A-Za-z0-9_-]{1,128}$/.test(destination)) push({ type: 'image', artifactId: destination.slice('jolo-artifact:'.length), alt: match[1] || 'Generated image' });
       else if (rest.startsWith("!")) push({ type: "text", text: `[image: ${match[1] || href || "image"}]` });
-      else if (href) push({ type: "link", href, rawHref: match[2], children: parseInline(match[1] || href) });
-      else if (target.kind === 'file' || target.kind === 'ambiguous') push({ type: 'link', href: match[2], rawHref: match[2], local: target.kind === 'file', ambiguous: target.kind === 'ambiguous', children: parseInline(match[1] || match[2]) });
+      else if (href) push({ type: "link", href, rawHref: destination, children: parseInline(match[1] || href, { directives: false }) });
+      else if (target.kind === 'file' || target.kind === 'ambiguous') push({ type: 'link', href: destination, rawHref: destination, local: target.kind === 'file', ambiguous: target.kind === 'ambiguous', children: parseInline(match[1] || destination, { directives: false }) });
       else push({ type: "text", text: match[1] });
       i += match[0].length; continue;
     }
@@ -257,7 +356,8 @@ export function parseDocument(text, { cache } = {}) {
 
 /** Plain-text projection for terminals and previews: no ANSI, no HTML. */
 export function renderPlain(blocks, { width = 80 } = {}) {
-  const inline = (nodes) => nodes.map((n) => (n.type === "text" ? n.text : n.type === 'image' ? `[image: ${n.alt}]` : n.type === "code" ? `\`${n.text}\`` : n.type === "link" ? `${inline(n.children)} <${n.href}>` : inline(n.children))).join("");
+  const directiveText = (node) => node.label || node.attributes.label || node.attributes.title || node.attributes.path || node.attributes.file || node.name.replace(/^codex-/, '').replace(/[-_]+/g, ' ');
+  const inline = (nodes) => nodes.map((n) => (n.type === "text" ? n.text : n.type === 'image' ? `[image: ${n.alt}]` : n.type === 'directive' ? directiveText(n) : n.type === "code" ? `\`${n.text}\`` : n.type === "link" ? `${inline(n.children)} <${n.href}>` : inline(n.children))).join("");
   const lines = [];
   for (const block of blocks) {
     switch (block.type) {

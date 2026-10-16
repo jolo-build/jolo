@@ -67,3 +67,11 @@ test('tokenization preserves path prefixes, queries and source locations', () =>
   expect(tokens.join('')).toBe(text);
   for (const token of ['~/notes/report.md', '//cdn.example.com/file.js', 'src/app.js#L12', '/download?file=report.pdf']) expect(tokens).toContain(token);
 });
+
+test('explicit destinations support spaces while ordinary prose remains unlinked', () => {
+  const value = '/Users/vmcs/Library/Application Support/jolo/Report.md';
+  expect(classifyReference(value, { explicit: true })).toMatchObject({ kind: 'file', reference: value });
+  expect(parseFileReference(value, { explicit: true })).toMatchObject({ path: value });
+  expect(classifyReference(value).kind).toBe('text');
+  expect(classifyReference('/tmp/file\nname.md', { explicit: true }).kind).toBe('text');
+});

@@ -2,6 +2,7 @@ import { delegationTools } from '../tools/delegation.js';
 import { requireInteractive } from "./authorization.js";
 import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
+import { screenCallHandler } from '../screen/rpc.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
 import { closeSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import path from 'node:path';
@@ -19,7 +20,7 @@ import { linkChatFolder } from '../account/chat-context.js';
  * a single method stands in for the few that method touches and names this type as it does so.
  * @typedef {{
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, credentials: any,
- *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
+ *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, screen?: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
  *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
@@ -27,7 +28,7 @@ import { linkChatFolder } from '../account/chat-context.js';
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks, permissions, dispatcher, browser, screen = null, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -60,6 +61,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
 
   const handlers = {
     'browser.call': browserCallHandler({ storage, runs, dispatcher, settingsService }),
+    'screen.call': screenCallHandler({ storage, runs, dispatcher, permissions, settingsService, interactiveClients: () => getServer()?.interactiveClientCount ?? 0 }),
     'workspace.search': async ({ workspaceId, ...args }, conn) => {
       const workspace = storage.getWorkspace(workspaceId);
       if (!workspace || workspace.removedAt) throw new ProtocolError('not_found', 'unknown workspace');
@@ -130,7 +132,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     'account.logout': (_params, conn) => { requireInteractive(conn); return account.logout(); },
     "settings.update": (params) => ({ settings: settingsService.update(params) }),
     "provider.presets": () => providerFactory.presets(),
-    "provider.models": ({ preset, refresh }) => providerFactory.models(preset, { refresh }),
+    "provider.models": ({ preset, refresh, model }) => providerFactory.models(preset, { refresh, model }),
     "credential.set": async ({ provider, value }) => {
       providerFactory?.catalog.get(provider);
       const stored = await credentials.set(provider, value);
@@ -162,7 +164,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
           const workspace = storage.ensureDirectWorkspace(project.id, root);
           const { grant, created } = permissions.grantInspect(workspace.id);
           if (created) storage.appendEvent({ type: 'grant.created', payload: { grantId: grant.id, scope: grant.scope, workspaceId: workspace.id } });
-          const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title, agentId: agentId ?? null, model });
+          const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title, agentId: agentId ?? null, model: model ?? settingsService.get().model, agentModels: Object.fromEntries(Object.entries(settingsService.get().agents ?? {}).filter(([, value]) => value).map(([id, value]) => [id, { model: value.model ?? null, effort: value.effort ?? null }])) });
           storage.appendEvent({ sessionId: session.id, type: 'session.created', payload: { session } });
           return { session, rootPath: root };
         });
@@ -178,7 +180,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a terminal; open it from the Agents panel instead of as a task`);
       }
       storage.setProjectPreferences(projectId, { ...storage.getProjectPreferences(projectId), workspaceMode: workspace.mode }); // remember the selected mode (§9.1)
-      const session = storage.createSession({ projectId, workspaceId, title, agentId: agentId ?? null, model });
+      const session = storage.createSession({ projectId, workspaceId, title, agentId: agentId ?? null, model: model ?? settingsService.get().model, agentModels: Object.fromEntries(Object.entries(settingsService.get().agents ?? {}).filter(([, value]) => value).map(([id, value]) => [id, { model: value.model ?? null, effort: value.effort ?? null }])) });
       storage.appendEvent({ sessionId: session.id, type: "session.created", payload: { session } });
       return { session, cursor: storage.maxSeq() };
     }),
@@ -193,18 +195,21 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       storage.appendEvent({ sessionId, type: 'session.updated', payload: { session: updated } });
       return { session: updated };
     }),
-    "session.setAgent": ({ sessionId, agentId, expectedRevision }) => storage.transaction(() => {
+    "session.setAgent": ({ sessionId, agentId, agentModels, model, expectedRevision }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", "task no longer exists");
       if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
-      if (session.agentId === agentId) return { session };
-      if (storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "Finish or stop the current task before switching agents; your conversation will stay here.");
+      if (session.agentId === agentId && !agentModels && !model) return { session };
+      if (session.agentId !== agentId && storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "Finish or stop the current task before switching agents; your conversation will stay here.");
       if (agentId) {
         const manifest = agents.catalog.get(agentId);
         if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a separate terminal, not a chat`);
         agents.catalog.command(manifest); // Refuse an unavailable binary before changing the session.
       }
-      const updated = storage.setSessionAgent(sessionId, agentId);
+      for (const id of Object.keys(agentModels ?? {})) agents.catalog.get(id);
+      if (model) { providerFactory.catalog.get(model.preset); storage.setSessionModel(sessionId, model); }
+      if (agentModels) storage.setSessionAgentModels(sessionId, { ...session.agentModels, ...agentModels });
+      const updated = session.agentId === agentId ? storage.getSession(sessionId) : storage.setSessionAgent(sessionId, agentId);
       storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
       return { session: updated };
     }),
@@ -215,8 +220,8 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit });
-      const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
-      return { session, messages, runs: storage.listRunsForSession(sessionId).map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
+      const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision, ...(permission.request.kind ? { kind: permission.request.kind } : {}), ...(permission.request.decisions ? { decisions: permission.request.decisions } : {}) }));
+      return { session, messages, runs: storage.listRunsForSession(sessionId).map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id), changeEvents: storage.changeEventsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
@@ -256,7 +261,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     "run.sendNow": (params, conn) => { requireInteractive(conn); return { run: runs.sendNow(params) }; },
     "run.snapshot": ({ runId }) => {
       const snapshot = runs.snapshot(runId);
-      return { ...snapshot, run: { ...snapshot.run, changedPaths: storage.changedPathsForRun(runId) } };
+      return { ...snapshot, run: { ...snapshot.run, changedPaths: storage.changedPathsForRun(runId), changeEvents: storage.changeEventsForRun(runId) } };
     },
     'attachment.create': (params, conn) => { requireInteractive(conn); return createImageUpload(storage, params); },
     'attachment.write': (params, conn) => { requireInteractive(conn); return writeImageUpload(storage, params); },
@@ -289,6 +294,19 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       return { capabilityId };
     },
     "browser.result": (params, conn) => browser.result(conn, params),
+    // Only a desktop window can hold the screen: it draws the cursor, owns the stop key and notices the user.
+    'screen.register': (params, conn) => {
+      if (conn.kind !== 'desktop') throw new ProtocolError('permission_denied', 'only Jolo desktop can provide the screen');
+      if (!screen) throw new ProtocolError('unavailable', 'this engine does not support screen control');
+      return { capabilityId: screen.register(conn, params).capabilityId };
+    },
+    'screen.update': (params, conn) => { if (!screen) throw new ProtocolError('unavailable', 'this engine does not support screen control'); return { capabilityId: screen.update(conn, params).capabilityId }; },
+    'screen.unregister': ({ capabilityId }, conn) => {
+      if (!screen?.host || screen.host.capabilityId !== capabilityId || screen.host.conn !== conn) throw new ProtocolError('not_found', 'unknown screen capability for this desktop');
+      screen.unregister(capabilityId, 'desktop unregistered');
+      return { capabilityId };
+    },
+    'screen.result': (params, conn) => { if (!screen) return { accepted: false }; return screen.result(conn, params); },
     "permission.resolve": (params, conn) => {
       requireInteractive(conn, "only an interactive client can submit a user's decision");
       const permission = permissions.resolve(params);

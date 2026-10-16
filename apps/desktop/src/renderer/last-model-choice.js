@@ -9,7 +9,7 @@ const within = (value, min, max) => value === null || (Number.isInteger(value) &
  * is a large share of the renderer bundle, and this would be the only reason to load it before the first
  * conversation can appear. The checks follow ModelRefSchema; the engine validates again before any run.
  *
- * @returns {{ preset: string, model: string, effort: string | null, contextWindowTokens: number | null, maxOutputTokens: number | null } | null | undefined}
+ * @returns {{ preset: string, model: string, effort: string | null, contextWindowTokens: number | null, maxOutputTokens: number | null, mode?: 'decisions' | 'decision-browser', chatModel?: any } | null | undefined}
  *   the reference, null for a saved null, or undefined when the value is not a model reference
  */
 function modelRef(value) {
@@ -22,7 +22,11 @@ function modelRef(value) {
   if (effort !== null && !EFFORTS.has(effort)) return undefined;
   if (!within(contextWindowTokens, 1000, 10_000_000) || !within(maxOutputTokens, 16, 1_000_000)) return undefined;
   if (contextWindowTokens && maxOutputTokens && maxOutputTokens >= contextWindowTokens) return undefined;
-  return { preset, model: name, effort, contextWindowTokens, maxOutputTokens };
+  if (value.mode !== undefined && !['decisions', 'decision-browser'].includes(value.mode)) return undefined;
+  if (value.chatModel?.chatModel || value.chatModel?.mode) return undefined;
+  const chatModel = value.chatModel === undefined ? null : modelRef(value.chatModel);
+  if (value.chatModel !== undefined && !chatModel) return undefined;
+  return { preset, model: name, effort, contextWindowTokens, maxOutputTokens, ...(value.mode ? { mode: value.mode } : {}), ...(chatModel ? { chatModel } : {}) };
 }
 
 // Shared by panes and retained across app restarts. Hosted models/efforts already

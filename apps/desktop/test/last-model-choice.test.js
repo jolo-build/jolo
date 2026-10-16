@@ -32,6 +32,15 @@ test('unavailable or removed agents fall back to the native model', () => {
   expect(newSessionModelChoice([{ ...agents[0], transport: 'pty' }], null)).toEqual({ model });
 });
 
+test('decision pairing survives local persistence without losing its text model', () => {
+  storage();
+  const paired = { ...model, preset: 'openrouter', model: 'vendor/decision', mode: /** @type {const} */ ('decisions'), chatModel: model };
+  rememberModelChoice(null, paired);
+  expect(readLastModelChoice()?.model).toEqual(paired);
+  rememberModelChoice(null, { ...paired, mode: 'decision-browser' });
+  expect(readLastModelChoice()?.model.mode).toBe('decision-browser');
+});
+
 test('missing, malformed or inaccessible storage keeps normal creation working', () => {
   for (const value of [null, '{', '{}', JSON.stringify({ agentId: 42, model }), JSON.stringify({ agentId: null, model: {} })]) {
     storage(value);

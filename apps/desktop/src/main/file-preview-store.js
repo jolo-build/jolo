@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ChatFileError, previewChatFile } from './chat-files.js';
+import { VISUALIZATION_CSP } from './visualization-host.js';
 
 export const FILE_PREVIEW_SCHEME = 'jolo-file-preview';
 const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
@@ -51,6 +52,7 @@ export function createFilePreviewStore(call) {
       const file = files.get(request.url);
       if (!file || request.method !== 'GET') return new Response('Preview unavailable', { status: 404 });
       const headers = { 'content-type': file.mime, 'content-length': String(file.content.length), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' };
+      if (file.mime.startsWith('text/html')) Object.assign(headers, { 'content-security-policy': VISUALIZATION_CSP, 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()' });
       const range = request.headers.get('range');
       if (!range) return new Response(file.content, { headers });
       const match = /^bytes=(\d+)-(\d*)$/.exec(range);

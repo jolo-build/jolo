@@ -8,10 +8,12 @@
 //
 // Every shape below was read from the installed binary and confirmed against a live session; see the
 // initialize/can_use_tool/control_response forms in the engine's agents README.
+import { randomUUID } from 'node:crypto';
 import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
+import { screenInstructions } from '../tools/screen.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
 
@@ -48,7 +50,7 @@ export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
  * The MCP configurators are absent when the engine hosts neither search nor a browser, and the
  * provider factory and settings only matter to a handoff that summarizes with a model.
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any,
- *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
+ *   mcpConfig?: (workspace: any, run: any) => { server: any, hasBrowser: boolean, hasSearch: boolean, hasScreen?: boolean } | null,
  *   providerFactory?: any, settings?: any }} deps
  */
 export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, mcpConfig, providerFactory = null, settings = null }) {
@@ -65,16 +67,19 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const remembered = recall(session, manifest).claudeSessionId ?? null;
       const hosted = mcpConfig?.(workspace, run);
       const mcpServers = hosted ? { jolo: hosted.server } : {};
-      const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
+      const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), hosted?.hasScreen ? screenInstructions({ hosted: true }) : '', standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
       const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
       const images = readImages(storage, run);
       const content = images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
       const env = hostedEnvironment(supervisor, turn.environment);
 
+      const requestUuid = randomUUID();
+      const backgroundTasks = new Set();
+      let hasTaskSnapshot = false, requestAnswered = false, awaitingFinal = false;
       const state = {
         blocks: new Map(), // stream block index -> { kind, messageId }
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0 },
-        result: null, failure: null,
+        result: null, failure: null, hasText: false,
       };
       let link;
       try {
@@ -108,8 +113,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         link.write({ type: "control_response", response: { request_id: message.request_id, subtype: "success", response: decision } });
       };
 
-      const onToolResult = (block) => {
+      const onToolResult = (block, result) => {
         const text = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : JSON.stringify(block.content ?? "");
+        if (!block.is_error) turn.recordEdits(block.tool_use_id, 'claude', result);
         turn.toolFinished(block.tool_use_id, { text: browserPreview(text), isError: Boolean(block.is_error) });
       };
 
@@ -120,10 +126,16 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         if (message.parent_tool_use_id != null && message.type !== 'control_request') return;
         switch (message.type) {
           case "control_response":
-            if (message.response?.request_id === "jolo-init") link.write({ type: "user", message: { role: "user", content } });
+            if (message.response?.request_id === "jolo-init") link.write({ type: "user", uuid: requestUuid, message: { role: "user", content } });
             return;
           case "control_request": return onControlRequest(message);
           case "system":
+            if (message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
+              hasTaskSnapshot = true;
+              backgroundTasks.clear();
+              for (const task of message.tasks) backgroundTasks.add(task.task_id);
+            } else if (!hasTaskSnapshot && message.subtype === 'task_started' && message.task_id) backgroundTasks.add(message.task_id);
+            else if (!hasTaskSnapshot && message.subtype === 'task_notification') backgroundTasks.delete(message.task_id);
             if (message.subtype === "init" && message.session_id && session.agentState?.claudeSessionId !== message.session_id) turn.remember({ claudeSessionId: message.session_id });
             return;
           case "stream_event": {
@@ -136,7 +148,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             } else if (event.type === "content_block_delta") {
               const block = state.blocks.get(event.index);
               const delta = event.delta ?? {};
-              if (block?.messageId && delta.type === "text_delta" && delta.text) turn.appendBounded(block.messageId, delta.text);
+              if (block?.messageId && delta.type === "text_delta" && delta.text) { turn.appendBounded(block.messageId, delta.text); if (delta.text.trim()) state.hasText = true; }
               if (block?.messageId && delta.type === "thinking_delta" && delta.thinking) turn.appendBounded(block.messageId, delta.thinking);
             } else if (event.type === "content_block_stop") {
               const block = state.blocks.get(event.index);
@@ -151,18 +163,39 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             for (const block of message.message?.content ?? []) {
               if (block.type === "tool_use") { ctx.transition("tools"); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: `${block.name} ${JSON.stringify(block.input ?? {})}` }); }
               else if (block.type === "text" && block.text && ![...state.blocks.values()].some((entry) => entry.kind === "text")) {
+                state.hasText ||= Boolean(block.text.trim());
                 const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, block.text); ctx.finishMessage(messageId, "complete"); // no partial stream arrived for this block
               }
             }
             return;
           }
           case "user":
-            for (const block of message.message?.content ?? []) if (block?.type === "tool_result") onToolResult(block);
+            for (const block of message.message?.content ?? []) if (block?.type === "tool_result") onToolResult(block, message.tool_use_result);
             return;
           case "result": {
-            state.result = message;
+            // Resumed sessions can emit results for queued task notifications before
+            // the submitted user turn. Only its UUID (or a legacy substantive result)
+            // acknowledges this request; empty zero-turn notification results do not.
+            const ids = message.user_message_uuids ?? (message.user_message_uuid ? [message.user_message_uuid] : []);
+            const emptyNotification = !message.is_error && !message.result?.trim() && message.num_turns === 0;
+            const answersRequest = ids.length ? ids.includes(requestUuid) : !emptyNotification;
+            requestAnswered ||= answersRequest;
             const usage = message.usage ?? {};
-            state.usage = { inputTokens: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0), outputTokens: usage.output_tokens ?? 0, attempts: 1, iterations: message.num_turns ?? 0 };
+            state.usage.inputTokens += (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+            state.usage.outputTokens += usage.output_tokens ?? 0;
+            state.usage.iterations += message.num_turns ?? 0;
+            if (!requestAnswered || emptyNotification) return;
+            state.result = message;
+            // Some CLI turns deliver their answer only in the final result.
+            // Preserve that answer without duplicating an already streamed reply.
+            if (!message.is_error && !state.hasText && typeof message.result === 'string' && message.result.trim()) {
+              const messageId = ctx.startMessage('assistant', 'text');
+              turn.appendBounded(messageId, message.result);
+              ctx.finishMessage(messageId, 'complete');
+              state.hasText = true;
+            }
+            if (!message.is_error && backgroundTasks.size) { awaitingFinal = true; ctx.transition('tools'); return; }
+            awaitingFinal = false;
             link.end();
             link.terminate({ graceful: true });
             return;
@@ -184,7 +217,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       if (signal.aborted) return { outcome: "cancelled" };
       if (state.failure) return { outcome: "failed", failure: state.failure.slice(0, 500) };
       if (!state.result) return { outcome: "failed", failure: `${manifest.displayName} exited ${exitCode ?? "?"} without a result${stderr ? `: ${stderr.slice(0, 300)}` : ""}` };
-      if (state.result.is_error) return { outcome: "failed", failure: String(state.result.result ?? state.result.subtype ?? "error").slice(0, 500) };
+      if (state.result.is_error) return { outcome: "failed", failure: String(state.result.result || state.result.errors?.join("; ") || state.result.subtype || "error").slice(0, 500) };
+      if (backgroundTasks.size || awaitingFinal) return { outcome: 'failed', failure: `${manifest.displayName} disconnected with background tasks still running. Their final response was not received.` };
+      if (!state.hasText) return { outcome: 'failed', failure: `${manifest.displayName} returned no response. Send the request again to retry.` };
       return { outcome: "completed" };
     },
   };

@@ -11,12 +11,15 @@ if (changeSummary) process.env.JOLO_CHANGE_SUMMARY_SMOKE = '1';
 if (process.argv.includes('--mermaid')) process.env.JOLO_MERMAID_SMOKE = '1';
 if (process.argv.includes('--host-dialogs')) process.env.JOLO_HOST_DIALOG_SMOKE = '1';
 const chats = process.argv.includes('--chats');
+if (process.argv.includes('--chat-swipe')) process.env.JOLO_CHAT_SWIPE_SMOKE = '1';
 if (process.argv.includes('--onboarding')) process.env.JOLO_ONBOARDING_SMOKE = '1';
 if (chats) process.env.JOLO_CHATS_SMOKE = '1';
 if (process.argv.includes('--reload')) process.env.JOLO_RELOAD_SMOKE = '1';
 if (process.argv.includes('--close-shortcuts')) process.env.JOLO_CLOSE_SHORTCUTS_SMOKE = '1';
 if (process.argv.includes('--zoom')) process.env.JOLO_ZOOM_SMOKE = '1';
 if (process.argv.includes('--panels')) process.env.JOLO_PANELS_SMOKE = '1';
+// Opt-in: shows Jolo's screen-control overlay and captures the real screen. Never posts input.
+if (process.argv.includes('--screen')) process.env.JOLO_SCREEN_SMOKE = '1';
 if (process.argv.includes('--panel-tabs')) process.env.JOLO_PANEL_TABS_SMOKE = '1';
 if (process.argv.includes('--chat-folders')) process.env.JOLO_CHAT_FOLDERS_SMOKE = '1';
 if (process.argv.includes('--file-previews')) process.env.JOLO_FILE_PREVIEWS_SMOKE = '1';
@@ -30,6 +33,8 @@ if (visualization) process.env.JOLO_VISUALIZATION_SMOKE = '1';
 const workspaceBoard = process.argv.includes('--board');
 if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
 if (process.argv.includes('--model-controls')) process.env.JOLO_MODEL_CONTROLS_SMOKE = '1';
+if (process.argv.includes('--decision-browser')) process.env.JOLO_DECISION_BROWSER_SMOKE = '1';
+if (process.argv.includes('--typesafe')) { process.env.JOLO_DECISION_BROWSER_SMOKE = '1'; process.env.JOLO_TYPESAFE_SMOKE = '1'; }
 if (process.argv.includes('--delegation')) process.env.JOLO_DELEGATION_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
 if (process.argv.includes('--history')) process.env.JOLO_HISTORY_SMOKE = '1';
@@ -105,6 +110,59 @@ const modelFixture = mockProvider('openai-responses');
 const providerDir = path.join(home, 'data', 'default', 'providers');
 mkdirSync(providerDir, { recursive: true });
 writeFileSync(path.join(providerDir, 'smoke-model.json'), JSON.stringify({ id: 'smoke-model', displayName: 'Smoke Model', protocol: 'openai-responses', baseUrl: modelFixture.baseUrl, auth: { kind: 'none' }, listing: 'openai', defaults: { contextWindowTokens: 64000, maxOutputTokens: 4096 } }));
+const decisionFixture = process.env.JOLO_MODEL_CONTROLS_SMOKE === '1' || process.env.JOLO_DECISION_BROWSER_SMOKE === '1' ? Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+  if (request.method === 'POST') {
+    if (!new URL(request.url).pathname.endsWith(process.env.JOLO_TYPESAFE_SMOKE === '1' ? '/systemone' : '/alpha/decisions')) return new Response('Wrong transport', { status: 400 });
+    const payload = await request.json();
+    // Explicit opt-in: only disposable smoke-page state is sent to the live decision provider.
+    if (process.env.JOLO_LIVE_DECISION_KEY_FILE && (payload.questions.action || payload.questions.start || payload.questions.start_group || payload.questions.complete)) {
+      const key = readFileSync(process.env.JOLO_LIVE_DECISION_KEY_FILE, 'utf8').trim();
+      const direct = process.env.JOLO_TYPESAFE_SMOKE === '1';
+      const response = await fetch(direct ? 'https://api.typesafe.ai/v1/systemone' : 'https://openrouter.ai/api/alpha/decisions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify({ ...payload, model: direct ? 'jev-latest' : '~typesafe/jev-latest' }), redirect: 'error', signal: AbortSignal.timeout(30_000) });
+      // fetch decodes the upstream body; do not forward its original content-encoding header.
+      return new Response(await response.text(), { status: response.status, headers: { 'content-type': 'application/json' } });
+    }
+    if (payload.questions.complete) return Response.json({ model: payload.model, answers: { complete: { type: 'noul', noul: 1 } }, usage: { input_tokens: 10, output_tokens: 5 } });
+    if (payload.questions.start) {
+      const answers = Object.fromEntries(Object.entries(payload.questions).map(([id, question]) => {
+        const options = question.criteria;
+        const choice = Object.keys(options).find(key => String(options[key]).endsWith(id === 'start' ? ': emin' : ': ghuliev'));
+        return [id, { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(options).map(key => [key, key === choice ? 1 : 0])) }];
+      }));
+      return Response.json({ model: payload.model, answers, usage: { input_tokens: 10, output_tokens: 5 } });
+    }
+    if (payload.state?.candidates) return Response.json({ model: payload.model, answers: Object.fromEntries(payload.state.candidates.map(candidate => [candidate.id, { type: 'noul', noul: /^Exhibitor \d+$/.test(candidate.text) ? 1 : 0 }])), usage: { input_tokens: 10, output_tokens: 5 } });
+    if (payload.questions.action && payload.state.userGoal.includes('list all fixture exhibitors')) {
+      const { page, collection } = payload.state, criteria = payload.questions.action.criteria;
+      const next = page.nodes.find(node => node.name === 'Next' && node.role === 'link');
+      const choice = !page.url.includes('/exhibitors') ? Object.keys(criteria).find(key => key.startsWith('navigate_'))
+        : collection.lastPageRead?.url !== page.url || collection.lastPageRead?.scroll?.contentHeight !== page.scroll?.contentHeight ? 'collect_text'
+        : !page.scroll?.atBottom ? 'scroll_down' : next ? `click_${next.ref}` : criteria.next_elements ? 'next_elements' : 'done';
+      return Response.json({ model: payload.model, answers: { action: { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(criteria).map(key => [key, key === choice ? 1 : 0])) } }, usage: { input_tokens: 10, output_tokens: 5 } });
+    }
+    if (payload.questions.action) {
+      const criteria = payload.questions.action.criteria;
+      if (payload.state.userGoal.includes('search emin ghuliev')) {
+        const field = payload.state.page.nodes.find(node => ['textbox', 'searchbox', 'combobox'].includes(node.role) && node.name === 'Search');
+        const choice = payload.state.page.title === 'Search results for emin ghuliev' ? 'done'
+          : !field ? Object.keys(criteria).find(key => key.startsWith('navigate_'))
+          : field.value === 'emin ghuliev' ? `enter_${field.ref}` : `fill_span_${field.ref}`;
+        return Response.json({ model: payload.model, answers: { action: { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(criteria).map(key => [key, key === choice ? 1 : 0])) } }, usage: { input_tokens: 10, output_tokens: 5 } });
+      }
+      const clicked = payload.state.page.nodes.some(node => node.name === 'Clicked');
+      const button = payload.state.page.nodes.find(node => node.role === 'button' && node.name === 'Click');
+      const choice = clicked ? 'done' : button ? `click_${button.ref}` : Object.keys(criteria).find(key => key.startsWith('navigate_'));
+      return Response.json({ model: payload.model, answers: { action: { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(criteria).map(key => [key, key === choice ? 1 : 0])) } }, usage: { input_tokens: 10, output_tokens: 5 } });
+    }
+    if (payload.model !== 'typesafe/jev-test' || !payload.questions.is_urgent || !payload.questions.department || !payload.questions.frustration) return new Response('Wrong decision request', { status: 400 });
+    return Response.json({ model: payload.model, answers: { is_urgent: { type: 'noul', noul: 0.99 }, department: { type: 'choice', choice: 'billing', confidence: 1, probabilities: { billing: 1, technical: 0, sales: 0 } }, frustration: { type: 'score', score: 1.4, confidence: 0.5, probabilities: { '0': 0, '1': 0.6, '2': 0.4 }, legend: { '0': 'Calm', '1': 'Frustrated', '2': 'Very angry' } } }, usage: { input_tokens: 320, output_tokens: 60 } });
+  }
+  const detail = new URL(request.url).pathname.endsWith('/endpoints');
+  if (process.env.JOLO_TYPESAFE_SMOKE === '1') return Response.json({ models: [{ name: 'typesafe/jev-test' }] });
+  const decision = { id: '~typesafe/jev-latest', name: 'TypeSafe: Jev Latest', architecture: { output_modalities: ['decisions'] } };
+  return Response.json({ data: detail ? decision : new URL(request.url).searchParams.get('output_modalities') === 'decisions' ? [{ ...decision, id: 'typesafe/jev-test' }] : [] });
+} }) : null;
+if (decisionFixture) writeFileSync(path.join(providerDir, 'decision-fixture.json'), JSON.stringify({ id: 'decision-fixture', displayName: 'Decision Fixture', protocol: process.env.JOLO_TYPESAFE_SMOKE === '1' ? 'typesafe' : 'openai-chat', baseUrl: decisionFixture.url.href.replace(/\/$/, ''), auth: { kind: 'none' }, listing: process.env.JOLO_TYPESAFE_SMOKE === '1' ? 'typesafe' : 'openrouter', defaults: { contextWindowTokens: 32000, maxOutputTokens: 4096 } }));
 if (process.argv.includes('--file-previews')) {
   const fixtureBuild = await Bun.build({ entrypoints: [path.join(root, 'test/fixtures/file-links-browser.jsx')], outdir: path.join(home, 'file-link-fixture'), target: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"' } });
   if (!fixtureBuild.success) throw new Error(fixtureBuild.logs.join('\n'));
@@ -117,7 +175,19 @@ if (process.argv.includes('--chat-layout')) {
   process.env.JOLO_CHAT_LAYOUT_FIXTURE = fixtureBuild.outputs[0].path;
 }
 mkdirSync(results, { recursive: true });
-const browserFixture = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response("<!doctype html><title>Jolo smoke page</title><h1>Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>", { headers: { 'content-type': 'text/html' } }) });
+const browserFixture = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request => {
+  if (new URL(request.url).pathname === '/search') {
+    const done = new URL(request.url).searchParams.get('q') === 'emin ghuliev';
+    return new Response(`<!doctype html><title>${done ? 'Search results for emin ghuliev' : 'Search'}</title><form action="/search"><input aria-label="Search" name="q" value="${done ? 'emin ghuliev' : ''}"><button>Search</button></form>${done ? '<h1>Search results for emin ghuliev</h1>' : ''}`, { headers: { 'content-type': 'text/html' } });
+  }
+  const url = new URL(request.url);
+  if (url.pathname === '/exhibitors') {
+    const second = url.searchParams.has('page');
+    const names = second ? [5, 165, 166, 167, 168, 169] : Array.from({ length: 160 }, (_, index) => index);
+    return new Response(`<!doctype html><title>Exhibitor directory</title><style>body{font:16px system-ui;padding:24px}h2{font-size:16px;margin:0;padding:8px;border-bottom:1px solid #ddd}a{display:block;padding:20px}</style><h1>Directory</h1>${names.map(index => `<h2>Exhibitor ${String(index).padStart(3, '0')}</h2>`).join('')}${second ? '' : `<script>let added=false;addEventListener('scroll',()=>{if(!added && scrollY+innerHeight>=document.documentElement.scrollHeight-100){added=true;for(let i=160;i<165;i++){const node=document.createElement('h2');node.textContent='Exhibitor '+i;document.body.append(node)}const a=document.createElement('a');a.href='/exhibitors?page=2';a.textContent='Next';document.body.append(a)}})</script>`}`, { headers: { 'content-type': 'text/html' } });
+  }
+  return new Response("<!doctype html><title>Jolo smoke page</title><h1>Inline browser is alive</h1><button onclick=\"this.textContent='Clicked'\">Click</button>", { headers: { 'content-type': 'text/html' } });
+} });
 process.env.JOLO_SMOKE_BROWSER_URL = browserFixture.url.href;
 const script = [
   { text: ["step 0\n", "done: smoke test prompt\n\n```md\n# Plan\n\n- **first** step\n```\n\n```mermaid\nflowchart LR\n  A[Read] --> B{Valid?}\n  B -->|yes| C[\"Save\\nto disk\"]\n  B -->|no| D[Reject]\n```\n\n```mermaid\nsequenceDiagram\n  participant U as User\n  participant J as Jolo\n  U->>J: run task\n  J-->>U: needs you\n  loop retry\n    U->>J: again\n  end\n```\n\n```python\n# GitHub search helper\nimport requests\n\nclass GitHubSearcher:\n    def search(self, query):\n        url = \"https://api.github.com\"\n        return requests.get(url, params={\"q\": query})\n```\n"] },
@@ -133,7 +203,7 @@ const script = [
   { text: ["Notes updated.\n"] },
 ];
 const visualizationPath = path.join(realpathSync(project), 'preview.html');
-if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · [app.js](app.js) · [location.js](location.js:120:82) · [My report](My%20Report.txt) · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip) · [missing.js](missing.js). Website assets: `/install.sh`, `releases/latest.txt`, `desktop.json`.'];
+if (process.argv.includes('--file-previews')) script[0].text = ['[PLAN.md](PLAN.md) · [preview.html](preview.html) · [app.js](app.js) · [location.js](location.js:120:82) · [My report](My%20Report.txt) · [image.png](image.png) · [report.pdf](report.pdf) · [archive.zip](archive.zip) · [missing.js](missing.js). Website assets: `/install.sh`, `releases/latest.txt`, `desktop.json`.'];
 if (process.argv.includes('--mermaid')) script[0].text.push('\n```mermaid\n' + [
   'flowchart TD',
   '  A[Workflow authors] -->|HTTPS after DNS is configured| D[Caddy reverse proxy\\nonly published entry point]',
@@ -200,6 +270,7 @@ const child = Bun.spawn(command, {
 const code = await child.exited;
 browserFixture.stop(true);
 modelFixture.stop();
+decisionFixture?.stop(true);
 taskServer?.stop(true);
 if (code === 0) console.log(readFileSync(path.join(results, "smoke.json"), "utf8"));
 process.exit(code);

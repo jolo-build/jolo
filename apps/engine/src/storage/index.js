@@ -266,10 +266,10 @@ export class Storage {
 
   // ---- sessions -------------------------------------------------------------------------------
 
-  createSession({ projectId, workspaceId, title, agentId = null, planTaskId = null, model = null }) {
+  createSession({ projectId, workspaceId, title, agentId = null, planTaskId = null, model = null, agentModels = {} }) {
     const id = newId("ses");
     const at = now();
-    this.db.query("INSERT INTO sessions (id, project_id, workspace_id, title, agent_id, plan_task_id, model_ref, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)").run(id, projectId, workspaceId, title, agentId, planTaskId, model ? JSON.stringify(model) : null, at);
+    this.db.query("INSERT INTO sessions (id, project_id, workspace_id, title, agent_id, plan_task_id, model_ref, agent_models, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)").run(id, projectId, workspaceId, title, agentId, planTaskId, model ? JSON.stringify(model) : null, JSON.stringify(agentModels), at);
     return this.getSession(id);
   }
 
@@ -283,6 +283,11 @@ export class Storage {
     // with the shared transcript, while retaining the Jolo session itself.
     const handoff = this.getSession(id)?.agentState?._jolo;
     this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
+    return this.getSession(id);
+  }
+
+  setSessionAgentModels(id, choices) {
+    this.db.query("UPDATE sessions SET agent_models = ?1, updated_at = ?2, revision = revision + 1 WHERE id = ?3").run(JSON.stringify(choices), now(), id);
     return this.getSession(id);
   }
 
@@ -432,6 +437,7 @@ export class Storage {
     return this.eventRepository.recentTools(runId, limit);
   }
 
+  changeEventsForRun(runId) { return this.eventRepository.changeEvents(runId); }
   changedPathsForRun(runId) { return this.eventRepository.changedPaths(runId); }
   lastEventAtForRun(runId) { return this.eventRepository.lastAt(runId); }
 

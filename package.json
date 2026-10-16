@@ -65,7 +65,8 @@
     "ink@7.1.1": "patches/ink@7.1.1.patch"
   },
   "overrides": {
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "undici": "7.29.1"
   },
   "license": "MIT",
   "repository": {

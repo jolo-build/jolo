@@ -112,7 +112,7 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
   }
   let match;
   if (prompt === 'browser-check') {
-    if (!entry.developerInstructions?.includes('Do not use computer use')) throw new Error('Jolo browser instructions missing');
+    if (!entry.developerInstructions?.includes('dedicated browser tools')) throw new Error('Jolo browser instructions missing');
     // `Bun.TOML.parse` only promises `object`; the engine writes the browser server under this key.
     const settings = /** @type {{ mcp_servers?: Record<string, { command: string, args: string[] }> }} */ (Bun.TOML.parse(argv.flatMap((arg, index) => arg === '-c' ? [argv[index + 1]] : []).join('\n')));
     if (!settings.mcp_servers?.jolo?.args?.at(-1)?.split(',').includes('browser')) { say('Browser tools unavailable'); end('completed'); return; }

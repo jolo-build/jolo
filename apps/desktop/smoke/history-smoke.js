@@ -34,7 +34,22 @@ export async function runHistorySmoke({ window, bridge, results, evaluate, waitF
     await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(sessionId)})`);
     await waitFor("document.querySelector('[data-message-id=\"history-387\"]')?.textContent.includes('Saved message 387')", 'latest page filled');
     await waitFor("document.querySelector('[data-message-id=\"history-288\"]')?.textContent.includes('Saved message 288')", 'first saved entry filled');
-    const scrollTop = () => evaluate("(() => { const el = document.querySelector('.conversation'); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); })()");
+    const atBottom = "(() => { const el = document.querySelector('.conversation'); return el.scrollHeight - el.clientHeight - el.scrollTop <= 2; })()";
+    await waitFor(atBottom, 'newly selected chat starts at its latest message');
+    // A sideways gesture with tiny upward drift must not disable following
+    // while text/images in the newly selected transcript are still arriving.
+    await evaluate("(() => { const el = document.querySelector('.conversation'); el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaX: 10, deltaY: -1 })); })()");
+    await evaluate("(() => { const block = document.createElement('div'); block.id = 'history-layout-fixture'; block.style.height = '600px'; document.querySelector('.transcript').append(block); })()");
+    await waitFor(atBottom, 'horizontal drift does not detach the newly opened chat from the bottom');
+    // Late markdown and image layout can shrink and then grow the transcript.
+    // Browser-generated scroll events during that change are not user input.
+    await evaluate("document.querySelector('#history-layout-fixture').style.height = '100px'");
+    await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    await evaluate("document.querySelector('#history-layout-fixture').style.height = '600px'");
+    await waitFor(atBottom, 'layout shrink and growth keep the latest message visible');
+    await evaluate("document.querySelector('#history-layout-fixture').remove()");
+    report.checks.push('Selected chats stay at the bottom during horizontal swipe drift and asynchronous layout changes');
+    const scrollTop = () => evaluate("(() => { const el = document.querySelector('.conversation'); el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 })); el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); })()");
     await scrollTop();
     await waitFor("document.querySelector('.history-loader [role=alert]')", 'failed page offers retry');
     await new Promise(resolve => setTimeout(resolve, 150));
@@ -53,5 +68,27 @@ export async function runHistorySmoke({ window, bridge, results, evaluate, waitF
     await scrollTop();
     writeFileSync(path.join(results, 'history.png'), (await window.webContents.capturePage()).toPNG());
     report.checks.push('scrolling back restores all 388 saved messages and removes the loader at the beginning');
+    await evaluate('window.__joloSmoke.newTask()');
+    await evaluate('window.__joloSmoke.showBoard()');
+    await evaluate('window.__joloSmoke.showTask()');
+    await evaluate("document.querySelector('[aria-label=\"Hide sidebar\"]')?.click()");
+    await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${sessionId}"]'))`, 'previous chat available in the rail');
+    await evaluate(`document.querySelector('.task-rail [data-task-id="${sessionId}"]').click()`);
+    await waitFor("document.querySelector('[data-message-id=\"history-387\"]')?.textContent.includes('Saved message 387')", 'clicked chat loaded');
+    await waitFor(atBottom, 'clicking a previously scrolled chat opens its latest message');
+    // Return by swipe after scrolling up in that chat too. Its previous reading
+    // position must not survive the selection change.
+    await evaluate("(() => { const el = document.querySelector('.conversation'); el.dispatchEvent(new WheelEvent('wheel', { bubbles:true, cancelable:true, deltaY:-120 })); el.scrollTop -= 300; })()");
+    const neighbor = await evaluate(`(() => { const ids = [...document.querySelectorAll('.task-rail [data-task-id]')].map(el => el.dataset.taskId); const index = ids.indexOf(${JSON.stringify(sessionId)}); const direction = index > 0 ? -1 : 1; return { id:ids[index+direction], direction }; })()`);
+    const swipe = async direction => {
+      await evaluate('new Promise(resolve => setTimeout(resolve, 250))');
+      await evaluate(`document.querySelector('.conversation').dispatchEvent(new WheelEvent('wheel', { bubbles:true, cancelable:true, deltaX:(window.jolo.naturalScrolling ? -1 : 1) * ${direction * 100} }))`);
+    };
+    await swipe(neighbor.direction);
+    await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(neighbor.id)}`, 'swipe to neighboring chat');
+    await swipe(-neighbor.direction);
+    await waitFor("document.querySelector('[data-message-id=\"history-387\"]')?.textContent.includes('Saved message 387')", 'swiped chat loaded');
+    await waitFor(atBottom, 'swiping back opens the latest message');
+    report.checks.push('Both rail clicks and swipes reopen previously scrolled chats at the bottom');
   } finally { bridge.call = original; }
 }

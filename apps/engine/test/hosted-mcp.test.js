@@ -2,6 +2,27 @@ import { expect, test } from 'bun:test';
 import { createHostedMcpConfig, hostedMcpConfig, codexMcpArgs, acpMcpServers } from '../src/hosted-mcp.js';
 import { SCHEDULE_METHODS } from '../src/scheduler/mcp.js';
 import { BrowserBroker } from '../src/browser/broker.js';
+import { ScreenBroker } from '../src/screen/broker.js';
+import { screenBridge } from '../src/screen/mcp.js';
+
+test('hosted runs get the screen tools only while a desktop provides the screen', () => {
+  const screen = new ScreenBroker({ storage: {}, log: {} });
+  const issued = [];
+  const config = createHostedMcpConfig({ browser: null, screen, search: null, paths: { socketPath: '/tmp/sock' }, capabilityTokens: { issue(...args) { issued.push(args); return { tokenPath: '/tmp/token' }; } }, log: {} });
+  const before = config({ id: 'ws' }, { id: 'r1' });
+  expect(before.hasScreen).toBe(false);
+  expect(before.server.args.at(-1)).toBe('schedule,delegation');
+  const conn = { closeHooks: new Set(), closed: false };
+  screen.register(conn, { display: { id: 1, width: 10, height: 10, scale: 1 }, operations: ['screenshot'], permissions: { accessibility: true, screenRecording: true } });
+  const during = config({ id: 'ws' }, { id: 'r2' });
+  expect(during.hasScreen).toBe(true);
+  expect(during.server.args.at(-1)).toBe('schedule,delegation,screen');
+  expect(issued.at(-1)[2]).toContain('screen.call');
+  for (const hook of conn.closeHooks) hook();
+  expect(config({ id: 'ws' }, { id: 'r3' }).hasScreen).toBe(false);
+  expect(screenBridge.tools.map(tool => tool.name)).toEqual(['screen_screenshot', 'screen_zoom', 'screen_pointer', 'screen_type', 'screen_press', 'screen_scroll', 'screen_wait', 'screen_windows', 'screen_activate']);
+  expect(screenBridge.tools.find(tool => tool.name === 'screen_pointer').annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+});
 import { ENGINE_ENTRY } from '../../../tests/integration/helpers.js';
 
 test('all hosted transports preserve quoted paths and pin the same workspace without a shell', () => {

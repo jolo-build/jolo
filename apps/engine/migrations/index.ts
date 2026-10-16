@@ -16,6 +16,9 @@ import taskReferences from "./0011_task_references.ts";
 import modelHarness from "./0012_model_harness.ts";
 import schedules from "./0013_schedules.ts";
 import delegations from "./0014_delegations.ts";
+import chatModels from "./0015_chat_models.ts";
+
+import runChangeEvents from "./0016_run_change_events.ts";
 
 export interface Migration {
   readonly version: number;
@@ -44,4 +47,6 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 12, name: "0012_model_harness.sql", sql: modelHarness },
   { version: 13, name: "0013_schedules.sql", sql: schedules },
   { version: 14, name: "0014_delegations.sql", sql: delegations },
+  { version: 15, name: "0015_chat_models.sql", sql: chatModels },
+  { version: 16, name: "0016_run_change_events.sql", sql: runChangeEvents },
 ]);

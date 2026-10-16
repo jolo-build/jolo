@@ -47,6 +47,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const projection = useMemo(() => new SessionProjection({ readArtifact: (artifactId, offset, length) => client.call("artifact.read", { artifactId, offset, length }), maxTextBytes: 512 * 1024, onChange: redraw }), [client]);
   const [session, setSession] = useState(initialSession);
   const [draftAgent, setDraftAgent] = useState(draftAgentId);
+  const draftModel = useRef(null), draftAgentModels = useRef({});
   const [loadingSession, setLoadingSession] = useState(Boolean(initialSession));
   const sessionRef = useRef(initialSession);
   const [promptState, dispatchPrompt] = useReducer(promptReducer, undefined, createPromptState);
@@ -149,8 +150,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const send = async (prompt) => {
     let current = sessionRef.current;
     if (!current) {
-      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: prompt.slice(0, 80), ...(agentId ? { agentId } : {}) });
+      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: prompt.slice(0, 80), ...(draftModel.current ? { model: draftModel.current } : {}), ...(agentId ? { agentId } : {}) });
       current = created.session;
+      if (Object.keys(draftAgentModels.current).length) current = (await client.call("session.setAgent", { sessionId: current.id, agentId, agentModels: draftAgentModels.current, expectedRevision: current.revision })).session;
       sessionRef.current = current;
       setSession(current);
     }
@@ -224,7 +226,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     if (/^\[\?\d+u$/.test(chunk)) return;
     if (permission) {
       const decision = { 1: "deny", 2: "allow_once", 3: "allow_run", 4: "allow_project" }[chunk];
-      if (decision) client.call("permission.resolve", { permissionId: permission.permissionId, decision }).then(() => setPermission(null)).catch((error) => setStatus(error.message));
+      // A narrowed request (screen consent) only offers some decisions; the others are not hotkeys for it.
+      if (decision && (!permission.decisions || permission.decisions.includes(decision))) client.call("permission.resolve", { permissionId: permission.permissionId, decision }).then(() => setPermission(null)).catch((error) => setStatus(error.message));
       return;
     }
     if (themeBusy) return;
@@ -309,12 +312,20 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       } else setDraftAgent(wanted);
       onChooseAgent(wanted);
     }
-    if (target && wanted === null && sessionRef.current) {
+    if (target?.modelRef !== undefined && wanted === null && sessionRef.current) {
       const current = (await client.call('session.page', { sessionId: sessionRef.current.id, limit: 1 })).session;
       const { session: updated } = await client.call('session.setModel', { sessionId: current.id, expectedRevision: current.revision, model: target.modelRef ?? null });
       sessionRef.current = updated; setSession(updated);
     }
-    if (target) rememberAgent(wanted);
+    if (target?.agentModel) {
+      const current = sessionRef.current;
+      if (current) {
+        const page = await client.call("session.page", { sessionId: current.id, limit: 1 });
+        const { session: updated } = await client.call("session.setAgent", { sessionId: current.id, agentId: wanted, agentModels: { [wanted]: target.agentModel }, expectedRevision: page.session.revision });
+        sessionRef.current = updated; setSession(updated);
+      } else draftAgentModels.current[wanted] = target.agentModel;
+    }
+    if (target?.modelRef && !sessionRef.current) draftModel.current = target.modelRef;
     setModelConfig(null);
     if (message) setStatus(message);
     void refreshSettings();
@@ -324,14 +335,14 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     <>
       <NativeTranscript batch={batch} project={project.rootPath} columns={columns} restored={restored} sessionTitle={initialSession?.title} update={update} welcomeOpen={welcomeOpen && !restored} welcomeHeight={themeMenu || modelConfig || sessionMenu ? 0 : Math.min(12, Math.max(0, rows - 10 - (promptRows - 1) - (commandRows ? commandRows + 1 : 0)))} />
       {themes.error && <Text color="error" wrap="truncate-end">Theme: {clean(themes.error)}</Text>}
-      {themeMenu ? <ThemeMenu rows={rows} columns={columns} paused={Boolean(permission)} onClose={() => setThemeMenu(false)} /> : sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
+      {themeMenu ? <ThemeMenu rows={rows} columns={columns} paused={Boolean(permission)} onClose={() => setThemeMenu(false)} /> : sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} session={session ?? { model: draftModel.current, agentModels: draftAgentModels.current }} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
       {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}
       {mentioningModel && !commands.length && dismissedCommand !== input && <Text dimColor wrap="truncate-end">{mentionError || (!mentionReport || mentionReport.loading ? 'Loading child-task models…' : mentionReport.notes[0] || 'No matching child-task models')}</Text>}
-      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
+      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { model: draftModel.current, agentModels: draftAgentModels.current, ...session, agentId })} columns={columns} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}
