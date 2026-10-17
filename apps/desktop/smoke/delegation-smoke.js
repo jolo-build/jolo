@@ -31,17 +31,33 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   await key('Enter');
   await evaluate("document.querySelector('.composer-submit').click()");
   await waitFor("window.__joloSmoke.state().runState === 'completed'", 'parent collects child result', 30_000);
-  await waitFor("document.querySelector('.delegated-task')?.textContent.includes('completed')", 'completed child visible');
   const parent = await evaluate('window.__joloSmoke.state().sessionId');
   const { delegations } = await bridge.rawCall('delegation.list', { sessionId: parent });
   assert.equal(delegations.length, 1);
   assert.equal(delegations[0].execution.model, 'fake-large');
   assert.equal(delegations[0].execution.effort, 'high');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /Child result:.*fake-large.*high/);
+  // The child is listed under its parent in the sidebar, not beside it, until the parent's count folds it.
+  const child = JSON.stringify(`[data-session-id="${delegations[0].sessionId}"]`);
+  const parentRow = JSON.stringify(`.sidebar-chat-row.has-subtasks [data-session-id="${parent}"]`);
+  const count = "document.querySelector('.sidebar-chat-row.has-subtasks .task-subtasks')";
+  const childShown = `Boolean(document.querySelector('.sidebar-subtasks ' + ${child}))`;
+  const painted = "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
+  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${count}?.textContent.includes('1') && ${childShown}`, 'child shown under its parent');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.sidebar-workspace-chats > .task-row ' + ${child}))`), false, 'the child is not a task of its own in the sidebar');
+  await evaluate(painted);
   writeFileSync(path.join(results, 'delegation-result.png'), (await window.webContents.capturePage()).toPNG());
-  await evaluate("document.querySelector('.delegated-open').click()");
+  await evaluate(`document.querySelector('.sidebar-subtasks ' + ${child}).click()`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(delegations[0].sessionId)}`, 'child opens its own conversation');
   await waitFor("window.__joloSmoke.state().assistantText.includes('fake-large')", 'child transcript loaded');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /fake-large.*high/);
-  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, and opening the child conversation passed.');
+  await evaluate(`document.querySelector(${parentRow}).click()`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(parent)}`, 'parent opens again');
+  await evaluate(painted);
+  assert.equal(await evaluate(childShown), true, 'opening the parent leaves its child tasks listed');
+  await evaluate(`${count}.click()`);
+  await waitFor(`!${childShown}`, 'the count folds the child tasks');
+  await evaluate(`${count}.click()`);
+  await waitFor(childShown, 'the count lists them again');
+  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks listed under their parent, and opening the child conversation passed.');
 }

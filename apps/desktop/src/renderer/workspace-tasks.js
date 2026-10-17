@@ -10,3 +10,20 @@ export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = '
   }
   return { tasks: [...tasks.values()], hasMore: Boolean(result?.hasMore && result?.nextCursor) };
 }
+
+/**
+ * A task list as a tree one level deep: each child task under the top-level conversation that started it, directly or
+ * through another child task, so the narrow sidebar never nests twice. A child whose parent is not in the list (an
+ * older page, or a deleted parent) stays a row of its own, so it is never lost.
+ * @returns {{ roots: any[], children: Map<string, any[]> }}
+ */
+export function taskTree(tasks) {
+  const listed = new Map(tasks.map((task) => [task.sessionId, task]));
+  const rootOf = (task) => (listed.has(task.parentSessionId) ? rootOf(listed.get(task.parentSessionId)) : task);
+  const children = new Map();
+  for (const task of tasks) {
+    const root = rootOf(task);
+    if (root !== task) children.set(root.sessionId, [...(children.get(root.sessionId) ?? []), task]);
+  }
+  return { roots: tasks.filter((task) => rootOf(task) === task), children };
+}

@@ -64,6 +64,10 @@ describe("Codex through its app-server", () => {
       expect(delegations).toHaveLength(1);
       expect(delegations[0]).toMatchObject({ state: 'completed', execution: { agentId: 'codex', model: 'fake-large', effort: 'high', pinned: true } });
       expect(delegations[0].sessionId).not.toBe(session.id);
+      // The board names the child's parent, so task lists can leave it to the conversation that started it.
+      const { tasks } = await client.call('board.tasks', { workspaceId: session.workspaceId });
+      expect(tasks.find(task => task.sessionId === delegations[0].sessionId)).toMatchObject({ parentSessionId: session.id });
+      expect(tasks.find(task => task.sessionId === session.id)).toMatchObject({ parentSessionId: null });
       expect(await text((await messagesOf(parent.id)).at(-1))).toContain('fake-large');
       expect(await text((await messagesOf(parent.id)).at(-1))).toContain('high');
       const next = await runTo('req_parent_model', 'model');

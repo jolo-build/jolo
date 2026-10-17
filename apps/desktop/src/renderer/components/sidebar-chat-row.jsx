@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { modelLabel } from '../model-options.js';
 import { relativeTime } from '@jolo/client/board';
 import { useTaskDrag } from '../task-drag.jsx';
@@ -10,9 +11,18 @@ const progress = {
   completed: ['check', 'Done'], failed: ['alert', 'Failed'], interrupted: ['alert', 'Interrupted'], cancelled: ['circleSlash', 'Stopped'],
 };
 
-/** One navigation row for both workspace tasks and standalone conversations. */
-export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentName = id => id, standalone = false }) {
+/**
+ * One navigation row for both workspace tasks and standalone conversations. A task that started child tasks lists
+ * them under its row, open until the user folds them with their count, and open again when one of them comes on
+ * screen or starts needing the user.
+ */
+export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentName = id => id, standalone = false, subtasks = [], renderSubtask = null, currentSessionId = null }) {
   const drag = useTaskDrag();
+  const [folded, setFolded] = useState(false);
+  const childNeeds = subtasks.some(child => child.attention === 'needs_you');
+  const childCurrent = subtasks.some(child => child.sessionId === currentSessionId);
+  useEffect(() => { if (childNeeds || childCurrent) setFolded(false); }, [childNeeds, childCurrent]);
+  const open = subtasks.length > 0 && !folded;
   const title = task.title || (standalone ? 'New chat' : 'New task');
   const needs = task.attention === 'needs_you';
   const [icon, status] = progress[task.run?.state] ?? (needs ? ['alert', 'Needs you'] : ['circle', 'Ready']);
@@ -25,7 +35,7 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
   const worktree = !standalone && (task.mode ?? target?.workspace?.mode) === 'worktree';
   const workspacePath = target?.workspace?.path;
   const details = [status, task.updatedAt && relativeTime(task.updatedAt), identity, branch && `Branch: ${branch}`, worktree && 'Worktree', !standalone && workspacePath].filter(Boolean).join(' · ');
-  return <div className={`sidebar-chat-row ${standalone ? 'recent-chat-row' : 'task-row'}${selected ? ' selected' : ''}`}
+  return <><div className={`sidebar-chat-row ${standalone ? 'recent-chat-row' : 'task-row'}${selected ? ' selected' : ''}${subtasks.length ? ' has-subtasks' : ''}`}
     onContextMenu={onMenu ? event => { event.preventDefault(); onMenu(task); } : undefined}
     onKeyDown={onMenu ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); onMenu(task); } } : undefined}>
     <button className={`sidebar-chat ${standalone ? 'recent-chat' : 'task'}`} {...drag(target)} data-session-id={task.sessionId}
@@ -42,6 +52,11 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
         </span>
       </span>
     </button>
+    {subtasks.length > 0 && <button className={`task-subtasks${childNeeds ? ' needs' : ''}`} aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} ${subtasks.length} child ${subtasks.length === 1 ? 'task' : 'tasks'} of ${title}`} onClick={() => setFolded(open)}>
+      <Icon name="bolt" size={11} />{subtasks.length}<Icon name={open ? 'down' : 'chevron'} size={11} />
+    </button>}
     {onMenu && <button className="task-more" onClick={() => onMenu(task)} aria-label={`Options for ${title}`}><Icon name="more" size={14} /></button>}
-  </div>;
+  </div>
+  {open && <div className="sidebar-subtasks" role="group" aria-label={`Child tasks of ${title}`}>{subtasks.map(renderSubtask)}</div>}
+  </>;
 }

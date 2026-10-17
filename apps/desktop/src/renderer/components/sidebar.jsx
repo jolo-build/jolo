@@ -2,20 +2,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { basename } from '../presentation.js';
 import { useWorkspaceTasks } from '../use-workspace-tasks.js';
+import { taskTree } from '../workspace-tasks.js';
 import { RecentChats } from './recent-chats.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
 
-export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName }) {
-  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} />;
+export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName, subtasks, renderSubtask, currentSessionId }) {
+  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} subtasks={subtasks} renderSubtask={renderSubtask} currentSessionId={currentSessionId} />;
 }
 
 function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, onOpen, onMenu, agentName }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, workspaceId: row.workspaceId, revision, state });
   const tasks = result?.tasks ?? [];
+  const tree = taskTree(tasks);
   // Keep an explicitly opened older chat selected even before its page is loaded.
-  const rows = selectedTask && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tasks] : tasks;
+  const rows = selectedTask && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
+  const taskRow = task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName}
+    subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={taskRow} currentSessionId={sessionId} />;
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
-    {rows.map(task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName} />)}
+    {rows.map(taskRow)}
     {error && <div className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></div>}
     {!result && loading && <p className="sidebar-empty" role="status">Loading tasks…</p>}
     {state === 'archived' && result && !rows.length && !loading && !error && <p className="sidebar-empty">No archived tasks.</p>}

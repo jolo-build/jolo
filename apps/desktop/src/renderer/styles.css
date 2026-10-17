@@ -311,12 +311,21 @@ strong { font-weight: 550; }
 .sidebar-activity.needs { background: var(--red); }
 .sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .sidebar-activity,
 .sidebar-chat-row:is(:hover, :has(:focus-visible)) .sidebar-activity { opacity: 0; }
-.sidebar-workspace-chats { margin-left: 16px; padding: 1px 0 2px 12px; }
-.sidebar-workspace-chats > .task-row::before,
-.sidebar-workspace-chats > .task-row::after { content: ''; position: absolute; left: -12px; pointer-events: none; }
-.sidebar-workspace-chats > .task-row::before { top: -1px; bottom: -1px; border-left: 1px solid var(--border); }
-.sidebar-workspace-chats > .task-row::after { top: 13px; width: 10px; border-top: 1px solid var(--border); }
-.sidebar-workspace-chats > .task-row:last-child::before { bottom: calc(100% - 14px); }
+.sidebar-workspace-chats, .sidebar-subtasks { margin-left: 16px; padding: 1px 0 2px 12px; }
+.sidebar-workspace-chats > .task-row::before, .sidebar-subtasks > .sidebar-chat-row::before,
+.sidebar-workspace-chats > .task-row::after, .sidebar-subtasks > .sidebar-chat-row::after { content: ''; position: absolute; left: -12px; pointer-events: none; }
+.sidebar-workspace-chats > .task-row::before, .sidebar-subtasks > .sidebar-chat-row::before { top: -1px; bottom: -1px; border-left: 1px solid var(--border); }
+.sidebar-workspace-chats > .task-row::after, .sidebar-subtasks > .sidebar-chat-row::after { top: 13px; width: 10px; border-top: 1px solid var(--border); }
+.sidebar-workspace-chats > .task-row:last-child::before, .sidebar-subtasks > .sidebar-chat-row:last-child::before,
+.sidebar-workspace-chats > .task-row:has(+ .sidebar-subtasks:last-child)::before { bottom: calc(100% - 14px); }
+/* A parent's child tasks hang one level below it; the parent's own line continues past them to its next sibling. */
+.sidebar-subtasks { position: relative; }
+.sidebar-workspace-chats > .sidebar-subtasks:not(:last-child)::before { content: ''; position: absolute; top: 0; bottom: 0; left: -28px; border-left: 1px solid var(--border); }
+.sidebar-chat-row.has-subtasks .sidebar-chat-details { padding-right: 48px; }
+/* Above the row's options button, whose box reaches into the details line. */
+.task-subtasks { position: absolute; z-index: 1; right: 6px; bottom: 5px; display: inline-flex; align-items: center; gap: 2px; height: 18px; padding: 0 5px; border-radius: 9px; color: var(--muted); font-size: 10px; background: transparent; }
+.task-subtasks:hover { color: var(--text); background: var(--hover); }
+.task-subtasks.needs { color: var(--red); }
 .sidebar-workspace-chats:empty { padding: 0; }
 .sidebar-load-more { justify-content: flex-start; color: var(--muted); font-size: 11px; padding: 7px 8px; }
 .recent-chats { margin-top: 22px; min-width: 0; }
@@ -369,14 +378,6 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .delegation-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--subtle); font-size: 11px; }
 .delegation-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delegation-chip button { padding: 4px; flex: none; border-radius: 4px; }
-.delegated-tasks { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.delegated-heading { padding: 10px 12px; color: var(--muted); font-size: 12px; }
-.delegated-task { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px; border-top: 1px solid var(--border); }
-.delegated-open { flex: 1; min-width: 0; justify-content: flex-start; gap: 9px; padding: 8px; text-align: left; border-radius: 6px; }
-.delegated-open > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.delegated-open strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.delegated-open small { color: var(--muted); overflow-wrap: anywhere; }
-.delegated-error { width: 100%; padding: 0 8px; color: var(--red); font-size: 12px; }
 .transcript, .compose-column { max-width: 740px; width: 100%; min-width: 0; margin-inline: auto; padding-inline: 28px; }
 .transcript { padding-block: 28px 40px; display: flex; flex-direction: column; gap: 24px; }
 .empty-transcript { min-height: 100%; justify-content: center; }

@@ -149,6 +149,7 @@ export function createBoard({ storage, env, log }) {
         const stopped = entry.run && (TERMINAL_RUN_STATES.includes(entry.run.state) || entry.run.state === "paused");
         return {
           sessionId: entry.session.id,
+          parentSessionId: entry.parentSessionId,
           standalone: entry.standalone,
           title: entry.session.title,
           agentId: entry.session.agentId,

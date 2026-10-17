@@ -1,5 +1,6 @@
 import { RUNNING, relativeTime } from '@jolo/client/board';
 import { useWorkspaceTasks } from '../use-workspace-tasks.js';
+import { taskTree } from '../workspace-tasks.js';
 import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
@@ -24,13 +25,20 @@ import { SidebarChatRow } from './sidebar-chat-row.jsx';
 export function RecentChats({ call, revision, state = 'open', sessionId, selectedTask, onOpen, onMenu, variant, now, agentName }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, revision, state, standalone: true });
   const drag = useTaskDrag();
-  const tasks = result?.tasks ?? [];
-  const rows = selectedTask && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tasks] : tasks;
+  const all = result?.tasks ?? [];
+  // The Board lists every chat, children included, so one that needs the user can be found there.
+  const tree = variant === 'board' ? { roots: all, children: new Map() } : taskTree(all);
+  const rows = selectedTask && !all.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
+  const chatRow = task => {
+    const target = { ...task, session: { id: task.sessionId }, historyState: state };
+    return <SidebarChatRow key={task.sessionId} task={task} target={target} selected={sessionId === task.sessionId} onOpen={() => onOpen(target)} onMenu={onMenu} agentName={agentName} standalone
+      subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={chatRow} currentSessionId={sessionId} />;
+  };
   return <section className="recent-chats" aria-label={state === 'archived' ? 'Archived chats' : 'Recent chats'}>
     {variant === 'board' ? <div className="board-section-heading"><h2>Chats</h2><span>Outside workspaces</span></div> : <h2>{state === 'archived' ? 'Archived chats' : 'Chats'}</h2>}
     {rows.map(task => {
+      if (variant !== 'board') return chatRow(task);
       const target = { ...task, session: { id: task.sessionId }, historyState: state };
-      if (variant !== 'board') return <SidebarChatRow key={task.sessionId} task={task} target={target} selected={sessionId === task.sessionId} onOpen={() => onOpen(target)} onMenu={onMenu} agentName={agentName} standalone />;
       return <div key={task.sessionId} className={`recent-chat-row${sessionId === task.sessionId ? ' selected' : ''}`}
         onContextMenu={onMenu ? event => { event.preventDefault(); onMenu(task); } : undefined}
         onKeyDown={onMenu ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); onMenu(task); } } : undefined}>

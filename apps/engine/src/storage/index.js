@@ -329,7 +329,9 @@ export class Storage {
     const rows = this.db.query(`
       SELECT s.*, p.root_path AS project_root, COALESCE(json_extract(p.preferences, '$.standalone'), 0) AS standalone, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
              r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note,
-             r.execution AS run_execution, COALESCE(json_extract(r.provider_config, '$.ref.model'), json_extract(r.provider_config, '$.model')) AS run_model
+             r.execution AS run_execution, COALESCE(json_extract(r.provider_config, '$.ref.model'), json_extract(r.provider_config, '$.model')) AS run_model,
+             (SELECT parent.session_id FROM delegations d JOIN runs child ON child.id = d.child_run_id JOIN runs parent ON parent.id = d.parent_run_id
+              JOIN sessions ps ON ps.id = parent.session_id WHERE child.session_id = s.id AND ps.deleted_at IS NULL LIMIT 1) AS parent_session_id
       FROM sessions s
       JOIN projects p ON p.id = s.project_id
       JOIN workspaces w ON w.id = s.workspace_id
@@ -343,6 +345,7 @@ export class Storage {
     `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone));
     return rows.map((row) => ({
       session: mapSession(row),
+      parentSessionId: row.parent_session_id ?? null,
       projectRootPath: row.project_root,
       standalone: Boolean(row.standalone),
       workspace: { id: row.workspace_id, branch: row.workspace_branch ?? null, mode: row.workspace_mode, lastViewedAt: row.workspace_last_viewed_at ?? null },

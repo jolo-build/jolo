@@ -948,6 +948,8 @@ export const BoardRowSchema = z.object({
 export const BoardTaskSchema = z.object({
   standalone: z.boolean().default(false),
   sessionId: Id,
+  /** The conversation whose agent started this one as a child task, which lists it with the rest of its children. */
+  parentSessionId: Id.nullable().default(null),
   title: z.string().max(200),
   agentId: Id.nullable(),
   answerer: z.object({ id: Id, displayName: z.string().nullable(), model: z.string().nullable() }).optional(),
