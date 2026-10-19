@@ -17,7 +17,7 @@ async function newModelChoice(agentId = undefined) {
   return newSessionModelChoice(agents, settings.model, agentId);
 }
 export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, initialNewChat = false, visible = true, watchChanges = false } = {}) {
-  const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog } = useEngineConnection();
+  const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, showNotice } = useEngineConnection();
   const [agents, setAgents] = useState([]);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -28,7 +28,6 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const [historyState, setHistoryState] = useState("open");
   const [sessionId, setSessionId] = useState(null);
   const [error, setError] = useState(null);
-  const [relayNote, setRelayNote] = useState(null);
   const permissions = useRef(new PendingPermissions());
   const [changes, setChanges] = useState([]);
   const [plans, setPlans] = useState([]);
@@ -437,7 +436,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
               const session = item.value.payload.session;
               setSessions(sessionsRef.current.map(existing => existing.id === session.id ? session : existing));
             }
-            if (item.value.type === "context.compacted") setRelayNote(`context compacted: ${item.value.payload.summarizedItems} earlier items summarized`);
+            if (item.value.type === "context.compacted") showNotice({ key: `compact:${item.value.sessionId}`, tone: "muted", title: "Context compacted", body: `${item.value.payload.summarizedItems} earlier items summarized` });
             permissions.current.apply(item.value);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));
           }
@@ -454,10 +453,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       if (schedulesChanged) void refreshSchedules();
     });
     return offEvents;
-  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans, refreshSchedules]);
+  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans, refreshSchedules, showNotice]);
 
   useEffect(() => {
-    const off = window.jolo.onEvents((items, meta) => { if (meta?.resyncRequired) setRelayNote("renderer fell behind; reloading the session"), void selectSession(sessionRef.current); });
+    const off = window.jolo.onEvents((items, meta) => { if (meta?.resyncRequired) console.info("renderer fell behind; reloading the session"), void selectSession(sessionRef.current); });
     return off;
   }, [selectSession]);
 
@@ -465,7 +464,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const working = useWorkingChanges({ workspaceId, connected: engine.connected, watching: visible && watchChanges, events: changes,
     runState: projection.current ? [...projection.current.runs.values()].filter(run => TERMINAL.has(run.state)).map(run => `${run.id}:${run.state}`).join(',') : '' });
   return {
-    engine, project, restoringProject, sessions, sessionId, settings, error, relayNote, setError, historyState, setHistory, manageSession,
+    engine, project, restoringProject, sessions, sessionId, settings, error, setError, historyState, setHistory, manageSession,
     panelScope: sessionId ? sessionPanelScopes.current.get(sessionId) ?? sessionId : draftSession.current.panelScope,
     workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree,
     agents, agentCatalog, refreshAgents, refreshCatalog, startAgent, stopAgent,

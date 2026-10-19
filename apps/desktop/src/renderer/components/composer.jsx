@@ -151,7 +151,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, offline = false, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -338,7 +338,7 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
-    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
+    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={offline ? 'Connecting…' : disabled ? 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
       onSelect={(e) => setCaret(/** @type {HTMLTextAreaElement} */ (e.target).selectionStart ?? 0)}

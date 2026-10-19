@@ -50,7 +50,7 @@ function Divider({ divider, canvas, onResize }) {
 
 function DesktopWorkspace() {
   const [layout, dispatch] = useReducer(paneReducer, undefined, initialLayout);
-  const [header, setHeader] = useState(null), [sidebar, setSidebar] = useState(null), [footer, setFooter] = useState(null), [settings, setSettings] = useState(null);
+  const [header, setHeader] = useState(null), [sidebar, setSidebar] = useState(null), [settings, setSettings] = useState(null);
   const [settingsOwner, setSettingsOwner] = useState(null);
   const [draggedTask, setDraggedTask] = useState(null);
   const [dropPreview, setDropPreview] = useState(null);
@@ -85,7 +85,7 @@ function DesktopWorkspace() {
   const width = sidebarWidth(sidebarState.width, viewport);
   const toggleSidebar = useCallback(() => setSidebarState(value => ({ ...value, collapsed: !value.collapsed })), []);
   const resizeSidebar = value => setSidebarState(state => ({ ...state, width: sidebarWidth(value, viewport) }));
-  const hosts = useMemo(() => ({ header, sidebar, footer, settings, sidebarCollapsed: sidebarHidden, toggleSidebar }), [header, sidebar, footer, settings, sidebarHidden, toggleSidebar]);
+  const hosts = useMemo(() => ({ header, sidebar, settings, sidebarCollapsed: sidebarHidden, toggleSidebar }), [header, sidebar, settings, sidebarHidden, toggleSidebar]);
   useEffect(() => { try { window.localStorage.setItem(SIDEBAR_KEY, JSON.stringify(sidebarState)); } catch { /* unavailable storage */ } }, [sidebarState]);
   useEffect(() => {
     const resized = () => setViewport(window.innerWidth);
@@ -204,7 +204,6 @@ function DesktopWorkspace() {
       </div>
       <div className="workspace-settings" ref={setSettings} hidden={!settingsOwner} />
     </div>
-    <div className="shell-slot" ref={setFooter} />
     <Notices />
   </div></TaskDragContext.Provider>;
 }

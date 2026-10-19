@@ -67,7 +67,7 @@ html { background: var(--bg); }
 body { font: 13px/1.55 var(--sans); color: var(--text); background: var(--bg); font-feature-settings: "calt", "kern"; }
 /* Monospace text never uses ligatures: a diff must show every character it contains. Counters and times stay tabular. */
 code, pre, .diff, .command, .action-row, .check-row code, .file-heading code, .change-file > span, .browser-bar input, .tree-file strong, .tree-file small { font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
-.chip, .status, .task .meta, .count, .composer-context, .check-row > span { font-variant-numeric: tabular-nums; }
+.chip, .task .meta, .count, .composer-context, .check-row > span { font-variant-numeric: tabular-nums; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a[href], summary { cursor: default; }
 #root .xterm.xterm-cursor-pointer, #root .xterm .xterm-cursor-pointer, #root .xterm .xterm-scrollable-element > .scrollbar > .scra { cursor: default; }
@@ -101,7 +101,7 @@ strong { font-weight: 550; }
 .hint { font-size: 12px; }
 .good { color: var(--green); }
 [hidden] { display: none !important; }
-.app { --sidebar-width: 194px; height: 100%; display: grid; grid-template-rows: 49px minmax(0, 1fr) 27px; overflow: hidden; background: var(--shell-gradient); }
+.app { --sidebar-width: 194px; height: 100%; display: grid; grid-template-rows: 49px minmax(0, 1fr); overflow: hidden; background: var(--shell-gradient); }
 .shell-slot { display: contents; }
 .workspace-body { position: relative; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 0; }
 .workspace-sidebar { min-width: 0; min-height: 0; }
@@ -204,7 +204,7 @@ strong { font-weight: 550; }
   .pane-body .model-select { max-width: 75%; }
 }
 /* Shared neutral surfaces keep every desktop panel in the same palette. */
-.inspector, .status { background: var(--panel); }
+.inspector { background: var(--panel); }
 .header { background: var(--subtle); }
 .sidebar { background: var(--side); }
 .header { display: grid; grid-template-columns: var(--header-sidebar-width, var(--sidebar-width)) minmax(0, 1fr); border-bottom: 1px solid var(--border); user-select: none; }
@@ -340,7 +340,6 @@ strong { font-weight: 550; }
 h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .state-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
 .state-dot.working { background: var(--highlight); }
-.state-dot.offline { background: var(--muted); }
 .conversation, .compose-wrap, .permission-notice { scrollbar-gutter: stable both-edges; }
 .conversation, .composer textarea { overscroll-behavior-y: contain; }
 .conversation { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
@@ -655,8 +654,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .settled-rule { flex: 1; height: 1px; background: var(--border); }
 
 /* What the app tells you while you are looking at it (§5.6). Quiet, dismissible, and never in the way of the
-   composer: the stack sits above the status bar and each notice is one line of news plus a way to go there. */
-.notices { position: fixed; right: 14px; bottom: 40px; z-index: 70; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; width: min(340px, calc(100vw - 28px)); }
+   composer: each notice is one line of news plus a way to go there. */
+.notices { position: fixed; right: 14px; bottom: 14px; z-index: 70; display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; width: min(340px, calc(100vw - 28px)); }
 .notice { display: flex; align-items: stretch; gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 14%); overflow: hidden; }
 .notice.needs { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
 .notice-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; text-align: left; border-radius: 0; }
@@ -665,6 +664,7 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .notice-title { font-size: 12px; font-weight: 550; }
 .notice-title, .notice-body { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice-body { font-size: 11px; color: var(--muted); }
+.notice-body:empty { display: none; }
 .notice-dismiss { flex: none; width: 26px; color: var(--muted); border-radius: 0; }
 .notice-dismiss:hover { color: var(--text); background: var(--hover); }
 
@@ -751,10 +751,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
   .plan-task-note:empty { display: none; }
   .plan-task-actions { grid-column: 2; grid-row: 2; justify-content: flex-end; }
 }
-.status { display: flex; align-items: center; gap: 15px; padding: 4px 13px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; min-width: 0; }
-.status > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.status > span:last-child { overflow: hidden; text-overflow: ellipsis; display: block; max-width: 60%; }
-.status .warn { color: var(--red); }
 .error { display: flex; align-items: center; gap: 8px; color: var(--red); background: var(--red-bg); margin: 8px 25px; padding: 8px 12px; border-radius: 7px; font-size: 12px; overflow-wrap: anywhere; }
 .error > span { flex: 1; }
 .modal { position: fixed; padding: 24px; border: 1px solid var(--border); border-radius: 13px; background: var(--panel); color: var(--text); width: min(460px, calc(100vw - 40px)); max-height: calc(100vh - 60px); overflow: auto; box-shadow: 0 16px 60px #0002; }
@@ -1071,7 +1067,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
   .header button { font-size: 11px; padding: 5px; }
   .task-header { padding: 10px 20px 0; }
   .shortcut { display: none; }
-  .status { gap: 10px; }
 }
 /* Optional Jolo account connection, alongside the existing settings sections. */
 .account-settings p { overflow-wrap: anywhere; }

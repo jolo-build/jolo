@@ -56,15 +56,21 @@ export function EngineProvider({ children }) {
   const onFocusRequest = useCallback((listener) => { focusListeners.current.add(listener); return () => focusListeners.current.delete(listener); }, []);
 
   useEffect(() => {
-    let disposed = false, notified = false, timer = null;
+    let disposed = false, notified = false, timer = null, offline = null;
     const receive = (next) => {
       if (disposed) return;
       setEngine(next);
+      clearTimeout(offline);
       if (next.connected) {
+        dismissNotice("engine");
         void Promise.allSettled([refreshSettings(), refreshBoard(), refreshCatalog()]).then(() => {
           if (!disposed) setInitializing(false);
         });
-      } else if (next.error) setInitializing(false); // let the interface show connection failures
+        return;
+      }
+      if (next.error) setInitializing(false); // let the interface show connection failures
+      // A blip under a second says nothing; a longer outage stays on screen until the engine is back.
+      offline = setTimeout(() => showNotice({ key: "engine", tone: "needs", title: next.error ? "Local engine stopped" : "Reconnecting to the local engine…", body: next.error ?? "" }), 1000);
     };
     const offEngine = window.jolo.onEngine((next) => { notified = true; receive(next); });
     void engineCall("engine.status", {}).then((status) => { if (!notified) receive({ connected: true, status }); }).catch((error) => { if (!notified) receive({ connected: false, error: error.message }); });
@@ -95,8 +101,8 @@ export function EngineProvider({ children }) {
         focus: { projectId: payload.projectId, rootPath: payload.rootPath, sessionId: payload.sessionId, permissionId: payload.permissionId ?? null },
       });
     });
-    return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); };
-  }, [refreshSettings, refreshBoard, refreshCatalog, showNotice]);
+    return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); clearTimeout(offline); };
+  }, [refreshSettings, refreshBoard, refreshCatalog, showNotice, dismissNotice]);
   // One object per change, not per render: every pane reads this context, so a fresh object each time
   // would re-render all of them whenever a notice comes or goes.
   const value = useMemo(() => ({ engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }),
