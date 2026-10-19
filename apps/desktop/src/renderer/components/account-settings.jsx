@@ -5,14 +5,11 @@ export function AccountPanel({ account, connected, busy, error, server, onServer
   const pending = account?.pending;
   return <section className="settings-card account-settings" aria-label="Jolo account">
     {!connected ? <p role="status">Connect to the Jolo engine to manage your account.</p> : !account ? <p role="status">Loading your account…</p> : account.state === 'signed_in' ? <>
-      <div className="settings-card-heading"><div><h2>{account.account.name}</h2><p>{account.account.email}</p></div><span className="hint">Signed in</span></div>
-      <p className="hint">This profile is connected as {account.device.name}.</p>
+      <div className="account-row" data-state="signed_in"><div><strong>{account.account.name}</strong><span className="hint">{account.account.email} · {account.device.name}</span></div><button type="button" className="link-button" disabled={busy} onClick={onLogout}>Sign out</button></div>
       {account.source === 'session' && <p className="hint" role="status">Your OS keychain is unavailable. This sign-in lasts only while the engine runs.</p>}
-      <p className="hint">{account.device.scopes?.includes('tasks:read') ? 'Task access is connected. Type # in chat to select a web task, or reference its ID, such as #JOLO-2.' : 'Approve task access to reference your web tasks in chat.'}</p>
-      <p className="hint">Chat sync keeps conversations with their projects and folders across devices. Link each synced folder to its local checkout on a new device. Files, tool output, and credentials stay local.</p>
-      <div className="account-actions"><button type="button" disabled={busy} onClick={onSync}>{account.sync?.enabled ? 'Pause chat sync' : 'Enable chat sync'}</button><button type="button" onClick={() => onOpen(`${account.origin}/chats`)}>View synced chats</button></div>
-      {account.sync?.enabled && <p className="hint" role="status">{account.sync.error || (account.sync.lastSyncedAt ? 'Chat history is synced.' : 'Waiting to sync chat history…')}</p>}
-      <div className="account-actions">{account.device.scopes?.includes('tasks:read') ? <button type="button" onClick={() => onOpen(`${account.origin}/tasks`)}>Open tasks</button> : <button type="button" disabled={busy} onClick={onConnectTasks}>Connect tasks</button>}<button type="button" disabled={busy} onClick={() => onOpen(`${account.origin}/devices`)}>Manage devices</button><button type="button" disabled={busy} onClick={onRefresh}>Refresh account</button><button type="button" disabled={busy} onClick={onLogout}>Sign out</button></div>
+      <div className="account-row"><span><span>Chat sync</span>{account.sync?.enabled ? (account.sync.error || !account.sync.lastSyncedAt) && <span className="hint" role="status">{account.sync.error || 'Waiting to sync chat history…'}</span> : <span className="hint">Chat sync keeps conversations with their projects and folders across devices. Link each synced folder to its local checkout on a new device. Files, tool output, and credentials stay local.</span>}</span><input type="checkbox" role="switch" aria-label="Chat sync" checked={Boolean(account.sync?.enabled)} disabled={busy} onChange={onSync} /></div>
+      <div className="account-row"><span>Web tasks</span>{account.device.scopes?.includes('tasks:read') ? <span className="hint">Connected · type # in chat</span> : <button type="button" disabled={busy} onClick={onConnectTasks}>Connect tasks</button>}</div>
+      <button type="button" className="link-button" onClick={() => onOpen(`${account.origin}/account`)}>Manage devices, chats and tasks online ↗</button>
     </> : pending ? <>
       <h2>Approve this device</h2><p>Sign in in your browser, then confirm that the code matches.</p>
       <p className="account-device-code" aria-label="Device code">{pending.userCode}</p>
@@ -23,7 +20,7 @@ export function AccountPanel({ account, connected, busy, error, server, onServer
       <button type="button" className="primary" disabled={busy} onClick={onLogin}>{busy ? 'Starting sign-in…' : 'Sign in to Jolo'}</button>
       <details className="settings-advanced"><summary>Account server</summary><label>Server URL<input type="url" value={server} onChange={event => onServer(event.target.value)} spellCheck={false} autoComplete="off" disabled={busy} /></label><p className="hint">Change this when using a self-hosted account service.</p></details>
     </>}
-    {account?.note && <p className="hint" role="status">{account.note}</p>}
+    {account?.note && <p className="hint" role="status">{account.note}{account.state === 'signed_in' && <> <button type="button" className="link-button" onClick={onRefresh}>Retry</button></>}</p>}
     {error && <p className="settings-save-error" role="alert">{error}</p>}
   </section>;
 }

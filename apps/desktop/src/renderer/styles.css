@@ -1033,6 +1033,19 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 /* Optional Jolo account connection, alongside the existing settings sections. */
 .account-settings p { overflow-wrap: anywhere; }
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.account-settings .account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
+.account-settings .account-row ~ .account-row { border-top: 1px solid var(--border); padding-top: 16px; }
+.account-row > :first-child { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.account-row input[type=checkbox] { appearance: none; position: relative; flex: none; width: 26px; height: 16px; margin: 0; padding: 0; border-radius: 999px; background: var(--field-focus); }
+.account-row input[type=checkbox]::before { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
+.account-row input[type=checkbox]:checked { background: var(--accent); }
+.account-row input[type=checkbox]:checked::before { left: 12px; background: var(--on-accent); }
+.account-row input[type=checkbox]:focus-visible { outline: 1.5px solid var(--highlight); outline-offset: 2px; }
+.account-row input[type=checkbox]:disabled { opacity: .45; }
+.link-button { padding: 0; color: var(--muted); font-size: 12px; }
+.link-button:hover { background: none; color: var(--text); }
+.link-button:focus-visible { outline-offset: 2px; }
+.account-settings > .link-button { align-self: flex-start; }
 .account-device-code { font-family: var(--mono); font-size: 26px; font-weight: 600; letter-spacing: .12em; margin-block: 20px; }
 .account-settings .settings-advanced { margin-top: 20px; }
 
@@ -1113,6 +1126,8 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
   .effort-track { background: ButtonFace; outline: 1px solid ButtonText; }
   .effort-track::before { background: Highlight; }
   .effort-slider input::-webkit-slider-thumb { background: ButtonText; }
+  .account-row input[type=checkbox] { background: ButtonFace; outline: 1px solid ButtonText; }
+  .account-row input[type=checkbox]::before, .account-row input[type=checkbox]:checked::before { background: ButtonText; }
 }
 
 .mermaid-expand { width: 28px; height: 28px; padding: 6px; color: var(--muted); border-radius: 6px; }

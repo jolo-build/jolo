@@ -18,7 +18,7 @@ export async function runTasksSmoke({window,bridge,evaluate,waitFor,results,repo
       assert.equal(new URL(approval).origin,process.env.JOLO_ACCOUNT_ORIGIN);
       const response=await fetch(process.env.JOLO_ACCOUNT_ORIGIN+'/__fixture/approve',{method:'POST',body:pending.pending.userCode});
       assert.equal(response.status,200);
-      try { await waitFor("document.querySelector('.account-settings')?.textContent.includes('Signed in')",'sign in approved',15000); } catch(error) { throw new Error(error.message + ' account=' + JSON.stringify(await bridge.rawCall('account.status',{})) + ' UI=' + await evaluate("document.querySelector('.account-settings')?.textContent")); }
+      try { await waitFor("Boolean(document.querySelector('.account-settings [data-state=signed_in]'))",'sign in approved',15000); } catch(error) { throw new Error(error.message + ' account=' + JSON.stringify(await bridge.rawCall('account.status',{})) + ' UI=' + await evaluate("document.querySelector('.account-settings')?.textContent")); }
     };
     await click('Sign in to Jolo'); await approve();
     assert.equal((await bridge.rawCall('account.status',{})).device.scopes.includes('tasks:read'),false);

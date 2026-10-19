@@ -112,7 +112,7 @@ Apply pending migrations with `bun run access:db:local` before running the updat
 
 ## Chat sync
 
-In desktop **Settings → Account**, choose **Enable chat sync** and approve it in Access. Enable it on each device. Conversation text then syncs automatically while Jolo is open, every 15 seconds, and appears under **Chats** in Access. Pausing sync stops transfers on that device. Signing out also stops sync.
+In desktop **Settings → Account**, turn on **Chat sync** and approve it in Access. Enable it on each device. Conversation text then syncs automatically while Jolo is open, every 15 seconds, and appears under **Chats** in Access. Turning it off stops transfers on that device. Signing out also stops sync.
 
 Sync includes standalone chats and project task conversations. Project and workspace identities and names travel with their conversations; standalone chats stay standalone. On another device, project chats remain grouped under their project. Use **Link local folder** to map each synced workspace to its local checkout, even when paths differ between devices. Linking an already-open local project combines its synced conversations with existing tasks. Reading synced history does not require a checkout; starting agents or terminals does. Absolute paths and folder contents are not uploaded. Older text-only histories gain their associations when the original device next syncs with an updated client. Files, attachments, tool output, native agent session IDs, credentials, and running processes are not transferred. Each conversation supports up to 1 MB of text and 10,000 messages, with up to 1,000 conversations per account. Oversized conversations remain local and show a sync notice.
 
