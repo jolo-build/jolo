@@ -66,7 +66,7 @@ const fillOf = (usage) => (usage?.contextWindow > 0 && usage.contextUsed !== nul
  * so (§7.2). The panel has a tab per agent, so one called in by a mention can be checked too; for a hosted
  * agent it also shows how much of the signed-in plan is left.
  */
-function UsageButton({ tabs, currentId, running }) {
+function UsageButton({ tabs, currentId, running, onCompact = null }) {
   const [at, setAt] = useState(null); // where to put the panel, and whether it is open at all
   const [chosenTab, setChosenTab] = useState(null); // null: the answering agent's tab
   const wrap = useRef(null);
@@ -108,7 +108,8 @@ function UsageButton({ tabs, currentId, running }) {
         <div><dt>Tokens out</dt><dd>{usage?.outputTokens ? tokens(usage.outputTokens) : '—'}</dd></div>
         <div><dt>Model turns</dt><dd>{usage?.iterations ? String(usage.iterations) : '—'}</dd></div>
       </dl>
-      <div className="hint">{usage?.runs ? `Across ${usage.runs} ${tab.name} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : `${tab.name} has not answered in this task yet.`}</div>
+      <div className="usage-foot"><span className="hint">{usage?.runs ? `Across ${usage.runs} ${tab.name} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : `${tab.name} has not answered in this task yet.`}</span>
+        {onCompact && tab.id === currentId && !running && usage?.runs > 0 && <button type="button" className="usage-compact" title="Summarize the conversation so far to free up the context window" onClick={() => { setAt(null); onCompact(); }}>Compact</button>}</div>
       {tab.id !== 'jolo' && <section className="usage-limits" aria-label="Plan limits">
         <div className="usage-limits-head"><span className="usage-head">Plan limits</span>{limits?.report?.plan ? <span className="usage-plan">{limits.report.plan}</span> : null}</div>
         {limits?.report?.windows.length > 0
@@ -150,7 +151,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -364,7 +365,7 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
       {/* The project is in the window's title; the bar names only changes waiting for review. */}
       {changesCount ? <><div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div><span className="composer-divider" aria-hidden="true" /></> : null}
-      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} />
+      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} onCompact={onCompact} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />

@@ -276,6 +276,21 @@ async function handle(message) {
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       return;
     }
+    case "thread/compact/start": {
+      // Codex compacts as a turn of its own: an empty reply, then the usual turn events around one compaction item.
+      const entry = threads.get(params.threadId);
+      if (!entry) return fail(-32602, "unknown thread");
+      if (current) return fail(-32002, "a turn is already running");
+      const turn = { id: `turn-${++counter}`, items: [], status: "inProgress", error: null, startedAt: Date.now(), completedAt: null, durationMs: null };
+      reply({});
+      const threadId = entry.thread.id, item = { type: "contextCompaction", id: `compaction-${counter}` };
+      notify("turn/started", { threadId, turn });
+      notify("item/started", { threadId, turnId: turn.id, item });
+      notify("item/completed", { threadId, turnId: turn.id, item });
+      notify("thread/compacted", { threadId, turnId: turn.id });
+      notify("turn/completed", { threadId, turn: { ...turn, status: "completed", completedAt: Date.now(), durationMs: 5 } });
+      return;
+    }
     case "turn/start": {
       const entry = threads.get(params.threadId);
       if (!entry) return fail(-32602, "unknown thread");

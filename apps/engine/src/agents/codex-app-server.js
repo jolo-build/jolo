@@ -12,7 +12,7 @@ import { realpathSync } from "node:fs";
 // The shapes below were generated from the installed binary (`codex app-server generate-json-schema`) and
 // confirmed in live sessions; see the engine's agents README.
 import { createHostedTurn, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
-import { createSummarizer, handoffPrompt } from "./handoff.js";
+import { compactRequested, createSummarizer, handoffPrompt } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { codexMcpArgs } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
@@ -240,6 +240,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       const onItemCompleted = (item) => {
         if (item.type === 'imageGeneration' && state.images.has(item.id)) return;
         state.items.delete(item.id);
+        if (item.type === "contextCompaction" && compactRequested(run)) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, "Context compacted."); ctx.finishMessage(messageId, "complete"); return; }
         if (SILENT_ITEMS.has(item.type)) return;
         if (TEXT_ITEMS.has(item.type)) {
           const entry = textMessage(item.id, "text");
@@ -373,6 +374,8 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         state.threadId = thread.id;
         if (thread.id !== remembered) turn.remember({ codexThreadId: thread.id });
         // Also per turn, so a model changed between turns takes effect on a thread that was resumed.
+        // Codex compacts a thread on request, as a turn of its own that reports through the usual turn events.
+        if (compactRequested(run)) { await request("thread/compact/start", { threadId: thread.id }); return; }
         const started = await request("turn/start", { threadId: thread.id, input: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...readImages(storage, run).map(image => ({ type: 'localImage', path: image.path }))], ...(chosen.model ? { model: chosen.model } : {}), ...(chosen.effort ? { effort: chosen.effort } : {}) });
         state.turnId ??= started?.turn?.id ?? null;
       };

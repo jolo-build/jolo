@@ -57,6 +57,13 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   report.checks.push('a new Claude chat sends and receives a reply while another Claude task in the same folder is active, without queueing or interrupting it');
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(recent)}))`, 'chats stay available from workspace');
   await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
+  // Compact sits in the usage panel for the agent answering here, and asks Claude to compact in its own terms.
+  await waitFor("window.__joloSmoke.state().runState === 'completed'", 'Claude reply settled');
+  await evaluate("document.querySelector('.composer .usage-ring').click()");
+  await waitFor("Boolean(document.querySelector('.usage-panel .usage-compact'))", 'Compact offered for Claude');
+  await evaluate("document.querySelector('.usage-panel .usage-compact').click()");
+  await waitFor("!document.querySelector('.usage-panel') && window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().assistantText.includes('Context compacted.')", 'Claude compacted its context');
+  report.checks.push('Compact in the usage panel asks Claude to compact its context and the task notes it');
   await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'chat preserves both turns');
   for (const theme of /** @type {const} */ (['dark', 'light'])) {
     nativeTheme.themeSource = theme;

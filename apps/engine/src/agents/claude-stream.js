@@ -9,7 +9,7 @@
 // Every shape below was read from the installed binary and confirmed against a live session; see the
 // initialize/can_use_tool/control_response forms in the engine's agents README.
 import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
-import { createSummarizer, handoffPrompt } from "./handoff.js";
+import { compactRequested, createSummarizer, handoffPrompt } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
@@ -80,7 +80,8 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const hosted = mcpConfig?.(workspace, run);
       const mcpServers = hosted ? { jolo: hosted.server } : {};
       const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
-      const contentPromise = handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) })
+      // Claude compacts on its own /compact command, which only works as the whole message.
+      const contentPromise = compactRequested(run) ? Promise.resolve("/compact") : handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) })
         .then(prompt => {
           const images = readImages(storage, run);
           return images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
@@ -144,6 +145,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           case "control_request": return onControlRequest(message);
           case "system":
             if (message.subtype === "init" && message.model) state.model = message.model;
+            if (message.subtype === "compact_boundary" && compactRequested(run)) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, "Context compacted."); ctx.finishMessage(messageId, "complete"); }
             if (message.subtype === "init" && message.session_id && session.agentState?.claudeSessionId !== message.session_id) turn.remember({ claudeSessionId: message.session_id });
             return;
           case "stream_event": {

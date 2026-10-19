@@ -85,7 +85,10 @@ async function turn(prompt, images = []) {
   };
   let turns = 1;
   let match;
-  if (prompt === 'subagent-review') {
+  if (prompt === '/compact') {
+    // Claude takes its own /compact only as the whole message; anything wrapped around it would be answered in prose.
+    out({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 41000 }, session_id: sessionId });
+  } else if (prompt === 'subagent-review') {
     const parentId = 'toolu_reviewer';
     const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
     const event = value => out({ type: 'stream_event', event: value, parent_tool_use_id: null, session_id: sessionId });

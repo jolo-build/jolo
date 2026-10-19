@@ -88,6 +88,17 @@ describe("Codex through its app-server", () => {
     } finally { await client.close(); }
   });
 
+  test("/compact asks Codex to compact its thread rather than answer the words, and the task notes it", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      expect((await runTo('before', 'hello')).state).toBe('completed');
+      const run = await runTo('compact', '/compact');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Context compacted.']);
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('a server exit during resume settles the run and releases queued follow-ups', async () => {
     const { client, repo, session, events, runTo } = await boot();
     try {

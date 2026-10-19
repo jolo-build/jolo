@@ -75,6 +75,17 @@ describe("Claude Code through its structured stream", () => {
     } finally { await client.close(); }
   }, 20_000);
 
+  test("/compact reaches Claude as its own command, alone, and the task notes the compaction", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      expect((await runTo('before', 'hello')).state).toBe('completed');
+      const run = await runTo('compact', ' /compact ');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Context compacted.']);
+    } finally { await client.close(); }
+  }, 20_000);
+
   test('long Claude tools do not inherit the native tool deadline', async () => {
     const { client, events, session, messagesOf, text } = await boot();
     try {

@@ -196,6 +196,12 @@ export function createSummarizer({ providerFactory, settings, log, sessionId, ru
 }
 
 /**
+ * Whether the user asked the agent to compact its own context, spelled as its CLI spells it. The adapter then asks the
+ * agent in its own terms rather than passing the words on as a request.
+ */
+export const compactRequested = (run) => String(run.prompt ?? "").trim() === "/compact" && !run.attachments?.length;
+
+/**
  * A vendor thread contains only turns that vendor saw. On resumption, catch it up
  * with messages added after its last completed turn; a legacy thread gets a full
  * bounded handoff once because it has no reliable delivery position yet.

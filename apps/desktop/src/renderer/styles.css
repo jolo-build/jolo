@@ -169,7 +169,6 @@ strong { font-weight: 550; }
 .compact-pane .composer textarea { min-height: 44px; max-height: min(160px, 25vh); font-size: 13px; }
 .compact-pane .composer-controls { gap: 4px; padding-top: 3px; }
 .compact-pane .empty-state { padding: 12px 0; }
-.compact-pane .empty-state h2 { font-size: 16px; }
 .compact-pane .empty-state p { font-size: 12px; }
 .compact-pane .empty-state p.empty-tagline { font-size: 13px; }
 .pane-picker.modal { width: min(620px, calc(100vw - 40px)); padding: 20px; }
@@ -381,7 +380,8 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .history-loader { text-align: center; font-size: 12px; color: var(--muted); }
 .history-loader button { margin-inline: auto; }
 .empty-state { max-width: 400px; margin: 0 auto; padding: 20px 0 40px; text-align: center; }
-.empty-state h2 { font-size: 20px; line-height: 1.4; letter-spacing: -.5px; font-weight: 500; margin-bottom: 10px; }
+.welcome-wordmark { display: block; font-size: 36px; line-height: 1.2; letter-spacing: -2px; margin: 0 auto 14px; }
+.compact-pane .welcome-wordmark { font-size: 28px; margin-bottom: 10px; }
 .empty-state p { color: var(--muted); line-height: 1.75; }
 .empty-state button { margin-top: 22px; }
 .empty-transcript .empty-state { padding: 0 0 2px; }
@@ -480,6 +480,9 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .composer-divider { width: 1px; height: 12px; background: var(--border); flex: none; }
 .composer textarea { display: block; width: 100%; min-height: 64px; max-height: min(240px, 32vh); border: 0; background: transparent; resize: none; field-sizing: content; overflow-y: auto; padding: 2px 0; font-size: 14px; line-height: 22px; }
 .composer textarea::placeholder { color: var(--muted); }
+.usage-panel .usage-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.usage-panel .usage-compact { flex: none; padding: 2px 7px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+.usage-panel .usage-compact:hover { color: var(--text); background: var(--hover); }
 .composer-controls { display: flex; align-items: center; gap: 6px; padding-top: 7px; }
 .message-queue { margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); font-size: 12px; }
 .message-queue-heading { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
@@ -991,10 +994,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .visualization-modal[open] { display: flex; flex-direction: column; }
 .visualization-modal .visualization-toolbar { flex: none; }
 .visualization-modal .visualization-frame { flex: 1; min-height: 0; }
-/* Workspaces: a compact folder list with recent conversations underneath. */
-.board { flex: 1; min-height: 0; overflow: auto; padding: 28px 36px 32px; container-type: inline-size; }
-.board-content { width: 100%; max-width: 1020px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
-.board-get-started { display: flex; justify-content: flex-end; color: var(--muted); }
 .onboarding { flex: 1; min-height: 0; overflow: auto; padding: 36px 24px; }
 .onboarding-content { width: 100%; max-width: 680px; margin: 0 auto; }
 .onboarding-heading { margin-bottom: 26px; }
