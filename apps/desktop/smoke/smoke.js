@@ -714,12 +714,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
       return {
         head: block.querySelector(".tool-diff-head")?.textContent,
         added: [...block.querySelectorAll(".tool-diff .diff-line.add")].map((node) => node.textContent),
-        meta: [...block.querySelectorAll(".tool-diff .diff-line.meta")].map((node) => node.textContent),
+        lines: [...block.querySelectorAll(".tool-diff .diff-line")].map((node) => node.textContent),
+        folded: Boolean(block.querySelector(":scope > details.tool-output:not([open]) > pre")) && !block.querySelector(":scope > pre"),
       };
     })()`);
     if (!inlineDiff.added.some((line) => line.includes("third"))) throw new Error(`the inline diff should show the added line: ${JSON.stringify(inlineDiff)}`);
-    if (!inlineDiff.meta.some((line) => line.includes("NOTES.md"))) throw new Error(`the inline diff should name the file: ${JSON.stringify(inlineDiff)}`);
-    if (!/1 file.*\+1/.test(inlineDiff.head ?? "")) throw new Error(`the inline diff should count what changed: ${JSON.stringify(inlineDiff.head)}`);
+    if (inlineDiff.lines.some((line) => /^(diff --git |index |--- a\/|\+\+\+ b\/)/.test(line))) throw new Error(`the inline diff should show only the change, without git's file header: ${JSON.stringify(inlineDiff)}`);
+    if (!/^NOTES\.md.*\+1/.test(inlineDiff.head ?? "")) throw new Error(`the inline diff should name the file and count what changed: ${JSON.stringify(inlineDiff.head)}`);
+    if (!inlineDiff.folded) throw new Error(`the edit's raw result should sit folded under Output: ${JSON.stringify(inlineDiff)}`);
     await waitFor("Boolean(document.querySelector('.tool-diff .diff-line.add .syntax-token.bold'))", 'inline diff highlights Markdown syntax');
     // The group can fold again on a later re-render; open it once more right before the picture is taken.
     // Every group is opened (the edit may sit in a later turn than the first group), the edit's block is opened through
@@ -728,7 +730,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor(`Boolean(document.querySelector("details.block.tool[open] .tool-diff .diff-line.add"))`, "the diff is on screen before the picture");
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "inline-diff.png"), (await window.webContents.capturePage()).toPNG());
-    report.checks.push("an edit's own line in the task activity opens to the diff of what it changed, with the file named and the lines counted");
+    report.checks.push("an edit's own line in the task activity opens to only the lines it changed, with the file named and counted in the head and the raw result folded under Output");
 
     await evaluate("window.__joloSmoke.showChanges()");
     await waitFor('document.querySelector(".file-modes [role=tab]:nth-child(2)")', "markdown file offers a preview", 10_000);

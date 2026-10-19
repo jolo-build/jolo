@@ -69,7 +69,7 @@ function DiffPreview({ artifactId }) {
   if (text === null) return <p className="hint deferred">Loading changes…</p>;
   const counts = diffSummary(text);
   return <div className="tool-diff">
-    <div className="tool-diff-head">{counts.files} {counts.files === 1 ? "file" : "files"}<span className="diff-added">+{counts.added}</span><span className="diff-removed">−{counts.removed}</span></div>
+    <div className="tool-diff-head">{counts.files === 1 ? <span title={counts.paths[0]}>{counts.paths[0].split("/").at(-1)}</span> : `${counts.files} files`}<span className="diff-added">+{counts.added}</span><span className="diff-removed">−{counts.removed}</span></div>
     <div className="diff" aria-label="What this change did">
       <DiffLines text={text} />
     </div>
@@ -112,7 +112,7 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
       <summary className={loading ? 'deferred' : undefined}><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       {expanded && <>
         {diffArtifactId && <DiffPreview artifactId={diffArtifactId} />}
-        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
+        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading tool output…</p> : diffArtifactId ? <details className="block tool-output"><summary>Output<Icon name="chevron" size={12} className="activity-disclosure" /></summary><pre>{rest}</pre></details> : <pre>{rest}</pre>}
       </>}
     </details>
   );

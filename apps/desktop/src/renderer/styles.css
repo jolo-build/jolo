@@ -568,6 +568,7 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .tool-diff-head .diff-added { color: var(--green); }
 .tool-diff-head .diff-removed { color: var(--red); }
 .tool-diff .diff { flex: none; max-height: 340px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 0; }
+details.tool-output > summary { gap: 4px; font-size: 11px; }
 .review-footer { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 13px; border-top: 1px solid var(--border); background: var(--bg); font-size: 12px; }
 .subtle-danger { color: var(--muted); }
 .subtle-danger:hover { color: var(--red); background: var(--red-bg); }
