@@ -34,7 +34,9 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(first.sessionId)} && window.__joloSmoke.state().messageCount > 0`, 'recent chat reopened');
   await submit('Suggest something outdoors');
-  await evaluate(`document.querySelector('.header [aria-label="Split right"]').click()`);
+  await evaluate(`document.querySelector('.header [aria-label="Panels"]').click()`);
+  await waitFor(`Boolean(document.querySelector('.panel-menu:popover-open [aria-label="Split right"]'))`, 'panels menu offers Split right');
+  await evaluate(`document.querySelector('.panel-menu:popover-open [aria-label="Split right"]').click()`);
   await waitFor('window.__joloSmoke.panes().length === 2 && window.__joloSmoke.state().standalone && Boolean(window.__joloSmoke.state().sessionId)', 'split creates another standalone chat');
   assert((await state()).workspaceId !== first.workspaceId, 'Split reuses the source chat storage');
   await evaluate('window.__joloSmoke.closePane(window.__joloSmoke.layout().active)');

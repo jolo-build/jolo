@@ -175,6 +175,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const openTerminal = () => { if (!terminalTabs.items.length) newTerminal(); else selectTab(terminalTabs.active.id); };
   const closeTerminal = () => { if (terminalTabs.active) closeTab(terminalTabs.active.id); };
   const closeContext = () => setContext(null);
+  const togglePanel = () => { if (context) { setContext(null); return true; } if (panelTabs.active) { selectTab(panelTabs.active.id); return true; } return false; };
   const selectContext = (id) => {
     if (id === 'browser') return openBrowser();
     if (id === 'terminal') return openTerminal();
@@ -264,6 +265,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       newChat: () => state.newChat(),
       board: () => state.board,
       closeTerminal,
+      togglePanel,
       showPlans: () => selectContext("plans"),
       plans: () => state.plans,
       startAgent: async (agentId) => { const agent = await state.startAgent(agentId);  return agent; },
@@ -357,6 +359,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     else if (action === "remove-worktree") setTaskDialog({ session, action, workspace: sessionWorkspace });
   });
   const startWorktree = async ({ branch, base }) => { await state.newSession("", { worktree: { branch, base } }); };
+  const mac = window.jolo.platform === 'darwin';
   return (
     <FilePreviewContext.Provider value={openFilePreview}>
     <div ref={root} className={`pane-workspace${context ? " with-context" : ""}`}>
@@ -372,10 +375,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div className="header-actions">
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
-            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verificationLabel(verification) }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen} />
-            {!multi && <span className="header-divider" aria-hidden="true" />}
-            {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "x")} aria-label="Split right" title="Split right"><Icon name="splitRight" size={14} /></button>}
-            {!multi && <button className="header-split" disabled={!canSplit} onClick={() => onSplit(pane.id, "y")} aria-label="Split below" title="Split below"><Icon name="splitBelow" size={14} /></button>}
+            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verificationLabel(verification) }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
+              onToggle={togglePanel} extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
             </>}
           </div>
         </div>

@@ -141,6 +141,13 @@ function DesktopWorkspace() {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !document.querySelector('dialog[open], .settings-page')) {
         event.preventDefault(); toggleSidebar(); return;
       }
+      // Off macOS the shortcut is Ctrl+J, which a terminal needs for itself.
+      const mac = window.jolo.platform === 'darwin';
+      if ((mac ? event.metaKey : event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'j' && !document.querySelector('dialog[open], .settings-page') && !(!mac && event.target instanceof Element && event.target.closest('.xterm'))) {
+        event.preventDefault();
+        if (!controllers.current.get(layoutRef.current.active)?.togglePanel?.()) /** @type {HTMLElement | null} */ (document.querySelector('.header [aria-label="Panels"]'))?.click();
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey) || event.altKey || (event.code !== "Backslash" && event.key !== "\\") || document.querySelector("dialog[open], .settings-page")) return;
       event.preventDefault(); split(layoutRef.current.active, event.shiftKey ? "y" : "x");
     };

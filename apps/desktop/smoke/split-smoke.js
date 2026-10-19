@@ -11,9 +11,10 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
   const panes = () => evaluate("window.__joloSmoke.panes()");
   const selector = (id) => `[data-pane-id="${id}"]`;
   // A lone pane has no bar of its own, because the window header already names its project and task; its split
-  // controls live in that header instead. Look in the pane first, then fall back to the header.
+  // controls live in the header's Panels menu instead. Look in the pane first, then open that menu.
   const click = (id, label) => evaluate(`(() => {
-    const button = document.querySelector(${JSON.stringify(`${selector(id)} [aria-label="${label}"]`)}) ?? document.querySelector(${JSON.stringify(`.header [aria-label="${label}"]`)});
+    let button = document.querySelector(${JSON.stringify(`${selector(id)} [aria-label="${label}"]`)});
+    if (!button) { document.querySelector('.header [aria-label="Panels"]').click(); button = document.querySelector(${JSON.stringify(`.panel-menu:popover-open [aria-label="${label}"]`)}); }
     if (!button) throw new Error(${JSON.stringify(`no "${label}" control for pane ${"${id}"}`)});
     button.focus(); button.click();
   })()`);

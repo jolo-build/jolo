@@ -140,6 +140,7 @@ strong { font-weight: 550; }
 .pane-actions { display: flex; align-items: center; gap: 1px; margin-left: auto; flex: none; }
 .pane-actions button { padding: 4px; width: 23px; height: 24px; color: var(--muted); border-radius: 4px; }
 .pane-actions button:hover { color: var(--text); }
+@media (hover: hover) { .pane-heading:not(:hover, :focus-within) .pane-actions button { opacity: 0; } }
 /* Conversation and task context share the full height of this split. */
 .pane-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; }
 .pane-body > .main { grid-column: 1; overflow: auto; }
@@ -225,9 +226,9 @@ strong { font-weight: 550; }
 .panel-menu button[aria-checked=true] { color: var(--highlight); }
 .panel-menu small { color: var(--muted); font-size: 10px; }
 .panel-menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
-.header-divider { width: 1px; height: 15px; background: var(--border); margin: 0 2px; }
-.header-split { padding: 4px; width: 24px; height: 24px; color: var(--muted); }
-.header-split:hover:not(:disabled) { color: var(--text); }
+.header .panel-toggle { width: 28px; height: 28px; padding: 0; color: var(--muted); }
+.header .panel-menu-trigger { width: 20px; height: 28px; padding: 0; margin-left: -5px; color: var(--muted); }
+.header :is(.panel-toggle, .panel-menu-trigger):is(:hover, .active, [aria-expanded=true]) { color: var(--text); }
 .header button { font-size: 12px; }
 .jolo-wordmark { flex: none; font-size: 18px; font-weight: 550; letter-spacing: -1.1px; }
 /* Each header action carries one glyph of one or two strokes beside its word. The glyphs are drawn plainly on
@@ -1030,7 +1031,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 @media (max-width: 820px) {
   .app { --sidebar-width: 156px; }
   .body, .with-context .body { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
-  .header-actions .header-action-label { display: none; }
   .header-workspace { gap: 16px; padding-inline: 12px; }
   .with-context .body { grid-template-rows: minmax(0, 1fr) minmax(210px, .9fr) auto; }
   .with-context .sidebar { grid-row: 1 / 4; }
