@@ -82,7 +82,7 @@ export function prepareLoadingSmoke({ window, bridge, root }) {
       await retried;
       await waitFor("document.querySelector('.app') && !document.getElementById('startup-screen').hidden", 'mounted interface stays covered while data loads');
       release();
-      await waitFor("document.querySelector('header') && [...document.querySelectorAll('.sidebar .sidebar-empty')].some(node => node.textContent === 'No workspaces yet.') && document.querySelector('.composer textarea')?.placeholder === 'Open a folder to start…' && !document.querySelector('.notice.needs') && document.fonts.status === 'loading'", 'all components and initial data are mounted while fonts are still loading');
+      await waitFor("document.querySelector('header') && document.querySelector('.sidebar .task-list') && !document.querySelector('.sidebar .sidebar-empty[role=status]') && document.querySelector('.composer textarea')?.placeholder === 'Open a folder to start…' && !document.querySelector('.notice.needs') && document.fonts.status === 'loading'", 'all components and initial data are mounted while fonts are still loading');
       await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))))');
       if (!pendingFonts.length || !(await evaluate("!document.getElementById('startup-screen').hidden && document.getElementById('root').inert"))) throw new Error('startup revealed the interface before its fonts finished loading');
       releaseFonts();

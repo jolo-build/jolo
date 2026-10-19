@@ -622,6 +622,7 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .sidebar .task-tabs button { padding: 4px 8px; font-size: 11px; font-weight: 400; color: var(--muted); }
 .sidebar .task-tabs #archived-tasks-tab { width: 24px; height: 24px; padding: 4px; border-radius: 5px; }
 .sidebar .task-tabs #archived-tasks-tab.selected { color: var(--text); background: var(--hover); }
+@media (hover: hover) { .sidebar:not(:hover) .task-tabs:not(:focus-within) #archived-tasks-tab:not(.selected) { opacity: 0; } }
 @media (hover: none) { .sidebar :is(.task-more, .sidebar-workspace-new, .new-task, .new-task-alt) { opacity: 1; } }
 
 .task-scope-menu select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: default; }

@@ -23,6 +23,7 @@ export function RecentChats({ call, revision, state = 'open', sessionId, selecte
   const tree = unpinnedTree(taskTree(sidebarChats(all)));
   // The open chat joins as soon as it is sent, before the list's own copy of it has caught up.
   const rows = selectedTask?.run && !selectedTask.pinnedAt && !all.some(task => task.sessionId === selectedTask.sessionId && task.run) ? [selectedTask, ...tree.roots] : tree.roots;
+  if (state !== 'archived' && !error && !rows.length && !result?.hasMore) return null;
   return <section className="recent-chats" aria-label={state === 'archived' ? 'Archived chats' : 'Recent chats'}>
     <h2>{state === 'archived' ? 'Archived chats' : 'Chats'}</h2>
     {rows.map(task => {
@@ -32,7 +33,7 @@ export function RecentChats({ call, revision, state = 'open', sessionId, selecte
     })}
     {error && <p className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></p>}
     {!result && loading && <p className="sidebar-empty" role="status">Loading chats…</p>}
-    {result && !rows.length && !error && <p className="sidebar-empty">{state === 'archived' ? 'No archived chats.' : 'Your chats will appear here.'}</p>}
+    {state === 'archived' && result && !rows.length && !error && <p className="sidebar-empty">No archived chats.</p>}
     {result?.hasMore && <button className="sidebar-load-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more chats'}</button>}
   </section>;
 }

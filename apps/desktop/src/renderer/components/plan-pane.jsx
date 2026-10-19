@@ -142,7 +142,7 @@ export function PlanPane({ projectId, plans, catalog, call, refresh, onOpenSessi
       </div>
       {error && <p className="plan-failure" role="alert">{error}</p>}
       {writing && <NewPlan catalog={catalog} onCreate={onCreate} onCancel={() => setWriting(false)} />}
-      {!writing && plans.length === 0 && <p className="muted plan-empty">No plans yet. A plan is a list of tasks, each answered by the agent you choose, carried out one at a time.</p>}
+      {!writing && plans.length === 0 && <p className="muted plan-empty">No plans yet.</p>}
       {plans.map((plan) => <PlanCard key={plan.id} plan={plan} catalog={catalog} onCall={onCall} onOpen={onOpenSession} />)}
     </div>
   );
