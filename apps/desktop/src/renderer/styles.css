@@ -232,9 +232,6 @@ strong { font-weight: 550; }
 .jolo-wordmark { flex: none; font-size: 18px; font-weight: 550; letter-spacing: -1.1px; }
 /* Each header action carries one glyph of one or two strokes beside its word. The glyphs are drawn plainly on
    purpose: this bar sits above someone's work all day and should not compete with it. */
-/* The original mark follows the surrounding theme without depending on a font. */
-.jolo-mark { display: inline-block; position: relative; flex: none; border-radius: 22%; background: linear-gradient(135deg, light-dark(#fafafa, #484848), light-dark(#cfcfcf, #181818)); }
-.jolo-mark::before { content: ''; position: absolute; inset: 0; background: light-dark(#111, #fff); mask: url('./jolo-mark.svg') center / contain no-repeat; }
 .header-separator { color: var(--muted); opacity: .65; }
 .workspace-title { color: var(--muted); min-width: 0; max-width: 200px; white-space: nowrap; }
 .workspace-title > span { overflow: hidden; text-overflow: ellipsis; }
@@ -342,7 +339,7 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .delegation-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delegation-chip button { padding: 4px; flex: none; border-radius: 4px; }
 .transcript, .compose-column { max-width: 740px; width: 100%; min-width: 0; margin-inline: auto; padding-inline: 28px; }
-.transcript { padding-block: 28px 40px; display: flex; flex-direction: column; gap: 24px; }
+.transcript { position: relative; padding-block: 28px 40px; display: flex; flex-direction: column; gap: 24px; }
 .empty-transcript { min-height: 100%; justify-content: center; }
 .main .transcript.empty-transcript { padding-block: 0; }
 /* A new task opens on the message bar: the bar and the line above it sit mid-pane until the first message. */
@@ -362,7 +359,6 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .message { min-width: 0; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; max-width: 92%; background: var(--hover); border-radius: 9px; padding: 8px 16px; font-size: 14px; line-height: 22px; }
 .message-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-bottom: 9px; text-transform: capitalize; }
-.agent-mark { width: 18px; height: 18px; }
 .message-text { white-space: pre-wrap; }
 .message.assistant { line-height: 1.6; font-size: 14px; }
 .message.evicted { font-size: 12px; color: var(--muted); font-style: italic; }
@@ -373,19 +369,15 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .reasoning-pending { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .activity-icon { color: currentColor; }
 .activity-spin { color: var(--text); transform-origin: center; animation: activity-turn 1s linear infinite; }
-.activity-pulse { animation: activity-breathe 1.8s ease-in-out infinite; }
 @keyframes activity-turn { to { transform: rotate(360deg); } }
-@keyframes activity-breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .activity-spin, .activity-pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .activity-spin { animation: none; } }
 summary::-webkit-details-marker { display: none; }
-.activity-line { flex: 1; height: 1px; background: var(--border); margin-inline: 3px; }
-.activity-group[open] > summary > .icon:last-child { transform: rotate(180deg); }
 .activity-steps { display: grid; gap: 12px; margin: 14px 0 0 7px; padding-left: 16px; border-left: 1px solid var(--border); }
 details.block { min-width: 0; }
 details.block summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: default; font-size: 12px; color: var(--muted); }
 details.block summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-disclosure { opacity: .6; }
-details.block[open] > summary > .activity-disclosure { transform: rotate(90deg); }
+details.block[open] > summary > .activity-disclosure, .activity-group[open] > summary > .activity-disclosure { transform: rotate(90deg); }
 details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; background: var(--subtle); padding: 10px 12px; border-radius: 7px; margin: 8px 0 0; font: 11px/1.65 var(--mono); }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 .run-note { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
@@ -668,7 +660,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .mention-name { font-family: var(--mono); font-weight: 500; }
 .mention-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-hint { padding: 4px 8px 2px; color: var(--muted); font-size: 11px; }
-.called-in { margin-left: 7px; color: var(--muted); font-weight: 400; font-size: 11px; text-transform: none; }
 .composer { position: relative; }
 
 /* Plans: a goal, its tasks in order, and who answers each (§6.6). */
@@ -1004,7 +995,7 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .onboarding-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; color: var(--muted); font-size: 11px; }
 .onboarding-footer button { flex: none; font-size: 12px; }
 .onboarding-error { color: var(--red); margin-top: 14px; overflow-wrap: anywhere; }
-.onboarding .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (max-width: 650px) {
   .onboarding { padding: 24px 16px; }
   .onboarding-card { padding: 18px; }

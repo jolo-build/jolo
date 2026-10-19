@@ -936,9 +936,9 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor(`window.__joloSmoke.state().runCount > ${runsBefore} && window.__joloSmoke.state().runState === 'completed'`, "the called-in agent answered", 30_000);
     // Completion and the artifact-backed transcript arrive on separate renderer updates.
     await waitFor("Boolean(document.querySelector('.message.assistant .message-label'))", 'the called-in reply rendered');
-    const answered = JSON.parse(await evaluate(`JSON.stringify({ labels: [...document.querySelectorAll('.message.assistant .message-label')].map(node => node.textContent), user: [...document.querySelectorAll('.message.user')].map(node => node.innerText).at(-1), answerer: document.querySelector('.model-select')?.textContent })`));
-    if (!answered.labels.at(-1)?.startsWith("Codex")) throw new Error(`the reply should name who was called in: ${JSON.stringify(answered.labels.slice(-2))}`);
-    if (!answered.labels.at(-1)?.includes("called in for this message")) throw new Error(`the reply should say it was a one-off: ${JSON.stringify(answered.labels.at(-1))}`);
+    const answered = JSON.parse(await evaluate(`JSON.stringify({ labels: [...document.querySelectorAll('.message.assistant .message-label')].map(node => node.textContent), titles: [...document.querySelectorAll('.message.assistant .message-label')].map(node => node.title), user: [...document.querySelectorAll('.message.user')].map(node => node.innerText).at(-1), answerer: document.querySelector('.model-select')?.textContent })`));
+    if (answered.labels.at(-1) !== "Codex") throw new Error(`the reply should name who was called in: ${JSON.stringify(answered.labels.slice(-2))}`);
+    if (!/called in for this message/i.test(answered.titles.at(-1) ?? '')) throw new Error(`the reply should say on hover it was a one-off: ${JSON.stringify(answered.titles.at(-1))}`);
     if (!answered.user.includes("@codex review what changed")) throw new Error(`the transcript should keep what was typed: ${JSON.stringify(answered.user)}`);
     if (await evaluate("window.__joloSmoke.state().sessionAgentId") !== sessionAgentBeforeMention) throw new Error("calling in an agent changed the task’s saved agent");
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
