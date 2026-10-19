@@ -772,7 +772,6 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     report.checks.push('Enter approves the default Allow once action, selected permission scopes still work, and held Enter is ignored; the stop control shows in both themes and returns to Send on completion');
     if (!hostedState.assistantText.includes("The command printed: hosted-smoke-ok")) throw new Error(`hosted reply missing: ${hostedState.assistantText.slice(-300)}`);
     if (!hostedState.toolText.includes('Bash {"command":"sleep 2; echo hosted-smoke-ok"}')) throw new Error(`hosted tool call missing: ${hostedState.toolText.slice(-300)}`);
-    if ((await evaluate("document.querySelector('.task-header .task-agent')?.textContent")) !== "Claude Code") throw new Error("hosted task is not identified in the task header");
     const replyLabel = await evaluate("[...document.querySelectorAll('.message.assistant .message-label')].at(-1)?.textContent");
     if (replyLabel !== "Claude Code") throw new Error(`a hosted reply must carry the agent's name, not Jolo's: ${JSON.stringify(replyLabel)}`);
     if (!(await evaluate("document.querySelector('.composer textarea').placeholder")).startsWith("Ask Claude Code")) throw new Error("composer placeholder still addresses Jolo for a hosted task");

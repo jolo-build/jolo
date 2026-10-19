@@ -316,6 +316,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   // Child tasks live in the same folder (or among the chats) as the conversation that started them.
   const familyList = useWorkspaceTasks({ call: state.call, revision: state.board?.generatedAt, ...(project?.standalone ? { standalone: true } : { workspaceId: session?.workspaceId ?? project?.workspaceId }) });
   const family = taskFamily(familyList.result?.tasks ?? [], sessionId);
+  const branch = session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null;
   const chosenAgentId = answerer === null ? (session ? sessionAgentId : newSessionModelChoice(hostedAgents, settings?.model).agentId ?? null) : answerer === "jolo" ? null : answerer;
   // Claude Code and Codex compact their own context when asked; the usage panel offers it for the agent answering here.
   const compactable = Boolean(session) && ["claude-stream", "codex-app-server"].includes(hostedAgents.find((entry) => entry.id === chosenAgentId)?.transport);
@@ -398,7 +399,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
         <main className="main" aria-label="Conversation">
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {pane.id === 'pane-1' && onboarding === 'active' && !sessionId ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : <>
-          {(!project?.standalone || activeRun || pendingPermission || family.children.length > 0 || family.parent) && <TaskHeader status={runLabel(activeRun ?? lastRun)} working={Boolean(activeRun)} branch={session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null} branchPath={workspace?.path} agent={sessionAgentId ? agentName(sessionAgentId) : null}
+          {(branch || family.children.length > 0 || family.parent) && <TaskHeader branch={branch} branchPath={workspace?.path}
             childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={() => selectContext("changes")} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />

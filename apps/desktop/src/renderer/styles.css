@@ -331,15 +331,10 @@ strong { font-weight: 550; }
 .child-task-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-tasks-menu .icon.needs { color: var(--red); }
 .task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; color: var(--muted); font-size: 11px; line-height: 18px; }
-.task-status { display: inline-flex; align-items: center; gap: 7px; }
-.task-meta-item { display: inline-flex; align-items: center; gap: 9px; min-width: 0; max-width: 100%; }
-.task-meta-item::before { content: ''; width: 2px; height: 2px; flex: none; border-radius: 50%; background: currentColor; opacity: .5; }
-.task-meta-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-agent { color: var(--text); font-weight: 500; }
+.task-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.task-worktree > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eyebrow { color: var(--muted); display: flex; align-items: center; gap: 7px; font-size: 11px; margin-bottom: 6px; }
 h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.state-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
-.state-dot.working { background: var(--highlight); }
 .conversation, .compose-wrap, .permission-notice { scrollbar-gutter: stable both-edges; }
 .conversation, .composer textarea { overscroll-behavior-y: contain; }
 .conversation { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
