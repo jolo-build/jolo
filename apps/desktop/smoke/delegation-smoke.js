@@ -37,27 +37,23 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   assert.equal(delegations[0].execution.model, 'fake-large');
   assert.equal(delegations[0].execution.effort, 'high');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /Child result:.*fake-large.*high/);
-  // The child is folded under its parent in the sidebar, not beside it, behind a count that opens it.
+  // The child is not a row of the sidebar; the parent's header lists it.
   const child = JSON.stringify(`[data-session-id="${delegations[0].sessionId}"]`);
-  const parentRow = JSON.stringify(`.sidebar-chat-row.has-subtasks [data-session-id="${parent}"]`);
-  const count = "document.querySelector('.sidebar-chat-row.has-subtasks .task-subtasks')";
-  const childShown = `Boolean(document.querySelector('.sidebar-subtasks ' + ${child}))`;
+  const parentRow = JSON.stringify(`.sidebar [data-session-id="${parent}"]`);
+  const toggle = "document.querySelector('.task-header .child-tasks-toggle')";
   const painted = "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
-  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${count}?.textContent === '1' && ${count}.getAttribute('aria-expanded') === 'false'`, 'parent row folds its child task behind a count');
-  assert.equal(await evaluate(`Boolean(document.querySelector('.sidebar-workspace-chats > .task-row ' + ${child}))`), false, 'the child is not a task of its own in the sidebar');
-  await evaluate(`${count}.click()`);
-  await waitFor(childShown, 'the count lists the child under its parent');
+  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${toggle}?.textContent.includes('1 child task')`, 'the parent lists its child task in its header');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.sidebar ' + ${child}))`), false, 'the child is not a row of the sidebar');
+  await evaluate(`${toggle}.click()`);
+  await waitFor(`Boolean(document.querySelector('.child-tasks-menu:popover-open ' + ${child}))`, 'the header lists the child task');
   await evaluate(painted);
   writeFileSync(path.join(results, 'delegation-result.png'), (await window.webContents.capturePage()).toPNG());
-  await evaluate(`document.querySelector('.sidebar-subtasks ' + ${child}).click()`);
+  await evaluate(`document.querySelector('.child-tasks-menu ' + ${child}).click()`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(delegations[0].sessionId)}`, 'child opens its own conversation');
   await waitFor("window.__joloSmoke.state().assistantText.includes('fake-large')", 'child transcript loaded');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /fake-large.*high/);
-  await evaluate(`document.querySelector(${parentRow}).click()`);
+  await waitFor("Boolean(document.querySelector('.task-header .parent-task-link'))", 'the child offers the way back to its parent');
+  await evaluate("document.querySelector('.task-header .parent-task-link').click()");
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(parent)}`, 'parent opens again');
-  await evaluate(painted);
-  assert.equal(await evaluate(childShown), true, 'opening the parent leaves its child tasks listed');
-  await evaluate(`${count}.click()`);
-  await waitFor(`!${childShown}`, 'the count folds the child tasks');
-  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks folded under their parent, and opening the child conversation passed.');
+  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks listed in the header of their parent, and opening the child and returning to the parent passed.');
 }

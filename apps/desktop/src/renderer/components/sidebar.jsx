@@ -6,8 +6,8 @@ import { taskTree, unpinnedTree } from '../workspace-tasks.js';
 import { RecentChats } from './recent-chats.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
 
-export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName, subtasks, renderSubtask, currentSessionId }) {
-  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} subtasks={subtasks} renderSubtask={renderSubtask} currentSessionId={currentSessionId} />;
+export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName, childTasks }) {
+  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} childTasks={childTasks} />;
 }
 
 function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, onOpen, onMenu, agentName }) {
@@ -17,7 +17,7 @@ function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, o
   // Keep an explicitly opened older chat selected even before its page is loaded; a pinned one is listed under Pinned.
   const rows = selectedTask && !selectedTask.pinnedAt && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
   const taskRow = task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName}
-    subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={taskRow} currentSessionId={sessionId} />;
+    childTasks={tree.children.get(task.sessionId) ?? []} />;
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
     {rows.map(taskRow)}
     {error && <div className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></div>}

@@ -23,6 +23,8 @@ import { SchedulesPanel } from "./schedules-panel.jsx";
 import { JoloLogo } from "./brand.jsx";
 import { TaskDialog } from "./task-dialog.jsx";
 import { TaskHeader } from "./task-header.jsx";
+import { useWorkspaceTasks } from "../use-workspace-tasks.js";
+import { taskFamily } from "../workspace-tasks.js";
 import { Board } from "./board.jsx";
 import { BoardHeader } from "./board-header.jsx";
 import { WorktreeDialog } from "./worktree-dialog.jsx";
@@ -314,6 +316,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const selectedModel = session ? session.model ?? settings?.model : readLastModelChoice()?.model ?? settings?.model;
   const providerLabel = (selectedModel?.preset === "fake" ? "Demo provider" : selectedModel?.model) ?? (settings?.demoProviderEnabled ? "Demo provider" : "Configure provider");
   const sessionAgentId = session?.agentId ?? null;
+  // Child tasks live in the same folder (or among the chats) as the conversation that started them.
+  const familyList = useWorkspaceTasks({ call: state.call, revision: state.board?.generatedAt, ...(project?.standalone ? { standalone: true } : { workspaceId: session?.workspaceId ?? project?.workspaceId }) });
+  const family = taskFamily(familyList.result?.tasks ?? [], sessionId);
   const chosenAgentId = answerer === null ? (session ? sessionAgentId : newSessionModelChoice(hostedAgents, settings?.model).agentId ?? null) : answerer === "jolo" ? null : answerer;
   const chooseAnswerer = agentId => {
     setAnswerer(agentId);
@@ -398,7 +403,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
         <main className={`main${view === "board" ? " board-main" : showTaskRail ? " has-task-rail" : ""}`} aria-label={view === "board" ? "Work board" : "Conversation"}>
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {view === "board" ? pane.id === 'pane-1' && onboarding === 'active' ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : pane.id === 'pane-1' && onboarding === null && (connection.initializing || state.restoringProject || state.board) && !engine.error ? <div className="empty-state" role="status">Getting your workspace ready…</div> : <Board board={state.board} connected={engine.connected} onGetStarted={pane.id === 'pane-1' ? () => updateOnboarding('active') : null} onOpen={openRow} onNewChat={newChat} onChatMenu={task => reportError(async () => taskMenu((await state.call('session.page', { sessionId: task.sessionId })).session))} onNewTask={row => reportError(async () => { await state.newFromBoard(row); showTask(); })} onOpenFolder={openFolder} call={state.call} /> : <>
-          {(!project?.standalone || activeRun || pendingPermission) && <TaskHeader status={runLabel(activeRun ?? lastRun)} working={Boolean(activeRun)} branch={session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null} branchPath={workspace?.path} agent={sessionAgentId ? agentName(sessionAgentId) : null} />}
+          {(!project?.standalone || activeRun || pendingPermission || family.children.length > 0 || family.parent) && <TaskHeader status={runLabel(activeRun ?? lastRun)} working={Boolean(activeRun)} branch={session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null} branchPath={workspace?.path} agent={sessionAgentId ? agentName(sessionAgentId) : null}
+            childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={() => selectContext("changes")} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />
           <PermissionNotice request={pendingPermission} active={active} onReview={() => onFocus(pane.id)} />

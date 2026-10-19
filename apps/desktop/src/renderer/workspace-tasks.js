@@ -20,6 +20,17 @@ export function sidebarChats(tasks, sessionId) {
   return tasks.filter((task) => task.run || task.sessionId === sessionId || task === newestUnwritten);
 }
 
+/**
+ * The open conversation's family: the child tasks it started, directly or through its children, and, when it is a
+ * child itself, the top-level task that started it.
+ * @returns {{ children: any[], parent: any | null }}
+ */
+export function taskFamily(tasks, sessionId) {
+  const tree = taskTree(tasks);
+  const parentId = [...tree.children].find(([, list]) => list.some((task) => task.sessionId === sessionId))?.[0] ?? null;
+  return { children: tree.children.get(sessionId) ?? [], parent: parentId ? tasks.find((task) => task.sessionId === parentId) ?? null : null };
+}
+
 /** A tree without its pinned tasks, which the sidebar lists in a section of their own; a pinned task's children go with it. */
 export function unpinnedTree(tree) {
   return { roots: tree.roots.filter((task) => !task.pinnedAt), children: new Map([...tree.children].map(([id, list]) => [id, list.filter((task) => !task.pinnedAt)])) };

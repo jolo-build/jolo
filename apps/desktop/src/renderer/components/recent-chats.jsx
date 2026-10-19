@@ -32,7 +32,7 @@ export function RecentChats({ call, revision, state = 'open', sessionId, selecte
   const chatRow = task => {
     const target = { ...task, session: { id: task.sessionId }, historyState: state };
     return <SidebarChatRow key={task.sessionId} task={task} target={target} selected={sessionId === task.sessionId} onOpen={() => onOpen(target)} onMenu={onMenu} agentName={agentName} standalone
-      subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={chatRow} currentSessionId={sessionId} />;
+      childTasks={tree.children.get(task.sessionId) ?? []} />;
   };
   return <section className="recent-chats" aria-label={state === 'archived' ? 'Archived chats' : 'Recent chats'}>
     {variant === 'board' ? <div className="board-section-heading"><h2>Chats</h2><span>Outside workspaces</span></div> : <h2>{state === 'archived' ? 'Archived chats' : 'Chats'}</h2>}

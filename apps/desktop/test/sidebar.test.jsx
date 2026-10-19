@@ -61,6 +61,9 @@ test('task progress marks working, waiting and failed states, and leaves settled
     expect(row(state)).toContain(`title="Task\n${label}`);
     expect(row(state)).not.toContain('sidebar-task-progress');
   }
+  // Child tasks are not listed here, so a settled parent takes the mark when one of them needs the user.
+  const parent = renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'task', title: 'Task', run: { state: 'completed' } }, childTasks: [{ sessionId: 'child', attention: 'needs_you' }] }))} />);
+  expect(parent).toContain('aria-label="A child task needs you"');
 });
 test('hidden sidebar does not mount chat loaders and empty folders remain visible', () => {
   const html = render({ workspaceId: 'beta', visible: false });
