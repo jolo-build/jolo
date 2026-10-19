@@ -53,7 +53,7 @@ const log = {
 /** Methods the renderer may invoke through the bridge; everything else fails closed. */
 const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "project.linkFolder", "chat.create", "session.create", "session.list", "session.page",
-  "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
+  "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel",
   "delegation.models",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
@@ -234,6 +234,7 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
       // An array literal widens "separator" to string, which Electron's item kinds do not accept, so the
       // template says what it is rather than every separator carrying its own annotation.
       Menu.buildFromTemplate(/** @type {import("electron").MenuItemConstructorOptions[]} */ ([
+        { label: opts.pinned === true ? "Unpin" : "Pin", click: () => { action = "pin"; } },
         { label: "Rename…", click: () => { action = "rename"; } },
         { label: opts.archived ? "Restore task" : "Archive task", click: () => { action = "archive"; } },
         ...(opts.worktree === true ? [{ type: "separator" }, { label: "Remove worktree…", click: () => { action = "remove-worktree"; } }] : []),

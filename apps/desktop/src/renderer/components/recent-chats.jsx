@@ -1,6 +1,6 @@
 import { RUNNING, relativeTime } from '@jolo/client/board';
 import { useWorkspaceTasks } from '../use-workspace-tasks.js';
-import { sidebarChats, taskTree } from '../workspace-tasks.js';
+import { sidebarChats, taskTree, unpinnedTree } from '../workspace-tasks.js';
 import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
@@ -27,7 +27,7 @@ export function RecentChats({ call, revision, state = 'open', sessionId, selecte
   const drag = useTaskDrag();
   const all = result?.tasks ?? [];
   // The Board lists every chat, children included, so one that needs the user can be found there.
-  const tree = variant === 'board' ? { roots: all, children: new Map() } : taskTree(sidebarChats(all, sessionId));
+  const tree = variant === 'board' ? { roots: all, children: new Map() } : unpinnedTree(taskTree(sidebarChats(all, sessionId)));
   const rows = selectedTask && !all.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
   const chatRow = task => {
     const target = { ...task, session: { id: task.sessionId }, historyState: state };

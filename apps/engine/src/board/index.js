@@ -138,18 +138,19 @@ export function createBoard({ storage, env, log }) {
     /**
      * Every open task across every project, for a task list that is not scoped to one project (§5.1). The
      * same attention rule the board rows use, so a task reads the same wherever it is shown.
-     * @param {{ limit?: number, workspaceId?: string, before?: { updatedAt: string, sessionId: string }, state?: string, standalone?: boolean }} [query]
-     * `before` is the cursor the previous page returned
+     * @param {{ limit?: number, workspaceId?: string, before?: { updatedAt: string, sessionId: string }, state?: string, standalone?: boolean, pinned?: boolean }} [query]
+     * `before` is the cursor the previous page returned; `pinned` lists only pinned tasks, or leaves them out
      */
-    tasks({ limit = 200, workspaceId, before, state = 'open', standalone } = {}) {
+    tasks({ limit = 200, workspaceId, before, state = 'open', standalone, pinned } = {}) {
       const generatedAt = new Date().toISOString();
-      const entries = storage.listSessionActivity({ limit: limit + 1, workspaceId, before, state, standalone });
+      const entries = storage.listSessionActivity({ limit: limit + 1, workspaceId, before, state, standalone, pinned });
       const rows = entries.slice(0, limit).map((entry) => {
         const { attention, reason } = attentionFor(entry.run, entry.workspace);
         const stopped = entry.run && (TERMINAL_RUN_STATES.includes(entry.run.state) || entry.run.state === "paused");
         return {
           sessionId: entry.session.id,
           parentSessionId: entry.parentSessionId,
+          pinnedAt: entry.session.pinnedAt,
           standalone: entry.standalone,
           title: entry.session.title,
           agentId: entry.session.agentId,

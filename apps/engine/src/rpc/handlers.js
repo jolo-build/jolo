@@ -211,6 +211,14 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     /** @param {{ archived: boolean, sessionId: string, expectedRevision: number }} params */
     "session.archive": ({ archived, ...params }) => editSession({ ...params, state: archived ? "archived" : "open" }),
     "session.delete": (params) => editSession({ ...params, deleted: true }),
+    "session.pin": ({ sessionId, pinned, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError("not_found", "task no longer exists");
+      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+      const updated = storage.setSessionPinned(sessionId, pinned);
+      storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
+      return { session: updated };
+    }),
     "session.page": ({ sessionId, beforeOrdinal, limit }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);

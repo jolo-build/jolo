@@ -325,7 +325,7 @@ export class Storage {
    * Every open task across every project, newest activity first, with the project and checkout it belongs to
    * and its most recent run. One query, so a sidebar listing all projects costs the same as listing one.
    */
-  listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null } = {}) {
+  listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null, pinned = null } = {}) {
     const rows = this.db.query(`
       SELECT s.*, p.root_path AS project_root, COALESCE(json_extract(p.preferences, '$.standalone'), 0) AS standalone, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
              r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note,
@@ -339,10 +339,11 @@ export class Storage {
       WHERE s.deleted_at IS NULL AND s.state = ?1 AND w.removed_at IS NULL
         AND (?3 IS NULL OR s.workspace_id = ?3)
         AND (?6 IS NULL OR COALESCE(json_extract(p.preferences, '$.standalone'), 0) = ?6)
+        AND (?7 IS NULL OR (s.pinned_at IS NOT NULL) = ?7)
         AND (?4 IS NULL OR COALESCE(r.updated_at, s.updated_at) < ?4 OR (COALESCE(r.updated_at, s.updated_at) = ?4 AND s.id < ?5))
-      ORDER BY COALESCE(r.updated_at, s.updated_at) DESC, s.id DESC
+      ORDER BY CASE WHEN ?7 = 1 THEN s.pinned_at END DESC, COALESCE(r.updated_at, s.updated_at) DESC, s.id DESC
       LIMIT ?2
-    `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone));
+    `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone), pinned === null ? null : Number(pinned));
     return rows.map((row) => ({
       session: mapSession(row),
       parentSessionId: row.parent_session_id ?? null,
@@ -358,6 +359,12 @@ export class Storage {
   updateSession(id, { title, state, deleted = false }) {
     this.db.query("UPDATE sessions SET title = COALESCE(?2, title), state = COALESCE(?3, state), deleted_at = CASE WHEN ?4 THEN ?5 ELSE deleted_at END, updated_at = ?5, revision = revision + 1 WHERE id = ?1")
       .run(id, title ?? null, state ?? null, deleted ? 1 : 0, now());
+    return this.getSession(id);
+  }
+
+  /** Pin a task or chat to the top of the sidebar, or unpin it, without changing its activity order. */
+  setSessionPinned(id, pinned) {
+    this.db.query("UPDATE sessions SET pinned_at = ?2, revision = revision + 1 WHERE id = ?1").run(id, pinned ? now() : null);
     return this.getSession(id);
   }
 

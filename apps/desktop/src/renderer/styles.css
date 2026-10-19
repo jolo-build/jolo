@@ -316,7 +316,8 @@ strong { font-weight: 550; }
 .sidebar-workspace-chats:empty { padding: 0; border: 0; }
 .sidebar-load-more { justify-content: flex-start; color: var(--muted); font-size: 11px; padding: 7px 8px; }
 .recent-chats { margin-top: 22px; min-width: 0; }
-.recent-chats h2 { margin: 0 13px 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.recent-chats h2, .pinned-tasks h2 { margin: 0 13px 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.pinned-tasks { margin-bottom: 18px; min-width: 0; }
 /* Dashboard chat rows keep the larger overview spacing and timestamps. */
 .board .recent-chat-row { position: relative; border-radius: 6px; }
 .board .recent-chat-row:hover { background: var(--hover); }

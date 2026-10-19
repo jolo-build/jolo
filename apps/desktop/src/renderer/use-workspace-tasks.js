@@ -8,10 +8,11 @@ import { readWorkspaceTasks } from './workspace-tasks.js';
  *   revision?: string,
  *   state?: string,
  *   standalone?: boolean,
+ *   pinned?: boolean,
  * }} options a folder's tasks are read by `workspaceId`; the chats that belong to no folder are read
- *   with `standalone` instead, so callers pass one or the other.
+ *   with `standalone` instead, so callers pass one or the other. `pinned` reads the pinned ones from everywhere.
  */
-export function useWorkspaceTasks({ call, workspaceId, revision, state = 'open', standalone }) {
+export function useWorkspaceTasks({ call, workspaceId, revision, state = 'open', standalone, pinned }) {
   const [pages, setPages] = useState(1);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -21,13 +22,13 @@ export function useWorkspaceTasks({ call, workspaceId, revision, state = 'open',
     let cancelled = false;
     setLoading(true);
     setError(null);
-    readWorkspaceTasks(call, workspaceId, pages, state, standalone).then(next => {
+    readWorkspaceTasks(call, workspaceId, pages, state, standalone, pinned).then(next => {
       if (!cancelled) setResult(next);
     }).catch(error => {
       if (!cancelled) setError(['unknown_method', 'invalid_params'].includes(error.code)
         ? 'Restart Jolo with the updated engine to list tasks by workspace.' : 'Couldn’t load tasks. Try again.');
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [call, workspaceId, revision, state, standalone, pages, retry]);
+  }, [call, workspaceId, revision, state, standalone, pinned, pages, retry]);
   return { result, loading, error, retry: () => setRetry(value => value + 1), loadMore: () => setPages(value => value + 1) };
 }

@@ -238,9 +238,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const params = { sessionId: session.id, expectedRevision: session.revision };
     if (action === "rename") params.title = title;
     if (action === "archive") params.archived = session.state !== "archived";
+    if (action === "pin") params.pinned = !session.pinnedAt;
     try {
       await call(`session.${action}`, params);
-      if (action !== "rename" && sessionRef.current === session.id) await selectSession(null);
+      if ((action === "archive" || action === "delete") && sessionRef.current === session.id) await selectSession(null);
     } finally {
       await refreshSessions();
     }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { basename } from '../presentation.js';
 import { useWorkspaceTasks } from '../use-workspace-tasks.js';
-import { taskTree } from '../workspace-tasks.js';
+import { taskTree, unpinnedTree } from '../workspace-tasks.js';
 import { RecentChats } from './recent-chats.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
 
@@ -13,9 +13,9 @@ export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentNam
 function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, onOpen, onMenu, agentName }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, workspaceId: row.workspaceId, revision, state });
   const tasks = result?.tasks ?? [];
-  const tree = taskTree(tasks);
-  // Keep an explicitly opened older chat selected even before its page is loaded.
-  const rows = selectedTask && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
+  const tree = unpinnedTree(taskTree(tasks));
+  // Keep an explicitly opened older chat selected even before its page is loaded; a pinned one is listed under Pinned.
+  const rows = selectedTask && !selectedTask.pinnedAt && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
   const taskRow = task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName}
     subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={taskRow} currentSessionId={sessionId} />;
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
@@ -27,6 +27,21 @@ function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, o
   </div>;
 }
 
+/** Tasks and chats the user pinned, from every project, above everything else; nothing shows until one is pinned. */
+function PinnedTasks({ rows, revision, call, sessionId, onOpenTask, onMenu, agentName }) {
+  const { result } = useWorkspaceTasks({ call, revision, pinned: true });
+  const tasks = result?.tasks ?? [];
+  if (!tasks.length) return null;
+  return <section className="pinned-tasks" aria-label="Pinned">
+    <h2>Pinned</h2>
+    {tasks.map(task => {
+      const row = task.standalone ? null : rows.find(entry => entry.workspaceId === task.workspaceId);
+      const target = row ? { ...row, session: { id: task.sessionId, title: task.title }, historyState: 'open' } : { ...task, session: { id: task.sessionId }, historyState: 'open' };
+      return <SidebarChatRow key={task.sessionId} task={task} target={target} selected={sessionId === task.sessionId} onOpen={() => onOpenTask(target)} onMenu={onMenu} agentName={agentName} standalone={task.standalone} />;
+    })}
+  </section>;
+}
+
 export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, visible = true, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onError, historyState = 'open', onHistory }) {
   const [expanded, setExpanded] = useState(() => new Set(workspaceId ? [workspaceId] : []));
   const rows = useMemo(() => (board?.projects ?? []).filter(row => !row.standalone).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path)), [board]);
@@ -35,7 +50,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
   const selected = sessions.find(session => session.id === sessionId && session.state === historyState);
   const selectedTask = selected ? { sessionId: selected.id, title: selected.title, agentId: selected.agentId, workspaceId: selected.workspaceId,
     answerer: lastRun && selected.agentState?._jolo?.lastRunId === lastRun.id ? selected.agentState._jolo.lastAnswerer : undefined,
-    updatedAt: lastRun?.updatedAt ?? selected.updatedAt, run: lastRun, attention: lastRun && ['paused', 'failed', 'interrupted', 'awaiting_permission'].includes(lastRun.state) ? 'needs_you' : 'idle' } : null;
+    updatedAt: lastRun?.updatedAt ?? selected.updatedAt, run: lastRun, pinnedAt: selected.pinnedAt ?? null, attention: lastRun && ['paused', 'failed', 'interrupted', 'awaiting_permission'].includes(lastRun.state) ? 'needs_you' : 'idle' } : null;
   const toggle = id => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const menu = async task => {
     try { const { session } = await call('session.page', { sessionId: task.sessionId, limit: 1 }); await onTaskMenu(session); }
@@ -47,6 +62,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
       {project && !project.standalone && <button className="new-task" onClick={onNewSession} title="New task in this workspace" aria-label="New task in this workspace"><Icon name="plus" size={14} /></button>}
       {project && !project.standalone && <button className="new-task-alt" onClick={onNewWorktree} title="New task in a worktree" aria-label="New task in a worktree"><Icon name="branch" size={14} /></button>}
     </div>
+    {!archived && visible && <PinnedTasks rows={rows} revision={board?.generatedAt} call={call} sessionId={sessionId} onOpenTask={onOpenTask} onMenu={menu} agentName={agentName} />}
     <div className="task-tabs" role="tablist" aria-label="Workspace tasks" onKeyDown={event => {
       if (/** @type {Element} */ (event.target).getAttribute('role') !== 'tab' || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();

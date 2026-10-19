@@ -1,9 +1,9 @@
 // Each folder has its own cursor; a busy workspace cannot hide another folder's chats.
-export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = 'open', standalone) {
+export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = 'open', standalone, pinned) {
   const tasks = new Map();
   let before, result;
   for (let index = 0; index < pages; index++) {
-    result = await call('board.tasks', { workspaceId, limit: 100, ...(standalone !== undefined ? { standalone } : {}), ...(state !== 'open' ? { state } : {}), ...(before ? { before } : {}) });
+    result = await call('board.tasks', { workspaceId, limit: 100, ...(standalone !== undefined ? { standalone } : {}), ...(pinned !== undefined ? { pinned } : {}), ...(state !== 'open' ? { state } : {}), ...(before ? { before } : {}) });
     for (const task of result.tasks) tasks.set(task.sessionId, task);
     if (!result.hasMore || !result.nextCursor) break;
     before = result.nextCursor;
@@ -18,6 +18,11 @@ export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = '
 export function sidebarChats(tasks, sessionId) {
   const newestUnwritten = tasks.filter((task) => !task.run).reduce((newest, task) => (!newest || String(task.updatedAt) > String(newest.updatedAt) ? task : newest), null);
   return tasks.filter((task) => task.run || task.sessionId === sessionId || task === newestUnwritten);
+}
+
+/** A tree without its pinned tasks, which the sidebar lists in a section of their own; a pinned task's children go with it. */
+export function unpinnedTree(tree) {
+  return { roots: tree.roots.filter((task) => !task.pinnedAt), children: new Map([...tree.children].map(([id, list]) => [id, list.filter((task) => !task.pinnedAt)])) };
 }
 
 /**

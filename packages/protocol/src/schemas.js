@@ -140,6 +140,8 @@ export const SessionSchema = z.object({
   agentId: Id.nullable().default(null),
   /** Set when this session was opened to carry out one task of a plan (§6.6). */
   planTaskId: Id.nullable().default(null),
+  /** When the user pinned this task or chat to the top of the sidebar; null when it is not pinned. */
+  pinnedAt: IsoTimestamp.nullable().default(null),
   createdAt: IsoTimestamp,
   updatedAt: IsoTimestamp,
 });
@@ -665,6 +667,10 @@ export const MethodSchemas = {
     params: z.object({ sessionId: Id, archived: z.boolean(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
+  "session.pin": {
+    params: z.object({ sessionId: Id, pinned: z.boolean(), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
   "session.delete": {
     params: z.object({ sessionId: Id, expectedRevision: Revision }),
     result: z.object({ sessionId: Id }),
@@ -950,6 +956,8 @@ export const BoardTaskSchema = z.object({
   sessionId: Id,
   /** The conversation whose agent started this one as a child task, which lists it with the rest of its children. */
   parentSessionId: Id.nullable().default(null),
+  /** When the user pinned it to the top of the sidebar; null when it is not pinned. */
+  pinnedAt: IsoTimestamp.nullable().default(null),
   title: z.string().max(200),
   agentId: Id.nullable(),
   answerer: z.object({ id: Id, displayName: z.string().nullable(), model: z.string().nullable() }).optional(),
@@ -969,7 +977,8 @@ export const BoardTaskSchema = z.object({
 Object.assign(MethodSchemas, {
   "board.list": { params: z.object({}), result: z.object({ projects: z.array(BoardRowSchema), generatedAt: IsoTimestamp }) },
   "board.tasks": {
-    params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
+    /** `pinned: true` lists only pinned tasks and chats, most recently pinned first; `false` leaves them out. */
+    params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), pinned: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
     result: z.object({ tasks: z.array(BoardTaskSchema), generatedAt: IsoTimestamp, hasMore: z.boolean().optional(), nextCursor: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).nullable().optional() }),
   },
   "board.viewed": { params: z.object({ workspaceId: Id }), result: z.object({ projectId: Id, workspaceId: Id, lastViewedAt: IsoTimestamp }) },

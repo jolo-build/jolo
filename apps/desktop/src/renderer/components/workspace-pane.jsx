@@ -345,8 +345,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   };
   const taskMenu = (session) => reportError(async () => {
     const sessionWorkspace = workspaces.find((item) => item.id === session.workspaceId);
-    const action = await window.jolo.taskMenu({ archived: session.state === "archived", worktree: Boolean(sessionWorkspace && sessionWorkspace.mode === "worktree" && sessionWorkspace.owned) });
-    if (action === "archive") await state.manageSession(session, action);
+    const action = await window.jolo.taskMenu({ archived: session.state === "archived", pinned: Boolean(session.pinnedAt), worktree: Boolean(sessionWorkspace && sessionWorkspace.mode === "worktree" && sessionWorkspace.owned) });
+    if (action === "archive" || action === "pin") await state.manageSession(session, action);
     else if (action === "rename" || action === "delete") setTaskDialog({ session, action });
     else if (action === "remove-worktree") setTaskDialog({ session, action, workspace: sessionWorkspace });
   });

@@ -256,6 +256,17 @@ describe("every task, across every project", () => {
     const stamps = tasks.map((task) => task.updatedAt);
     expect([...stamps].sort().reverse()).toEqual(stamps);
 
+    // Pinned tasks come from every project, most recently pinned first, and pinning leaves the activity order alone.
+    const pin = async (task, pinned) => client.call("session.pin", { sessionId: task.sessionId, pinned, expectedRevision: (await client.call("session.page", { sessionId: task.sessionId })).session.revision });
+    await pin(byTitle.third, true);
+    await new Promise((resolve) => setTimeout(resolve, 5)); // a later pin, so the order is the pinning order
+    await pin(byTitle.second, true);
+    expect((await client.call("board.tasks", { pinned: true })).tasks.map((task) => task.title)).toEqual(["second", "third"]);
+    expect((await client.call("board.tasks", { pinned: false })).tasks.map((task) => task.title)).toEqual(["first"]);
+    expect((await client.call("board.tasks", {})).tasks.map((task) => task.updatedAt)).toEqual(stamps);
+    await pin(byTitle.second, false);
+    expect((await client.call("board.tasks", { pinned: true })).tasks.map((task) => [task.title, Boolean(task.pinnedAt)])).toEqual([["third", true]]);
+
     // An archived task drops off the list; a deleted one never appears.
     await client.call("session.archive", { sessionId: byTitle.first.sessionId, archived: true, expectedRevision: (await client.call("session.page", { sessionId: byTitle.first.sessionId })).session.revision });
     expect((await client.call("board.tasks", {})).tasks.map((task) => task.title).sort()).toEqual(["second", "third"]);
