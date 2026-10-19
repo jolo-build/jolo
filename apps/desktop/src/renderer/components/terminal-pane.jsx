@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ensureFontLoaded, stackFor } from "../fonts.js";
-import { Icon } from './icon.jsx';
 import { terminalTheme } from '../themes.js';
 
 const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
@@ -16,10 +15,9 @@ const decodeBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0
  *   paneId?: string,
  *   attachTo?: string | null,
  *   onState?: (payload: any) => void,
- *   onClose?: () => void,
  * }} props `onState` is for callers that track a hosted agent's status; the terminal itself needs no listener.
  */
-export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, onClose }) {
+export function TerminalPane({ workspaceId, paneId, attachTo = null, onState }) {
   const host = useRef(null);
   const term = useRef(null);
   const fit = useRef(null);
@@ -65,7 +63,7 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
           lastSeq.current = seq;
           instance.write(decodeBase64(item.value.data));
         } else if (item.kind === "event" && item.value.type === "terminal.state" && item.value.payload.terminalId === terminalId.current) {
-          setStatus(item.value.payload.state === "exited" ? `shell exited (${item.value.payload.exitCode ?? "signal"})` : "running");
+          setStatus(item.value.payload.state === "exited" ? `Shell exited (${item.value.payload.exitCode ?? "signal"})` : "running");
           onState?.(item.value.payload);
         }
       }
@@ -128,8 +126,8 @@ export function TerminalPane({ workspaceId, paneId, attachTo = null, onState, on
 
   return (
     <section className="terminal">
-      <div className="bar"><span>Terminal</span><span className="hint">{status}</span>{onClose && <button onClick={onClose} aria-label="Close terminal" title="Close terminal and its shell"><Icon name="close" size={13} /></button>}</div>
       <div className="xterm-host" ref={host} />
+      {status !== "running" && status !== "opening…" && <p className="terminal-status" role="status">{status}</p>}
     </section>
   );
 }

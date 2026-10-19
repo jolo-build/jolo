@@ -160,7 +160,7 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await evaluate("document.querySelector('.context-close').click()");
     await waitFor("document.querySelector('.pane-body > .main').getBoundingClientRect().width > 300", 'closing compact context restores the chat');
     await select('Terminal');
-    await evaluate("document.querySelector('.terminal [aria-label=\"Close terminal\"]').click()");
+    await evaluate("document.querySelector('.panel-item-tab[data-active=true] .panel-item-close').click()");
     await waitFor('!window.__joloTerminal && !document.querySelector(".panel-item-tabs [data-panel-type=terminal]")', 'explicit terminal close releases its shell');
     report.checks.push('one Panels menu lists all six panels; repeated native mouse clicks open and close it without hiding the selected panel, and outside clicks, keyboard navigation and Escape work');
     report.checks.push('Terminal, Checks and Plans open on the right and fit light, dark and compact layouts; the bottom tools bar is gone');

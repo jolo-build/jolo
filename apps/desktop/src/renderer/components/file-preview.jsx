@@ -11,10 +11,10 @@ export function FilePreview({ file, onClose }) {
   useLayoutEffect(() => { selected.current?.scrollIntoView({ block: 'center', inline: 'center' }); }, [file, showSource]);
   const text = file.kind === 'text' || file.kind === 'markdown';
   return <>
-    <div className="file-heading"><code title={file.path}>{file.path.split('/').at(-1)}</code>{file.line && <span className="file-location">Line {file.line}{file.column ? `, column ${file.column}` : ''}</span>}
+    {(file.line || file.kind === 'markdown' || onClose) && <div className="file-heading"><code title={file.path}>{file.path.split('/').at(-1)}</code>{file.line && <span className="file-location">Line {file.line}{file.column ? `, column ${file.column}` : ''}</span>}
       {file.kind === 'markdown' && !file.line && <div className="file-modes" role="tablist" aria-label="File view"><button role="tab" aria-selected={!source} onClick={() => setSource(false)}>Preview</button><button role="tab" aria-selected={source} onClick={() => setSource(true)}>Source</button></div>}
       {onClose && <button aria-label="Close file preview" title="Close file preview" onClick={onClose}><Icon name="close" size={14} /></button>}
-    </div>
+    </div>}
     <div className={`file-preview-content${text ? ' md-preview' : ''}`} aria-label={`Preview of ${file.path}`}>
       {text && (showSource ? <pre className="file-preview-source"><code>{hasLocation ? <>{lines.slice(0, file.line - 1).join('\n')}{file.line > 1 ? '\n' : ''}<mark className="file-source-location">{lines[file.line - 1].slice(0, Math.max(0, (file.column ?? 1) - 1))}<span ref={selected} className="file-source-caret">{lines[file.line - 1].slice(Math.max(0, (file.column ?? 1) - 1), file.column ?? 1)}</span>{lines[file.line - 1].slice(file.column ?? 1)}</mark>{file.line < lines.length ? '\n' : ''}{lines.slice(file.line).join('\n')}</> : file.text}</code></pre> : <Markdown text={file.text} cacheKey={file.text} sessionId={file.sessionId} />)}
       {file.kind === 'image' && <img src={file.url} alt={file.path.split('/').at(-1)} />}

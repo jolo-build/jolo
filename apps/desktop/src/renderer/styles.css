@@ -529,12 +529,14 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .panel-item-bar { display: flex; flex: 0 0 34px; min-width: 0; border-bottom: 1px solid var(--border); }
 .context-bar > .panel-item-bar { flex: 1; align-self: stretch; border-bottom: 0; }
 .panel-item-tabs { display: flex; min-width: 0; overflow-x: auto; flex: 1; scrollbar-width: thin; }
-.panel-item-tab { display: flex; flex: 0 1 auto; min-width: 84px; max-width: 220px; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; }
+.panel-item-tab { position: relative; display: flex; flex: 0 1 auto; min-width: 84px; max-width: 220px; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; }
 .panel-item-tab[data-active="true"] { border-bottom-color: var(--text); background: var(--hover); }
 .panel-item-tab button, .panel-item-new { display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; padding: 7px 9px; font-size: 11px; }
 .panel-item-tab [role="tab"] { min-width: 0; }
 .panel-item-tab [role="tab"] span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .panel-item-tab .panel-item-close { flex: 0 0 auto; padding: 5px; }
+.panel-item-tab:not([data-active="true"]) .panel-item-close { display: none; position: absolute; inset: 0 0 0 auto; background: var(--hover); }
+.panel-item-tab:not([data-active="true"]):hover .panel-item-close { display: flex; }
 .panel-item-tab button:hover, .panel-item-new:hover { background: var(--hover); }
 .panel-item-new { flex: 0 0 34px; justify-content: center; border-left: 1px solid var(--border); }
 .changes { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -720,11 +722,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .check-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 11px var(--mono); }
 .check-row > span { flex: none; font-size: 11px; }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
-.terminal .bar { display: flex; flex: none; align-items: center; gap: 10px; min-height: 36px; padding: 4px 12px; color: var(--muted); font-size: 11px; }
-.terminal .bar .hint { flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal .bar button { padding: 4px; color: var(--muted); }
-.terminal .bar .hint { font-size: 10px; }
-.terminal .xterm-host { flex: 1; min-height: 0; padding: 5px 16px 8px; }
+.terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal .xterm-host { flex: 1; min-height: 0; padding: 10px 16px 8px; }
 .terminal .xterm { height: 100%; }
 @container inspector (max-width: 620px) {
   .plan-card > header { flex-wrap: wrap; gap: 8px; }

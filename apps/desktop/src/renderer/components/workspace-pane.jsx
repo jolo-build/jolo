@@ -428,7 +428,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             </div>
             <div className="tool-panel" id={`${pane.id}-checks-panel`} hidden={context !== "checks"}><ChecksPanel verification={verification} /></div>
             <div className="tool-panel" id={`${pane.id}-terminal-panel`} hidden={context !== "terminal"}>
-              {panelTabs.retained.filter(({ item }) => item.panelType === 'terminal').map(({ scope, item: tab }) => <div className="panel-item-content" key={tab.id} hidden={scope !== panelScope || terminalTabs.activeId !== tab.id}><Suspense fallback={null}><TerminalPane workspaceId={tab.workspaceId} paneId={tab.hookId} onClose={() => terminalTabs.close(tab.id)} /></Suspense></div>)}
+              {panelTabs.retained.filter(({ item }) => item.panelType === 'terminal').map(({ scope, item: tab }) => <div className="panel-item-content" key={tab.id} hidden={scope !== panelScope || terminalTabs.activeId !== tab.id}><Suspense fallback={null}><TerminalPane workspaceId={tab.workspaceId} paneId={tab.hookId} /></Suspense></div>)}
               {!terminalTabs.items.length && <div className="panel-empty"><Icon name="terminal" size={26} /><h2>No open terminals</h2><button onClick={newTerminal}>New terminal tab</button></div>}
             </div>
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
