@@ -66,7 +66,7 @@ function DiffPreview({ artifactId }) {
     return () => { cancelled = true; };
   }, [artifactId]);
   if (failed) return null;
-  if (text === null) return <p className="hint">Loading changes…</p>;
+  if (text === null) return <p className="hint deferred">Loading changes…</p>;
   const counts = diffSummary(text);
   return <div className="tool-diff">
     <div className="tool-diff-head">{counts.files} {counts.files === 1 ? "file" : "files"}<span className="diff-added">+{counts.added}</span><span className="diff-removed">−{counts.removed}</span></div>
@@ -94,7 +94,7 @@ function ScreenshotPreview({ artifactId }) {
     })().catch(() => {});
     return () => { cancelled = true; };
   }, [artifactId]);
-  return src ? <img className="screenshot" src={src} alt="browser screenshot" /> : <span className="hint">loading screenshot…</span>;
+  return src ? <img className="screenshot" src={src} alt="browser screenshot" /> : <span className="hint deferred">loading screenshot…</span>;
 }
 
 /**
@@ -109,10 +109,10 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
   const screenshot = status === "streaming" ? null : screenshotArtifactId(text);
   return (
     <details className="block tool" onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      <summary className={loading ? 'deferred' : undefined}><ActivityIcon name={loading ? 'spinner' : toolIcon(head)} active={loading || status === "streaming"} /><span>{head || (loading ? "Loading tool…" : "Tool")}{status === "streaming" ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       {expanded && <>
         {diffArtifactId && <DiffPreview artifactId={diffArtifactId} />}
-        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
+        {screenshot ? <ScreenshotPreview artifactId={screenshot} /> : !text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading tool output…</p> : <pre>{rest}</pre>}
       </>}
     </details>
   );
@@ -120,7 +120,7 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
 
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
   const working = status === "streaming";
-  if (!text.trim()) return <div className="reasoning-pending" role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
+  if (!text.trim()) return <div className={`reasoning-pending${working ? '' : ' deferred'}`} role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
   return (
     <details className="block reasoning">
       <summary><ActivityIcon name="think" active={working} /><span>Reasoning{working ? " …" : ""}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
@@ -149,7 +149,7 @@ const MessageArticle = memo(function MessageArticle(/** @type {MessageArticlePro
     {message.role === 'user' && run?.attachments?.length > 0 && <div className="message-attachments">{run.attachments.map((attachment, index) => !attachment.mimeType.startsWith('image/') ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
     {message.role === 'user' && run?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{run.taskReferences.map(task => <button type="button" key={task.url} title={`${task.team?.name ?? 'Personal'} · ${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>{task.team?.name ?? 'Personal'} · r{task.revision} ↗</span></button>)}</div>}
     {message.role !== "user" && (assistant && !guestName ? <div className="message-label sr-only">{assistantName}</div> : <div className="message-label" title={guestName ? 'Called in for this message' : undefined}>{assistant ? guestName : message.role}</div>)}
-    {!text && committedBytes > renderedBytes ? <p className="hint" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
+    {!text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
   </article>;
 });
 
@@ -158,7 +158,7 @@ function ActivityGroup({ messages, identity, guest, runState, hasRunStatus = fal
   const tools = messages.filter((message) => message.kind === "tool").length;
   if (!tools && !messages.some((message) => message.text.trim())) {
     if (working && hasRunStatus) return null;
-    return <div className="activity-pending" role="status" title={identity}><ActivityIcon name="spinner" active /><span>{working ? `Thinking…${guest ? ` · ${guest}` : ''}` : "Loading reasoning…"}</span></div>;
+    return <div className={`activity-pending${working ? '' : ' deferred'}`} role="status" title={identity}><ActivityIcon name="spinner" active /><span>{working ? `Thinking…${guest ? ` · ${guest}` : ''}` : "Loading reasoning…"}</span></div>;
   }
   // Background commands may span several replies. Their individual rows stay
   // live, while the task has one authoritative progress line below the transcript.
@@ -238,6 +238,14 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     observer.observe(el.firstElementChild);
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
+  // A first page too short to scroll never reaches the scroll load, so it fills the view itself without detaching the reader.
+  useEffect(() => {
+    const el = container.current;
+    if (!history?.hasOlder || history.loading || history.error || !el.clientHeight || el.scrollHeight > el.clientHeight + 100) return;
+    const following = follow.current;
+    loadOlder();
+    follow.current = following;
+  });
   const activeRun = runs.find(run => ['preparing', 'model', 'tools', 'awaiting_permission', 'cancelling'].includes(run.state));
   const thinking = activeRun?.state === 'model' && messages.some(message => message.runId === activeRun.id && message.kind === 'reasoning' && message.status === 'streaming');
   // Queued messages (and ones removed before starting) have no transcript yet.
@@ -299,9 +307,8 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     if (el.scrollTop < 100 && !history?.error) loadOlder();
   }}>
     <div className={`transcript${empty ? " empty-transcript" : ""}`}>
-      {history?.hasOlder && <div className="history-loader">
-        <button type="button" onClick={loadOlder} disabled={history.loading}>{history.loading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
-        {history.error && <p role="alert">Couldn’t load earlier messages. Try again.</p>}
+      {history?.hasOlder && (history.loading || history.error) && <div className="history-loader">
+        {history.error ? <p role="alert">Couldn’t load earlier messages · <button type="button" onClick={loadOlder}>Retry</button></p> : <p className="hint deferred" role="status" aria-label="Loading earlier messages">…</p>}
       </div>}
       {empty && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><p className="empty-tagline">A little help. A lot of possibility.</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {

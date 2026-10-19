@@ -32,7 +32,7 @@ export function RecentChats({ call, revision, state = 'open', sessionId, selecte
         childTasks={tree.children.get(task.sessionId) ?? []} />;
     })}
     {error && <p className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></p>}
-    {!result && loading && <p className="sidebar-empty" role="status">Loading chats…</p>}
+    {!result && loading && <p className="sidebar-empty deferred" role="status">Loading chats…</p>}
     {state === 'archived' && result && !rows.length && !error && <p className="sidebar-empty">No archived chats.</p>}
     {result?.hasMore && <button className="sidebar-load-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more chats'}</button>}
   </section>;

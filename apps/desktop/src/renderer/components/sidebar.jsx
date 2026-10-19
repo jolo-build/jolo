@@ -21,7 +21,7 @@ function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, o
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
     {rows.map(taskRow)}
     {error && <div className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></div>}
-    {!result && loading && <p className="sidebar-empty" role="status">Loading tasks…</p>}
+    {!result && loading && <p className="sidebar-empty deferred" role="status">Loading tasks…</p>}
     {state === 'archived' && result && !rows.length && !loading && !error && <p className="sidebar-empty">No archived tasks.</p>}
     {result?.hasMore && <button className="sidebar-load-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more tasks'}</button>}
   </div>;
@@ -89,7 +89,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
           {open && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
         </div>;
       })}
-      {!board && <p className="sidebar-empty" role="status">Loading workspaces…</p>}
+      {!board && <p className="sidebar-empty deferred" role="status">Loading workspaces…</p>}
       <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
         selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />
     </nav>

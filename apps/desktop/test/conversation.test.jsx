@@ -25,18 +25,18 @@ const reasoning = (overrides = {}) => ({ id: 'thinking', role: 'assistant', kind
 /** @param {PartialMessage[]} messages what the projection returns, newest last */
 const render = (...messages) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true }))} />);
 
-test('saved history exposes a load action, progress, and retryable errors', () => {
+test('saved history loads without a button, shows a deferred mark, and offers retry only on failure', () => {
   const history = { hasOlder: true, loading: false };
   const markup = () => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ history, hasProject: true }))} />);
-  expect(markup()).toContain('Load earlier messages');
+  expect(markup()).not.toContain('history-loader');
   history.loading = true;
-  expect(markup()).toContain('Loading earlier messages…');
-  expect(markup()).toContain('disabled');
+  expect(markup()).toContain('<p class="hint deferred" role="status" aria-label="Loading earlier messages">…</p>');
+  expect(markup()).not.toContain('<button');
   history.loading = false;
   history.error = 'offline';
-  expect(markup()).toContain('Try again.');
+  expect(markup()).toContain('Couldn’t load earlier messages · <button type="button">Retry</button>');
   history.hasOlder = false;
-  expect(markup()).not.toContain('Load earlier messages');
+  expect(markup()).not.toContain('history-loader');
 });
 
 describe('conversation activity', () => {
