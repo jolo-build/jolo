@@ -131,6 +131,21 @@ test('routine task notifications explicitly suppress the OS sound', async () => 
   } finally { f.service.dispose(); }
 });
 
+test('a finished task says nothing its title already says', async () => {
+  const f = attentionFixture({ focused: false });
+  try {
+    Object.assign(f.row, { session: { id: 's', title: 'look around' }, run: { id: 'r', prompt: 'look around', verification: { status: 'not_run' } } });
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } });
+    await Bun.sleep(1);
+    expect(f.notifications[0].options.title).toBe('repo · look around: done');
+    expect(f.notifications[0].options.body).toBeUndefined();
+    Object.assign(f.row, { changedFiles: 3, run: { id: 'r', prompt: 'look around', verification: { status: 'failed' } } });
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } });
+    await Bun.sleep(1);
+    expect(f.notifications[1].options.body).toBe('3 files changed · checks failed');
+  } finally { f.service.dispose(); }
+});
+
 
 test('browser uses native isolated mouse zoom and bounded keyboard shortcuts', () => {
   const contents = new EventEmitter();

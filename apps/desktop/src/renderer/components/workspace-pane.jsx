@@ -212,9 +212,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     const offFocus = window.jolo.onFocusRequest(open); // a clicked OS notification
     const offNotice = onFocusRequest(open); // a clicked in-app notice, by the same path
     // While this pane is showing a task, that task finishing needs no notice: the user can see it happen.
-    const offWatch = visible ? watchSession(sessionId) : null;
+    // Its approvals need none either, unless a narrow pane's open panel may be hiding the inline request.
+    const offWatch = visible ? watchSession(sessionId, { approvals: active || !context }) : null;
     return () => { window.removeEventListener("focus", onWindowFocus); offFocus(); offNotice(); offWatch?.(); };
-  }, [active, visible, workspaceId, sessionId, onFocusRequest, watchSession]);
+  }, [active, visible, workspaceId, sessionId, context, onFocusRequest, watchSession]);
 
   const reportError = (operation) => Promise.resolve().then(operation).catch((e) => state.setError(e.message));
   const openFolder = () => reportError(async () => {
@@ -389,7 +390,6 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
         <button className="pane-project" onClick={() => setPickerOpen(true)} title={project?.standalone ? 'Choose a workspace' : project?.rootPath ?? "Choose project and task"} aria-label="Choose project and task"><span>{projectLabel}</span><Icon name="down" size={11} /></button>
         <span className="pane-heading-separator">/</span><h1 className="pane-task-name" title={session?.title || (project?.standalone ? "New chat" : "New task")}>{session?.title || (project?.standalone ? "New chat" : "New task")}</h1>
         <div className="pane-actions">
-          {pendingPermission && <span className="pane-attention-label">Approval</span>}
           <button disabled={!canSplit} onClick={() => onSplit(pane.id, "x")} aria-label="Split right" title="Split right"><Icon name="splitRight" size={14} /></button>
           <button disabled={!canSplit} onClick={() => onSplit(pane.id, "y")} aria-label="Split below" title="Split below"><Icon name="splitBelow" size={14} /></button>
           {multi && <><button onClick={() => onZoom(pane.id)} aria-label={zoomed ? "Restore panes" : "Maximize pane"} title={zoomed ? "Restore panes" : "Maximize pane"}><Icon name={zoomed ? "restore" : "maximize"} size={13} /></button><button onClick={() => onClose(pane.id)} aria-label="Close pane" title="Close pane · tasks keep running"><Icon name="close" size={13} /></button></>}

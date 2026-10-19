@@ -42,14 +42,16 @@ export function EngineProvider({ children }) {
   // when it is, so a task that finishes in another project is never missed just because it was not on screen.
   const [notices, setNotices] = useState([]);
   const onScreen = useRef(new Map()); // sessions a visible pane is showing: they need no telling
+  const approvalOnScreen = useRef(new Map()); // of those, the ones whose approval request is on screen too
   const focusListeners = useRef(new Set());
   const dismissNotice = useCallback((key) => setNotices((list) => list.filter((notice) => notice.key !== key)), []);
   const showNotice = useCallback((notice) => setNotices((list) => [...list.filter((entry) => entry.key !== notice.key), notice].slice(-NOTIFY_LIMIT)), []);
-  /** A pane says which task it is showing, so finishing in front of the user is not announced to them. */
-  const watchSession = useCallback((sessionId) => {
+  /** A pane says which task it is showing, and whether it shows that task's approvals, so neither is announced twice. */
+  const watchSession = useCallback((sessionId, { approvals = false } = {}) => {
     if (!sessionId) return () => {};
-    onScreen.current.set(sessionId, (onScreen.current.get(sessionId) ?? 0) + 1);
-    return () => { const count = onScreen.current.get(sessionId) - 1; if (count) onScreen.current.set(sessionId, count); else onScreen.current.delete(sessionId); };
+    const maps = approvals ? [onScreen.current, approvalOnScreen.current] : [onScreen.current];
+    for (const map of maps) map.set(sessionId, (map.get(sessionId) ?? 0) + 1);
+    return () => { for (const map of maps) { const count = map.get(sessionId) - 1; if (count) map.set(sessionId, count); else map.delete(sessionId); } };
   }, []);
   /** Opening a task from a notice takes the same path a clicked OS notification does. */
   const requestFocus = useCallback((payload) => { for (const listener of focusListeners.current) listener(payload); }, []);
@@ -91,7 +93,7 @@ export function EngineProvider({ children }) {
         setNotices(list => list.filter(notice => notice.focus?.permissionId !== payload.permissionId));
         return;
       }
-      if (payload.kind !== "approval" && payload.sessionId && onScreen.current.has(payload.sessionId)) return;
+      if (payload.sessionId && (payload.kind === "approval" ? approvalOnScreen : onScreen).current.has(payload.sessionId)) return;
       showNotice({
         key: `${payload.sessionId ?? payload.projectId ?? payload.kind}:${payload.kind}:${payload.title}`,
         tone: payload.tone ?? "muted",

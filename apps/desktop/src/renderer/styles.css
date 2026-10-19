@@ -137,7 +137,6 @@ strong { font-weight: 550; }
 .pane-indicator { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--muted); opacity: .5; }
 .pane-indicator.is-running { background: var(--green); opacity: 1; box-shadow: 0 0 0 3px var(--green-bg); }
 .pane-indicator.needs-attention { background: var(--red); opacity: 1; box-shadow: 0 0 0 3px var(--red-bg); }
-.pane-attention-label { color: var(--red); font-size: 10px; }
 .pane-actions { display: flex; align-items: center; gap: 1px; margin-left: auto; flex: none; }
 .pane-actions button { padding: 4px; width: 23px; height: 24px; color: var(--muted); border-radius: 4px; }
 .pane-actions button:hover { color: var(--text); }
@@ -198,7 +197,6 @@ strong { font-weight: 550; }
 }
 @container (max-width: 340px) {
   .pane-heading { gap: 4px; padding-inline: 6px; }
-  .pane-attention-label { display: none; }
   .pane-project { max-width: 30%; justify-content: flex-start; }
   .pane-body .composer-context, .pane-body .composer-divider { display: none; }
   .pane-body .model-select { max-width: 75%; }
@@ -659,7 +657,6 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .notice-title { font-size: 12px; font-weight: 550; }
 .notice-title, .notice-body { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice-body { font-size: 11px; color: var(--muted); }
-.notice-body:empty { display: none; }
 .notice-dismiss { flex: none; width: 26px; color: var(--muted); border-radius: 0; }
 .notice-dismiss:hover { color: var(--text); background: var(--hover); }
 

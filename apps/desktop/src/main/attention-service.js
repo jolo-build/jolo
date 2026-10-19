@@ -5,7 +5,7 @@
 // There is one decision and it is made here: a window that is NOT focused gets an OS notification, and a
 // window that IS gets the same words sent into the app, which shows them as a notice. The renderer decides
 // only whether a notice is redundant, because it alone knows which task is on screen.
-import { checksLabel, clip } from "@jolo/client/board";
+import { clip } from "@jolo/client/board";
 
 const REFRESH_DEBOUNCE_MS = 250;
 const BOARD_EVENTS = new Set(["run.state", "permission.requested", "permission.resolved", "workspace.viewed", "session.updated", "session.deleted", "run.verification", "files.changed"]);
@@ -84,7 +84,7 @@ export function createAttentionService({ bridge, window, log, app, Notification,
     const toApp = () => { if (!disposed && !entry.closed && !window.isDestroyed()) window.webContents.send("jolo:notice", { ...payload, title, body, tone, at: Date.now() }); };
     if (!Notification.isSupported()) { toApp(); return; }
     // Only an unanswered approval may make a sound. Routine task updates stay quiet.
-    const notification = new Notification({ title, body, silent: kind !== "approval" });
+    const notification = new Notification({ title, body: body || undefined, silent: kind !== "approval" });
     entry.notification = notification;
     notification.on("click", () => {
       if (entry.closed || window.isDestroyed()) return;
@@ -136,8 +136,9 @@ export function createAttentionService({ bridge, window, log, app, Notification,
       const state = event.payload.state;
       const where = task ? `${row.name} · ${clip(task, 40)}` : row.name;
       const title = state === "completed" ? `${where}: done` : state === "failed" ? `${where}: task failed` : state === "interrupted" ? `${where}: interrupted` : `${where}: paused`;
-      const files = row.changedFiles ? ` · ${row.changedFiles} file${row.changedFiles === 1 ? "" : "s"}` : "";
-      const body = state === "completed" ? `${clip(task ?? row.run?.prompt ?? "", 80)} · checks ${checksLabel(row)}${files}` : clip(task ? `${task}: ${row.summary}` : row.summary, 120);
+      // The title already names the task; the body only adds what the title cannot say.
+      const files = row.changedFiles, checks = row.run?.verification?.status;
+      const body = state === "completed" ? [!task && clip(row.run?.prompt ?? "", 80), files && `${files} file${files === 1 ? "" : "s"} changed`, checks === "failed" ? "checks failed" : checks === "stale" ? "checks out of date" : null].filter(Boolean).join(" · ") : clip(row.summary ?? "", 120);
       const tone = state === "completed" ? "good" : state === "failed" ? "needs" : "muted";
       show({ kind, row, tone, title, body, sessionId: event.sessionId ?? null, permissionId: row.pendingPermission?.permissionId ?? null });
     } catch (error) {

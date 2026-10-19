@@ -647,6 +647,17 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     for (const deadline = Date.now() + 5_000; badge() !== "1";) { if (Date.now() > deadline) throw new Error(`dock badge is "${badge()}", expected "1"`); await new Promise((r) => setTimeout(r, 50)); }
     if (!bridge.attention.notified.some((n) => n.kind === "approval" && n.permissionId === waiting.pendingPermission.permissionId)) throw new Error(`no approval notification: ${JSON.stringify(bridge.attention.notified)}`);
     report.checks.push("the board listed the project under needs-you with its pending request, the dock badge counted it, and a notification was raised");
+    // The dialog is the one signal for a request on screen, and a stray click beside it refuses nothing.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (await evaluate("Boolean(document.querySelector('.permission-modal[open]')) && [...document.querySelectorAll('.notice.needs .notice-title')].some(node => node.textContent.includes('needs your approval'))")) throw new Error("an approval shown in its dialog was announced again by a notice");
+    const dialogEdge = await evaluate("(() => { const r = document.querySelector('.permission-modal[open]').getBoundingClientRect(); return { x: Math.max(2, Math.round(r.left) - 12), y: Math.round(r.top + r.height / 2) }; })()");
+    window.webContents.sendInputEvent({ type: "mouseMove", ...dialogEdge });
+    window.webContents.sendInputEvent({ type: "mouseDown", ...dialogEdge, button: "left", clickCount: 1 });
+    window.webContents.sendInputEvent({ type: "mouseUp", ...dialogEdge, button: "left", clickCount: 1 });
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (!(await evaluate(`Boolean(document.querySelector('.permission-modal[open]')) && window.__joloSmoke.state().pendingPermission === ${JSON.stringify(waiting.pendingPermission.permissionId)}`))) throw new Error("a click outside the permission dialog answered the request");
+    report.checks.push("with the approval dialog on screen no notice repeated it, and a click on the backdrop left the request waiting");
     await evaluate("(() => { const select = document.querySelector('.permission-modal select'); select.value = 'allow_run'; select.dispatchEvent(new Event('change', {bubbles:true})); })()");
     await evaluate("document.querySelector('.permission-modal .primary').focus()");
     await permissionEnter();

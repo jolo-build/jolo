@@ -25,12 +25,12 @@ function Notice({ notice, onOpen, onDismiss }) {
       {notice.focus?.projectId ? (
         <button className="notice-open" onClick={() => onOpen(notice)} title="Open this task">
           <span className="notice-title">{notice.title}</span>
-          <span className="notice-body">{notice.body}</span>
+          {notice.body && <span className="notice-body">{notice.body}</span>}
         </button>
       ) : (
         <div className="notice-open notice-plain">
           <span className="notice-title">{notice.title}</span>
-          <span className="notice-body">{notice.body}</span>
+          {notice.body && <span className="notice-body">{notice.body}</span>}
         </div>
       )}
       <button className="notice-dismiss" onClick={() => onDismiss(notice.key)} aria-label="Dismiss"><Icon name="close" size={12} /></button>

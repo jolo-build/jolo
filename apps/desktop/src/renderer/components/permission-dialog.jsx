@@ -17,7 +17,7 @@ export function PermissionDialog({ request, onDecide, workspacePath = null }) {
     try { await onDecide(decision); }
     catch (e) { deciding.current = false; setError(e.message); setPending(false); }
   };
-  return <Modal label="Permission request" onClose={() => decide('deny')} initialFocus={allowButton} className="permission-modal" onKeyDown={event => {
+  return <Modal label="Permission request" onClose={() => decide('deny')} dismissOnBackdrop={false} initialFocus={allowButton} className="permission-modal" onKeyDown={event => {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
     // Holding Enter must not approve a second request that appears after this one.
     if (event.repeat || deciding.current) { event.preventDefault(); return; }

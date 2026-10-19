@@ -10,9 +10,10 @@ import { useEffect, useRef } from 'react';
  *   initialFocus?: { current: HTMLElement | null },
  *   className?: string,
  *   style?: import('react').CSSProperties,
+ *   dismissOnBackdrop?: boolean,
  * }} props `onKeyDown` and `initialFocus` belong to dialogs with a primary action; most have neither.
  */
-export function Modal({ children, label, onClose, onKeyDown, initialFocus, className = '', style }) {
+export function Modal({ children, label, onClose, onKeyDown, initialFocus, className = '', style, dismissOnBackdrop = true }) {
   const dialog = useRef(null);
   const backdropPress = useRef(false);
   const close = useRef(onClose);
@@ -43,6 +44,6 @@ export function Modal({ children, label, onClose, onKeyDown, initialFocus, class
     onClick={(event) => {
       const dismiss = backdropPress.current && isBackdrop(event);
       backdropPress.current = false;
-      if (dismiss) { event.stopPropagation(); close.current?.(); }
+      if (dismiss) { event.stopPropagation(); if (dismissOnBackdrop) close.current?.(); }
     }}>{children}</dialog>;
 }
