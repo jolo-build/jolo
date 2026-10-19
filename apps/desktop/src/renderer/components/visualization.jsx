@@ -61,7 +61,7 @@ export function Visualization({ block, sessionId, streaming }) {
     return () => { live = false; if (url) window.jolo.releaseVisualization(url); };
   }, [active, block.path, block.status, sessionId, attempt]);
   return <section ref={root} className={`visualization ${block.mode === 'wide' ? 'wide' : ''}`} aria-label={title}>
-    <div className="visualization-toolbar"><Icon name="browser" size={14} /><span title={block.path}>{title}</span>{preview && <button type="button" onClick={() => setExpanded(true)} aria-label={`Expand ${title}`}><Icon name="maximize" size={13} />Expand</button>}</div>
+    <div className="visualization-toolbar"><span title={block.path}>{title}</span>{preview && <button type="button" onClick={() => setExpanded(true)} aria-label={`Expand ${title}`} title="Expand"><Icon name="maximize" size={13} /></button>}</div>
     {block.status !== 'ready' ? <p className="visualization-note" role="status">{block.status === 'pending' ? streaming ? 'Preparing visualization…' : 'This visualization reference is incomplete.' : 'This visualization reference is invalid.'}</p>
       : !sessionId ? <p className="visualization-note">Open this chat to preview its visualization.</p>
       : error ? <div className="visualization-note" role="alert"><p>{error.message}</p>{!error.restart && <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry preview</button>}</div>

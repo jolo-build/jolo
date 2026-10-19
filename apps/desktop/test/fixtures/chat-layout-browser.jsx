@@ -45,7 +45,7 @@ async function run() {
       check(copied.at(-1) === source, `Copy changed the ${language || 'unlabeled'} source or its whitespace`);
       check(button.textContent === 'Copied', 'Copy did not confirm success');
       const style = getComputedStyle(button);
-      check(style.paddingLeft === style.paddingRight && parseFloat(style.paddingRight) >= 9, 'Copy hover background has unbalanced padding');
+      check(style.paddingLeft === style.paddingRight, 'Copy hover background has unbalanced padding');
       const controls = [...button.parentElement.querySelectorAll('button')];
       check(controls.every(control => near(control.getBoundingClientRect().height, button.getBoundingClientRect().height)), 'Code header hover backgrounds have different heights');
       const toggle = /** @type {HTMLButtonElement} */ (host.querySelector('.md-embed-toggle'));

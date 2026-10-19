@@ -852,12 +852,17 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .md h3, .md h4, .md h5, .md h6 { margin: 16px 0 7px; font-size: 15px; font-weight: 600; }
 .md code.md-code-lines { display: block; white-space: pre; overflow-x: auto; padding: 8px 10px; margin: 6px 0; line-height: 1.6; }
 .md code { font-family: var(--mono); font-size: .92em; background: var(--hover); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; box-decoration-break: clone; overflow-wrap: anywhere; }
-.md-code-block { width: fit-content; max-width: 100%; min-width: 0; background: var(--subtle); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 12px 0; }
-.md-code-language { display: flex; align-items: center; gap: 8px; padding: 6px 13px; border-bottom: 1px solid var(--border); color: var(--muted); font: 11px/1.5 var(--mono); }
-.md-code-copy { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; min-width: 82px; min-height: 28px; padding: 4px 9px; border-radius: 6px; color: var(--muted); font: 11px/1.5 var(--sans); white-space: nowrap; }
-.md-code-copy:hover { background: var(--hover); color: var(--text); }
+.md-code-block { position: relative; width: fit-content; max-width: 100%; min-width: 0; background: var(--subtle); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 12px 0; }
+.md .md-code-block > pre.md-code { padding-right: 40px; }
+.md-code-tools { position: absolute; top: 5px; right: 5px; display: flex; gap: 2px; border-radius: 6px; background: var(--subtle); opacity: 0; }
+:is(.md-code-block, .md-embed):is(:hover, :has(:focus-visible)) > .md-code-tools { opacity: 1; }
+@media (hover: none) { .md-code-tools { opacity: 1; } }
+.md-code-tools button { flex: none; width: 26px; height: 26px; padding: 6px; color: var(--muted); }
+.md-code-tools button:hover { color: var(--text); }
+.md-code-tools .md-embed-toggle[aria-pressed=true] { color: var(--text); background: var(--hover); }
 .md-code-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.md-embed { min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 12px 0; background: var(--bg); }
+.md-embed { position: relative; min-width: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 12px 0; background: var(--bg); }
+.md-embed:not(.md-diagram) { border: 0; border-left: 2px solid var(--border); border-radius: 0; background: none; }
 .md-diagram-body { padding: 12px; min-width: 0; }
 /* Inline diagrams scroll with the conversation; panning belongs to the full-window viewer. */
 .mermaid-viewport { min-width: 0; overflow: clip; }
@@ -878,9 +883,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .mermaid-rail { fill: none; stroke: var(--border); stroke-dasharray: 3 3; }
 .mermaid-rail-label { font-style: italic; }
 .mermaid-group { color: var(--muted); font-size: 11px; padding: 6px 2px 0; }
-.md-embed-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; font: 11px var(--sans); color: var(--muted); padding: 4px 9px; margin: 0; }
-.md-embed-toggle[aria-pressed=true], .md-embed-toggle:hover { color: var(--text); }
-.md-embed-body { padding: 12px 14px; }
+.md-embed-body { padding: 2px 0 2px 13px; }
 .md-embed-body .md-embed { margin: 8px 0; }
 .md-preview { flex: 1; min-height: 0; overflow: auto; background: var(--bg); padding: 16px 18px; font-size: 13px; line-height: 1.7; }
 .inspector :is(.diff, .md-preview, .file-heading, .review-footer) { background: color-mix(in srgb, var(--bg) 18%, transparent); }
@@ -1130,7 +1133,6 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
   .account-row input[type=checkbox]::before, .account-row input[type=checkbox]:checked::before { background: ButtonText; }
 }
 
-.mermaid-expand { width: 28px; height: 28px; padding: 6px; color: var(--muted); border-radius: 6px; }
 .modal.mermaid-full-window { inset: 0; margin: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; padding: 16px 24px; border: 0; border-radius: 0; background: transparent; box-shadow: none; gap: 12px; overflow: hidden; }
 .modal.mermaid-full-window::backdrop { background: #000c; }
 .mermaid-full-heading { display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px; align-items: center; gap: 12px; color: #fff; font-size: 13px; }

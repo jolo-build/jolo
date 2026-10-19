@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Icon } from './icon.jsx';
 
 /** Copy the fence's source, preserving whitespace and excluding its controls. */
-export function CopyCodeButton({ text }) {
+export function CopyCodeButton({ text, language = '' }) {
   const [result, setResult] = useState({ text: null, status: 'idle' });
   const status = result.text === text ? result.status : 'idle';
   useEffect(() => {
@@ -11,7 +11,7 @@ export function CopyCodeButton({ text }) {
     return () => clearTimeout(timer);
   }, [result]);
   return <button type="button" className="md-code-copy" aria-label="Copy code to clipboard"
-    title={status === 'failed' ? 'Could not copy. Click to try again.' : 'Copy to clipboard'}
+    title={status === 'failed' ? 'Could not copy. Click to try again.' : `Copy ${language || 'code'}`}
     disabled={result.status === 'copying'} onClick={async () => {
       setResult({ text, status: 'copying' });
       try {
@@ -19,7 +19,7 @@ export function CopyCodeButton({ text }) {
         setResult({ text, status: 'copied' });
       } catch { setResult({ text, status: 'failed' }); }
     }}>
-    <Icon name={status === 'copied' ? 'check' : 'copy'} size={13} />
-    <span aria-live="polite">{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</span>
+    <Icon name={status === 'copied' ? 'check' : 'copy'} size={14} />
+    <span className="sr-only" aria-live="polite">{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</span>
   </button>;
 }
