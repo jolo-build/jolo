@@ -16,7 +16,7 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     const pdfWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false } });
     try { await pdfWindow.loadURL('data:text/html,<h1>Jolo PDF preview</h1><p>This document opens inside the Files panel.</p>'); writeFileSync(path.join(project, 'report.pdf'), await pdfWindow.webContents.printToPDF({})); }
     finally { pdfWindow.destroy(); }
-    await evaluate("window.__joloSmoke.showTask(); window.__joloSmoke.send('Show the generated files')");
+    await evaluate("window.__joloSmoke.send('Show the generated files')");
     await waitFor("Array.from(document.querySelectorAll('.message.assistant a')).some(a => a.textContent === 'PLAN.md')", 'assistant file links');
     const click = async name => evaluate(`Array.from(document.querySelectorAll('.message.assistant a')).find(a => a.textContent === ${JSON.stringify(name)}).click()`);
     await click('PLAN.md');

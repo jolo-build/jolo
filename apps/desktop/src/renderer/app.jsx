@@ -65,15 +65,12 @@ function DesktopWorkspace() {
       window.removeEventListener('blur', clearTaskDrag);
     };
   }, [clearTaskDrag]);
-  const [paneViews, setPaneViews] = useState({ 'pane-1': 'board' });
-  const onViewChange = useCallback((id, view) => setPaneViews(current => current[id] === view ? current : { ...current, [id]: view }), []);
-  const boardActive = paneViews[layout.active] === 'board';
   const [sidebarState, setSidebarState] = useState(() => readSidebar(window.localStorage));
-  const sidebarHidden = boardActive || sidebarState.collapsed;
+  const sidebarHidden = sidebarState.collapsed;
   const [sidebarHovered, setSidebarHovered] = useState(false);
-  const canPeekSidebar = sidebarState.collapsed && !boardActive && !settingsOwner;
+  const canPeekSidebar = sidebarState.collapsed && !settingsOwner;
   const sidebarPeeking = canPeekSidebar && sidebarHovered;
-  useEffect(() => { setSidebarHovered(false); }, [sidebarState.collapsed, boardActive, settingsOwner]);
+  useEffect(() => { setSidebarHovered(false); }, [sidebarState.collapsed, settingsOwner]);
   useEffect(() => {
     if (!sidebar) return;
     // The sidebar content is portaled from WorkspacePane; listen on its DOM host.
@@ -136,21 +133,20 @@ function DesktopWorkspace() {
     const [id, controller] = browserTarget(controllers.current, workspaceId, layoutRef.current.active);
     if (layoutRef.current.zoom && layoutRef.current.zoom !== id) dispatch({ type: 'zoom', id: layoutRef.current.zoom });
     dispatch({ type: 'focus', id });
-    controller.showTask();
     controller.openBrowser();
   }), []);
 
   useEffect(() => {
     const onKey = (event) => {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !document.querySelector('dialog[open], .settings-page')) {
-        event.preventDefault(); if (!boardActive) toggleSidebar(); return;
+        event.preventDefault(); toggleSidebar(); return;
       }
       if (!(event.metaKey || event.ctrlKey) || event.altKey || (event.code !== "Backslash" && event.key !== "\\") || document.querySelector("dialog[open], .settings-page")) return;
       event.preventDefault(); split(layoutRef.current.active, event.shiftKey ? "y" : "x");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [split, toggleSidebar, boardActive]);
+  }, [split, toggleSidebar]);
   useEffect(() => {
     if (!window.jolo.smoke) return;
     window.__joloSmoke = new Proxy({}, { get: (_target, property) => {
@@ -182,7 +178,7 @@ function DesktopWorkspace() {
           return <section key={pane.id} className={`pane-slot${layout.active === pane.id ? " focused" : ""}${layout.panes.length > 1 ? " compact-pane" : ""}`} data-pane-id={pane.id} aria-label={`Workspace pane ${pane.id.slice(5)}`} hidden={hidden}
             style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
             onPointerDownCapture={() => dispatch({ type: "focus", id: pane.id })} onFocusCapture={() => dispatch({ type: "focus", id: pane.id })}>
-            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onViewChange={onViewChange} onFocus={focusPane} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} />
+            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onFocus={focusPane} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} />
             {draggedTask && !hidden && !settingsOwner && <div className="task-split-target"
               onDragOver={event => {
                 if (!acceptsTaskDrop(event)) return;

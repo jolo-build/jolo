@@ -4,7 +4,7 @@ import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
-import { JoloMark } from "./brand.jsx";
+import { JoloLogo, JoloMark } from "./brand.jsx";
 import { runLabel, screenshotArtifactId } from "../presentation.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
@@ -295,7 +295,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         <button type="button" onClick={loadOlder} disabled={history.loading}>{history.loading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
         {history.error && <p role="alert">Couldn’t load earlier messages. Try again.</p>}
       </div>}
-      {empty && <div className="empty-state"><p className="empty-tagline">A little help. A lot of possibility.</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
+      {empty && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><p className="empty-tagline">A little help. A lot of possibility.</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
         if (group.type === 'changes') {
           const card = changeCards.find(card => card.runId === group.runId);

@@ -67,7 +67,7 @@ Want a look first? `jolo demo` plays a scripted session — no agent or account 
 
 ## Start a task
 
-1. On your first launch, follow the guide to choose an agent, open a folder, and prepare a first task. You can skip it and reopen it from **Getting started** on the work board.
+1. On your first launch, follow the guide to choose an agent, open a folder, and prepare a first task. You can skip it and reopen it later from **Settings → About → Getting started**.
 2. Choose an agent and model below the message box.
 3. Describe what you want to do.
 4. Review the agent's work and continue the conversation.

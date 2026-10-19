@@ -15,15 +15,17 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
     await evaluate('document.querySelector(".pane-slot.focused .composer").requestSubmit()');
     await waitFor(`window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().assistantText.includes(${JSON.stringify(text)})`, 'standalone reply');
   };
-  await waitFor('Boolean(document.querySelector(".board-chat-actions button:not(:disabled)"))', 'new chat available without a folder');
+  await waitFor('Boolean(document.querySelector(".sidebar .new-chat:not(:disabled)"))', 'new chat available without a folder');
   assert(!(await state()).projectId, 'Fresh start unexpectedly requires a project');
-  await evaluate('document.querySelector(".board-chat-actions button").click()');
-  await waitFor('window.__joloSmoke.state().standalone && Boolean(window.__joloSmoke.state().sessionId) && window.__joloSmoke.state().view === "task"', 'standalone chat created');
+  await evaluate('document.querySelector(".sidebar .new-chat").click()');
+  await waitFor('window.__joloSmoke.state().standalone && Boolean(window.__joloSmoke.state().sessionId)', 'standalone chat created');
   const first = await state();
   assert(await evaluate('document.querySelectorAll(".sidebar-workspace").length === 0'), 'Chat appeared as a workspace folder');
   assert(await evaluate('!document.querySelector(".composer textarea").disabled'), 'Chat composer requires a project');
+  assert(await evaluate(`!document.querySelector('.sidebar .recent-chat[data-session-id="${first.sessionId}"]')`), 'An unsent chat is listed in the sidebar');
   await submit('Help me plan my weekend');
   await waitFor('document.querySelector(".header-task-title").textContent === "Help me plan my weekend"', 'chat gets its first-message title');
+  await waitFor(`Boolean(document.querySelector('.sidebar .recent-chat[data-session-id="${first.sessionId}"]'))`, 'a chat is listed as soon as it is sent');
   await evaluate('document.querySelector(".sidebar .new-chat").click()');
   await waitFor(`window.__joloSmoke.state().standalone && window.__joloSmoke.state().sessionId !== ${JSON.stringify(first.sessionId)}`, 'second standalone chat');
   assert((await state()).workspaceId !== first.workspaceId, 'Independent chats share working storage');
@@ -37,10 +39,10 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   assert((await state()).workspaceId !== first.workspaceId, 'Split reuses the source chat storage');
   await evaluate('window.__joloSmoke.closePane(window.__joloSmoke.layout().active)');
   await bridge.rawCall('project.open', { path: project });
-  await evaluate('window.__joloSmoke.showBoard()');
-  await waitFor('document.querySelectorAll(".board-card").length === 1', 'only the actual workspace is a folder');
-  await evaluate('document.querySelector(".board-actions button").click()');
-  await waitFor('window.__joloSmoke.state().view === "task" && !window.__joloSmoke.state().standalone', 'workspace task creation still works');
+  await evaluate('window.__joloSmoke.refreshBoard()');
+  await waitFor('document.querySelectorAll(".sidebar-workspace").length === 1', 'only the actual workspace is a folder');
+  await evaluate('document.querySelector(".sidebar-workspace-new").click()');
+  await waitFor('!window.__joloSmoke.state().standalone && Boolean(window.__joloSmoke.state().sessionId)', 'workspace task creation still works');
   const workspaceTask = await state();
   const { session: backgroundChat } = await bridge.rawCall('session.create', {
     projectId: workspaceTask.projectId, workspaceId: workspaceTask.workspaceId, title: 'Background Claude task', agentId: 'claude',
@@ -55,8 +57,6 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   assert(await evaluate("!document.querySelector('.message-queue')"), 'independent chat was queued behind the background task');
   await bridge.rawCall('run.cancel', { runId: backgroundRun.id });
   report.checks.push('a new Claude chat sends and receives a reply while another Claude task in the same folder is active, without queueing or interrupting it');
-  await waitFor(`Boolean(document.querySelector(${JSON.stringify(recent)}))`, 'chats stay available from workspace');
-  await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
   // Compact sits in the usage panel for the agent answering here, and asks Claude to compact in its own terms.
   await waitFor("window.__joloSmoke.state().runState === 'completed'", 'Claude reply settled');
   await evaluate("document.querySelector('.composer .usage-ring').click()");
@@ -64,6 +64,8 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   await evaluate("document.querySelector('.usage-panel .usage-compact').click()");
   await waitFor("!document.querySelector('.usage-panel') && window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().assistantText.includes('Context compacted.')", 'Claude compacted its context');
   report.checks.push('Compact in the usage panel asks Claude to compact its context and the task notes it');
+  await waitFor(`Boolean(document.querySelector(${JSON.stringify(recent)}))`, 'chats stay available from workspace');
+  await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
   await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'chat preserves both turns');
   for (const theme of /** @type {const} */ (['dark', 'light'])) {
     nativeTheme.themeSource = theme;
@@ -81,9 +83,9 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
     window.webContents.sendInputEvent({ type: 'keyDown', ...shortcut });
     window.webContents.sendInputEvent({ type: 'keyUp', ...shortcut });
     await loaded;
-    await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".board .recent-chat"))', 'Chats survive keyboard reload');
+    await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".sidebar .recent-chat"))', 'Chats survive keyboard reload');
     assert(await evaluate('!window.__reloadSentinel'), 'Shortcut refreshed data without reloading the application document');
-    await evaluate(`document.querySelector('.board .recent-chat[data-session-id="${first.sessionId}"]').click()`);
+    await evaluate(`document.querySelector('.sidebar .recent-chat[data-session-id="${first.sessionId}"]').click()`);
     await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'history survives keyboard reload');
   }
   report.checks.push('F5 and Cmd/Ctrl+R from the composer reload the whole application document and retain chat history');

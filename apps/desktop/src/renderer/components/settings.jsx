@@ -156,7 +156,10 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
               </section>
               <div className="settings-font-preview"><span className="settings-nav-label">Preview</span><p style={{ fontFamily: `${JSON.stringify(fonts.sans)}, var(--sans)` }}>A little help. A lot of possibility.</p><code style={{ fontFamily: `${JSON.stringify(fonts.mono)}, var(--mono)` }}>const answer = 42;</code><span className="terminal-sample" style={{ fontFamily: `${JSON.stringify(fonts.terminal)}, var(--terminal-font)` }}>~/project $ bun run dev</span></div>
             </div>
-            <div role="tabpanel" id={`${id}-about`} aria-labelledby={`${id}-about-tab`} hidden={section !== 'about'}>{section === 'about' && <AboutSettings />}</div>
+            <div className="settings-about" role="tabpanel" id={`${id}-about`} aria-labelledby={`${id}-about-tab`} hidden={section !== 'about'}>{section === 'about' && <>
+              <AboutSettings />
+              {onGetStarted && <section className="settings-card"><div className="settings-card-heading"><div><h2>Getting started</h2><p className="hint">Walk through choosing an agent and starting a first task again.</p></div><button type="button" className="outline" onClick={onGetStarted}>Open guide</button></div></section>}
+            </>}</div>
           </fieldset>
         </div>
       </div>

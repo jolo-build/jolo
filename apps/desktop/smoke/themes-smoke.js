@@ -42,7 +42,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     window.show();
     window.focus();
     app.focus({ steal: true });
-    try { await waitFor("Boolean(window.__joloSmoke) && Boolean(document.querySelector('.board')) && document.querySelector('#startup-screen').hidden", 'themed renderer restored'); }
+    try { await waitFor("Boolean(window.__joloSmoke) && Boolean(document.querySelector('.composer')) && document.querySelector('#startup-screen').hidden", 'themed renderer restored'); }
     catch (error) {
       const state = await evaluate("({ url: location.href, ready: document.readyState, visibility: document.visibilityState, theme: document.documentElement.dataset.theme, sheets: [...document.styleSheets].map(sheet => sheet.href), bridge: Boolean(window.jolo), smoke: window.jolo?.smoke, html: document.body.innerHTML.slice(0, 2500) })");
       throw new Error(`${error.message}; page=${JSON.stringify(state)}; console=${JSON.stringify(messages)}`);
@@ -51,7 +51,6 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
   const cssColor = hex => `rgb(${[1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16)).join(', ')})`;
   try {
     window.setSize(1200, 840);
-    await evaluate('window.__joloSmoke.showTask()');
     await waitFor("window.__joloSmoke.state().workspaceId && !window.__joloSmoke.state().standalone", 'folder workspace ready');
     // Resizing closes popovers; let the new task layout settle before opening its menu.
     await settle();
@@ -118,7 +117,6 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     await reload();
     assert.equal(await evaluate('document.documentElement.dataset.theme'), 'white');
     assert.equal(await evaluate('getComputedStyle(document.body).backgroundColor'), 'rgb(255, 255, 255)');
-    await evaluate("window.__joloSmoke.showTask()");
     await openSettings();
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Color theme\"]').value"), 'white');
     writeFileSync(path.join(results, 'theme-white-reload.png'), (await window.webContents.capturePage()).toPNG());

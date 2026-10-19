@@ -54,8 +54,7 @@ export async function runSplitSmoke({ window, bridge, project, results, evaluate
   const other = path.join(path.dirname(project), "other-project");
   mkdirSync(other, { recursive: true });
   await bridge.rawCall("project.open", { path: other });
-  await evaluate("window.__joloSmoke.showBoard()"); // refresh shared project picker data
-  await evaluate("window.__joloSmoke.showTask()");
+  await evaluate("window.__joloSmoke.refreshBoard()"); // refresh shared project picker data
   await click(third, "Choose project and task");
   await waitFor("Boolean(document.querySelector('.pane-picker[open]'))", "project picker");
   await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");

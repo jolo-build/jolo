@@ -42,7 +42,7 @@ function PinnedTasks({ rows, revision, call, sessionId, onOpenTask, onMenu, agen
   </section>;
 }
 
-export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, visible = true, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onError, historyState = 'open', onHistory }) {
+export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onError, historyState = 'open', onHistory }) {
   const [expanded, setExpanded] = useState(() => new Set(workspaceId ? [workspaceId] : []));
   const rows = useMemo(() => (board?.projects ?? []).filter(row => !row.standalone).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path)), [board]);
   const archived = historyState === 'archived';
@@ -62,7 +62,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
       {project && !project.standalone && <button className="new-task" onClick={onNewSession} title="New task in this workspace" aria-label="New task in this workspace"><Icon name="plus" size={14} /></button>}
       {project && !project.standalone && <button className="new-task-alt" onClick={onNewWorktree} title="New task in a worktree" aria-label="New task in a worktree"><Icon name="branch" size={14} /></button>}
     </div>
-    {!archived && visible && <PinnedTasks rows={rows} revision={board?.generatedAt} call={call} sessionId={sessionId} onOpenTask={onOpenTask} onMenu={menu} agentName={agentName} />}
+    {!archived && <PinnedTasks rows={rows} revision={board?.generatedAt} call={call} sessionId={sessionId} onOpenTask={onOpenTask} onMenu={menu} agentName={agentName} />}
     <div className="task-tabs" role="tablist" aria-label="Workspace tasks" onKeyDown={event => {
       if (/** @type {Element} */ (event.target).getAttribute('role') !== 'tab' || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -82,16 +82,16 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
           <div className={`sidebar-workspace-heading${workspaceId === row.workspaceId ? ' current' : ''}`}>
             <button className="sidebar-workspace-toggle" onClick={() => toggle(row.workspaceId)} aria-expanded={open} aria-controls={open ? `sidebar-chats-${row.workspaceId}` : undefined} aria-label={`${open ? 'Hide' : 'Show'} tasks in ${name}`} title={`${row.workspace.path}${!archived && row.taskCount !== undefined ? ` · ${row.taskCount} tasks` : ''}`}>
               <span className={`workspace-folder${working ? ' working' : ''}`} role={working ? 'img' : undefined} aria-label={working ? 'Tasks working' : undefined}><Icon name="folder" size={16} /><Icon name="chevron" size={14} className="workspace-disclosure" /></span><span className="sidebar-workspace-name">{name}</span>
-              {!archived && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
+              {!archived && !open && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
             </button>
             {!archived && <button className="sidebar-workspace-new" onClick={() => onNewWorkspaceTask(row)} aria-label={`New task in ${name}`} title={`New task in ${name}`}><Icon name="plus" size={13} /></button>}
           </div>
-          {open && visible && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
+          {open && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
         </div>;
       })}
       {!rows.length && <p className="sidebar-empty">{board ? 'No workspaces yet.' : 'Loading workspaces…'}</p>}
-      {visible && <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
-        selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />}
+      <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
+        selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />
     </nav>
     <div className="side-bottom"><button className="sidebar-open-folder" onClick={onOpenFolder}><Icon name="folderPlus" size={16} /><span>Open folder</span></button><button className="settings-link" onClick={onSettings}><Icon name="settings" size={16} /><span>Settings</span></button></div>
   </aside>;

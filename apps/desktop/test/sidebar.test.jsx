@@ -65,10 +65,8 @@ test('task progress marks working, waiting and failed states, and leaves settled
   const parent = renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'task', title: 'Task', run: { state: 'completed' } }, childTasks: [{ sessionId: 'child', attention: 'needs_you' }] }))} />);
   expect(parent).toContain('aria-label="A child task needs you"');
 });
-test('hidden sidebar does not mount chat loaders and empty folders remain visible', () => {
-  const html = render({ workspaceId: 'beta', visible: false });
-  expect(html).toContain('Hide tasks in beta');
-  expect(html).not.toContain('Loading tasks');
+test('empty folders remain visible', () => {
+  expect(render({ workspaceId: 'beta' })).toContain('Hide tasks in beta');
 });
 
 test('collapsed folders show ongoing work even when another task needs attention', () => {

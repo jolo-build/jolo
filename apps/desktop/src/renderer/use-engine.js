@@ -191,6 +191,16 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   }, [openProject, refreshBoard]);
 
   /** New task in the selected folder, or a fresh worktree when requested (§9.1). */
+  /** The folder's top-level task that was never written to, if it has one, with the agent and model just chosen. */
+  const emptyTask = async (workspaceId, choice) => {
+    const { tasks } = await call("board.tasks", { workspaceId, limit: 100 });
+    const empty = tasks.find((task) => !task.run && !task.title && !task.parentSessionId && !task.pinnedAt);
+    if (!empty) return null;
+    let { session } = await call("session.page", { sessionId: empty.sessionId, limit: 1 });
+    if ((choice.agentId ?? null) !== session.agentId) ({ session } = await call("session.setAgent", { sessionId: session.id, agentId: choice.agentId ?? null, expectedRevision: session.revision }));
+    if (choice.model && JSON.stringify(choice.model) !== JSON.stringify(session.model)) ({ session } = await call("session.setModel", { sessionId: session.id, model: choice.model, expectedRevision: session.revision }));
+    return session;
+  };
   const newSession = useCallback(async (title = "", options = {}) => {
     const current = projectRef.current;
     if (!current) throw new Error("open a project first");
@@ -204,7 +214,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       const { workspaces } = await call('workspace.list', { projectId: current.projectId });
       if (!workspaces.some(workspace => workspace.id === workspaceId)) workspaceId = current.workspaceId;
     }
-    const { session } = await call("session.create", { projectId: current.projectId, workspaceId, title, ...await newModelChoice(options.agentId) });
+    const choice = await newModelChoice(options.agentId);
+    // A folder keeps one task that has not been written to: asking for another opens that one, set to today's choice.
+    const reused = !title && !options.worktree ? await emptyTask(workspaceId, choice) : null;
+    const session = reused ?? (await call("session.create", { projectId: current.projectId, workspaceId, title, ...choice })).session;
     historyRef.current = "open";
     setHistoryState("open");
     const preferredMode = workspaceId === current.workspaceId ? "direct" : "worktree";

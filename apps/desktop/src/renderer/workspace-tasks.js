@@ -11,13 +11,9 @@ export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = '
   return { tasks: [...tasks.values()], hasMore: Boolean(result?.hasMore && result?.nextCursor) };
 }
 
-/**
- * The chats the sidebar lists: each one that has been written to, the open one, and the newest one not yet written to,
- * which another pane may have open. Older unwritten chats are left out rather than piling up as identical rows.
- */
-export function sidebarChats(tasks, sessionId) {
-  const newestUnwritten = tasks.filter((task) => !task.run).reduce((newest, task) => (!newest || String(task.updatedAt) > String(newest.updatedAt) ? task : newest), null);
-  return tasks.filter((task) => task.run || task.sessionId === sessionId || task === newestUnwritten);
+/** The chats the sidebar lists: a new chat joins the list with its first message, even while it is open. */
+export function sidebarChats(tasks) {
+  return tasks.filter((task) => task.run);
 }
 
 /**

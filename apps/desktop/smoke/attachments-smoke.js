@@ -4,7 +4,6 @@ import path from 'node:path';
 
 /** Exercise the native paste event through the real composer, bridge, engine and agent fixture. */
 export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, results, report }) {
-  await evaluate("window.__joloSmoke.showTask()");
   await evaluate("window.__joloSmoke.selectSession(null)");
   await evaluate("window.__joloSmoke.pickAnswerer('claude')");
   await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", 'image answerer');
@@ -141,19 +140,6 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   report.checks.push('file input accepts PDF, drag-and-drop accepts source files, Codex opens uploaded bytes, and sent file cards persist');
 
   const fileSessionId = await evaluate('window.__joloSmoke.state().sessionId');
-  await evaluate("document.querySelector('[aria-label=\"Show sidebar\"]')?.click()");
-  await waitFor("Boolean(document.querySelector('[aria-label=\"Hide sidebar\"]')) && !document.querySelector('.task-rail') && !document.querySelector('.main.has-task-rail')", 'expanded sidebar hides rail and removes its gutter');
-  await evaluate("document.querySelector('[aria-label=\"Hide sidebar\"]').click()");
-
-  await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${textSessionId}"]'))`, 'task rail lists another chat');
-  await evaluate(`document.querySelector('.task-rail [data-task-id="${textSessionId}"]').click()`);
-  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(textSessionId)}`, 'task rail switches chats');
-  await waitFor(`Boolean(document.querySelector('.task-rail [data-task-id="${textSessionId}"][aria-current="page"]'))`, 'task rail highlights selection');
-  await evaluate(`document.querySelector('.task-rail [data-task-id="${fileSessionId}"]').click()`);
-  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(fileSessionId)}`, 'task rail returns to previous chat');
-  await waitFor("document.querySelector('.message.user')?.textContent.includes('Report.pdf')", 'task rail loads the selected conversation');
-  writeFileSync(path.join(results, 'task-rail.png'), (await window.webContents.capturePage()).toPNG());
-  report.checks.push('task rail switches between saved chats and highlights the active chat');
 
   const documentPath = path.join(results, 'open-test.pdf');
   writeFileSync(documentPath, '%PDF-1.7\nfixture');

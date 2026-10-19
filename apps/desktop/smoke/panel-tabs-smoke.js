@@ -11,7 +11,6 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await waitFor("Boolean(document.querySelector('.panel-menu:popover-open[aria-label=\"New panel tab\"]'))", 'new tab menu');
     await evaluate(`document.querySelector('.panel-menu:popover-open [aria-label="${label}"]').click()`);
   };
-  await evaluate('window.__joloSmoke.showTask()');
   await evaluate('window.__joloSmoke.newTask()');
   const firstSession = await evaluate('window.__joloSmoke.state().sessionId');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
@@ -168,9 +167,11 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
   } finally { dialog.showOpenDialog = originalDialog; }
   const firstTabs = await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).map(tab => tab.textContent)");
   const firstUrl = await evaluate("document.querySelector('webview').getURL()");
-  await evaluate('window.__joloSmoke.newTask()');
-  const secondSession = await evaluate('window.__joloSmoke.state().sessionId');
-  assert(firstSession !== secondSession, 'new task did not create another chat');
+  // The first task was never written to, so New task would reopen it; the second one is made directly.
+  const { projectId, workspaceId } = await evaluate('window.__joloSmoke.state()');
+  const secondSession = (await bridge.rawCall('session.create', { projectId, workspaceId, title: '' })).session.id;
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(secondSession)})`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(secondSession)}`, 'second chat in the same workspace open');
   await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('[aria-label=\"Panel tabs\"] [role=tab]') && !document.querySelector('webview')", 'new chat in the same workspace starts without panels');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(`${fixtureUrl}?second-chat`)})`);
   await waitFor("document.querySelector('webview')?.getURL().includes('second-chat')", 'second chat owns a different browser');

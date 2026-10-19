@@ -37,7 +37,7 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
   };
   const report = { measuredAt: new Date().toISOString(), electron: process.versions.electron, chrome: process.versions.chrome, checks: [] };
   await waitFor("Boolean(window.__joloSmoke)", "renderer hook");
-  await waitFor("Boolean(document.querySelector('.onboarding, .board'))", 'initial workspace ready');
+  await waitFor("document.getElementById('startup-screen').hidden && Boolean(document.querySelector('.onboarding, .composer'))", 'initial workspace ready');
   if (process.env.JOLO_ONBOARDING_SMOKE === '1') {
     const { runOnboardingSmoke } = await import('./onboarding-smoke.js');
     try {
@@ -162,10 +162,10 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     } finally { fixture.close(); }
     return;
   }
-  if (process.env.JOLO_BOARD_SMOKE === '1') {
-    const { runBoardSmoke } = await import('./board-smoke.js');
+  if (process.env.JOLO_FOLDERS_SMOKE === '1') {
+    const { runFoldersSmoke } = await import('./folders-smoke.js');
     try {
-      await runBoardSmoke({ window, bridge, project, results, evaluate, waitFor, report });
+      await runFoldersSmoke({ window, bridge, project, results, evaluate, waitFor, report });
       writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
     } finally { fixture.close(); }
     return;
@@ -670,34 +670,12 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
       mkdirSync(directory, { recursive: true });
       await bridge.rawCall("project.open", { path: directory });
     }
-    await evaluate("window.__joloSmoke.showBoard()");
-    await waitFor("window.__joloSmoke.state().view === 'board' && document.querySelectorAll('.board-row').length >= 1", "board view", 10_000);
-    await waitFor("window.__joloSmoke.state().needsYou === 0 && Boolean(document.querySelector('.board-card .workspace-folder')) && !document.querySelector('.board-card .workspace-folder.working, .board-card .board-workspace-activity.needs')", "board row refreshed after completion", 10_000);
-    await waitFor("document.querySelectorAll('.board-row').length >= 4", "multiple board projects");
-    const boardTheme = nativeTheme.themeSource;
-    const boardWindowSize = window.getSize();
-    try {
-      for (const theme of /** @type {const} */ (["light", "dark"])) {
-        nativeTheme.themeSource = theme;
-        await waitFor(`matchMedia('(prefers-color-scheme: dark)').matches === ${theme === "dark"}`, `${theme} board theme`);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        writeFileSync(path.join(results, `board-${theme}.png`), (await window.webContents.capturePage()).toPNG());
-      }
-      window.setSize(800, 860);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      if (await evaluate("document.querySelector('.board').scrollWidth > document.querySelector('.board').clientWidth")) throw new Error("board overflows at narrow width");
-      if (await evaluate("Boolean(document.querySelector('.board button button'))")) throw new Error("board contains nested buttons");
-      writeFileSync(path.join(results, "board-narrow.png"), (await window.webContents.capturePage()).toPNG());
-    } finally { window.setSize(...boardWindowSize); nativeTheme.themeSource = boardTheme; }
-    report.checks.push("the workspace board renders multiple compact rows in both themes and fits a narrow window without nested buttons");
-    await evaluate("[...document.querySelectorAll('.board-card')].find(card => card.dataset.workspaceId === window.__joloSmoke.state().workspaceId).querySelector('.board-expand').click()");
-    await waitFor("Boolean(document.querySelector('.board-workspace-tasks .board-task'))", "workspace task list", 5_000);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await evaluate("window.__joloSmoke.refreshBoard()");
+    await waitFor("window.__joloSmoke.state().needsYou === 0 && document.querySelectorAll('.sidebar-workspace').length >= 4 && !document.querySelector('.sidebar .workspace-folder.working, .sidebar-activity.needs')", "sidebar folders refreshed", 10_000);
     const settled = await boardRow();
     if (!settled?.run?.note || settled.attention === "needs_you") throw new Error(`board row after completion: ${JSON.stringify(settled)?.slice(0, 500)}`);
-    writeFileSync(path.join(results, "board.png"), (await window.webContents.capturePage()).toPNG());
-    await evaluate("window.__joloSmoke.showTask()");
-    report.checks.push("the board expanded the workspace into its chats, and the badge cleared once nothing needed the user");
+    writeFileSync(path.join(results, "folders.png"), (await window.webContents.capturePage()).toPNG());
+    report.checks.push("the sidebar listed every opened folder, and the badge cleared once nothing needed the user");
 
     await evaluate("window.__joloSmoke.openTerminal()");
     await waitFor("Boolean(window.__joloTerminal?.ready) && window.__joloSmoke.state().terminalText.length > 0", "terminal ready with a prompt", 15_000);
@@ -763,7 +741,6 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     report.checks.push("a third-party agent CLI ran inside the workspace, its request for the user was observed from its screen, and its exit was reported by the process");
 
     // Claude Code through its structured stream: chosen in the composer, answered as a task, permissions routed to Jolo's dialog.
-    await evaluate("window.__joloSmoke.showTask()");
     if (!(await evaluate("window.__joloSmoke.hostedAgents()")).some((entry) => entry.id === "claude" && entry.available)) throw new Error("hosted Claude Code is missing from the composer picker");
     await evaluate("window.__joloSmoke.pickAnswerer('claude')");
     await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", "composer shows Claude Code as the answerer");
@@ -782,21 +759,17 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
         await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
         const progress = await evaluate(`(async () => {
           const button = document.querySelector('.composer .stop-button');
-          const arc = button?.querySelector('.stop-progress-arc');
-          const animation = arc?.getAnimations()[0];
-          const before = animation?.currentTime;
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
           const bounds = button.getBoundingClientRect();
-          return {animated: animation?.playState === 'running' && animation.currentTime > before, label: button.getAttribute('aria-label'), rect: {x: Math.floor(bounds.x - 8), y: Math.floor(bounds.y - 8), width: Math.ceil(bounds.width + 16), height: Math.ceil(bounds.height + 16)}};
+          return {stop: Boolean(button?.querySelector('.stop-progress rect')), label: button.getAttribute('aria-label'), rect: {x: Math.floor(bounds.x - 8), y: Math.floor(bounds.y - 8), width: Math.ceil(bounds.width + 16), height: Math.ceil(bounds.height + 16)}};
         })()`);
-        if (!progress.animated || progress.label !== 'Stop task') throw new Error(`working indicator failed in ${theme}: ${JSON.stringify(progress)}`);
+        if (!progress.stop || progress.label !== 'Stop task') throw new Error(`working indicator failed in ${theme}: ${JSON.stringify(progress)}`);
         writeFileSync(path.join(results, `composer-progress-${theme}.png`), (await window.webContents.capturePage(progress.rect)).toPNG());
       }
     } finally { nativeTheme.themeSource = progressTheme; }
     await waitFor("window.__joloSmoke.state().sessionAgentId === 'claude' && window.__joloSmoke.state().runState === 'completed'", "hosted turn completed", 30_000);
     const hostedState = await evaluate("window.__joloSmoke.state()");
     await waitFor("!document.querySelector('.composer .stop-progress') && Boolean(document.querySelector('.composer [aria-label=\"Send message\"]'))", 'working indicator returns to Send after the completed state renders');
-    report.checks.push('Enter approves the default Allow once action, selected permission scopes still work, and held Enter is ignored; the stop control animates in both themes and returns to Send on completion');
+    report.checks.push('Enter approves the default Allow once action, selected permission scopes still work, and held Enter is ignored; the stop control shows in both themes and returns to Send on completion');
     if (!hostedState.assistantText.includes("The command printed: hosted-smoke-ok")) throw new Error(`hosted reply missing: ${hostedState.assistantText.slice(-300)}`);
     if (!hostedState.toolText.includes('Bash {"command":"sleep 2; echo hosted-smoke-ok"}')) throw new Error(`hosted tool call missing: ${hostedState.toolText.slice(-300)}`);
     if ((await evaluate("document.querySelector('.task-header .task-agent')?.textContent")) !== "Claude Code") throw new Error("hosted task is not identified in the task header");
@@ -915,19 +888,16 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     const withWorktree = await projectRows();
     const worktreeRow = withWorktree.find((row) => row.workspace.mode === "worktree");
     if (withWorktree.length !== 2 || !worktreeRow || worktreeRow.git.branch !== "smoke/worktree" || !existsSync(worktreeRow.workspace.path) || worktreeRow.run?.state !== "completed") throw new Error(`worktree board rows: ${JSON.stringify(withWorktree.map((r) => [r.workspace, r.git, r.run?.state]))}`);
-    await evaluate("window.__joloSmoke.showBoard()");
-    await waitFor("document.querySelectorAll('.board-row').length >= 2 && document.querySelector('.worktree-tag')", "board shows the worktree row", 10_000);
+    await waitFor(`Boolean(document.querySelector('.sidebar-workspace[data-workspace-id="${worktreeRow.workspaceId}"]'))`, "sidebar shows the worktree folder", 10_000);
     writeFileSync(path.join(results, "worktree.png"), (await window.webContents.capturePage()).toPNG());
-    await evaluate("window.__joloSmoke.showTask()");
     await evaluate("window.__joloSmoke.removeWorktree()");
     for (const deadline = Date.now() + 10_000; (await projectRows()).length !== 1;) { if (Date.now() > deadline) throw new Error("worktree row did not disappear"); await new Promise((r) => setTimeout(r, 100)); }
     if (existsSync(worktreeRow.workspace.path)) throw new Error("worktree directory still exists after removal");
-    report.checks.push("a task ran in its own git worktree on a new branch, the board listed that checkout separately, and removal deleted the directory while keeping the branch");
+    report.checks.push("a task ran in its own git worktree on a new branch, the sidebar listed that checkout separately, and removal deleted the directory while keeping the branch");
   }
   {
     // Calling another agent into a task by name: the picker, then a turn that says who answered it (§4.3).
     // A fresh task, because the checkout the earlier one worked in has since been removed.
-    await evaluate("window.__joloSmoke.showTask()");
     await evaluate("window.__joloSmoke.newTask()");
     await waitFor("window.__joloSmoke.state().runCount === 0", "a fresh task to call an agent into");
     await evaluate(`(() => { const input = document.querySelector('.composer textarea'); input.focus(); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, "@co"); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
@@ -1014,7 +984,6 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     writeFileSync(path.join(results, "plan.png"), (await window.webContents.capturePage()).toPNG());
     report.checks.push("a plan of two tasks was written down, waited to be started, then ran one task at a time to completion with each task naming who answered it");
     await evaluate("window.__joloSmoke.showPlans()"); // leave the panel as the rest of the run found it
-    await evaluate("window.__joloSmoke.showTask()");
     const { runQueueSmoke } = await import('./queue-smoke.js');
     await runQueueSmoke({ evaluate, waitFor, bridge, window, results });
     report.checks.push('Enter queues messages durably; Remove keeps the current turn running; double Enter interrupts and sends exactly once in the same chat');

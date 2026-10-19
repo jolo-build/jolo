@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { readWorkspaceTasks } from '../src/renderer/workspace-tasks.js';
+import { readWorkspaceTasks, sidebarChats } from '../src/renderer/workspace-tasks.js';
 
 test('workspace task loading uses its own cursor and refreshes every loaded page', async () => {
   const calls = [];
@@ -18,4 +18,9 @@ test('workspace task loading uses its own cursor and refreshes every loaded page
 
 test('page failures remain visible to the task list for retry', async () => {
   await expect(readWorkspaceTasks(async () => { throw new Error('offline'); }, 'folder')).rejects.toThrow('offline');
+});
+
+test('a new chat joins the sidebar with its first message, even while it is open', () => {
+  const tasks = [{ sessionId: 'new' }, { sessionId: 'sent', run: { state: 'completed' } }, { sessionId: 'older' }];
+  expect(sidebarChats(tasks).map(task => task.sessionId)).toEqual(['sent']);
 });

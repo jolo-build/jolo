@@ -38,7 +38,6 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       && !document.querySelector('.task-tools');
   })()`);
   const originalSize = window.getSize(), originalTheme = nativeTheme.themeSource;
-  await evaluate('window.__joloSmoke.showTask()');
   window.setSize(1280, 860);
   try {
     await frame();

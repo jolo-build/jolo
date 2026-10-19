@@ -13,7 +13,6 @@ export async function runCloseShortcutsSmoke({ window, browserHost, fixtureUrl, 
   const quit = app.quit;
   app.quit = () => { quits++; };
   try {
-    await evaluate('window.__joloSmoke.showTask()');
     await selectPanel(evaluate, waitFor, 'Files');
     await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
     await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'browser loaded');

@@ -33,17 +33,20 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
   await evaluate(`document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-new').click()`);
   await waitFor(`window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)} && window.__joloSmoke.state().sessionId`, 'folder plus creates task in worktree');
   const firstNew = await evaluate('window.__joloSmoke.state().sessionId');
+  // A folder keeps one task that was never written to: plus and the top New task both reopen it.
+  await evaluate(`document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-new').click()`);
   await evaluate("document.querySelector('.new-task').click()");
-  await waitFor(`window.__joloSmoke.state().sessionId !== ${JSON.stringify(firstNew)} && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)}`, 'top new-task button preserves selected folder');
-  const selectedNew = await evaluate('window.__joloSmoke.state().sessionId');
+  await evaluate('new Promise(resolve => setTimeout(resolve, 500))');
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(firstNew)} && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)} && document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 1`, 'plus and the top New task reopen the folder’s empty task instead of adding more');
+  const selectedNew = (await bridge.rawCall('session.create', { projectId: alpha.projectId, workspaceId: worktree.id, title: '' })).session.id;
   await evaluate("document.querySelector('#archived-tasks-tab').click()");
   await waitFor(`document.querySelector('#archived-tasks-tab').getAttribute('aria-selected') === 'true' && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)}`, 'archive preserves the selected workspace');
   await evaluate("document.querySelector('#open-tasks-tab').click()");
-  await waitFor(`document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 3`, 'worktree task list restored');
+  await waitFor(`document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 2`, 'worktree task list restored');
   await evaluate(`document.querySelector(${JSON.stringify(`.sidebar .task[data-session-id="${selectedNew}"]`)}).click()`);
   // Keep the screenshot focused on the hierarchy rather than a long open folder.
   await evaluate(`(() => { const button = document.querySelector(${alphaGroup}).querySelector('.sidebar-workspace-toggle'); if (button.getAttribute('aria-expanded') === 'true') button.click(); })()`);
-  await waitFor(`document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 3 && document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle').title.includes('3 tasks')`, 'worktree chats and folder count refreshed');
+  await waitFor(`document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 2 && document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle').title.includes('2 tasks')`, 'worktree chats and folder count refreshed');
   const badgeSession = (await bridge.rawCall('session.page', { sessionId: firstNew })).session;
   await bridge.rawCall('session.setAgent', { sessionId: firstNew, agentId: 'claude', expectedRevision: badgeSession.revision });
   await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"]`)})?.title.includes('Claude Code')`, 'agent detail in the task row tooltip');
@@ -81,13 +84,11 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
   if (await evaluate(`getComputedStyle(document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle')).backgroundColor !== 'rgba(0, 0, 0, 0)'`)) throw new Error('folder hover has a second background');
   await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   writeFileSync(path.join(results, 'workspace-sidebar-working.png'), (await window.webContents.capturePage()).toPNG());
-  await evaluate('window.__joloSmoke.showBoard()');
-  await waitFor(`document.querySelector('.board-card[data-workspace-id="${worktree.id}"] .workspace-folder.working')`, 'board folder also shows ongoing work');
   await bridge.rawCall('run.cancel', { runId: run.id });
-  await waitFor("!document.querySelector('.board .workspace-folder.working')", 'folder animation stops after cancellation');
+  await waitFor(`!document.querySelector(${worktreeGroup}).querySelector('.workspace-folder.working')`, 'folder activity stops after cancellation');
   report.checks.push('sidebar task rows show stable progress icons, the latest agent/model, branch and worktree details with aligned title and metadata columns');
   report.checks.push('sidebar folders expand into paginated chats, retain the selected older chat without duplicates, and update its title after rename');
   report.checks.push('sidebar navigation crosses folders; Archive groups tasks by folder and supports opening and restoring them');
   report.checks.push('both folder plus and the top New task create chats in the selected worktree; sidebar fits light, dark, and narrow layouts');
-  report.checks.push('collapsed sidebar folders show task activity, the board reflects it, and folder hover has a single background');
+  report.checks.push('collapsed sidebar folders show task activity until it stops, and folder hover has a single background');
 }

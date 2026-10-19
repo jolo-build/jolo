@@ -70,7 +70,7 @@ export async function runReloadSmoke({ window, bridge, browserHost, project, fix
         } else {
           window.webContents.focus();
           try {
-            await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".board")) && !window.__panelReloadSentinel', `${panel}: ${JSON.stringify(shortcut)} whole application reloaded`);
+            await waitFor('Boolean(window.__joloSmoke) && Boolean(document.querySelector(".composer")) && !window.__panelReloadSentinel', `${panel}: ${JSON.stringify(shortcut)} whole application reloaded`);
           } catch (error) {
             throw new Error(`${error.message}; document=${await evaluate('document.body.innerText.slice(0, 500)')}`);
           }

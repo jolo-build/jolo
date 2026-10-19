@@ -22,7 +22,6 @@ export async function runZoomSmoke({ window, browserHost, fixtureUrl, evaluate, 
     focused.sendInputEvent({type:'keyUp', keyCode, modifiers});
     await frame();
   };
-  await evaluate('window.__joloSmoke.showTask()');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
   await waitFor("window.__joloSmoke.state().browserTitle === 'Jolo smoke page'", 'zoom browser fixture loaded');
   const guest = [...browserHost.guests.values()][0]?.guest;

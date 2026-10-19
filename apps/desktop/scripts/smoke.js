@@ -27,8 +27,8 @@ const tasks = process.argv.includes('--tasks');
 const loading = process.argv.includes("--loading");
 const visualization = process.argv.includes('--visualization');
 if (visualization) process.env.JOLO_VISUALIZATION_SMOKE = '1';
-const workspaceBoard = process.argv.includes('--board');
-if (workspaceBoard) process.env.JOLO_BOARD_SMOKE = '1';
+const folders = process.argv.includes('--folders');
+if (folders) process.env.JOLO_FOLDERS_SMOKE = '1';
 if (process.argv.includes('--model-controls')) process.env.JOLO_MODEL_CONTROLS_SMOKE = '1';
 if (process.argv.includes('--delegation')) process.env.JOLO_DELEGATION_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
@@ -156,7 +156,7 @@ if (visualization) writeFileSync(visualizationPath, `<div style="padding:20px"><
 // Exercise the delimiter-free agent output alongside the original marker format.
 const visualizationReply = `Here is the preview.\n\nvisualize${JSON.stringify({path:visualizationPath,mode:'wide',title:'Interactive preview'})}\n\nAnd a missing file:\n\nvisualize${JSON.stringify({path:path.join(realpathSync(project),'missing-preview.html')})}`;
 const scriptPath = path.join(home, "script.json");
-writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : workspaceBoard ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
+writeFileSync(scriptPath, JSON.stringify(visualization ? [{ text: [visualizationReply] }] : folders ? [{ text: Array.from({ length: 1000 }, () => 'Working on the folder.\n') }] : browserChat ? script.slice(1, 7) : liveResults ? [{ text: [...Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: checking the live conversation and its final reply.\n\n`), 'LIVE_FINAL_REPLY\n'] }] : script));
 const appIndex = process.argv.indexOf("--app");
 if (changeSummary) writeFileSync(scriptPath, JSON.stringify([
   { text: ['Inspected the icons. No files changed.'] },
