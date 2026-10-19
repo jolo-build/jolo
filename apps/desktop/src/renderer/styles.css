@@ -396,8 +396,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .change-summary-counts .diff-removed { color: var(--red); }
 .change-summary-status { font-size: 11px; color: var(--muted); }
 .change-summary-review { flex: none; gap: 4px; padding: 4px 6px; color: var(--muted); font-size: 12px; }
-.change-summary-files { list-style: none; padding: 0 0 0 16px; margin: 6px 0 0 7px; border-left: 1px solid var(--border); }
-.change-summary-files li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 26px; padding: 4px 6px 4px 0; }
+.change-summary-files { list-style: none; padding: 0 0 0 10px; margin: 6px 0 0 7px; border-left: 1px solid var(--border); }
+.change-summary-file { display: flex; justify-content: space-between; gap: 12px; width: 100%; min-height: 26px; padding: 4px 6px; text-align: left; }
 .change-summary-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 11px/1.5 var(--mono); font-variant-ligatures: none; }
 .change-summary-toggle { justify-content: flex-start; gap: 5px; margin: 4px 0 0 18px; max-width: calc(100% - 18px); padding: 4px 6px; color: var(--muted); font-size: 11px; text-align: left; }
 .compose-dock { position: relative; flex: none; min-width: 0; }
@@ -550,8 +550,8 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .file-op { color: var(--muted); font: 10px var(--mono); }
 .file-heading { display: flex; align-items: center; gap: 8px; padding: 13px; background: var(--bg); border-bottom: 1px solid var(--border); }
 .file-heading code { flex: 1; font: 11px var(--mono); overflow-wrap: anywhere; min-width: 0; }
-.file-heading label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; white-space: nowrap; }
-.file-heading input { width: 12px; height: 12px; }
+.file-context { padding: 2px 6px; color: var(--muted); font-size: 11px; }
+.file-context[aria-pressed=true], .file-context:hover { color: var(--text); }
 .diff { flex: 1; min-height: 0; overflow: auto; background: var(--bg); padding: 10px 0; font: 11px/1.8 var(--mono); }
 .diff > p { padding: 8px 14px; }
 .diff-lines { width: max-content; min-width: 100%; }

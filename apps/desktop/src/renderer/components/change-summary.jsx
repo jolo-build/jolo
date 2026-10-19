@@ -58,14 +58,14 @@ export function ChangeSummary({ files, onLoadDiff, onReview, frozen = false, ini
       <div className="change-summary-heading"><strong>Changed {files.length} {files.length === 1 ? 'file' : 'files'}</strong>
         {pending || unavailable ? <span className="change-summary-status">{pending ? 'Calculating changes…' : 'Line counts unavailable'}</span> : <LineCounts {...totals} />}
       </div>
-      <button type="button" className="change-summary-review" title="Review current working changes" onClick={onReview}>Review<Icon name="chevron" size={12} /></button>
+      <button type="button" className="change-summary-review" title="Review current working changes" onClick={() => onReview?.()}>Review<Icon name="chevron" size={12} /></button>
     </div>
     <ul className="change-summary-files">{visible.map(file => {
       const stat = counts.get(changeKey(file));
       const label = file.newPath ? `${file.path} → ${file.newPath}` : file.path;
-      return <li key={file.newPath ?? file.path}><span className="change-summary-path" title={label}>{label}</span>
+      return <li key={file.newPath ?? file.path}><button type="button" className="change-summary-file" onClick={() => onReview?.(file.newPath ?? file.path)}><span className="change-summary-path" title={label}>{label}</span>
         {!stat && !frozen ? <span className="muted" aria-label="Calculating line counts">…</span> : !stat || stat.unavailable ? <span className="muted" title="Line counts unavailable">—</span> : stat.binary ? <span className="muted">Binary</span> : <LineCounts {...stat} />}
-      </li>;
+      </button></li>;
     })}</ul>
     {files.length > 3 && <button type="button" className="change-summary-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       <span>{expanded ? 'Show fewer files' : `Show ${files.length - 3} more ${files.length === 4 ? 'file' : 'files'}`}</span><Icon name={expanded ? 'down' : 'chevron'} size={13} />

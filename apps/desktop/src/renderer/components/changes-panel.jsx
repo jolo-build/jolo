@@ -14,6 +14,7 @@ const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
  *   status?: { source?: string, loading?: boolean, error?: string | null, truncated?: boolean },
  *   onRefresh?: () => unknown,
  *   view?: string,
+ *   focus?: { path: string, at: number } | null,
  *   onSelectFile?: () => void,
  *   onOpenFile?: (path: string) => void,
  *   onLoadDiff: (path: string) => Promise<any>,
@@ -22,7 +23,7 @@ const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
  * }} props without `onLoadFile` there is nothing to render a markdown file from, so the preview tab
  *   is not offered at all.
  */
-export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFile, onOpenFile, onLoadDiff, onLoadFile, onRevert }) {
+export function ChangesPanel({ changes, status = {}, onRefresh, view, focus = null, onSelectFile, onOpenFile, onLoadDiff, onLoadFile, onRevert }) {
   const [selected, setSelected] = useState(null);
   const [diff, setDiff] = useState(null);
   const [note, setNote] = useState(null);
@@ -34,6 +35,7 @@ export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFi
   const [mode, setMode] = useState('diff'); // markdown files can also show a rendered preview of their current content
   const [preview, setPreview] = useState(null);
   const request = useRef(0);
+  const focused = useRef(focus?.at);
   const files = uniqueChanges(changes);
   const active = files.find((change) => (change.newPath ?? change.path) === selected) ?? files[0];
   const path = active?.newPath ?? active?.path;
@@ -49,12 +51,26 @@ export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFi
     load.catch((error) => { if (request.current === ticket) setNote(error.message); });
     return () => { request.current += 1; };
   }, [path, revision, visible, refresh, showPreview, onLoadDiff, onLoadFile]);
+  useEffect(() => {
+    if (!focus || focused.current === focus.at || status.loading) return;
+    focused.current = focus.at;
+    if (files.some((file) => (file.newPath ?? file.path) === focus.path)) setSelected(focus.path);
+    else onOpenFile?.(focus.path);
+  }, [focus, status.loading]);
   const select = (file) => { if (view === 'files' && onOpenFile) { onOpenFile(file.newPath ?? file.path); return; } setSelected(file.newPath ?? file.path); onSelectFile?.(); };
   const revert = async () => {
     setReverting(true); setNote(null);
     try { await onRevert(active.invocationId, path); await onRefresh?.(); setNote(`Reverted ${path}`); setRefresh((value) => value + 1); }
     catch (error) { setNote(error.message); }
     finally { setReverting(false); setConfirmRevert(false); }
+  };
+  const step = (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const index = files.indexOf(active) + (event.key === 'ArrowDown' ? 1 : -1);
+    if (!files[index]) return;
+    setSelected(files[index].newPath ?? files[index].path);
+    event.currentTarget.querySelectorAll('button')[index]?.focus();
   };
   const markReviewed = () => {
     setReviewed((previous) => new Set([...previous, revision]));
@@ -65,14 +81,14 @@ export function ChangesPanel({ changes, status = {}, onRefresh, view, onSelectFi
   const refreshButton = <button className="icon-button" title="Refresh working changes" aria-label="Refresh working changes" onClick={() => { void onRefresh?.(); setRefresh(value => value + 1); }}><Icon name="refresh" size={14} /></button>;
   const scopeNote = status.source === 'git' ? 'All uncommitted changes in this workspace.' : 'Edits recorded by Jolo in this session. Git is unavailable for this folder.';
   const statusNote = status.error || (status.truncated ? 'Showing the first 1,000 changed files.' : null);
-  if (!files.length) return <div className={`panel-empty${status.loading ? ' deferred' : ''}`}><Icon name={view === 'files' ? 'folder' : 'changes'} size={26} /><h2>{status.error ? 'Could not load changes' : status.loading ? 'Loading changes…' : status.source === 'git' ? 'No working changes' : 'No recorded changes'}</h2><p>{status.error || (status.loading ? 'Checking this workspace…' : status.source === 'git' ? 'This workspace has no uncommitted changes.' : scopeNote)}</p>{refreshButton}</div>;
-  if (view === 'files') return <div className="file-tree"><div className="panel-heading"><strong>Working files</strong><span className="muted">{files.length} changed</span>{refreshButton}</div><p className="hint">{scopeNote}</p>{statusNote && <p className="panel-note" role="status">{statusNote}</p>}{files.map((file) => <button className="tree-file" key={file.newPath ?? file.path} onClick={() => select(file)}><Icon name="file" /><span><strong>{basename(file.newPath ?? file.path)}</strong><small>{(file.newPath ?? file.path).split('/').slice(0, -1).join('/') || '.'}</small></span><span className="file-op">{file.op}</span></button>)}</div>;
+  if (!files.length) return <div className={`panel-empty${status.loading ? ' deferred' : ''}`}><Icon name={view === 'files' ? 'folder' : 'changes'} size={26} /><h2>{status.error ? 'Could not load changes' : status.loading ? 'Loading changes…' : status.source === 'git' ? 'No changes' : 'No recorded changes'}</h2>{(status.error || status.loading || status.source !== 'git') && <p>{status.error || (status.loading ? 'Checking this workspace…' : scopeNote)}</p>}{refreshButton}</div>;
+  if (view === 'files') return <div className="file-tree"><div className="panel-heading" title={scopeNote}><strong>Working files</strong><span className="muted">{files.length} changed</span>{refreshButton}</div>{status.source !== 'git' && <p className="hint">{scopeNote}</p>}{statusNote && <p className="panel-note" role="status">{statusNote}</p>}{files.map((file) => <button className="tree-file" key={file.newPath ?? file.path} onClick={() => select(file)}><Icon name="file" /><span><strong>{basename(file.newPath ?? file.path)}</strong><small>{(file.newPath ?? file.path).split('/').slice(0, -1).join('/') || '.'}</small></span><span className="file-op">{file.op}</span></button>)}</div>;
   return <section className="changes">
-    <div className="panel-heading"><strong>Working changes</strong><span className="muted">{reviewedCount} of {files.length} reviewed</span>{refreshButton}</div>
-    <p className="hint">{scopeNote}</p>
+    <div className="panel-heading" title={scopeNote}><strong>Working changes</strong><span className="muted">{reviewedCount} of {files.length} reviewed</span>{refreshButton}</div>
+    {status.source !== 'git' && <p className="hint">{scopeNote}</p>}
     {statusNote && <p className="panel-note" role="status">{statusNote}</p>}
-    <div className="changes-list">{files.map((file) => <button key={file.newPath ?? file.path} className="change-file" aria-pressed={(file.newPath ?? file.path) === path} onClick={() => select(file)}><Icon name={reviewed.has(changeKey(file)) ? 'check' : 'file'} size={15} /><span>{file.path}{file.newPath ? ` → ${file.newPath}` : ''}</span><small className="file-op">{file.op}</small></button>)}</div>
-    <div className="file-heading"><code>{path}</code>{markdown && <div className="file-modes" role="tablist" aria-label="File view"><button role="tab" aria-selected={!showPreview} onClick={() => setMode('diff')}>Diff</button><button role="tab" aria-selected={showPreview} onClick={() => setMode('preview')}>Preview</button></div>}{!showPreview && <label><input type="checkbox" checked={context} onChange={(event) => setContext(event.target.checked)} />Context</label>}<button title="Refresh diff" aria-label="Refresh diff" onClick={() => { setReviewed((previous) => { const next = new Set(previous); next.delete(revision); return next; }); setRefresh((value) => value + 1); }}><Icon name="refresh" size={13} /></button></div>
+    {files.length > 1 && <div className="changes-list" onKeyDown={step}>{files.map((file) => <button key={file.newPath ?? file.path} className="change-file" aria-pressed={(file.newPath ?? file.path) === path} onClick={() => select(file)}><Icon name={reviewed.has(changeKey(file)) ? 'check' : 'file'} size={15} /><span>{file.path}{file.newPath ? ` → ${file.newPath}` : ''}</span><small className="file-op">{file.op}</small></button>)}</div>}
+    <div className="file-heading"><code>{path}</code>{files.length === 1 && active.op !== 'replace' && <small className="file-op">{active.op}</small>}{markdown && <div className="file-modes" role="tablist" aria-label="File view"><button role="tab" aria-selected={!showPreview} onClick={() => setMode('diff')}>Diff</button><button role="tab" aria-selected={showPreview} onClick={() => setMode('preview')}>Preview</button></div>}{!showPreview && <button className="file-context" aria-pressed={context} onClick={() => setContext((value) => !value)}>Context</button>}</div>
     {note && <p className="panel-note" role="status">{note}</p>}
     {showPreview ? <div className="md-preview" aria-label={`Preview of ${path}`}>
       {!preview && !note && <p className="hint deferred">Loading file…</p>}

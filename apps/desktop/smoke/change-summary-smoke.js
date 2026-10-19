@@ -19,6 +19,8 @@ export async function runChangeSummarySmoke({ window, project, evaluate, waitFor
   await waitFor("document.querySelectorAll('.change-summary-files li').length === 3", 'file list collapses');
   await evaluate("document.querySelector('.change-summary-review').click()");
   await waitFor("document.querySelector('.panel-item-tabs [aria-label=Changes]')?.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('.changes .diff .diff-line'))", 'Review opens the real diff panel');
+  const picked = await evaluate("(() => { const file = document.querySelectorAll('.change-summary-file')[1]; file.click(); return file.querySelector('.change-summary-path').textContent; })()");
+  await waitFor(`document.querySelector('.changes .file-heading code')?.textContent === ${JSON.stringify(picked)} && document.querySelector('.change-file[aria-pressed=true]')?.textContent.includes(${JSON.stringify(picked)})`, 'a file in the card opens its own diff');
   writeFileSync(path.join(project, 'assets/icons/home.svg'), '<svg><!-- unrelated edit --></svg>\n<!-- extra line -->\n');
   await evaluate("document.querySelector('[aria-label=\"Refresh working changes\"]').click()");
   if (await evaluate("document.querySelector('.change-summary-heading .diff-added').textContent") !== '+6') throw new Error('unrelated edits rewrote the card');
@@ -55,6 +57,6 @@ export async function runChangeSummarySmoke({ window, project, evaluate, waitFor
   await waitFor("document.querySelectorAll('.change-summary').length === 2", 'both result cards restored');
   if (!await evaluate(oldCardBeforePrompt)) throw new Error('reload detached previous changes from their reply');
   if (await evaluate("document.querySelector('.change-summary .diff-added').textContent") !== '+6') throw new Error('reload lost the historical line counts');
-  report.checks.push('Changed files card shows tracked and untracked line totals, expands and collapses, opens Review, ignores unrelated edits, and fits a narrow window');
+  report.checks.push('Changed files card shows tracked and untracked line totals, expands and collapses, opens Review and each file’s own diff, ignores unrelated edits, and fits a narrow window');
   report.checks.push('Previous changes stay above a follow-up prompt with frozen counts, after completion and reload; read-only turns have no card and attributed edits have their own card');
 }
