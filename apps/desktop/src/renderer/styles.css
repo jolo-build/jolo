@@ -825,6 +825,10 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .settings-appearance .select-field:focus-within { border-color: var(--highlight); }
 .settings-appearance .select-field:hover select { background: var(--field-focus); }
 .settings-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+/* Hiding an agent or provider keeps it out of the model menu only; its settings stay here. */
+.source-hide { flex: none; padding: 3px 8px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+.source-hide:hover:not(:disabled), .source-hide[aria-pressed="true"] { color: var(--text); background: var(--hover); }
+.agent-model-row.hidden .agent-identity h2 { color: var(--muted); }
 .settings-card-heading > div { min-width: 0; }
 .settings-card-heading h2 { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
 .settings-card-heading .hint { font-size: 11px; }

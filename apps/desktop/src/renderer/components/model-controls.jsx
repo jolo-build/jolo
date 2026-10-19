@@ -4,7 +4,7 @@ import { ModelLogo } from './brand.jsx';
 import { effortLabel, modelEfforts, effortForModel, modelLabel } from '../model-options.js';
 
 /** Quick access to the same saved model preferences used by Settings. */
-export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange }) {
+export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange, hiddenSources = [] }) {
   const trigger = useRef(null), effortTrigger = useRef(null), opener = useRef(null), search = useRef(null), panel = useRef(null), busy = useRef(false), alive = useRef(true);
   const id = useId();
   const [open, setOpen] = useState(false), [view, setView] = useState('models');
@@ -78,10 +78,12 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
     if (next !== (effort ?? null)) void save(selectedModel, next);
     else setPreview(undefined);
   };
+  // The menu lists what is set up and not hidden in Settings; the source in use, or being browsed, always stays reachable.
+  const inUse = agents.some(entry => entry.id === agentId) ? `agent:${agentId}` : `provider:${nativeModel?.preset}`;
   const sources = [
     ...agents.map(entry => ({ key: `agent:${entry.id}`, agentId: entry.id, preset: '', name: entry.displayName, available: entry.available })),
     ...presets.map(entry => ({ key: `provider:${entry.id}`, agentId: 'jolo', preset: entry.id, name: entry.displayName, available: entry.available })),
-  ];
+  ].filter(entry => (entry.available && !hiddenSources.includes(entry.key)) || entry.key === source || entry.key === inUse);
   const term = query.trim().toLowerCase();
   const sourceName = sources.find(entry => entry.key === source)?.name ?? agentName;
   const choices = (report?.models ?? []).filter(model => `${modelLabel(model.displayName || model.id)} ${model.id} ${sourceName}`.toLowerCase().includes(term));

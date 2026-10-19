@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { modelFromFields, ProviderOverridesSchema } from '@jolo/protocol/schemas';
 import { Select } from './select.jsx';
 
-export function ProviderModels({ settings, session, onPresets, onDiscover, onSaveConnection, onSaveDefault, onUseModel, onSetCredential }) {
+export function ProviderModels({ settings, session, onPresets, onDiscover, onSaveConnection, onSaveDefault, onUseModel, onSetCredential, onHide = null }) {
+  const hiddenHere = preset => (settings?.hiddenSources ?? []).includes(`provider:${preset.id}`);
   const current = session?.model ?? settings?.model;
   const [presets, setPresets] = useState([]), [selected, setSelected] = useState(current?.preset ?? 'openai');
   const [form, setForm] = useState({ model: current?.model ?? '', reasoningEffort: current?.effort ?? '', contextWindowTokens: current?.contextWindowTokens ?? '', maxOutputTokens: current?.maxOutputTokens ?? '' });
@@ -59,7 +60,8 @@ export function ProviderModels({ settings, session, onPresets, onDiscover, onSav
     </div>
     <fieldset className="settings-fields" disabled={busy || !preset}>
       <section className="settings-card" aria-label={preset?.displayName ?? 'Model provider'}>
-        <div className="settings-card-heading"><div><h2>{preset?.displayName ?? 'Loading providers…'}</h2><p className="hint">{preset?.auth.kind === 'none' ? 'No API key required.' : preset?.available ? `API key available (${preset.credentialSource}).` : 'An API key is required.'}</p></div></div>
+        <div className="settings-card-heading"><div><h2>{preset?.displayName ?? 'Loading providers…'}</h2><p className="hint">{preset?.auth.kind === 'none' ? 'No API key required.' : preset?.available ? `API key available (${preset.credentialSource}).` : 'An API key is required.'}</p></div>
+          {onHide && preset && <button type="button" className="source-hide" aria-pressed={hiddenHere(preset)} title={hiddenHere(preset) ? `Show ${preset.displayName} in the model menu` : `Hide ${preset.displayName} from the model menu`} onClick={() => onHide(`provider:${preset.id}`, !hiddenHere(preset))}>{hiddenHere(preset) ? 'Hidden' : 'Hide'}</button>}</div>
         {preset?.auth.kind !== 'none' && <label>API key<input type="password" value={key} onChange={e => setKey(e.target.value)} autoComplete="off" placeholder="Keep existing key" /></label>}
         {preset?.protocol !== 'fake' && <>
           <label>Base URL<input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={preset?.baseUrl} spellCheck={false} /></label>

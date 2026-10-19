@@ -19,7 +19,7 @@ const sections = [
 ];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
+function AgentModels({ agents, form, onChange, onDiscover, disabled, hidden = new Set(), onHide = null }) {
   const [found, setFound] = useState({});
   const [asking, setAsking] = useState({});
   const requested = useRef(new Set());
@@ -49,11 +49,13 @@ function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
     {configurable.map(agent => {
       const entry = form[agent.id] ?? { model: '', effort: '' };
       const report = found[agent.id];
-      return <section key={agent.id} className="agent-model-row" aria-label={agent.displayName}>
+      const isHidden = hidden.has(`agent:${agent.id}`);
+      return <section key={agent.id} className={`agent-model-row${isHidden ? ' hidden' : ''}`} aria-label={agent.displayName}>
         <div className="agent-identity">
           <span className="agent-avatar" aria-hidden="true"><AgentLogo agentId={agent.id} /></span>
           <div><h2>{agent.displayName}</h2><span className={`agent-install-state ${agent.available ? 'installed' : ''}`}><i />{agent.available ? 'Installed' : 'Not installed'}</span></div>
           <button type="button" className="agent-refresh" aria-label={`Refresh models for ${agent.displayName}`} disabled={disabled || !agent.available || asking[agent.id]} onClick={() => discover(agent.id, true)} title={`Refresh models for ${agent.displayName}`}><Icon name="refresh" size={14} /></button>
+          {onHide && <button type="button" className="source-hide" aria-pressed={isHidden} disabled={disabled} title={isHidden ? `Show ${agent.displayName} in the model menu` : `Hide ${agent.displayName} from the model menu`} onClick={() => onHide(`agent:${agent.id}`, !isHidden)}>{isHidden ? 'Hidden' : 'Hide'}</button>}
         </div>
         <div className="settings-field-grid agent-preferences">
           {agent.supportsModel && <label>Model<Select aria-label={`Model for ${agent.displayName}`} value={entry.model} disabled={disabled} onChange={event => onChange(agent.id, { ...entry, model: event.target.value })}>
@@ -74,7 +76,7 @@ function AgentModels({ agents, form, onChange, onDiscover, disabled }) {
   </div>;
 }
 
-export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDiscoverModels, onSetCredential, onClose, initialSection = 'agents', session, onPresets, onDiscoverProviderModels, onSaveConnection, onUseModel }) {
+export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDiscoverModels, onSetCredential, onClose, initialSection = 'agents', session, onPresets, onDiscoverProviderModels, onSaveConnection, onUseModel, onGetStarted = null, onHideSource = null }) {
   const [section, setSection] = useState(initialSection);
   const [agentForm, setAgentForm] = useState(() => Object.fromEntries(agents.map(agent => [agent.id, { model: agent.model ?? '', effort: agent.effort ?? '' }])));
   const [fonts, setFonts] = useState(readFonts);
@@ -131,9 +133,9 @@ export function SettingsPage({ settings, agents = [], onSave, onSaveAgents, onDi
           <header className="settings-heading"><h1 ref={heading} tabIndex={-1}>{current.label}</h1><p>{current.description}</p></header>
           <fieldset disabled={busy} className="settings-fields">
             <div role="tabpanel" id={`${id}-account`} aria-labelledby={`${id}-account-tab`} hidden={section !== 'account'}>{section === 'account' && <AccountSettings />}</div>
-            <div role="tabpanel" id={`${id}-agents`} aria-labelledby={`${id}-agents-tab`} hidden={section !== 'agents'}><AgentModels agents={agents} form={agentForm} disabled={busy} onChange={(agentId, entry) => { setAgentForm({ ...agentForm, [agentId]: entry }); setNote(null); }} onDiscover={onDiscoverModels} /></div>
+            <div role="tabpanel" id={`${id}-agents`} aria-labelledby={`${id}-agents-tab`} hidden={section !== 'agents'}><AgentModels agents={agents} form={agentForm} disabled={busy} hidden={new Set(settings?.hiddenSources ?? [])} onHide={onHideSource} onChange={(agentId, entry) => { setAgentForm({ ...agentForm, [agentId]: entry }); setNote(null); }} onDiscover={onDiscoverModels} /></div>
             <div role="tabpanel" id={`${id}-provider`} aria-labelledby={`${id}-provider-tab`} hidden={section !== 'provider'}>
-              <ProviderModels settings={settings} session={session} onPresets={onPresets} onDiscover={onDiscoverProviderModels} onSaveConnection={onSaveConnection} onSaveDefault={onSave} onUseModel={onUseModel} onSetCredential={onSetCredential} />
+              <ProviderModels settings={settings} session={session} onHide={onHideSource} onPresets={onPresets} onDiscover={onDiscoverProviderModels} onSaveConnection={onSaveConnection} onSaveDefault={onSave} onUseModel={onUseModel} onSetCredential={onSetCredential} />
             </div>
             <div className="settings-appearance" role="tabpanel" id={`${id}-appearance`} aria-labelledby={`${id}-appearance-tab`} hidden={section !== 'appearance'}>
               <section className="settings-card">

@@ -830,6 +830,8 @@ export const SettingsSchema = z.object({
   budgets: BudgetSettingsSchema,
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
+  /** Agents ("agent:<id>") and providers ("provider:<preset>") the user keeps out of the model menu. */
+  hiddenSources: z.array(z.string().min(1).max(80)).max(100).default([]),
 });
 
 const CredentialProvider = PresetId;
@@ -900,6 +902,7 @@ Object.assign(MethodSchemas, {
       providers: ProviderOverridesSchema.optional(),
       budgets: BudgetPatchSchema.optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
+      hiddenSources: z.array(z.string().min(1).max(80)).max(100).optional(),
     }),
     result: z.object({ settings: SettingsSchema }),
   },

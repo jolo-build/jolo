@@ -126,6 +126,10 @@ describe("choosing a model for each hosted agent", () => {
     // Clearing both fields is the same as forgetting the agent: it goes back to its own default.
     settings = (await client.call("settings.update", { agents: { claude: { model: null, effort: null }, codex: null } })).settings;
     expect(settings.agents).toEqual({});
+    // Hidden sources are a plain list the menu reads; repeats collapse, and an empty list clears it.
+    settings = (await client.call("settings.update", { hiddenSources: ["agent:grok", "provider:openai", "agent:grok"] })).settings;
+    expect(settings.hiddenSources).toEqual(["agent:grok", "provider:openai"]);
+    expect((await client.call("settings.update", { hiddenSources: [] })).settings.hiddenSources).toEqual([]);
     expect(await catalogEntry("claude")).toMatchObject({ model: null, effort: null });
     await expect(client.call("settings.update", { agents: { claude: { model: "" } } })).rejects.toMatchObject({ code: "invalid_params" });
   }, 30_000);
