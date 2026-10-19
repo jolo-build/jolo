@@ -68,33 +68,25 @@ function PreviewContext({ panel, onClose }) {
   </aside>;
 }
 function Workspace() {
-  const [screen, setScreen] = useState('chat'), [task, setTask] = useState(exampleTasks[0]), [panel, setPanel] = useState(null);
+  const [task, setTask] = useState(exampleTasks[0]), [panel, setPanel] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [openFolders, setOpenFolders] = useState(['jolo']);
-  const openTask = title => { setTask(title); setScreen('chat'); setSidebarOpen(false); setPanel(null); };
+  const openTask = title => { setTask(title); setSidebarOpen(false); setPanel(null); };
   const toggleFolder = name => setOpenFolders(openFolders.includes(name) ? openFolders.filter(f => f !== name) : [...openFolders,name]);
   const tasksFor = name => name === 'jolo' ? exampleTasks : [name === 'orbis' ? 'Refine the project sidebar' : 'Explore the codebase'];
   const taskRow = (title,index) => <button type="button" className={`example-task ${task === title ? 'selected' : ''}`} key={title} onClick={() => openTask(title)} aria-current={task === title ? 'true' : undefined}>
     <span className="example-status" aria-label={title === exampleTasks[0] ? 'Working' : 'Done'}>{title === exampleTasks[0] ? <span className="working-ring" /> : <Icon name="check" size={14} />}</span><span className="example-task-copy"><span className="example-task-title">{title}</span><small>{taskDetails[index][0]}</small><small className="example-task-branch"><Icon name="branch" size={11} /><span>{taskDetails[index][1]}</span><span>{taskDetails[index][2]}</span></small></span>
   </button>;
   return <div className="workspace-example">
-    <div className="app-bar"><div className="app-brand-area"><span className="app-wordmark">jolo</span><Icon name="panels" size={15} /><button className="mobile-preview-tasks" type="button" aria-expanded={sidebarOpen && screen === 'chat'} aria-label="Show example tasks" onClick={() => { setSidebarOpen(!sidebarOpen); setScreen('chat'); setPanel(null); }}><Icon name="panels" size={16} /> Tasks</button></div><Icon name="chat" size={14} /><span className="app-bar-title">{screen === 'board' ? 'Workspaces' : task}</span><div className="app-bar-end"><button type="button" onClick={() => { setScreen(screen === 'board' ? 'chat' : 'board'); setSidebarOpen(false); }} aria-pressed={screen === 'board'}><Icon name="board" size={14} /> Board</button><PreviewPanels selected={panel} onSelect={value => { setPanel(value); setScreen('chat'); setSidebarOpen(false); }} /></div></div>
-    {screen === 'board' ? <div className="preview-board">
-      <div className="preview-board-heading"><div><h3>Workspaces</h3><p><span className="activity-dot" /> 1 working <span>·</span> 1 new result</p></div><button className="preview-new-chat" type="button" onClick={() => openTask('New chat')}><Icon name="compose" size={15} /> New chat</button></div>
-      <div className="preview-section-label"><span>Folders <span>3</span></span><span>Recent activity</span></div>
-      {exampleFolders.map(([name,count,path,branch]) => <div className="preview-folder" key={name}>
-        <button type="button" className="preview-folder-heading" aria-expanded={openFolders.includes(name)} onClick={() => toggleFolder(name)}><Icon name="chevron" size={14} className={openFolders.includes(name) ? '' : 'collapsed'} /><Icon name="folder" /><strong>{name}</strong><span>{count}</span><span className="preview-path">{path}</span><code><Icon name="branch" size={13} />{branch}</code></button>
-        {openFolders.includes(name) && <div className="preview-folder-tasks">{tasksFor(name).map((title,index) => <button type="button" className={`preview-task ${name === 'jolo' && index === 0 ? 'is-working' : ''}`} key={title} onClick={() => openTask(title)}>{index === 0 && name === 'jolo' ? <span className="working-ring" /> : <Icon name="check" size={15} />}<span>{title}</span><small>{index === 0 && name === 'jolo' ? 'Working' : 'Done'}</small></button>)}{name === 'jolo' && <span className="preview-older">3 older tasks</span>}</div>}
-      </div>)}
-      <div className="preview-section-label preview-chats-label"><span>Chats</span><span>Outside workspaces</span></div><button className="preview-chat-row" type="button" onClick={() => openTask('Plan the next release')}><Icon name="chat" size={18} /><span>Plan the next release</span><small>Yesterday</small></button>
-    </div> : <div className={`app-body ${panel ? 'has-panel' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
+    <div className="app-bar"><div className="app-brand-area"><span className="app-wordmark">jolo</span><Icon name="panels" size={15} /><button className="mobile-preview-tasks" type="button" aria-expanded={sidebarOpen} aria-label="Show example tasks" onClick={() => { setSidebarOpen(!sidebarOpen); setPanel(null); }}><Icon name="panels" size={16} /> Tasks</button></div><Icon name="chat" size={14} /><span className="app-bar-title">{task}</span><div className="app-bar-end"><PreviewPanels selected={panel} onSelect={value => { setPanel(value); setSidebarOpen(false); }} /></div></div>
+    <div className={`app-body ${panel ? 'has-panel' : ''} ${sidebarOpen ? 'sidebar-open' : ''}`}>
       <aside className="app-sidebar" aria-label="Example tasks"><button className="example-new" type="button" onClick={() => openTask('New chat')}><Icon name="compose" size={16} /> New chat</button><div className="sidebar-label">Projects</div>
         {exampleFolders.map(([name]) => <div key={name}><button type="button" className="sidebar-folder" aria-expanded={openFolders.includes(name)} onClick={() => toggleFolder(name)}><Icon name={openFolders.includes(name) ? 'chevron' : 'folder'} size={16} /><span>{name}</span>{name === 'jolo' && <span className="activity-dot" />}</button>{openFolders.includes(name) && <div className="sidebar-task-tree">{tasksFor(name).slice(0,3).map(taskRow)}</div>}</div>)}
         <div className="sidebar-label">Chats</div><button className={`example-chat ${task === 'Plan the next release' ? 'selected' : ''}`} type="button" onClick={() => openTask('Plan the next release')}><Icon name="check" size={14} /><span>Plan the next release<small>Claude Code · Opus</small></span></button>
       </aside>
       <div className="app-conversation"><div className="conversation-heading"><Icon name="branch" size={13} /> refine-navigation <span>·</span> Worktree</div><div className="conversation-content"><div className="user-message">{task === 'New chat' || task === 'Plan the next release' ? 'Help me plan what to work on next.' : 'Make the workspace easier to navigate. Keep everything compact and consistent.'}</div><div className="agent-heading">Codex</div><p>I’m aligning the project and task rows. Each conversation will show its progress, latest model, and branch so you can pick up where you left off.</p><div className="activity"><span className="working-ring" /> Task activity <span>· 4 actions</span><span className="activity-rule" /></div><button type="button" className="review-line" onClick={() => setPanel('changes')}><Icon name="changes" size={15} /><span>Changes ready to inspect</span><span className="diff-count">+24 <span>−8</span></span></button></div><div className="example-composer"><span>Ask Codex to build, fix, or explore…</span><div><span><Icon name="plus" size={14} /> Codex <Icon name="chevron" size={12} /></span><span className="send-example"><Icon name="arrow" size={15} /></span></div></div></div>
       {panel && <PreviewContext panel={panel} onClose={() => setPanel(null)} />}
-    </div>}
+    </div>
   </div>;
 }
 function ProductPreview() {
