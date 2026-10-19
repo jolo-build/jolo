@@ -79,12 +79,12 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
     await evaluate(`document.querySelector('.board .recent-chat[data-session-id="${first.sessionId}"]').click()`);
     await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'history survives keyboard reload');
   }
-  // Claude's own subagents stand on their own line: their kind and model, what they are doing, then their report.
+  // Claude's own subagents stand on their own line: their purpose, kind and model, what they are doing, then their report.
   const { session: reviewChat } = await bridge.rawCall('session.create', { projectId: workspaceTask.projectId, workspaceId: workspaceTask.workspaceId, title: 'Subagent review', agentId: 'claude' });
   await evaluate(`window.__joloSmoke.openTarget(${JSON.stringify(project)}, ${JSON.stringify(reviewChat.id)})`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(reviewChat.id)}`, 'subagent chat open');
   const { run: reviewRun } = await bridge.rawCall('run.start', { sessionId: reviewChat.id, requestId: 'subagent-review', prompt: 'subagent-review' });
-  await waitFor("Boolean(window.__joloSmoke.state().pendingPermission) && document.querySelector('.subagent.working .subagent-title')?.textContent === 'code-reviewer · Opus 5.5' && document.querySelector('.subagent-now')?.textContent === 'Bash: echo child-review'", 'working subagent shows its model and current tool');
+  await waitFor("Boolean(window.__joloSmoke.state().pendingPermission) && document.querySelector('.subagent.working .subagent-title')?.textContent === 'Review the code' && document.querySelector('.subagent.working .subagent-meta')?.textContent === 'code-reviewer · Opus 5.5' && document.querySelector('.subagent-now')?.textContent === 'echo child-review'", 'working subagent shows its model and current tool');
   await bridge.rawCall('permission.resolve', { permissionId: (await state()).pendingPermission, decision: 'deny' });
   await waitFor(`window.jolo.call('run.snapshot', {runId:${JSON.stringify(reviewRun.id)}}).then(reply => reply.result.run.state === 'completed')`, 'subagent review finished');
   await evaluate("document.querySelector('.subagent-block summary').click()");

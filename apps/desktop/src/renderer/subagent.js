@@ -36,3 +36,30 @@ export function parseSubagent(text) {
   }
   return { type: String(input.subagent_type || 'Agent'), description, model, steps, report: lines.slice(index).join('\n').trim() };
 }
+
+const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)\s+(\S.*)$/;
+const base = path => path.split('/').filter(Boolean).at(-1) ?? path;
+
+/** A step as the live line shows it: the tool's verb and the file it touched, so the whole line is kept for hover. */
+export function shortStep(step) {
+  const match = /^([A-Za-z_]+):?\s*(.*)$/s.exec(step);
+  if (!match) return step;
+  const [, tool, rest] = match;
+  if (tool === 'Bash' || tool === 'PowerShell') {
+    const words = rest.split(/\s+/).filter(Boolean);
+    if (words.length <= 3) return rest || tool;
+    const file = [...words].reverse().find(word => word.includes('/'));
+    return `${words[0]} …${file ? ` ${base(file)}` : ''}`;
+  }
+  return rest.includes('/') && !/\s/.test(rest) ? `${tool} ${base(rest)}` : rest ? `${tool} ${rest}` : tool;
+}
+
+/** The files a subagent edited, read from its steps, each once in the order it first touched them. */
+export function editedFiles(steps) {
+  const files = [];
+  for (const step of steps) {
+    const match = EDIT_TOOLS.exec(step);
+    if (match && !files.includes(match[2])) files.push(match[2]);
+  }
+  return files;
+}

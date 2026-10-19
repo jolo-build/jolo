@@ -5,8 +5,8 @@ import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
-import { runLabel, screenshotArtifactId } from "../presentation.js";
-import { parseSubagent } from "../subagent.js";
+import { basename, runLabel, screenshotArtifactId } from "../presentation.js";
+import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -116,24 +116,29 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
 /**
  * One of the agent's own subagents, on its own line where the call is: its kind, model and purpose, with what it is doing
  * now while it works. Opening it lists the tools it used and its report.
- * @typedef {{ text: string, status: string, messageId: string, sessionId?: string | null }} SubagentBlockProps
+ * @typedef {{ text: string, status: string, messageId: string, sessionId?: string | null, onReview?: () => void }} SubagentBlockProps
  */
-const SubagentBlock = memo(function SubagentBlock(/** @type {SubagentBlockProps} */ { text, status, messageId, sessionId }) {
+const SubagentBlock = memo(function SubagentBlock(/** @type {SubagentBlockProps} */ { text, status, messageId, sessionId, onReview }) {
   const agent = useMemo(() => parseSubagent(text), [text]);
   const [expanded, setExpanded] = useState(false);
   if (!agent) return null;
   const working = status === "streaming";
-  const title = [agent.type, modelLabel(agent.model)].filter(Boolean).join(" · ");
+  // The purpose leads. The kind is named only when it is a special one, and the model follows; edits are counted once it is done.
+  const kind = /^(agent|task|general-purpose)$/i.test(agent.type) ? null : agent.type;
+  const meta = [kind, modelLabel(agent.model)].filter(Boolean).join(" · ");
+  const files = editedFiles(agent.steps);
+  const now = working && agent.steps.length > 0 ? agent.steps.at(-1) : null;
   return <div className={`subagent${working ? " working" : ""}`}>
     <details className="block subagent-block" onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ActivityIcon name={working ? "spinner" : "agents"} active={working} /><span className="subagent-title">{title}</span>{agent.description && <span className="subagent-description">{agent.description}</span>}<Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      <summary><ActivityIcon name={working ? "spinner" : "agents"} active={working} /><span className="subagent-title">{agent.description || meta || "Subagent"}</span>{agent.description && meta && <span className="subagent-meta">{meta}</span>}{!working && files.length > 0 && <span className="subagent-meta">{files.length} {files.length === 1 ? "file" : "files"} edited</span>}<Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       {expanded && <div className="subagent-body">
+        {files.length > 0 && <ul className="subagent-files" aria-label="Files it edited">{files.map(file => <li key={file}><button type="button" title={file} onClick={onReview}>{basename(file)}</button></li>)}</ul>}
         {agent.steps.length > 0 && <ol className="subagent-steps" aria-label="Tools it used">{agent.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>}
         {agent.report ? <div className="subagent-report"><Markdown text={agent.report} cacheKey={`${messageId}:report`} sessionId={sessionId} streaming={false} /></div>
           : <p className="hint">{working ? "Still working…" : "No report."}</p>}
       </div>}
     </details>
-    {working && agent.steps.length > 0 && <div className="subagent-now">{agent.steps.at(-1)}</div>}
+    {now && <div className="subagent-now" title={now}>{shortStep(now)}</div>}
   </div>;
 });
 
@@ -327,7 +332,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
           return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={loadRunDiff} onReview={onReview} />;
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
-        if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} />;
+        if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;

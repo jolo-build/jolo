@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseSubagent } from '../src/renderer/subagent.js';
+import { editedFiles, parseSubagent, shortStep } from '../src/renderer/subagent.js';
 
 const head = 'Agent {"subagent_type":"Explore","description":"Find where tokens refresh","prompt":"Look through src/auth"}';
 
@@ -24,4 +24,13 @@ test('other tool calls are not subagents', () => {
   expect(parseSubagent('Agents {"description":"x"}')).toBeNull();
   expect(parseSubagent('Agent {}')).toBeNull();
   expect(parseSubagent('')).toBeNull();
+});
+
+test('the live line shows the verb and the file; the edited files are listed once each', () => {
+  expect(shortStep("Bash: sed -n '600,800p' /usr/local/go/src/net/http/server.go")).toBe('sed … server.go');
+  expect(shortStep('Bash: echo child-review')).toBe('echo child-review');
+  expect(shortStep('Bash: bun run typecheck 2>&1')).toBe('bun …');
+  expect(shortStep('Read src/auth/session.ts')).toBe('Read session.ts');
+  expect(shortStep('Grep refresh')).toBe('Grep refresh');
+  expect(editedFiles(['Read a.js', 'Edit src/a.js', 'Write src/b.js', 'Edit src/a.js', 'Bash: ls'])).toEqual(['src/a.js', 'src/b.js']);
 });

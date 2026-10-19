@@ -175,12 +175,15 @@ test("the agent's own subagents stand on their own line with their model, and sa
   const tool = (/** @type {PartialMessage} */ overrides) => ({ id: 'agent', role: 'tool', kind: 'tool', runId: 'run', text: call, status: 'streaming', renderedBytes: 0, committedBytes: 0, ...overrides });
   const working = render(tool({}), { id: 'bash', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 });
   expect(working).toContain('class="subagent working"');
-  expect(working).toContain('Explore · Opus 5.5');
-  expect(working).toContain('Find where tokens refresh');
-  expect(working).toContain('<div class="subagent-now">Read src/auth/session.ts</div>');
+  expect(working).toContain('<span class="subagent-title">Find where tokens refresh</span><span class="subagent-meta">Explore · Opus 5.5</span>');
+  expect(working).toContain('<div class="subagent-now" title="Read src/auth/session.ts">Read session.ts</div>');
   // Its ordinary neighbour stays in the activity group, which counts only that one.
   expect(working).toContain('Task activity · 1 action');
-  const done = render(tool({ text: `${call}Tokens refresh in session.ts.\n`, status: 'complete' }));
+  const done = render(tool({ text: `${call}↳ Edit src/auth/session.ts\n\nTokens refresh in session.ts.\n`, status: 'complete' }));
   expect(done).toContain('class="subagent"');
   expect(done).not.toContain('subagent-now');
+  expect(done).toContain('<span class="subagent-meta">1 file edited</span>'); // the file list itself opens with the row
+  // A default kind is not named: only the model.
+  const plain = render(tool({ text: 'Agent {"subagent_type":"general-purpose","description":"Fix round 6","prompt":"x"}\n↳ model: claude-opus-5-5\n', status: 'streaming' }));
+  expect(plain).toContain('<span class="subagent-title">Fix round 6</span><span class="subagent-meta">Opus 5.5</span>');
 });
