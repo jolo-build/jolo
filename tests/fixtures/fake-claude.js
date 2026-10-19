@@ -90,14 +90,14 @@ async function turn(prompt, images = []) {
     const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
     const event = value => out({ type: 'stream_event', event: value, parent_tool_use_id: null, session_id: sessionId });
     const report = '[{"file":"app.js","line":10,"summary":"INTERNAL_REVIEW","failure_scenario":"internal details"}]';
-    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { prompt: 'Review the code' } }] }, session_id: sessionId });
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { description: 'Review the code', subagent_type: 'code-reviewer', prompt: 'Review the code' } }] }, session_id: sessionId });
     // Two overlapping streams use the same block index. A child stop must not clear the parent's block.
     event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
     event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'I found one issue. ' } });
     child({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
     child({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: report } } });
     child({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
-    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: report }, { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'echo child-review' } }] } });
+    child({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: report }, { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'echo child-review' } }] } });
     // Child permissions still go through the host policy even though their transcript stays internal.
     const decision = await new Promise(resolve => {
       pending.set('child-permission', resolve);
@@ -105,12 +105,21 @@ async function turn(prompt, images = []) {
     });
     child({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'child-bash', content: decision.behavior }] } });
     child({ type: 'stream_event', event: { type: 'message_stop' } });
-    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'SECOND_INTERNAL_REVIEW' }] } });
+    child({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'SECOND_INTERNAL_REVIEW' }, { type: 'tool_use', id: 'child-read', name: 'Read', input: { file_path: 'app.js' } }] } });
     out({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: parentId, content: report }] }, session_id: sessionId });
     event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Validate the interval before saving.' } });
     event({ type: 'content_block_stop', index: 0 });
     out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'I found one issue. Validate the interval before saving.' }] }, session_id: sessionId });
     event({ type: 'message_stop' });
+  } else if (prompt === 'subagent-long') {
+    // A subagent long enough to pass the bound on its progress, with paths long enough to be cut at a step's width.
+    const parentId = 'toolu_long';
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { description: 'Read everything', subagent_type: 'Explore', prompt: 'Read everything' } }] }, session_id: sessionId });
+    for (let index = 0; index < 200; index++) {
+      out({ type: 'assistant', parent_tool_use_id: parentId, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `child-${index}`, name: 'Read', input: { file_path: `src/${String(index).padStart(3, '0')}/${'deep/'.repeat(40)}file.js` } }] }, session_id: sessionId });
+    }
+    out({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: parentId, content: 'LONG_REPORT' }] }, session_id: sessionId });
+    say('Read it all.');
   } else if (prompt === 'browser-discovery') {
     say(offersBrowser(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo) ? 'Browser tools available' : 'Browser tools unavailable');
   } else if (prompt === 'browser-check') {

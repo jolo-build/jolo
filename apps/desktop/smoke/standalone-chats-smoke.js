@@ -79,6 +79,19 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
     await evaluate(`document.querySelector('.board .recent-chat[data-session-id="${first.sessionId}"]').click()`);
     await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'history survives keyboard reload');
   }
+  // Claude's own subagents stand on their own line: their kind and model, what they are doing, then their report.
+  const { session: reviewChat } = await bridge.rawCall('session.create', { projectId: workspaceTask.projectId, workspaceId: workspaceTask.workspaceId, title: 'Subagent review', agentId: 'claude' });
+  await evaluate(`window.__joloSmoke.openTarget(${JSON.stringify(project)}, ${JSON.stringify(reviewChat.id)})`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(reviewChat.id)}`, 'subagent chat open');
+  const { run: reviewRun } = await bridge.rawCall('run.start', { sessionId: reviewChat.id, requestId: 'subagent-review', prompt: 'subagent-review' });
+  await waitFor("Boolean(window.__joloSmoke.state().pendingPermission) && document.querySelector('.subagent.working .subagent-title')?.textContent === 'code-reviewer · Opus 5.5' && document.querySelector('.subagent-now')?.textContent === 'Bash: echo child-review'", 'working subagent shows its model and current tool');
+  await bridge.rawCall('permission.resolve', { permissionId: (await state()).pendingPermission, decision: 'deny' });
+  await waitFor(`window.jolo.call('run.snapshot', {runId:${JSON.stringify(reviewRun.id)}}).then(reply => reply.result.run.state === 'completed')`, 'subagent review finished');
+  await evaluate("document.querySelector('.subagent-block summary').click()");
+  await waitFor("document.querySelector('.subagent-report')?.textContent.includes('INTERNAL_REVIEW') && document.querySelectorAll('.subagent-steps li').length === 2 && !document.querySelector('.subagent-now') && !document.querySelector('.activity-group')?.textContent.includes('Agent')", 'finished subagent opens to its tools and report');
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  writeFileSync(path.join(results, 'subagent.png'), (await window.webContents.capturePage()).toPNG());
+  report.checks.push("Claude's own subagent shows on its own line with its kind and model, says what it is doing while it works, and opens to its tools and report");
   report.checks.push('F5 and Cmd/Ctrl+R from the composer reload the whole application document and retain chat history');
   report.checks.push('New chat works without a folder, receives replies, gets a title, and reopens from Recents with both turns after reload');
   report.checks.push('workspace folders remain separate from chats; folder task creation and standalone split panes both work');

@@ -169,3 +169,18 @@ describe('conversation activity', () => {
     expect(render(reasoning({ evicted: true }))).toContain('Older text was released from memory.');
   });
 });
+
+test("the agent's own subagents stand on their own line with their model, and say what they are doing while they work", () => {
+  const call = 'Agent {"subagent_type":"Explore","description":"Find where tokens refresh","prompt":"Look"}\n↳ model: claude-opus-5-5\n↳ Read src/auth/session.ts\n';
+  const tool = (/** @type {PartialMessage} */ overrides) => ({ id: 'agent', role: 'tool', kind: 'tool', runId: 'run', text: call, status: 'streaming', renderedBytes: 0, committedBytes: 0, ...overrides });
+  const working = render(tool({}), { id: 'bash', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 });
+  expect(working).toContain('class="subagent working"');
+  expect(working).toContain('Explore · Opus 5.5');
+  expect(working).toContain('Find where tokens refresh');
+  expect(working).toContain('<div class="subagent-now">Read src/auth/session.ts</div>');
+  // Its ordinary neighbour stays in the activity group, which counts only that one.
+  expect(working).toContain('Task activity · 1 action');
+  const done = render(tool({ text: `${call}Tokens refresh in session.ts.\n`, status: 'complete' }));
+  expect(done).toContain('class="subagent"');
+  expect(done).not.toContain('subagent-now');
+});

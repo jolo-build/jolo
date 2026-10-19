@@ -67,11 +67,31 @@ describe("Claude Code through its structured stream", () => {
       expect(replies.every(message => message.status === 'complete')).toBe(true);
       const tools = messages.filter(message => message.kind === 'tool');
       expect(tools).toHaveLength(1);
-      expect(await text(tools[0])).toContain('Agent');
-      expect(await text(tools[0])).toContain('INTERNAL_REVIEW');
+      const call = await text(tools[0]);
+      expect(call.split('\n', 1)[0]).toBe('Agent {"subagent_type":"code-reviewer","description":"Review the code","prompt":"Review the code"}');
+      // The subagent's model and each tool it used come first, one line each, then its report.
+      expect(call).toContain('\n↳ model: claude-opus-5-5\n↳ Bash: echo child-review\n↳ Read app.js\n\n[{"file":"app.js"');
+      expect(call).toContain('INTERNAL_REVIEW');
+      expect(call).not.toContain('SECOND_INTERNAL_REVIEW');
       expect(tools[0].status).toBe('complete');
       expect(events.filter(event => event.type === 'permission.requested')).toHaveLength(1);
       expect(run.note.summary).toBe('I found one issue. Validate the interval before saving.');
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test("a long subagent's progress stops at whole lines, says more happened, and keeps its report whole", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      const run = await runTo('long review', 'subagent-long');
+      expect(run.state).toBe('completed');
+      const [tool] = (await messagesOf(run.id)).filter(message => message.kind === 'tool');
+      const lines = (await text(tool)).split('\n');
+      const steps = lines.slice(1, lines.indexOf(''));
+      expect(steps[0]).toBe('↳ model: claude-opus-5-5');
+      expect(steps.at(-1)).toBe('↳ … more steps not shown');
+      expect(steps.length).toBeGreaterThan(50);
+      expect(steps.slice(1, -1).every(line => /^↳ Read src\/\d{3}\/(deep\/)+/.test(line))).toBe(true);
+      expect(lines.slice(lines.indexOf('') + 1).join('\n').trim()).toBe('LONG_REPORT');
     } finally { await client.close(); }
   }, 20_000);
 

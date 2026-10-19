@@ -6,6 +6,7 @@ import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo, JoloMark } from "./brand.jsx";
 import { runLabel, screenshotArtifactId } from "../presentation.js";
+import { parseSubagent } from "../subagent.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -110,6 +111,30 @@ const ToolBlock = memo(function ToolBlock(/** @type {ToolBlockProps} */ { text, 
       </>}
     </details>
   );
+});
+
+/**
+ * One of the agent's own subagents, on its own line where the call is: its kind, model and purpose, with what it is doing
+ * now while it works. Opening it lists the tools it used and its report.
+ * @typedef {{ text: string, status: string, messageId: string, sessionId?: string | null }} SubagentBlockProps
+ */
+const SubagentBlock = memo(function SubagentBlock(/** @type {SubagentBlockProps} */ { text, status, messageId, sessionId }) {
+  const agent = useMemo(() => parseSubagent(text), [text]);
+  const [expanded, setExpanded] = useState(false);
+  if (!agent) return null;
+  const working = status === "streaming";
+  const title = [agent.type, modelLabel(agent.model)].filter(Boolean).join(" · ");
+  return <div className={`subagent${working ? " working" : ""}`}>
+    <details className="block subagent-block" onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary><ActivityIcon name={working ? "spinner" : "agents"} active={working} /><span className="subagent-title">{title}</span>{agent.description && <span className="subagent-description">{agent.description}</span>}<Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      {expanded && <div className="subagent-body">
+        {agent.steps.length > 0 && <ol className="subagent-steps" aria-label="Tools it used">{agent.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>}
+        {agent.report ? <div className="subagent-report"><Markdown text={agent.report} cacheKey={`${messageId}:report`} sessionId={sessionId} streaming={false} /></div>
+          : <p className="hint">{working ? "Still working…" : "No report."}</p>}
+      </div>}
+    </details>
+    {working && agent.steps.length > 0 && <div className="subagent-now">{agent.steps.at(-1)}</div>}
+  </div>;
 });
 
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
@@ -252,7 +277,9 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     // A provider may complete a thinking block without a displayable summary.
     // Keep pending artifact loads visible, but never leave an empty disclosure.
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
-    if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
+    // The agent's own subagents stand on their own line, so their work shows without opening the activity.
+    if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
+    else if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
       if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
     } else groups.push({ type: "message", id: message.id, message });
@@ -300,6 +327,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
           return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={loadRunDiff} onReview={onReview} />;
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status"><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{activeRun?.id === lastRun.id ? ` · ${identityFor(lastRun)}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
+        if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} />;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;

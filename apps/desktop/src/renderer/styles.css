@@ -416,6 +416,14 @@ details.block summary span { min-width: 0; overflow: hidden; text-overflow: elli
 .activity-disclosure { opacity: .6; }
 details.block[open] > summary > .activity-disclosure { transform: rotate(90deg); }
 details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; background: var(--subtle); padding: 10px 12px; border-radius: 7px; margin: 8px 0 0; font: 11px/1.65 var(--mono); }
+/* One of the agent's own subagents stands on its own line; while it works, one quiet line says what it is doing. */
+.subagent { min-width: 0; }
+details.block.subagent-block summary .subagent-title { flex: none; max-width: 50%; color: var(--text); }
+.subagent-now { margin: 2px 0 0 24px; font: 11px/1.6 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-body { display: grid; gap: 10px; margin: 10px 0 0 7px; padding-left: 15px; border-left: 1px solid var(--border); }
+.subagent-steps { margin: 0; padding: 0; list-style: none; max-height: 168px; overflow: auto; font: 11px/1.65 var(--mono); color: var(--muted); }
+.subagent-steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-report { min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 .run-note { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .run-note > span { min-width: 0; overflow-wrap: anywhere; }

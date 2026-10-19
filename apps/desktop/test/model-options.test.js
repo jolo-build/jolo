@@ -21,7 +21,7 @@ test('model labels are readable without provider IDs or context suffixes', () =>
   for (const [id, label] of [
     ['gpt-6-astra', 'GPT 6 Astra'], ['gpt-5.6-sol', 'GPT 5.6 Sol'],
     ['opus[1m]', 'Opus'], ['Opus (1M context)', 'Opus'],
-    ['claude-sonnet-4-6', 'Sonnet 4.6'], ['claude-opus-4-20250514', 'Opus 4'],
+    ['claude-sonnet-4-6', 'Sonnet 4.6'], ['claude-opus-4-20250514', 'Opus 4'], ['claude-fable-5-1', 'Fable 5.1'],
     ['gemini-2.5-pro', 'Gemini 2.5 Pro'], ['grok-4.6', 'Grok 4.6'],
     ['openai/gpt-6-astra', 'GPT 6 Astra'], ['o3', 'o3'], ['test-model', 'Test Model'],
   ]) expect(modelLabel(id)).toBe(label);
