@@ -93,8 +93,8 @@ function UsageButton({ tabs, currentId, running, onCompact = null }) {
   const current = tabs.find(tab => tab.id === currentId) ?? tabs[0];
   const shown = tabs.find(tab => tab.id === chosenTab) ?? current;
   const ring = fillOf(current?.usage);
-  // Color is kept for a context that is nearly full; below that the ring stays quiet.
-  const level = ring !== null && ring >= 0.9 ? ' full' : '';
+  // Color is kept for a context that is nearly full; below 60% the ring shows only on hover or focus.
+  const level = ring !== null && ring >= 0.9 ? ' full' : ring === null || ring < 0.6 ? ' quiet' : '';
   const title = ring !== null ? `Context ${Math.round(ring * 100)}% full · click for usage` : 'Usage · this agent does not report how full its context is';
   /** One agent's page: how full its window is, what it cost here, and how much of its plan is left. */
   const pageOf = (tab) => {
@@ -364,7 +364,7 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
       {/* The project is in the window's title; the bar names only changes waiting for review. */}
-      {changesCount ? <><div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div><span className="composer-divider" aria-hidden="true" /></> : null}
+      {changesCount ? <div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div> : null}
       <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} onCompact={onCompact} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
