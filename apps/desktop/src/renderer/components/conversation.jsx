@@ -4,7 +4,7 @@ import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
 import { DiffLines } from './diff-lines.jsx';
-import { JoloLogo, JoloMark } from "./brand.jsx";
+import { JoloMark } from "./brand.jsx";
 import { runLabel, screenshotArtifactId } from "../presentation.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
@@ -185,6 +185,8 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     return { source: 'artifact', diff, truncated };
   }, []);
   const messages = projection ? projection.ordered() : [];
+  // Only a conversation known to be empty opens on the message bar; one still loading shows nothing meanwhile.
+  const empty = !messages.length && (!sessionId || Boolean(history?.seeded));
   const runs = projection ? [...projection.runs.values()] : [];
   const captureAnchor = () => {
     const el = container.current;
@@ -288,12 +290,12 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     lastScrollTop.current = el.scrollTop;
     if (el.scrollTop < 100 && !history?.error) loadOlder();
   }}>
-    <div className={`transcript${messages.length ? "" : " empty-transcript"}`}>
+    <div className={`transcript${empty ? " empty-transcript" : ""}`}>
       {history?.hasOlder && <div className="history-loader">
         <button type="button" onClick={loadOlder} disabled={history.loading}>{history.loading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
         {history.error && <p role="alert">Couldn’t load earlier messages. Try again.</p>}
       </div>}
-      {!messages.length && <div className="empty-state"><JoloLogo className="welcome-wordmark" /><h2>A little help. A lot of possibility.</h2><p>{standalone ? "Ask a question, explore an idea, or work through something together." : hasProject ? "Describe what you have in mind. Jolo can explore your project, make changes, and help you check the result." : "Open a project and turn an idea into your next working change."}</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
+      {empty && <div className="empty-state"><p className="empty-tagline">A little help. A lot of possibility.</p>{!hasProject && <button onClick={onOpenFolder} className="outline"><Icon name="folder" />Open a folder</button>}</div>}
       {groups.map((group) => {
         if (group.type === 'changes') {
           const card = changeCards.find(card => card.runId === group.runId);

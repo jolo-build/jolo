@@ -6,9 +6,11 @@ export class SessionHistory {
     this.beforeOrdinal = null;
     this.loading = false;
     this.error = null;
+    this.seeded = false;
   }
 
   seed(page) {
+    this.seeded = true;
     this.hasOlder = page.hasOlder;
     this.beforeOrdinal = page.messages[0]?.ordinal ?? null;
     this.onChange();

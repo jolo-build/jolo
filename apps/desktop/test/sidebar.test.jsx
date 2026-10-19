@@ -30,17 +30,16 @@ test('archive keeps folder grouping without showing open task counts or selected
   expect(html).not.toContain('Open chat');
   expect(html).not.toContain('New task in beta');
 });
-test('nested chats show the latest answerer, progress and checkout details', () => {
+test('nested chats keep one line and carry the latest answerer and checkout in their tooltip', () => {
   // Only the markup of a single row is under test, so this render leaves off the drag state and the
   // open and menu callbacks: nothing here clicks the row, so nothing here can fire them.
   const html = renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'chat', title: 'Fix parser', projectName: 'Repeated folder', agentId: 'claude', answerer: { id: 'codex', displayName: 'Codex', model: 'gpt-6-astra' }, mode: 'worktree', branch: 'codex/parser', updatedAt: '2026-09-10T00:00:00.000Z', run: { state: 'completed' } }, dragTask: { workspace: { path: '/work/parser' } }, agentName: () => 'Wrong session default', selected: true, onMenu() {} }))} />);
-  expect(html).toContain('Fix parser');
-  expect(html).toContain('Done');
-  expect(html).toContain('Codex');
-  expect(html).toContain('>Codex · GPT 6 Astra</span>');
-  expect(html).toContain('aria-label="Done"');
-  expect(html).toContain('>codex/parser</span>');
+  expect(html).toContain('>Fix parser</span>');
+  expect(html).toContain('Done · ');
+  expect(html).not.toContain('sidebar-task-progress');
+  expect(html).toContain('Codex · GPT 6 Astra · Branch: codex/parser · Worktree · /work/parser"');
   expect(html).toContain('title="Worktree: /work/parser"');
+  expect(html).not.toContain('sidebar-chat-details');
   expect(html).not.toContain('Wrong session default');
   expect(html).not.toContain('Repeated folder');
   expect(html).not.toContain('branch-tag');
@@ -48,15 +47,19 @@ test('nested chats show the latest answerer, progress and checkout details', () 
   expect(html).toContain('Options for Fix parser');
 });
 
-test('task progress covers running, waiting and terminal states without changing the working icon', () => {
+test('task progress marks working, waiting and failed states, and leaves settled ones to the tooltip', () => {
   const row = state => renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'task', title: 'Task', run: state ? { state } : null } }))} />);
   for (const state of ['preparing', 'model', 'tools']) {
     expect(row(state)).toContain('aria-label="Working"');
     expect(row(state)).toContain('activity-spin');
   }
-  for (const [state, label] of [['queued', 'Queued'], ['awaiting_permission', 'Needs approval'], ['paused', 'Paused'], ['completed', 'Done'], ['failed', 'Failed'], ['interrupted', 'Interrupted'], ['cancelled', 'Stopped'], [null, 'Ready']]) {
+  for (const [state, label] of [['queued', 'Queued'], ['awaiting_permission', 'Needs approval'], ['paused', 'Paused'], ['failed', 'Failed'], ['interrupted', 'Interrupted']]) {
     expect(row(state)).toContain(`aria-label="${label}"`);
     expect(row(state)).not.toContain('activity-spin');
+  }
+  for (const [state, label] of [['completed', 'Done'], ['cancelled', 'Stopped'], [null, 'Ready']]) {
+    expect(row(state)).toContain(`title="Task\n${label}`);
+    expect(row(state)).not.toContain('sidebar-task-progress');
   }
 });
 test('hidden sidebar does not mount chat loaders and empty folders remain visible', () => {

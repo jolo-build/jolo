@@ -46,8 +46,8 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
   await waitFor(`document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 3 && document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle').title.includes('3 tasks')`, 'worktree chats and folder count refreshed');
   const badgeSession = (await bridge.rawCall('session.page', { sessionId: firstNew })).session;
   await bridge.rawCall('session.setAgent', { sessionId: firstNew, agentId: 'claude', expectedRevision: badgeSession.revision });
-  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-task-answerer`)})?.textContent === 'Claude Code'`, 'agent detail visible in the task row');
-  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-task-branch`)})?.textContent === ${JSON.stringify(worktree.branch)} && document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-task-worktree`)})?.title.includes(${JSON.stringify(worktree.path)})`, 'branch and worktree path available in each task');
+  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"]`)})?.title.includes('Claude Code')`, 'agent detail in the task row tooltip');
+  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"]`)})?.title.includes(${JSON.stringify(`Branch: ${worktree.branch}`)}) && document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-task-worktree`)})?.title.includes(${JSON.stringify(worktree.path)})`, 'branch and worktree path available in each task');
   const size = window.getSize(), theme = nativeTheme.themeSource;
   try {
     for (const color of /** @type {const} */ (['dark', 'light'])) {
@@ -63,16 +63,16 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
       const x = left('.new-chat span');
       const task = document.querySelector(${JSON.stringify(`.task[data-session-id="${firstNew}"]`)});
       return Math.abs(left('.sidebar-workspace-name') - x) < 1
-        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x - 28) < 1
-        && Math.abs(left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .sidebar-chat-details`)}) - x - 28) < 1
-        && task.getBoundingClientRect().height === 42
-        && task.querySelector('.sidebar-task-progress[aria-label="Ready"]');
+        && left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x >= 0
+        && left(${JSON.stringify(`.task[data-session-id="${firstNew}"] .task-title`)}) - x <= 12
+        && task.getBoundingClientRect().height === 28
+        && task.title.includes('Ready') && !task.querySelector('.sidebar-task-progress');
     })()`);
-    if (!aligned) throw new Error('sidebar tree indentation, title/metadata alignment or compact task row height are inconsistent');
+    if (!aligned) throw new Error('sidebar tree indentation or one-line task row height are inconsistent');
     writeFileSync(path.join(results, 'workspace-sidebar-narrow.png'), (await window.webContents.capturePage()).toPNG());
   } finally { window.setSize(...size); nativeTheme.themeSource = theme; }
   const { run } = await bridge.rawCall('run.start', { sessionId: selectedNew, requestId: 'folder-animation', prompt: 'Show ongoing folder activity' });
-  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-progress.working`)}) && document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-answerer`)})?.textContent === 'Jolo · Fake'`, 'working task shows progress and the captured model');
+  await waitFor(`document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"] .sidebar-task-progress.working`)}) && document.querySelector(${JSON.stringify(`.task[data-session-id="${selectedNew}"]`)})?.title.includes('Jolo · Fake')`, 'working task shows progress and the captured model');
   await evaluate(`(() => { const button = document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle'); if (button.getAttribute('aria-expanded') === 'true') button.click(); })()`);
   await waitFor(`document.querySelector(${worktreeGroup}).querySelector('.workspace-folder.working') && !document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-chats')`, 'collapsed folder shows work with a status dot');
   const point = await evaluate(`(() => { const r = document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-toggle').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);

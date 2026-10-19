@@ -37,14 +37,16 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   assert.equal(delegations[0].execution.model, 'fake-large');
   assert.equal(delegations[0].execution.effort, 'high');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /Child result:.*fake-large.*high/);
-  // The child is listed under its parent in the sidebar, not beside it, until the parent's count folds it.
+  // The child is folded under its parent in the sidebar, not beside it, behind a count that opens it.
   const child = JSON.stringify(`[data-session-id="${delegations[0].sessionId}"]`);
   const parentRow = JSON.stringify(`.sidebar-chat-row.has-subtasks [data-session-id="${parent}"]`);
   const count = "document.querySelector('.sidebar-chat-row.has-subtasks .task-subtasks')";
   const childShown = `Boolean(document.querySelector('.sidebar-subtasks ' + ${child}))`;
   const painted = "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
-  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${count}?.textContent.includes('1') && ${childShown}`, 'child shown under its parent');
+  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${count}?.textContent === '1' && ${count}.getAttribute('aria-expanded') === 'false'`, 'parent row folds its child task behind a count');
   assert.equal(await evaluate(`Boolean(document.querySelector('.sidebar-workspace-chats > .task-row ' + ${child}))`), false, 'the child is not a task of its own in the sidebar');
+  await evaluate(`${count}.click()`);
+  await waitFor(childShown, 'the count lists the child under its parent');
   await evaluate(painted);
   writeFileSync(path.join(results, 'delegation-result.png'), (await window.webContents.capturePage()).toPNG());
   await evaluate(`document.querySelector('.sidebar-subtasks ' + ${child}).click()`);
@@ -57,7 +59,5 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   assert.equal(await evaluate(childShown), true, 'opening the parent leaves its child tasks listed');
   await evaluate(`${count}.click()`);
   await waitFor(`!${childShown}`, 'the count folds the child tasks');
-  await evaluate(`${count}.click()`);
-  await waitFor(childShown, 'the count lists them again');
-  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks listed under their parent, and opening the child conversation passed.');
+  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks folded under their parent, and opening the child conversation passed.');
 }

@@ -93,7 +93,8 @@ function UsageButton({ tabs, currentId, running }) {
   const current = tabs.find(tab => tab.id === currentId) ?? tabs[0];
   const shown = tabs.find(tab => tab.id === chosenTab) ?? current;
   const ring = fillOf(current?.usage);
-  const level = ring === null ? '' : ring >= 0.9 ? ' full' : ring >= 0.75 ? ' warn' : '';
+  // Color is kept for a context that is nearly full; below that the ring stays quiet.
+  const level = ring !== null && ring >= 0.9 ? ' full' : '';
   const title = ring !== null ? `Context ${Math.round(ring * 100)}% full · click for usage` : 'Usage · this agent does not report how full its context is';
   /** One agent's page: how full its window is, what it cost here, and how much of its plan is left. */
   const pageOf = (tab) => {
@@ -149,7 +150,7 @@ function typingMention(value, caret) {
   return match ? match[1] : null;
 }
 
-export function Composer({ usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -361,8 +362,8 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
     <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
-      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
-      <span className="composer-divider" aria-hidden="true" />
+      {/* The project is in the window's title; the bar names only changes waiting for review. */}
+      {changesCount ? <><div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div><span className="composer-divider" aria-hidden="true" /></> : null}
       <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">

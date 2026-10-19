@@ -12,6 +12,15 @@ export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = '
 }
 
 /**
+ * The chats the sidebar lists: each one that has been written to, the open one, and the newest one not yet written to,
+ * which another pane may have open. Older unwritten chats are left out rather than piling up as identical rows.
+ */
+export function sidebarChats(tasks, sessionId) {
+  const newestUnwritten = tasks.filter((task) => !task.run).reduce((newest, task) => (!newest || String(task.updatedAt) > String(newest.updatedAt) ? task : newest), null);
+  return tasks.filter((task) => task.run || task.sessionId === sessionId || task === newestUnwritten);
+}
+
+/**
  * A task list as a tree one level deep: each child task under the top-level conversation that started it, directly or
  * through another child task, so the narrow sidebar never nests twice. A child whose parent is not in the list (an
  * older page, or a deleted parent) stays a row of its own, so it is never lost.
