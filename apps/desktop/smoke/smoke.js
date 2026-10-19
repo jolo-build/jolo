@@ -884,7 +884,6 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     await waitFor(`${rowFor("Codex")}.querySelector('select').value === 'fake-small'`, 'select chooses the model');
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "agent-models.png"), (await window.webContents.capturePage()).toPNG());
-    await evaluate("[...document.querySelectorAll('.settings-savebar button')].find((button) => button.textContent === 'Save changes').click()");
     await waitFor("(window.__joloSmoke.hostedAgents().find((entry) => entry.id === 'codex') ?? {}).model === 'fake-small'", "the chosen model was saved and shows in the picker", 10_000);
     await evaluate("window.__joloSmoke.closeSettings()");
     report.checks.push("each hosted agent's model is chosen in settings from the list that agent itself reports, and the choice reaches the composer's picker");

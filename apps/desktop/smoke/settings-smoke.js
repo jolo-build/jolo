@@ -9,18 +9,19 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
   const tab = async name => { await evaluate(`document.querySelector('.settings-nav [data-section="${name}"]').click()`); await settle(); };
   const draft = 'Keep my workspace draft';
   const choiceBefore = await evaluate("localStorage.getItem('jolo.lastModelChoice')");
+  const storedAgents = "window.jolo.call('settings.get', {}).then(r => JSON.stringify(r.result.settings.agents))";
+  const agentsBefore = await evaluate(storedAgents);
   await evaluate(`(() => { const input = document.querySelector('.composer textarea'); window.__settingsDraftNode = input; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(draft)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
   await evaluate("document.querySelector('.settings-link').click()");
   await waitFor("Boolean(document.querySelector('.settings-page'))", 'settings page opened');
   assert(await evaluate("!document.querySelector('dialog[open]') && document.querySelector('.pane-canvas').inert"), 'settings must be a dedicated page with the workspace retained behind it');
   await waitFor("['Claude Code', 'Codex', 'Grok CLI'].every(name => [...document.querySelectorAll('.agent-model-row')].find(row => row.querySelector('h2')?.textContent === name)?.querySelector('.agent-model-note')?.textContent.includes('models available'))", 'installed agents load their models automatically', 20_000);
-  assert(await evaluate("document.querySelector('.settings-savebar').textContent.includes('All changes saved')"), 'automatic model discovery must not change saved preferences');
+  assert(await evaluate(storedAgents) === agentsBefore, 'automatic model discovery must not change saved preferences');
   assert(await evaluate("['low', 'high'].every(value => document.querySelector('[aria-label=\"Effort for Grok CLI\"] option[value=\"' + value + '\"]'))"), 'reasoning effort choices load automatically');
   assert(await evaluate("document.querySelectorAll('.agent-preferences input').length === 0"), 'agent model and effort controls must be selection-only');
   await evaluate("(() => {const select=document.querySelector('[aria-label=\"Model for Codex\"]');select.value='fake-large';select.dispatchEvent(new Event('change',{bubbles:true}));})()");
   assert(await evaluate("document.querySelector('[aria-label=\"Model for Codex\"]').selectedOptions[0].textContent === 'Fake Large'"), 'selected model shows its readable name');
-  await evaluate("document.querySelector('.settings-savebar button[type=submit]').click()");
-  await waitFor("window.__joloSmoke.hostedAgents().find(agent=>agent.id==='codex')?.model === 'fake-large'", 'selection-only model choice saved');
+  await waitFor("window.__joloSmoke.hostedAgents().find(agent=>agent.id==='codex')?.model === 'fake-large'", 'selection-only model choice saved without a save step');
   report.checks.push('Settings automatically loaded every installed agent and its reasoning efforts without changing saved preferences');
   const themeBefore = nativeTheme.themeSource, sizeBefore = window.getSize();
   try {
@@ -91,6 +92,6 @@ export async function runSettingsSmoke({ window, results, evaluate, waitFor, rep
   await waitFor("!document.querySelector('.settings-page')", 'settings closed');
   assert(await evaluate(`window.__settingsDraftNode === document.querySelector('.composer textarea') && window.__settingsDraftNode.value === ${JSON.stringify(draft)}`), 'settings lost or remounted the prompt draft');
   await evaluate("(() => { const input=window.__settingsDraftNode; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ''); input.dispatchEvent(new Event('input', {bubbles:true})); delete window.__settingsDraftNode; })()");
-  report.checks.push('Settings is a dedicated page with section navigation, a visible save bar, borderless controls in both themes, and a responsive narrow layout');
+  report.checks.push('Settings is a dedicated page with section navigation, changes that apply without a save step, borderless controls in both themes, and a responsive narrow layout');
   report.checks.push('Switching settings sections preserves unsaved choices; returning to the workspace preserves the original composer node and draft');
 }

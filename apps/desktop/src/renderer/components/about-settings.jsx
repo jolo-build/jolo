@@ -46,5 +46,6 @@ export function AboutSettings({ initialState = null }) {
         ? <button type="button" className="primary" disabled={locked} onClick={() => void update(ready)}>{installing ? 'Restarting…' : ready ? 'Restart to update' : downloading ? 'Downloading…' : `Update to ${state.latest}`}</button>
         : state.releaseUrl && <button type="button" className="primary" onClick={() => window.jolo.openExternal(state.releaseUrl)}>Download {state.latest}</button>)}
     </div>}
+    {state && state.managed !== false && <p className="hint">Jolo installs an update only when you ask it to.</p>}
   </section>;
 }

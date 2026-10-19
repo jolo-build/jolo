@@ -105,7 +105,7 @@ Selected models remain available in the conversation. Each child has its own con
 
 ## Appearance
 
-In the desktop app, open **Settings → Appearance → Color theme**, choose a palette, and click **Save changes**. The desktop shares the CLI’s neutral Jolo White theme, four Catppuccin palettes (Latte, Frappé, Macchiato, Mocha), and three GitHub palettes (Light, Dark, Dark Dimmed). **System default** follows your computer’s light or dark appearance.
+In the desktop app, open **Settings → Appearance → Color theme** and choose a palette; it applies at once. The desktop shares the CLI’s neutral Jolo White theme, four Catppuccin palettes (Latte, Frappé, Macchiato, Mocha), and three GitHub palettes (Light, Dark, Dark Dimmed). **System default** follows your computer’s light or dark appearance.
 
 The choice is remembered on this device and applies to the interface, code highlighting, diffs, and terminal panes. Desktop and CLI selections are independent.
 

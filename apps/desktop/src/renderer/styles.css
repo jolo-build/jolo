@@ -763,8 +763,6 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .settings-window-title { font-size: 12px; font-weight: 550; }
 .settings-page { height: 100%; min-height: 0; display: grid; grid-template-columns: var(--sidebar-expanded-width, var(--sidebar-width)) minmax(0, 1fr); }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 18px 12px; background: var(--side); border-right: 1px solid var(--border); }
-.settings-nav-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; }
-.settings-nav > .settings-nav-label { padding: 0 10px 8px; }
 .settings-nav button { min-height: 28px; padding: 5px 10px; justify-content: flex-start; gap: 9px; font-size: 12px; text-align: left; color: var(--muted); }
 .settings-nav [aria-selected=true] { background: var(--tint); color: var(--highlight); font-weight: 550; }
 .settings-form { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -827,21 +825,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .settings-advanced[open] > summary .icon { transform: rotate(90deg); }
 .settings-advanced > .settings-card { margin-top: 7px; }
 .settings-reset { align-self: flex-start; font-size: 11px; color: var(--muted); padding: 6px 9px; }
-.settings-theme-preview { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); overflow: hidden; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--bg); font-size: 12px; }
-.theme-preview-side { display: flex; flex-direction: column; gap: 8px; padding: 16px 10px; background: var(--side); color: var(--muted); }
-.theme-preview-active { padding: 3px 6px; border-radius: 4px; color: var(--highlight); background: var(--tint); }
-.theme-preview-content { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px; }
-.theme-preview-keyword { color: var(--syntax-keyword); }
-.theme-preview-number { color: var(--syntax-number); }
-.theme-preview-success { color: var(--green); }
-.settings-font-preview { display: flex; flex-direction: column; gap: 14px; padding: 22px 20px; margin-top: 16px; background: var(--subtle); border-radius: 10px; overflow-wrap: anywhere; }
-.settings-font-preview p { font-size: 18px; }
-.settings-font-preview code, .settings-font-preview .terminal-sample { font-size: 12px; }
-.settings-savebar { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex: none; min-height: 65px; padding: 14px max(36px, calc((100% - 760px) / 2)); border-top: 1px solid var(--border); background: var(--bg); }
-.settings-savebar > span { font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
-.settings-savebar > div { display: flex; align-items: center; gap: 8px; flex: none; }
-.settings-savebar button { font-size: 12px; padding: 7px 12px; }
-.settings-save-error { font-weight: 550; }
+.settings-save-error { font-weight: 550; color: var(--red); }
 .combobox { display: flex; position: relative; min-width: 0; }
 .combobox input { width: 100%; padding-inline-end: 36px; }
 .combobox > button { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; padding: 0; color: var(--muted); }
@@ -855,17 +839,13 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 @media (max-width: 760px) {
   .settings-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-nav { flex-direction: row; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .settings-nav > .settings-nav-label { display: none; }
   .settings-nav button { white-space: nowrap; flex: none; padding: 7px 9px; }
   .settings-scroll { padding: 24px 20px; }
-  .settings-savebar { padding: 12px 20px; }
 }
 @media (max-width: 480px) {
   .settings-field-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-card { padding: 16px; }
   .settings-nav button { gap: 6px; font-size: 11px; }
-  .settings-savebar { flex-wrap: wrap; gap: 8px; }
-  .settings-savebar > div { margin-left: auto; }
 }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
 .md p { margin: 8px 0; white-space: pre-wrap; }

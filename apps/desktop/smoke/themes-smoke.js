@@ -20,8 +20,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
   };
   const save = async id => {
     await choose(id);
-    await evaluate("document.querySelector('.settings-savebar button[type=submit]').click()");
-    await waitFor(`document.documentElement.dataset.theme === ${JSON.stringify(id)} && localStorage.getItem('jolo.theme') === ${JSON.stringify(id)} && document.querySelector('.settings-savebar button[type=submit]').disabled`, `${id} saved and applied`);
+    await waitFor(`document.documentElement.dataset.theme === ${JSON.stringify(id)} && localStorage.getItem('jolo.theme') === ${JSON.stringify(id)}`, `${id} saved and applied`);
     await settle();
   };
   const openSettings = async () => {
@@ -60,10 +59,10 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     await openSettings();
     assert.deepEqual(await evaluate("[...document.querySelector('[aria-label=\"Color theme\"]').options].map(option => option.value)"), ['system', ...BUILTIN_THEMES.slice(1).map(theme => theme.id)]);
     await choose('catppuccin-mocha');
-    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'system', 'draft selection only changes its preview');
-    await evaluate("[...document.querySelectorAll('.settings-savebar button')].find(button => button.textContent === 'Discard changes').click()");
-    assert.equal(await evaluate("document.querySelector('[aria-label=\"Color theme\"]').value"), 'system');
-    report.checks.push('Appearance lists all CLI palettes and discards an unsaved theme choice');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'catppuccin-mocha', 'choosing a theme applies it at once');
+    await choose('system');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'system');
+    report.checks.push('Appearance lists all CLI palettes and applies a theme the moment it is chosen');
 
     for (const theme of BUILTIN_THEMES.slice(1)) {
       const light = ['white', 'catppuccin-latte', 'github-light'].includes(theme.id);
@@ -99,7 +98,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     report.checks.push(`All ${BUILTIN_THEMES.length - 1} palettes color the interface, syntax, and the existing terminal even with the opposite OS appearance`);
     window.setSize(720, 560);
     await settle();
-    assert(await evaluate("[...document.querySelectorAll('.settings-theme-preview, .settings-savebar, [aria-label=\"Color theme\"]')].every(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && el.scrollWidth <= el.clientWidth; })"), 'theme controls overflow a narrow window');
+    assert(await evaluate("[...document.querySelectorAll('[aria-label=\"Color theme\"]')].every(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && el.scrollWidth <= el.clientWidth; })"), 'theme controls overflow a narrow window');
     writeFileSync(path.join(results, 'theme-narrow.png'), (await window.webContents.capturePage()).toPNG());
 
     await save('system');
