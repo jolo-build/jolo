@@ -2,8 +2,8 @@
 // A stand-in for the Claude Code binary that speaks its stream-json host protocol, so the adapter is tested
 // end to end without the real CLI or its API. Shapes mirror what the real binary sent in a live session.
 // Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call, "write <file>" for a
-// Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model and effort it was
-// started with, and anything else just answers in prose.
+// Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model, effort and fast mode
+// it was started with, and anything else just answers in prose.
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
@@ -15,9 +15,11 @@ const offersBrowser = config => config?.args?.at(-1)?.split(',').includes('brows
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
 const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
+// Headless, Claude Code runs fast only when the launch's own --settings ask for it.
+const fastMode = JSON.parse(valueOf("--settings") ?? "{}").fastMode === true;
 const MODELS = [
   { value: "default", resolvedModel: "fake-default", displayName: "Default (recommended)", description: "the everyday choice", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
-  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"] },
+  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"], supportsFastMode: true },
   { value: "haiku", resolvedModel: "fake-haiku", displayName: "Haiku", description: "the quick one" },
 ];
 // The parts of a get_usage answer Jolo reads, in the shape Claude Code 2.1 sends.
@@ -152,7 +154,7 @@ async function turn(prompt, images = []) {
   } else if (prompt === "history") {
     say(`${resumed ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
-    say(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}.`);
+    say(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}${fastMode ? " in fast mode" : ""}.`);
   } else if (prompt.startsWith("fail")) {
     out({ type: "result", subtype: "error_during_execution", is_error: true, result: "scripted failure", session_id: sessionId, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } });
     return;

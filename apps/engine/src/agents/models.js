@@ -8,6 +8,7 @@
 import { tmpdir } from "node:os";
 import { hostedEnvironment, spawnLineChild } from "./hosted.js";
 import { claudeArgv } from "./claude-stream.js";
+import { CODEX_FAST_TIER } from "./codex-app-server.js";
 import { modelSelector } from "./acp.js";
 
 // A client waits 10 s for any request, and this one starts a process, so the probe has to finish inside that.
@@ -26,8 +27,8 @@ const efforts = (list) => [...new Set((Array.isArray(list) ? list : []).map((ent
 const claudeEfforts = (levels) => (Array.isArray(levels) && levels.includes("xhigh") ? [...levels, "ultracode"] : levels);
 
 /** One model as Jolo offers it, whatever the vendor called its fields. */
-const model = ({ id, displayName, description, isDefault = false, efforts: levels = [] }) => ({
-  id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20),
+const model = ({ id, displayName, description, isDefault = false, efforts: levels = [], supportsFast = false }) => ({
+  id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20), supportsFast: Boolean(supportsFast),
 });
 
 /** The thinking levels Antigravity's --effort accepts, from least to most. */
@@ -110,7 +111,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
 
   /** Claude lists its models in the reply to the same initialize the adapter sends every turn. */
   const fromClaude = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     return probe(manifest, claudeArgv(binary, extraArgs), {
       open: (send) => send({ type: "control_request", request_id: "jolo-models", request: { subtype: "initialize" } }),
       ask: (message) => {
@@ -125,6 +126,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
             description: [text(entry.description), text(entry.resolvedModel) && entry.resolvedModel !== entry.value ? `(${entry.resolvedModel})` : ""].filter(Boolean).join(" "),
             isDefault: entry.value === "default",
             efforts: entry.supportsEffort ? claudeEfforts(entry.supportedEffortLevels) : [],
+            supportsFast: entry.supportsFastMode,
           })),
           note: null,
         };
@@ -134,7 +136,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
 
   /** Codex has a method for it, and pages its answer. */
   const fromCodex = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     const collected = [];
     return probe(manifest, [binary, ...extraArgs, "app-server"], {
       open: (send) => send({ id: 1, method: "initialize", params: { clientInfo: { name: "jolo", title: "Jolo", version: build }, capabilities: { experimentalApi: false } } }),
@@ -149,7 +151,8 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
         if (message.error) return { models: [], note: text(message.error.message, "Codex did not report a model list") };
         for (const entry of message.result?.data ?? []) {
           if (!text(entry?.id) || entry.hidden) continue;
-          collected.push(model({ id: entry.id, displayName: entry.displayName, description: entry.description, isDefault: entry.isDefault, efforts: entry.supportedReasoningEfforts }));
+          // Codex calls fast mode the "priority" service tier, and lists the tiers each model offers.
+          collected.push(model({ id: entry.id, displayName: entry.displayName, description: entry.description, isDefault: entry.isDefault, efforts: entry.supportedReasoningEfforts, supportsFast: Array.isArray(entry.serviceTiers) && entry.serviceTiers.some((tier) => tier?.id === CODEX_FAST_TIER) }));
         }
         const cursor = message.result?.nextCursor;
         if (cursor && collected.length < MAX_MODELS) { send({ id: 3, method: "model/list", params: { cursor } }); return null; }
@@ -162,7 +165,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
    * An ACP agent publishes its models as a session config option. Some also answer with a vendor-shaped list
    * under `models`, which is read only when the standard selector is absent.
    */
-  const fromAcp = (manifest) => probe(manifest, catalog.command(manifest, { model: null, effort: null }), {
+  const fromAcp = (manifest) => probe(manifest, catalog.command(manifest, { model: null, effort: null, fast: null }), {
     open: (send) => send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "jolo", title: "Jolo", version: build } } }),
     ask: (message, send) => {
       if (message.id === 1) {
@@ -196,7 +199,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
 
   /** Antigravity answers `models` with one JSON result when asked for JSON output. */
   const fromAntigravity = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     return probe(manifest, [binary, ...extraArgs, "--output-format", "json", "models"], {
       open: () => {},
       ask: (message) => {

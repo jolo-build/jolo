@@ -24,14 +24,14 @@ export const GENERIC_RULES = Object.freeze([...NEEDS_INPUT, ...WORKING]);
 
 const hostedAgent = (id, displayName, binary, description, transport, args = [], flags = {}) => ({ id, displayName, binary, description, args, transport, statusModel: "process", idleMs: 4_000, rules: [], ...flags });
 
-/** How each transport can be told which model to run. "flag" needs the manifest to spell the option;
- *  "protocol" is carried by the adapter itself; "none" means Jolo leaves the choice to the agent. */
+/** How each transport can be told which model to run, and whether in fast mode. "flag" needs the manifest to spell
+ *  the option; "protocol" is carried by the adapter itself; "none" means Jolo leaves the choice to the agent. */
 export const TRANSPORT_MODEL_SUPPORT = Object.freeze({
-  pty: Object.freeze({ model: "none", effort: "none" }),
-  "claude-stream": Object.freeze({ model: "flag", effort: "flag" }),
-  "codex-app-server": Object.freeze({ model: "protocol", effort: "protocol" }),
-  acp: Object.freeze({ model: "flag", effort: "flag" }),
-  "antigravity-stream": Object.freeze({ model: "flag", effort: "flag" }),
+  pty: Object.freeze({ model: "none", effort: "none", fast: "none" }),
+  "claude-stream": Object.freeze({ model: "flag", effort: "flag", fast: "flag" }),
+  "codex-app-server": Object.freeze({ model: "protocol", effort: "protocol", fast: "protocol" }),
+  acp: Object.freeze({ model: "flag", effort: "flag", fast: "flag" }),
+  "antigravity-stream": Object.freeze({ model: "flag", effort: "flag", fast: "flag" }),
 });
 
 /** The transports that can say how much of the signed-in plan is used (Claude's get_usage, Codex's account/rateLimits/read, Antigravity's /usage). */
@@ -41,7 +41,7 @@ export const BUILTIN_MANIFESTS = Object.freeze([
   // These speak a structured protocol: replies, tool calls and permission questions arrive as data, so they answer
   // as a Jolo session rather than in a watched terminal. Protocol flags are the adapter's; a manifest's args are
   // the vendor's own options (Claude: e.g. --model; Codex: -c key=value; ACP agents: whatever starts their agent mode).
-  hostedAgent("claude", "Claude Code", "claude", "Anthropic's coding agent CLI, driven through its structured stream.", "claude-stream", [], { modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }),
+  hostedAgent("claude", "Claude Code", "claude", "Anthropic's coding agent CLI, driven through its structured stream.", "claude-stream", [], { modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"], fastArgs: ["--settings", JSON.stringify({ fastMode: true })] }),
   hostedAgent("codex", "Codex", "codex", "OpenAI's coding agent CLI, driven through its app-server.", "codex-app-server"),
   hostedAgent("grok", "Grok CLI", "grok", "xAI's coding agent CLI, driven through the Agent Client Protocol.", "acp", ["--permission-mode", "default", "agent", "stdio"], { modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }),
   hostedAgent("devin", "Devin CLI", "devin", "Cognition’s local coding agent, using your Devin CLI login through ACP.", "acp", ["acp"], { modelArgs: ["--model", "{model}"], modelArgsPosition: "after" }),

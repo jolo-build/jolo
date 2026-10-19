@@ -324,9 +324,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   // (a mention included), and every installed agent that can report its plan's limits.
   const usageTabs = [...new Set([chosenAgentId ?? 'jolo', ...state.taskAgents(), ...hostedAgents.filter((entry) => entry.available && entry.supportsLimits).map((entry) => entry.id)])]
     .map((id) => ({ id, name: id === 'jolo' ? 'Jolo' : agentName(id), usage: state.usageFor(id) }));
-  const saveModelChoice = async ({ agentId, preset, model, effort }) => {
+  const saveModelChoice = async ({ agentId, preset, model, effort, fast }) => {
     if (agentId !== 'jolo') {
-      await state.call('settings.update', { agents: { [agentId]: { model, effort } } });
+      await state.call('settings.update', { agents: { [agentId]: { model, effort, fast } } });
       rememberModelChoice(agentId, selectedModel);
       await Promise.all([state.refreshSettings(), state.refreshCatalog()]);
       setAnswerer(agentId);

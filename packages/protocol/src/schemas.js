@@ -326,6 +326,8 @@ export const AgentRuleSchema = z.object({
 export const AgentModelSettingsSchema = z.object({
   model: z.string().min(1).max(200).nullable().default(null),
   effort: z.string().min(1).max(40).nullable().default(null),
+  /** Fast mode: the vendor's faster, pricier serving of the same model, where the model offers it. */
+  fast: z.boolean().optional(),
 });
 
 /** The same fields as a patch. Defaults are deliberately absent: an unnamed field keeps its stored value,
@@ -333,6 +335,7 @@ export const AgentModelSettingsSchema = z.object({
 export const AgentModelPatchSchema = z.object({
   model: z.string().min(1).max(200).nullable().optional(),
   effort: z.string().min(1).max(40).nullable().optional(),
+  fast: z.boolean().optional(),
 });
 
 /** A model a hosted agent says it can run, as reported by that agent (§4.3). */
@@ -342,6 +345,8 @@ export const AgentModelSchema = z.object({
   description: z.string().max(500).default(""),
   isDefault: z.boolean().default(false),
   efforts: z.array(z.string().max(40)).max(20).default([]),
+  /** Whether the agent says this model can run in fast mode. */
+  supportsFast: z.boolean().default(false),
 });
 
 export const AgentIdKey = z.string().regex(/^[a-z][a-z0-9-]{0,38}$/, "lowercase kebab-case id");
@@ -361,6 +366,8 @@ export const AgentManifestSchema = z.object({
   modelArgsPosition: z.enum(["before", "after"]).default("before"),
   /** The same for reasoning effort; {effort} is replaced. */
   effortArgs: z.array(z.string().max(200)).max(8).optional(),
+  /** Added when fast mode is on. Omit when the CLI has no such option or the transport carries it, as Codex does. */
+  fastArgs: z.array(z.string().max(200)).max(8).optional(),
   transport: z.enum(AGENT_TRANSPORTS).default("pty"),
   statusModel: z.enum(["process", "screen"]).default("process"),
   idleMs: z.number().int().min(AGENT_LIMITS.minIdleMs).max(AGENT_LIMITS.maxIdleMs).default(4_000),
@@ -377,11 +384,13 @@ export const AgentCatalogEntrySchema = z.object({
   available: z.boolean(),
   resolvedPath: z.string().nullable(),
   source: z.enum(["builtin", "user"]),
-  /** The configured model and effort for this agent, and whether Jolo can set them at all. */
+  /** The configured model, effort and fast mode for this agent, and whether Jolo can set them at all. */
   model: z.string().nullable(),
   effort: z.string().nullable(),
+  fast: z.boolean().default(false),
   supportsModel: z.boolean(),
   supportsEffort: z.boolean(),
+  supportsFast: z.boolean().default(false),
   /** Whether this agent can report the signed-in plan's usage limits (agent.limits). */
   supportsLimits: z.boolean(),
 });

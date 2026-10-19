@@ -12,7 +12,7 @@ import { BUILTIN_MANIFESTS, LIMIT_REPORTING, TRANSPORT_MODEL_SUPPORT } from "./m
 import { compileRules } from "./status.js";
 
 const MANIFEST_MAX_BYTES = 64 * 1024;
-const NO_CONFIG = Object.freeze({ model: null, effort: null });
+const NO_CONFIG = Object.freeze({ model: null, effort: null, fast: false });
 
 const binaryCache = new Map();
 
@@ -37,19 +37,20 @@ function resolveBinary(name, toolPath) {
   return null;
 }
 
-/** Whether Jolo can set a model (or effort) for this manifest at all, and by which route. */
+/** Whether Jolo can set a model (or effort, or fast mode) for this manifest at all, and by which route. */
 export function modelSupport(manifest) {
   const support = TRANSPORT_MODEL_SUPPORT[manifest.transport] ?? TRANSPORT_MODEL_SUPPORT.pty;
   return {
     model: support.model === "flag" ? (manifest.modelArgs?.length ? "flag" : "none") : support.model,
     effort: support.effort === "flag" ? (manifest.effortArgs?.length ? "flag" : "none") : support.effort,
+    fast: support.fast === "flag" ? (manifest.fastArgs?.length ? "flag" : "none") : support.fast,
   };
 }
 
 const fill = (template, token, value) => template.map((part) => part.replaceAll(token, value));
 
 /**
- * @param {{ dir: string, env: { path: string }, shell: string | null, settings?: { agent: (id: string) => { model: string | null, effort: string | null } }, log: any }} options
+ * @param {{ dir: string, env: { path: string }, shell: string | null, settings?: { agent: (id: string) => { model: string | null, effort: string | null, fast?: boolean } }, log: any }} options
  */
 export function createCatalog({ dir, env, shell, settings = null, log }) {
   const manifests = new Map();
@@ -79,13 +80,14 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
   /** What this agent was configured to run with, ignoring anything its transport cannot carry. */
   // An override belongs to one run and never touches what the agent is configured with (§6.6): a named value
   // wins, an explicit null means "no option at all" (how models are probed), and undefined keeps the setting.
-  /** @param {any} manifest @param {{ model?: string | null, effort?: string | null }} [override] */
-  const configFor = (manifest, { model, effort } = {}) => {
+  /** @param {any} manifest @param {{ model?: string | null, effort?: string | null, fast?: boolean | null }} [override] */
+  const configFor = (manifest, { model, effort, fast } = {}) => {
     const chosen = settings?.agent(manifest.id) ?? NO_CONFIG;
     const support = modelSupport(manifest);
     const wantedModel = model === undefined ? chosen.model ?? null : model;
     const wantedEffort = effort === undefined ? chosen.effort ?? null : effort;
-    return { model: support.model === "none" ? null : wantedModel, effort: support.effort === "none" ? null : wantedEffort, support };
+    const wantedFast = fast === undefined ? chosen.fast === true : fast === true;
+    return { model: support.model === "none" ? null : wantedModel, effort: support.effort === "none" ? null : wantedEffort, fast: support.fast !== "none" && wantedFast, support };
   };
 
   return {
@@ -94,12 +96,12 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
       return [...manifests.values()].map((manifest) => {
         const binary = binaryFor(manifest);
         const resolvedPath = resolveBinary(binary, env.path);
-        const { model, effort, support } = configFor(manifest);
+        const { model, effort, fast, support } = configFor(manifest);
         return {
           id: manifest.id, displayName: manifest.displayName, description: manifest.description, binary,
           statusModel: manifest.statusModel, transport: manifest.transport,
           available: Boolean(resolvedPath), resolvedPath, source: manifest.source,
-          model, effort, supportsModel: support.model !== "none", supportsEffort: support.effort !== "none",
+          model, effort, fast, supportsModel: support.model !== "none", supportsEffort: support.effort !== "none", supportsFast: support.fast !== "none",
           supportsLimits: LIMIT_REPORTING.has(manifest.transport),
         };
       });
@@ -115,17 +117,18 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
      * options before a subcommand; the manifest's own args follow, then the opening prompt if there is one.
      * A transport that carries the model itself (Codex) contributes no flags here.
      * @param {any} manifest
-     * @param {{ prompt?: string | null, model?: string | null, effort?: string | null }} [override]
+     * @param {{ prompt?: string | null, model?: string | null, effort?: string | null, fast?: boolean | null }} [override]
      */
-    command(manifest, { prompt = null, model, effort } = {}) {
+    command(manifest, { prompt = null, model, effort, fast } = {}) {
       const binary = binaryFor(manifest);
       const resolved = resolveBinary(binary, env.path);
       if (!resolved) throw new ProtocolError("unavailable", `${manifest.displayName} is not installed: ${binary} was not found on the engine's PATH`);
-      const chosen = configFor(manifest, { model, effort });
+      const chosen = configFor(manifest, { model, effort, fast });
       const args = [];
       const modelArgs = chosen.model && chosen.support.model === "flag" ? fill(manifest.modelArgs, "{model}", chosen.model) : [];
       if (manifest.modelArgsPosition !== "after") args.push(...modelArgs);
       if (chosen.effort && chosen.support.effort === "flag") args.push(...fill(manifest.effortArgs, "{effort}", chosen.effort));
+      if (chosen.fast && chosen.support.fast === "flag") args.push(...manifest.fastArgs);
       args.push(...manifest.args);
       if (manifest.modelArgsPosition === "after") args.push(...modelArgs);
       if (prompt && manifest.promptArgs) args.push(...fill(manifest.promptArgs, "{prompt}", prompt));
