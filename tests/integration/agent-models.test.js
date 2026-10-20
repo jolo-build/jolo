@@ -14,7 +14,7 @@ afterEach(async () => {
 const FIXTURE = (name) => path.join(ROOT, "tests", "fixtures", name);
 
 /** One profile with all three structured transports played by fixtures, so nothing reaches a real CLI. */
-async function boot({ clientKind = "test" } = {}) {
+async function boot({ clientKind = "test", env = {} } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, "repo");
   mkdirSync(repo, { recursive: true });
@@ -30,7 +30,7 @@ async function boot({ clientKind = "test" } = {}) {
   writeFileSync(path.join(agentsDir, "codex.json"), JSON.stringify({ id: "codex", displayName: "Codex", binary: launcher("fake-codex", "fake-codex.js"), transport: "codex-app-server" }));
   writeFileSync(path.join(agentsDir, "grok.json"), JSON.stringify({ id: "grok", displayName: "Grok CLI", binary: launcher("fake-acp", "fake-acp.js", `FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))}\nexport FAKE_ACP_STATE\n`), args: ["--acp"], transport: "acp", modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }));
 
-  const engine = await startEngine({ home });
+  const engine = await startEngine({ home, env });
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
@@ -217,6 +217,28 @@ describe("choosing a model for each hosted agent", () => {
     expect(grok.models[1].efforts).toEqual(["low", "high"]);
     expect(grok.efforts).toEqual(["low", "high"]);
   }, 60_000);
+
+  test("an aged model list is shown at once and refreshed behind it, and the last answer survives a restart", async () => {
+    const env = { JOLO_MODELS_TTL_MS: "100" };
+    const { client, home, engine } = await boot({ env });
+    const binary = path.join(home, "fake-codex");
+    const starts = () => readFileSync(`${binary}.starts`, "utf8").trim().split("\n").length;
+    const first = await client.call("agent.models", { agentId: "codex" });
+    expect(first.source).toBe("agent");
+    expect(starts()).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await client.call("agent.models", { agentId: "codex" })).toEqual(first); // aged, so answered from memory
+    await waitFor(() => starts() === 2, { label: "a refresh ran behind the aged answer" });
+    await client.close();
+    await engine.stop();
+    const again = await startEngine({ home, env });
+    engines.push(again);
+    const reopened = await again.connect();
+    try {
+      expect(await reopened.call("agent.models", { agentId: "codex" })).toEqual(first); // the last answer, before any process starts
+      await waitFor(() => starts() === 3, { label: "a refresh ran after the restart" });
+    } finally { await reopened.close(); }
+  }, 30_000);
 
   test("automatic discovery shares probes, reuses results, and refreshes on request", async () => {
     const { client, home } = await boot();

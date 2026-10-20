@@ -23,6 +23,19 @@ export async function runCloseShortcutsSmoke({ window, browserHost, fixtureUrl, 
     assert(quits === 0 && !window.isDestroyed(), 'browser shortcut did not close the app');
     report.checks.push('Cmd/Ctrl+W from a focused native browser closes its tab and preserves the neighboring file tab');
 
+    // Cmd/Ctrl+F opens find on the page; the window's own matching reports a count, and Esc closes it.
+    const press = (keyCode, modifiers = []) => { window.webContents.focus(); window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers }); };
+    await evaluate("document.querySelector('.composer textarea')?.focus()");
+    press('F', [process.platform === 'darwin' ? 'meta' : 'control']);
+    await waitFor("document.activeElement === document.querySelector('.find-bar input')", 'find bar opens focused');
+    await evaluate("(() => { const input = document.querySelector('.find-bar input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(input, 'New chat'); input.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    await waitFor("/^1\\/\\d+$/.test(document.querySelector('.find-count')?.textContent ?? '') && CSS.highlights.get('jolo-find')?.size > 0", 'find counts and marks its matches');
+    await evaluate("document.querySelector('.find-bar [aria-label=\"Next match\"]').click()");
+    await waitFor("/^2\\/\\d+$|^1\\/1$/.test(document.querySelector('.find-count')?.textContent ?? '')", 'next steps to the following match');
+    press('Escape');
+    await waitFor("!document.querySelector('.find-bar') && !CSS.highlights.get('jolo-find')", 'Esc closes find and clears the marks');
+    report.checks.push('Cmd/Ctrl+F opens find in page with highlighted matches and a count, Enter steps, and Esc closes it');
+
     await selectPanel(evaluate, waitFor, 'Terminal');
     await waitFor("Boolean(document.querySelector('.xterm-helper-textarea'))", 'terminal mounted');
     await evaluate("document.querySelector('.xterm-helper-textarea').focus()");

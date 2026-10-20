@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Notices } from "./components/notices.jsx";
+import { FindBar } from "./components/find-bar.jsx";
 import { EngineProvider } from "./engine-context.jsx";
 import { WorkspacePane } from "./components/workspace-pane.jsx";
 import { initialLayout, MAX_PANES, paneRects, paneReducer } from "./pane-layout.js";
@@ -83,6 +84,7 @@ function DesktopWorkspace() {
   const [viewport, setViewport] = useState(window.innerWidth);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const width = sidebarWidth(sidebarState.width, viewport);
+  const [finding, setFinding] = useState(false);
   const toggleSidebar = useCallback(() => setSidebarState(value => ({ ...value, collapsed: !value.collapsed })), []);
   const resizeSidebar = value => setSidebarState(state => ({ ...state, width: sidebarWidth(value, viewport) }));
   const hosts = useMemo(() => ({ header, sidebar, settings, sidebarCollapsed: sidebarHidden, toggleSidebar }), [header, sidebar, settings, sidebarHidden, toggleSidebar]);
@@ -140,6 +142,10 @@ function DesktopWorkspace() {
     const onKey = (event) => {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b' && !document.querySelector('dialog[open], .settings-page')) {
         event.preventDefault(); toggleSidebar(); return;
+      }
+      // Cmd/Ctrl+F finds on the page, unless something focused (an editor, a browser) already took the key.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f" && !event.defaultPrevented && !document.querySelector("dialog[open]")) {
+        event.preventDefault(); setFinding(true); return;
       }
       // Off macOS the shortcut is Ctrl+J, which a terminal needs for itself.
       const mac = window.jolo.platform === 'darwin';
@@ -212,6 +218,7 @@ function DesktopWorkspace() {
       <div className="workspace-settings" ref={setSettings} hidden={!settingsOwner} />
     </div>
     <Notices />
+    <FindBar open={finding} onClose={() => setFinding(false)} />
   </div></TaskDragContext.Provider>;
 }
 

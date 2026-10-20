@@ -4,11 +4,14 @@ import { ModelLogo } from './brand.jsx';
 import { effortLabel, modelEfforts, effortForModel, fastForModel, modelLabel, modelSupportsFast } from '../model-options.js';
 
 /** Quick access to the same saved model preferences used by Settings. */
+/** Model lists already seen in this window, so a menu opened in another chat or pane shows them at once. */
+const knownReports = new Map();
+
 export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange, hiddenSources = [] }) {
   const trigger = useRef(null), effortTrigger = useRef(null), opener = useRef(null), search = useRef(null), panel = useRef(null), busy = useRef(false), alive = useRef(true);
   const id = useId();
   const [open, setOpen] = useState(false), [view, setView] = useState('models');
-  const [reports, setReports] = useState({}), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
+  const [reports, setReports] = useState(() => Object.fromEntries(knownReports)), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [error, setError] = useState(''), [presets, setPresets] = useState([]);
   const [browsing, setBrowsing] = useState({ agentId, preset: nativeModel?.preset ?? '' });
   const [query, setQuery] = useState('');
@@ -62,7 +65,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
     let cancelled = false;
     setLoading(true); setError('');
     latest.current.call(agent ? 'agent.models' : 'provider.models', agent ? { agentId: activeAgentId, refresh: Boolean(refresh) } : { preset, refresh: Boolean(refresh) })
-      .then(result => { if (!cancelled) setReports(current => ({ ...current, [source]: result })); })
+      .then(result => { knownReports.set(source, result); if (!cancelled) setReports(current => ({ ...current, [source]: result })); })
       .catch(error => { if (!cancelled) setError(error.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };

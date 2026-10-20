@@ -1,6 +1,7 @@
 // Which models a hosted agent can run, asked of the agent itself.
 //
-// Jolo keeps no list of anyone's models: they change without notice, and a stale list is worse than none.
+// Jolo keeps no list of anyone's models of its own: an agent is asked, and its last answer is kept only to show while
+// it is asked again, so opening the menu never waits for a process that already answered once.
 // Each transport is asked over its own protocol instead — Claude answers its initialize, Codex has
 // model/list, an ACP agent publishes a model selector, Antigravity has a models command — so what the user picks from is what that install
 // actually offers today. Settings loads this automatically when opened; recent answers are shared
@@ -16,7 +17,7 @@ import { modelSelector } from "./acp.js";
 // An agent slower than this is not broken; the model field simply stays free text for it.
 const PROBE_TIMEOUT_MS = 8_000;
 const MAX_MODELS = 100;
-const CACHE_TTL_MS = 5 * 60_000;
+const CACHE_TTL_MS = Number(process.env.JOLO_MODELS_TTL_MS) || 5 * 60_000;
 /** The transports that can name their slash commands, so they are asked even when their model cannot be set. */
 const COMMAND_TRANSPORTS = new Set(["claude-stream", "codex-app-server"]);
 
@@ -132,11 +133,21 @@ export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs,
 }
 
 /**
- * @param {{ catalog: any, supervisor: any, build?: string, log: any }} deps
+ * @param {{ catalog: any, supervisor: any, build?: string, log: any, storage?: any }} deps storage keeps each agent's last answer across restarts
  */
-export function createModelDirectory({ catalog, supervisor, build = "dev", log }) {
+export function createModelDirectory({ catalog, supervisor, build = "dev", log, storage = null }) {
   const answered = new Map(); // agentId -> recent successful answer
   const pending = new Map(); // concurrent clients share one probe per agent
+  const saved = (agentId) => `models:${agentId}`;
+  /** The last successful answer: from this run, or from the one before it. */
+  const recall = (agentId) => {
+    if (answered.has(agentId)) return answered.get(agentId);
+    const kept = storage?.getPreference?.(saved(agentId));
+    if (!kept?.answer || typeof kept.at !== "number") return null;
+    const entry = { answer: kept.answer, expiresAt: kept.at + CACHE_TTL_MS };
+    answered.set(agentId, entry);
+    return entry;
+  };
 
   /** The shared probe; an agent too slow to answer leaves the model field as free text. */
   const probe = async (manifest, argv, steps) => {
@@ -263,7 +274,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
         : `${manifest.displayName} has no model option in its manifest; add modelArgs to set one`;
       if (!settable && !COMMAND_TRANSPORTS.has(manifest.transport)) return { agentId, models: [], efforts: [], commands: [], source: "none", note: reason };
       if (pending.has(agentId)) return pending.get(agentId);
-      const remembered = answered.get(agentId);
+      const remembered = recall(agentId);
       if (!refresh && remembered && Date.now() < remembered.expiresAt) return remembered.answer;
       const request = (async () => {
         let result;
@@ -282,13 +293,15 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
         const note = settable ? result.note : commands.length ? reason : result.note ?? reason;
         const answer = { agentId, models, efforts: levels, commands, source: models.length || levels.length || commands.length ? "agent" : "none", note: note ? note.slice(0, 300) : null };
         // Only a real answer is kept: a failure should be retried, since signing in or installing fixes it.
-        if (answer.source === "agent") answered.set(agentId, { answer, expiresAt: Date.now() + CACHE_TTL_MS });
-        else answered.delete(agentId);
+        if (answer.source === "agent") { answered.set(agentId, { answer, expiresAt: Date.now() + CACHE_TTL_MS }); storage?.setPreference?.(saved(agentId), { answer, at: Date.now() }); }
+        else { answered.delete(agentId); storage?.setPreference?.(saved(agentId), null); }
         return answer;
       })();
       pending.set(agentId, request);
-      try { return await request; }
-      finally { pending.delete(agentId); }
+      void request.finally(() => pending.delete(agentId));
+      // An answer that has merely aged is shown at once, while the agent is asked again behind it for the next open.
+      if (!refresh && remembered) { request.catch(() => {}); return remembered.answer; }
+      return request;
     },
   };
 }
