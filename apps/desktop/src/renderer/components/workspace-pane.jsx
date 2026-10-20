@@ -104,6 +104,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [worktreeDialog, setWorktreeDialog] = useState(false);
   const [changesFocus, setChangesFocus] = useState(null);
   const [revealPath, setRevealPath] = useState(/** @type {{ path: string } | null} */ (null)); // a folder a breadcrumb asked the tree to show
+  const [filesExpanded, setFilesExpanded] = useState(false); // the Files panel over the whole pane, the conversation set aside
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
@@ -128,16 +129,31 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       add: item => panelTabs.add({ ...item, panelType }), update: panelTabs.update, close: closeTab };
   };
   const browserTabs = tabsFor('browser'), terminalTabs = tabsFor('terminal'), fileTabs = tabsFor('file');
+  // Expanded lasts while a file is on screen in the Files panel, whose heading holds the button that gives the
+  // conversation back; Esc does too, unless Settings, which Esc closes, is open over it. An error, which the
+  // conversation shows, gives it back as well.
+  const fileShown = context === 'files' && Boolean(fileTabs.active);
+  const expanded = filesExpanded && fileShown;
+  useEffect(() => { if (!fileShown || error) setFilesExpanded(false); }, [fileShown, error]);
+  useEffect(() => {
+    if (!expanded || !active || showSettings) return;
+    const restore = event => { if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('dialog[open]')) setFilesExpanded(false); };
+    window.addEventListener('keydown', restore);
+    return () => window.removeEventListener('keydown', restore);
+  }, [expanded, active, showSettings]);
   const browser = browserTabs.active;
   const browserTitle = browser?.title ?? '';
   previewSession.current = sessionId;
   previewWorkspace.current = workspaceId;
-  /** A project file picked in the tree opens as a tab; a text file can be edited there and written back. */
-  const openWorkspaceFile = (relative) => reportError(async () => {
+  /** A project file picked in the tree opens as a tab, at `line` when a search found it there; a text file can be edited
+   * there and written back. Opening it again keeps the tab's unsaved mark, since its edits stay in the tab. `opened` is
+   * new with each opening, so the line is revealed again then, and not when the tab's mark or text changes. */
+  const openWorkspaceFile = (relative, line = 0) => reportError(async () => {
     const result = await state.call('workspace.readFile', { workspaceId, path: relative });
     const name = basename(relative);
     const kind = result.binary ? 'details' : /\.(md|markdown|mdx)$/i.test(relative) ? 'markdown' : 'text';
-    fileTabs.add({ id: relative, path: relative, title: name, kind, workspaceId, sessionId, ...(result.binary
+    const title = fileTabs.items.find(item => item.id === relative)?.title ?? name;
+    fileTabs.add({ id: relative, path: relative, title, kind, workspaceId, sessionId, ...(line > 0 && !result.binary ? { line, opened: {} } : {}), ...(result.binary
       ? { size: result.bytes, extension: (relative.match(/\.([^./]+)$/)?.[1] ?? '').toUpperCase(), note: 'This file is not text, so it is not shown here.' }
       : { text: result.text, truncated: result.truncated, editable: !result.truncated }) });
     setContext('files');
@@ -391,7 +407,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const mac = window.jolo.platform === 'darwin';
   return (
     <FilePreviewContext.Provider value={openFilePreview}>
-    <div ref={root} className={`pane-workspace${context ? " with-context" : ""}`}>
+    <div ref={root} className={`pane-workspace${context ? " with-context" : ""}${expanded ? " files-expanded" : ""}`}>
       {active && hosts.header && createPortal(<header className="header">
         <div className="header-brand"><JoloLogo /><button className="sidebar-toggle" onClick={hosts.toggleSidebar} aria-label={hosts.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!hosts.sidebarCollapsed} aria-controls="workspace-sidebar" title={`${hosts.sidebarCollapsed ? 'Show' : 'Hide'} sidebar (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}B)`} disabled={showSettings}><Icon name="sidebar" /></button></div>
         <div className="header-workspace">
@@ -451,10 +467,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
               <div className="panel-item-content" hidden={context !== 'changes'}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view="changes" focus={changesFocus} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
               <div className="files-layout" hidden={context !== 'files'}>
                 <div className="files-main">
-                  {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} onSave={file.editable ? text => saveWorkspaceFile(file, text) : null} onDirty={file.editable ? dirty => fileTabs.update(file.id, { title: dirty ? `${basename(file.path)} •` : basename(file.path) }) : null} onReveal={file.workspaceId === workspaceId && !project?.standalone ? folder => setRevealPath({ path: folder }) : null} /></div>)}
+                  {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} onSave={file.editable ? text => saveWorkspaceFile(file, text) : null} onDirty={file.editable ? dirty => fileTabs.update(file.id, { title: dirty ? `${basename(file.path)} •` : basename(file.path) }) : null} onReveal={file.workspaceId === workspaceId && !project?.standalone ? folder => setRevealPath({ path: folder }) : null} expanded={expanded} onExpand={() => setFilesExpanded(value => !value)} /></div>)}
                   {!fileTabs.active && <div className="panel-empty files-empty"><Icon name="folder" size={28} /><h2>Open files appear here</h2><p>{workspaceId && !project?.standalone ? 'Pick a file in the tree, or click a file path in the conversation.' : 'Click a file path in the conversation, or open a folder to browse its files.'}</p></div>}
                 </div>
-                {workspaceId && !project?.standalone && <FileTree key={workspaceId} call={state.call} workspaceId={workspaceId} name={projectLabel} active={context === 'files'} revision={`${changes.length}:${lastRun?.updatedAt ?? ''}`} selectedPath={fileTabs.active?.path ?? null} reveal={revealPath} onOpen={openWorkspaceFile} onPick={() => void pickFile()} />}
+                {workspaceId && !project?.standalone && <FileTree key={workspaceId} call={state.call} workspaceId={workspaceId} active={context === 'files'} revision={`${changes.length}:${lastRun?.updatedAt ?? ''}`} selectedPath={fileTabs.active?.path ?? null} reveal={revealPath} onOpen={openWorkspaceFile} onPick={() => void pickFile()} />}
               </div>
             </div>
             <div className="browser-host" hidden={context !== 'browser'}>

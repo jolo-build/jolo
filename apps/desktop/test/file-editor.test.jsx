@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FilePreview } from '../src/renderer/components/file-preview.jsx';
 import { highlightStyle, SYNTAX } from '../src/renderer/components/code-editor.jsx';
+import { FileTree } from '../src/renderer/components/file-tree.jsx';
+import { PanelItemTabs } from '../src/renderer/components/panel-item-tabs.jsx';
 
 test('a project text file offers Edit; a chat preview does not', () => {
   const file = { path: 'src/app.js', kind: 'text', text: 'export const answer = 42;\n', editable: true };
@@ -25,4 +27,26 @@ test('a project file heading is a breadcrumb whose folders show themselves in th
 test('the source editor finds every highlighting tag it colours', () => {
   // The tags are looked up by name in CodeMirror's default style; a renamed or missing one would silently lose its colour.
   expect(highlightStyle.specs.map(spec => [spec.tag].flat().length)).toEqual(SYNTAX.map(([names]) => names.length));
+});
+
+test('the filter says it also searches inside the files', () => {
+  const tree = renderToStaticMarkup(<FileTree call={async () => ({ entries: [] })} workspaceId="workspace" onOpen={() => {}} />);
+  expect(tree).toContain('placeholder="Filter, or ? to search in files"');
+});
+
+test('a file tab wears its file type badge; other tabs keep their icon', () => {
+  const tabs = [{ id: 'src/app.js', panelType: 'file', path: 'src/app.js', title: 'app.js' }, { id: 'changes', panelType: 'changes', title: 'Changes', icon: 'changes' }];
+  const bar = renderToStaticMarkup(<PanelItemTabs label="Panel tabs" paneId="pane-1" tabs={tabs} activeId="src/app.js" onSelect={() => {}} onClose={() => {}} newControl={null} />);
+  expect(bar).toContain('<span class="file-badge script" aria-hidden="true">JS</span><span>app.js</span>');
+  expect(bar).toContain('aria-label="Changes"');
+  expect(bar.match(/file-badge/g)).toHaveLength(1);
+});
+
+test('every file in the Files panel can expand it, and the button says how to come back', () => {
+  const image = { path: 'docs/shot.png', kind: 'image', url: 'jolo-file://shot' };
+  const collapsed = renderToStaticMarkup(<FilePreview file={image} onClose={null} onExpand={() => {}} />);
+  expect(collapsed).toContain('aria-label="Expand panel" aria-pressed="false"');
+  const restored = renderToStaticMarkup(<FilePreview file={image} onClose={null} expanded onExpand={() => {}} />);
+  expect(restored).toContain('aria-label="Restore panel" aria-pressed="true" title="Restore (Esc)"');
+  expect(renderToStaticMarkup(<FilePreview file={image} onClose={null} />)).not.toContain('file-heading'); // a chat preview elsewhere stays bare
 });

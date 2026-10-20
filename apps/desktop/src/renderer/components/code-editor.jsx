@@ -63,11 +63,12 @@ const locationAt = line => line ? EditorView.decorations.of(view => line <= view
 /**
  * A file's text in CodeMirror: line numbers with folding, syntax colours for the file's language, and wrapped lines.
  * Read-only until `readOnly` is false; Cmd/Ctrl+S calls `onSave`. A `line` (and `column`) is scrolled to the middle and
- * marked, and scrolled to again whenever `reveal` changes, as when the same link is followed twice. The view is on the
+ * marked, and scrolled to again whenever `reveal` changes, as when the same link is followed twice. A new `revision`
+ * puts `value` back even while the user is typing in it, as Revert does, and undo can take that back. The view is on the
  * element as `cmView`, so tests can read `cmView.state.doc`.
- * @param {{ path: string, value: string, readOnly?: boolean, onChange?: ((text: string) => void) | null, onSave?: (() => void) | null, line?: number | null, column?: number | null, reveal?: unknown }} props
+ * @param {{ path: string, value: string, readOnly?: boolean, onChange?: ((text: string) => void) | null, onSave?: (() => void) | null, line?: number | null, column?: number | null, reveal?: unknown, revision?: number }} props
  */
-export function CodeEditor({ path, value, readOnly = true, onChange = null, onSave = null, line = null, column = null, reveal = null }) {
+export function CodeEditor({ path, value, readOnly = true, onChange = null, onSave = null, line = null, column = null, reveal = null, revision = 0 }) {
   const host = useRef(/** @type {HTMLDivElement | null} */ (null));
   const view = useRef(/** @type {EditorView | null} */ (null));
   const parts = useRef(/** @type {{ mode: Compartment, language: Compartment, location: Compartment } | null} */ (null));
@@ -102,12 +103,15 @@ export function CodeEditor({ path, value, readOnly = true, onChange = null, onSa
     return () => { current = false; };
   }, [path]);
   // Text that changes from outside replaces the document, except while the user is typing in it; undo skips it.
+  // A new revision is the user's own reset, so it replaces the document regardless and can be undone.
+  const shownRevision = useRef(revision);
   useEffect(() => {
-    const editor = view.current;
-    if (!editor || (editor.hasFocus && !readOnly) || editor.state.doc.toString() === value) return;
+    const editor = view.current, reset = shownRevision.current !== revision;
+    shownRevision.current = revision;
+    if (!editor || (editor.hasFocus && !readOnly && !reset) || editor.state.doc.toString() === value) return;
     syncing.current = true;
-    try { editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, annotations: Transaction.addToHistory.of(false) }); } finally { syncing.current = false; }
-  }, [value]);
+    try { editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value }, ...(reset ? {} : { annotations: Transaction.addToHistory.of(false) }) }); } finally { syncing.current = false; }
+  }, [value, revision]);
   useEffect(() => {
     const editor = view.current;
     if (!editor) return;

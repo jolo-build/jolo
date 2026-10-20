@@ -150,6 +150,10 @@ strong { font-weight: 550; }
 .pane-body .conversation { min-height: 32px; }
 .pane-workspace.with-context .pane-body { grid-template-columns: minmax(0, var(--chat-size, 1fr)) minmax(0, var(--context-size, .95fr)); }
 .pane-body > .inspector { grid-column: 2; grid-row: 1; background: var(--side); border-top: 0; border-left: 1px solid var(--border); }
+/* Expanded from a file's heading, the Files panel takes the whole pane until Esc or the same button. */
+.pane-workspace.files-expanded .pane-body { grid-template-columns: minmax(0, 1fr); }
+.pane-workspace.files-expanded .pane-body > :is(.main, .context-divider) { display: none; }
+.pane-workspace.files-expanded .pane-body > .inspector { grid-column: 1; border-left: 0; }
 .context-divider { grid-column: 2; grid-row: 1; justify-self: start; position: relative; width: 8px; margin-left: -4px; z-index: 6; cursor: col-resize; touch-action: none; }
 .context-divider::after { content: ''; position: absolute; inset: 0 3px; background: transparent; }
 .context-divider:hover::after, .context-divider:focus-visible::after, .context-resizing .context-divider::after { background: var(--accent); }
@@ -902,7 +906,8 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .files-empty h2 { font-size: 15px; }
 .explorer-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; padding-bottom: 10px; border-left: 1px solid var(--border); }
 .explorer-filter { display: flex; align-items: center; gap: 6px; flex: none; margin: 8px 8px 4px; padding: 0 6px 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
-.explorer-filter input { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; background: transparent; font-size: 12px; color: var(--text); outline: none; }
+.explorer-filter input { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; background: transparent; font-size: 12px; color: var(--text); outline: none; text-overflow: ellipsis; }
+.explorer-filter input::placeholder { font-size: 11px; }
 .explorer-filter > button { flex: none; padding: 4px; color: var(--muted); border-radius: 5px; }
 .explorer-filter > button:hover { color: var(--text); }
 .explorer-tree ul { list-style: none; margin: 0; padding: 0; }
@@ -914,6 +919,12 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .explorer-row > small { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
 .explorer-row:hover, .explorer-row[aria-current=true] { background: var(--hover); }
 .explorer-matches .explorer-row { padding-left: 12px; }
+/* Search in files: a quiet row per file, then its lines with their numbers; only the found text reads at full strength. */
+.explorer-hits .explorer-row { padding-left: 12px; color: var(--muted); }
+.explorer-hits .explorer-row:hover, .explorer-hits .explorer-row:focus-visible { color: var(--text); }
+.explorer-hits .explorer-hit { gap: 8px; min-height: 22px; padding-left: 16px; font: 11px var(--mono); font-variant-ligatures: none; }
+.explorer-hit-line { flex: none; min-width: 3ch; text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; opacity: .8; }
+.explorer-hit mark { background: none; color: var(--text); font-weight: 600; }
 .explorer-chevron { flex: none; color: var(--muted); transition: transform .12s; }
 .explorer-chevron.open { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .explorer-chevron { transition: none; } }
@@ -931,6 +942,9 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 /* Source, read or edited, is one CodeMirror editor (code-editor.jsx) that fills the area and scrolls itself; its own look is its theme. */
 .file-preview-content.code { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .file-save { font-size: 11px; padding: 4px 9px; }
+.file-revert { font-size: 11px; padding: 4px 7px; color: var(--muted); }
+.file-expand { flex: none; padding: 5px; color: var(--muted); }
+.file-revert:hover, .file-expand:hover { color: var(--text); }
 .file-save-error { color: var(--red); }
 .file-preview-content > img, .file-preview-content > video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .file-preview-content > embed { display: block; width: 100%; height: 100%; min-height: 200px; }
