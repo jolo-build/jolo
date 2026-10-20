@@ -20,8 +20,12 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
     await waitFor("Boolean(document.querySelector('.panel-menu:popover-open [role=menuitemradio][aria-label=Files]'))", 'panel menu open');
     await evaluate("document.querySelector('.panel-menu:popover-open [role=menuitemradio][aria-label=Files]').click()");
-    await waitFor("[...document.querySelectorAll('.explorer-row')].some(row => row.textContent === 'PLAN.md')", 'the tree lists the project');
-    await evaluate("[...document.querySelectorAll('.explorer-row')].find(row => row.textContent === 'PLAN.md').click()");
+    await waitFor("Boolean(document.querySelector('.files-empty')) && [...document.querySelectorAll('.explorer-row')].some(row => row.textContent === 'MDPLAN.md')", 'the tree lists the project beside the empty file area');
+    await evaluate("(() => { const input = document.querySelector('.explorer-filter input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(input, 'locat'); input.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    await waitFor("[...document.querySelectorAll('.explorer-matches .explorer-row')].some(row => row.textContent.includes('location.js')) && ![...document.querySelectorAll('.explorer-row')].some(row => row.textContent === 'MDPLAN.md')", 'the filter shows matches instead of the tree');
+    await evaluate("(() => { const input = document.querySelector('.explorer-filter input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(input, ''); input.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    await waitFor("[...document.querySelectorAll('.explorer-row')].some(row => row.textContent === 'MDPLAN.md')", 'clearing the filter restores the tree');
+    await evaluate("[...document.querySelectorAll('.explorer-row')].find(row => row.textContent === 'MDPLAN.md').click()");
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content h3')?.textContent === 'Project plan'", 'a file picked in the tree opens as a tab');
     await evaluate("document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Edit file\"]').click()");
     await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) textarea.file-editor'))", 'the editor opens');
@@ -32,8 +36,8 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     if (!readFileSync(path.join(project, 'PLAN.md'), 'utf8').includes('- Edited in Jolo')) throw new Error('the edit was not written to disk');
     await waitFor("[...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md') && !document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]')", 'saving clears the mark');
     await evaluate("document.querySelector('[aria-label=\"Close PLAN.md\"]').click()");
-    await waitFor("![...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md') && Boolean(document.querySelector('.explorer-tree'))", 'closing the tab returns to the tree');
-    report.checks.push('the Files panel lists the project as a tree, opens a file from it, and saves an edit back to disk');
+    await waitFor("![...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md') && Boolean(document.querySelector('.files-empty'))", 'closing the tab shows the empty file area again');
+    report.checks.push('the Files panel shows the project tree beside the open file, filters it, opens a file from it, and saves an edit back to disk');
     await evaluate("window.__joloSmoke.send('Show the generated files')");
     await waitFor("Array.from(document.querySelectorAll('.message.assistant a')).some(a => a.textContent === 'PLAN.md')", 'assistant file links');
     const click = async name => evaluate(`Array.from(document.querySelectorAll('.message.assistant a')).find(a => a.textContent === ${JSON.stringify(name)}).click()`);
