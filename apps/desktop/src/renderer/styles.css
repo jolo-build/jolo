@@ -890,15 +890,36 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .inspector :is(.diff, .md-preview, .file-heading, .review-footer) { background: color-mix(in srgb, var(--bg) 18%, transparent); }
 .md-preview .md h3 { font-size: 17px; } .md-preview .md h4 { font-size: 15px; }
 .file-preview-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
-/* The Files panel's tree: plain rows, one indent step per folder, nothing lit until a row is pointed at. */
-.explorer-tree { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding-bottom: 10px; }
+/* The Files panel: the open file on the left, the project's tree on the right with a filter above it. */
+.files-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 240px); flex: 1; min-height: 0; min-width: 0; }
+.files-layout[hidden] { display: none; }
+.files-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.files-empty h2 { font-size: 15px; }
+.explorer-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; padding-bottom: 10px; border-left: 1px solid var(--border); }
+.explorer-filter { display: flex; align-items: center; gap: 6px; flex: none; margin: 8px 8px 4px; padding: 0 6px 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
+.explorer-filter input { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; background: transparent; font-size: 12px; color: var(--text); outline: none; }
+.explorer-filter > button { flex: none; padding: 4px; color: var(--muted); border-radius: 5px; }
+.explorer-filter > button:hover { color: var(--text); }
 .explorer-tree ul { list-style: none; margin: 0; padding: 0; }
-.explorer-row { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 0; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
+.explorer-row { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 0; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
 .explorer-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.explorer-row > small { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
 .explorer-row:hover { background: var(--hover); }
+.explorer-matches .explorer-row { padding-left: 12px; }
 .explorer-chevron { flex: none; color: var(--muted); transition: transform .12s; }
 .explorer-chevron.open { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .explorer-chevron { transition: none; } }
+/* One badge per file family: a readable letter or two on a soft tint, never a full-colour icon set. */
+.file-badge { flex: none; min-width: 20px; height: 15px; padding: 0 3px; border-radius: 4px; font: 600 8px/15px var(--sans); letter-spacing: .02em; text-align: center; color: var(--text); background: var(--hover); }
+.file-badge.script { color: #a07c00; background: color-mix(in srgb, #e8b400 18%, transparent); }
+.file-badge.typed { color: #2b6cb0; background: color-mix(in srgb, #3b82f6 16%, transparent); }
+.file-badge.prose { color: #2f855a; background: color-mix(in srgb, #38a169 16%, transparent); }
+.file-badge.data { color: #b7612a; background: color-mix(in srgb, #ed8936 16%, transparent); }
+.file-badge.media { color: #7c3aed; background: color-mix(in srgb, #8b5cf6 16%, transparent); }
+.file-badge.style { color: #b83280; background: color-mix(in srgb, #d53f8c 14%, transparent); }
+.file-badge.markup, .file-badge.shell { color: var(--muted); background: var(--hover); }
+.file-badge-plain { flex: none; color: var(--muted); }
+@media (max-width: 1050px) { .files-layout { grid-template-columns: minmax(0, 1fr) minmax(170px, 200px); } }
 .file-preview-content.editing { display: flex; }
 .file-editor { flex: 1; width: 100%; margin: 0; padding: 12px 13px; border: 0; resize: none; background: transparent; color: var(--text); font: 12px/1.65 var(--mono); font-variant-ligatures: none; white-space: pre; overflow: auto; tab-size: 2; outline: none; }
 .file-save { font-size: 11px; padding: 4px 9px; }
