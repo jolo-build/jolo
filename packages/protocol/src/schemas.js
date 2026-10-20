@@ -633,6 +633,7 @@ export const SearchTextParams = z.object({
 export const MethodSchemas = {
   hello: { params: HelloParams, result: HelloResult },
   "engine.status": { params: z.object({}), result: EngineStatusResult },
+  /** Agents' search_text over the wire, which scoped guest credentials reach; the Files panel searches with workspace.searchInFiles. */
   "workspace.search": {
     params: SearchTextParams.extend({ workspaceId: Id }),
     result: z.object({ pattern: z.string(), engine: z.enum(['tgrep', 'ripgrep', 'builtin']), freshness: z.enum(['indexed', 'live']), matches: z.array(z.object({ path: z.string(), line: z.number().int(), text: z.string() })), truncated: z.boolean(), nextCursor: z.string().optional(), scanned: z.number().int() }),
@@ -668,6 +669,11 @@ export const MethodSchemas = {
   "workspace.files": {
     params: z.object({ workspaceId: Id, query: z.string().max(200).default(''), path: z.string().max(4096).optional(), limit: z.number().int().min(1).max(200).default(20) }),
     result: z.object({ entries: z.array(z.object({ path: z.string(), kind: z.enum(['file', 'directory']) })), truncated: z.boolean(), total: z.number().int().nonnegative(), source: z.enum(['git', 'ripgrep', 'builtin', 'listing']) }),
+  },
+  /** The Files panel's search in files: lines of non-ignored files holding the literal query, case-blind unless it has a capital, at most 20 a file. */
+  "workspace.searchInFiles": {
+    params: z.object({ workspaceId: Id, query: z.string().min(1).max(200).regex(/^[^\r\n\0]*$/, 'one line of text'), limit: z.number().int().min(1).max(200).default(50) }),
+    result: z.object({ matches: z.array(z.object({ path: z.string(), line: z.number().int().min(1), text: z.string() })), truncated: z.boolean(), source: z.enum(['ripgrep', 'git']) }),
   },
   "workspace.remove": {
     params: z.object({ workspaceId: Id, force: z.boolean().default(false) }),

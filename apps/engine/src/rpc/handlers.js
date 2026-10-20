@@ -13,7 +13,7 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
-import { searchWorkspaceFiles, listWorkspaceFolder } from '../search/files.js';
+import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '../search/files.js';
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
@@ -433,6 +433,21 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       conn.closeHooks.add(cancel);
       try { return await searchWorkspaceFiles({ root: workspace.path, env: toolEnv, signal: controller.signal, query, limit }); }
       finally { clearTimeout(timer); conn.closeHooks.delete(cancel); }
+    },
+    // The Files panel's search in files. It shares the engine-wide bound on searches running at once with
+    // workspace.search, stops with the client that asked, and answers with what it found by its own deadline.
+    "workspace.searchInFiles": async ({ workspaceId, query, limit }, conn) => {
+      requireInteractive(conn, "searching in files is for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId });
+      if (activeSearches >= 8) throw new ProtocolError('limit_exceeded', 'search is busy; retry shortly');
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      conn.closeHooks.add(cancel);
+      activeSearches++;
+      try { return await searchWorkspaceText({ root: workspace.path, env: toolEnv, signal: controller.signal, query, limit }); }
+      finally { activeSearches--; conn.closeHooks.delete(cancel); }
     },
     "workspace.changes": ({ workspaceId }) => {
       const workspace = storage.getWorkspace(workspaceId);

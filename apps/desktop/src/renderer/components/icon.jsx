@@ -15,6 +15,7 @@ const paths = {
   sidebarRight: 'M3 4h18v16H3ZM15 4v16',
   splitRight: 'M3 4h18v16H3ZM12 4v16', splitBelow: 'M3 4h18v16H3ZM3 12h18',
   maximize: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5', restore: 'M8 3v5H3M16 3v5h5M21 16h-5v5M3 16h5v5',
+  expand: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7', collapse: 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7',
   more: 'M5 11.5h.01v.01H5ZM12 11.5h.01v.01H12ZM19 11.5h.01v.01H19Z',
   plus: 'M12 5v14M5 12h14', arrow: 'm7 10 5-5 5 5M12 5v14', right: 'M5 12h14m-6-6 6 6-6 6',
   chevron: 'm9 5 7 7-7 7', down: 'm6 9 6 6 6-6', close: 'm6 6 12 12M6 18 18 6', check: 'm5 12 4 4L19 6',

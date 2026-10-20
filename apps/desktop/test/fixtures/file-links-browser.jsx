@@ -44,7 +44,10 @@ async function run() {
     const text = 'one\n\nthree\n';
     flushSync(() => root.render(<FilePreview file={{ path: 'source.js', kind: 'text', text, line, column }} onClose={null} />));
     check(host.querySelector('code').closest('.file-heading') !== null, 'Source heading disappeared');
-    check(host.querySelector('.file-preview-source code').textContent === text, 'Location highlighting changed copied source text');
+    // The source editor loads on first use; its lines are what a reader sees and copies.
+    const lines = () => Array.from(host.querySelectorAll('.file-preview-source .cm-line'));
+    await waitFor(() => lines().findIndex(node => node.classList.contains('file-source-location')) === line - 1);
+    check(/** @type {any} */ (host.querySelector('.file-preview-source')).cmView.state.doc.toString() === text && lines().map(node => node.textContent).join('\n') === text, 'Location highlighting changed copied source text');
   }
   host.className = 'message';
   host.style.margin = '24px';
