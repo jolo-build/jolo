@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { openSession, removeHome, startEngine, tempHome } from "./helpers.js";
-import { pathMatchScore, searchWorkspaceFiles, topLevelMix } from "../../apps/engine/src/search/files.js";
+import { pathMatchScore, searchWorkspaceFiles, searchWorkspaceText, topLevelMix } from "../../apps/engine/src/search/files.js";
 import { resolveToolEnvironment } from "../../apps/engine/src/tools/dispatcher.js";
 
 const engines = [];
@@ -82,6 +82,84 @@ test("workspace.files offers non-ignored files and folders by fragment, lists on
     await client.close();
   }
 }, 20_000);
+
+test("workspace.searchInFiles finds lines in files that are not ignored, a few per file and up to the limit", async () => {
+  const home = tempHome(); homes.push(home);
+  const repo = repository(home);
+  writeFileSync(path.join(repo, "src", "many.txt"), Array.from({ length: 30 }, (_, index) => `match ${index + 1}`).join("\n") + "\n");
+  writeFileSync(path.join(repo, "src", "long.txt"), `match ${"x".repeat(500)}\n`);
+  writeFileSync(path.join(repo, ".git", "notes.txt"), "needle in repository metadata\n");
+  const engine = await startEngine({ home });
+  engines.push(engine);
+  const client = await engine.connect();
+  try {
+    const { project } = await openSession(client, repo);
+    const workspaceId = project.workspaceId;
+    const search = params => client.call("workspace.searchInFiles", { workspaceId, ...params });
+    // Ripgrep when the engine finds it, git grep in a repository otherwise; the answer is the same.
+    const source = resolveToolEnvironment(process.env).ripgrep ? "ripgrep" : "git";
+
+    // A literal, workspace-relative path with "/" and a 1-based line number.
+    expect(await search({ query: "answer" })).toEqual({ matches: [{ path: "src/app.js", line: 1, text: "export const answer = 42;" }], truncated: false, source });
+    expect((await search({ query: "= () =>" })).matches).toEqual([{ path: "src/components/button.jsx", line: 1, text: "export const Button = () => null;" }]);
+
+    // Case is ignored until the query has a capital.
+    expect((await search({ query: "button" })).matches.map(match => match.path)).toEqual(["src/components/button.jsx"]);
+    expect((await search({ query: "BUTTON" })).matches).toEqual([]);
+
+    // Dotfiles are read; ignored files and folders, repository metadata and the symlink out of the workspace are not.
+    expect((await search({ query: "ignored" })).matches).toEqual([{ path: ".gitignore", line: 1, text: "ignored.txt" }]);
+    expect((await search({ query: "hidden by" })).matches).toEqual([]);
+    expect((await search({ query: "needle" })).matches).toEqual([]);
+    expect((await search({ query: "secret" })).matches).toEqual([]);
+
+    // Each file gives at most 20 lines and a long line is clipped; the limit bounds the whole answer and says so.
+    const all = await search({ query: "match" });
+    expect(all.truncated).toBe(false);
+    expect(all.matches.filter(match => match.path === "src/many.txt").map(match => match.line)).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
+    expect(all.matches.find(match => match.path === "src/long.txt")?.text).toHaveLength(200);
+    const bounded = await search({ query: "match", limit: 5 });
+    expect(bounded.matches).toHaveLength(5);
+    expect(bounded.truncated).toBe(true);
+
+    await expect(search({ query: "" })).rejects.toMatchObject({ code: "invalid_params" });
+    await expect(search({ query: "two\nlines" })).rejects.toMatchObject({ code: "invalid_params" });
+    await expect(client.call("workspace.searchInFiles", { workspaceId: "wsp_missing", query: "answer" })).rejects.toMatchObject({ code: "not_found" });
+
+    // Like the picker, searching in files is an interactive client's request.
+    const headless = await engine.connect({ clientKind: "headless" });
+    await expect(headless.call("workspace.searchInFiles", { workspaceId, query: "answer" })).rejects.toMatchObject({ code: "permission_denied" });
+    await headless.close();
+  } finally {
+    await client.close();
+  }
+}, 20_000);
+
+test("searching in files falls back to git grep, needs ripgrep outside a repository, and answers by its deadline", async () => {
+  const home = tempHome(); homes.push(home);
+  const repo = repository(home);
+  const env = resolveToolEnvironment(process.env);
+  const search = (options) => searchWorkspaceText({ root: repo, env, signal: AbortSignal.timeout(10_000), query: "answer", limit: 50, ...options });
+  expect(await search({ env: { ...env, ripgrep: null } })).toEqual({ matches: [{ path: "src/app.js", line: 1, text: "export const answer = 42;" }], truncated: false, source: "git" });
+  const plain = path.join(home, "plain");
+  mkdirSync(plain);
+  writeFileSync(path.join(plain, "notes.md"), "answer\n");
+  await expect(search({ root: plain, env: { ...env, ripgrep: null } })).rejects.toMatchObject({ code: "unavailable", message: "searching in files needs ripgrep" });
+  await expect(search({ env: { ...env, ripgrep: null, git: null } })).rejects.toMatchObject({ code: "unavailable", message: "searching in files needs ripgrep" });
+
+  // A search that outlives its deadline hands back what it found so far; one whose client left is cancelled.
+  const slow = path.join(home, "slow-rg");
+  writeFileSync(`${slow}.out`, "./src/app.js\u00001:export const answer = 42;\n");
+  writeFileSync(slow, '#!/bin/sh\ncat "$0.out"\nexec sleep 10\n');
+  chmodSync(slow, 0o755);
+  const started = Date.now();
+  // The deadline leaves room for macOS to vet a script it has never run before.
+  expect(await search({ env: { ...env, ripgrep: slow }, timeoutMs: 1500 })).toEqual({ matches: [{ path: "src/app.js", line: 1, text: "export const answer = 42;" }], truncated: true, source: "ripgrep" });
+  expect(Date.now() - started).toBeLessThan(5000);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 100);
+  await expect(search({ env: { ...env, ripgrep: slow }, signal: controller.signal })).rejects.toMatchObject({ code: "interrupted" });
+});
 
 test("a folder that is not a repository is still listed, without repository metadata or dependencies", async () => {
   const home = tempHome(); homes.push(home);

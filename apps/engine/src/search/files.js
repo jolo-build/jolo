@@ -2,6 +2,7 @@
 // they sit in, and the top-level listing of one folder. Enumeration goes through git or ripgrep, which
 // both honour .gitignore; the built-in walk, for a folder with neither, only skips repository metadata
 // and dependency directories. Everything is bounded to the workspace root and never follows symlinks.
+// The Files panel's search in files reads the same non-ignored files through ripgrep or git grep.
 import { lstatSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { ProtocolError } from '@jolo/protocol';
@@ -10,6 +11,9 @@ import { resolveWorkspacePath, WorkspacePathError } from '../tools/paths.js';
 export const FILES_MAX_ENTRIES = 50_000;
 const CACHE_MS = 3000;
 const SKIPPED_DIRECTORIES = new Set(['.git', 'node_modules']);
+const SEARCH_PER_FILE = 20;
+const SEARCH_TEXT_CHARS = 200;
+const SEARCH_LINE_HEAD = 64 * 1024;
 /** @type {Map<string, { at: number, promise: Promise<{ files: string[], truncated: boolean, source: 'git' | 'ripgrep' | 'builtin' }> }>} */
 const recent = new Map();
 
@@ -179,4 +183,69 @@ export function listWorkspaceFolder({ root, folder, limit }) {
     .map(entry => ({ path: resolved.relative ? `${resolved.relative}/${entry.name}` : entry.name, kind: entry.isDirectory() ? /** @type {const} */ ('directory') : /** @type {const} */ ('file') }))
     .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'directory' ? -1 : 1) || a.path.localeCompare(b.path));
   return { entries: names.slice(0, limit), truncated: names.length > limit, total: names.length, source: /** @type {const} */ ('listing') };
+}
+
+/**
+ * Lines of the workspace's non-ignored files that hold a literal query, for the Files panel's search in files.
+ * Ripgrep searches when it is installed and git grep in a repository otherwise; both honour .gitignore, skip
+ * binary files and never read repository metadata. Case is ignored unless the query has a capital, each file
+ * gives at most 20 lines, and a search still running when its time is up hands back what it found as truncated.
+ * @param {{ root: string, env: { git?: string | null, ripgrep?: string | null, path: string }, signal: AbortSignal, query: string, limit: number, timeoutMs?: number }} options
+ * @returns {Promise<{ matches: { path: string, line: number, text: string }[], truncated: boolean, source: 'ripgrep' | 'git' }>}
+ */
+export async function searchWorkspaceText({ root, env, signal, query, limit, timeoutMs = 10_000 }) {
+  const { ripgrep, git } = env;
+  // Ripgrep prints `path\0line:text` and git `path\0line\0text`; with --hidden, ripgrep reads dotfiles the way git does.
+  const command = ripgrep
+    ? [ripgrep, '--null', '--line-number', '--no-heading', '--color', 'never', '--fixed-strings', '--smart-case', '--hidden', '--glob', '!.git', '--sort', 'path', '--max-count', String(SEARCH_PER_FILE), '-e', query, '--', '.']
+    : git ? [git, '-c', 'grep.fullName=false', '-c', 'grep.column=false', 'grep', '-z', '-n', '-I', '-F', '--no-color', '--untracked', ...(query === query.toLowerCase() ? ['-i'] : []), '-e', query] : null;
+  if (!command) throw new ProtocolError('unavailable', 'searching in files needs ripgrep');
+  const source = ripgrep ? 'ripgrep' : 'git';
+  if (signal.aborted) throw new ProtocolError('interrupted', 'search cancelled');
+  const proc = Bun.spawn(command, { cwd: root, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', env: { PATH: env.path, GIT_OPTIONAL_LOCKS: '0' } });
+  const stderr = (async () => { let text = ''; for await (const chunk of proc.stderr) text = (text + Buffer.from(chunk).toString('utf8')).slice(-2048); return text; })();
+  const reader = proc.stdout.getReader();
+  /** @type {{ path: string, line: number, text: string }[]} */
+  const matches = [];
+  /** @type {Map<string, number>} */
+  const perFile = new Map();
+  let truncated = false, stopped = false, partial = '';
+  const stop = () => { stopped = true; proc.kill(); reader.cancel().catch(() => {}); };
+  const timer = setTimeout(() => { truncated = true; stop(); }, timeoutMs);
+  signal.addEventListener('abort', stop, { once: true });
+  /** @param {string} record one output line */
+  const take = record => {
+    const cut = record.indexOf('\0');
+    const number = cut > 0 ? /^(\d+)[:\0]/.exec(record.slice(cut + 1, cut + 24)) : null;
+    if (!number || Number(number[1]) < 1) return;
+    const file = record.slice(0, cut).replaceAll('\\', '/').replace(/^\.\//, '');
+    if (file.split('/').some(part => part === '..' || part === '.git')) return; // never outside the workspace, never repository metadata
+    const seen = perFile.get(file) ?? 0;
+    if (seen >= SEARCH_PER_FILE) return;
+    if (matches.length >= limit) { truncated = true; stop(); return; }
+    perFile.set(file, seen + 1);
+    matches.push({ path: file, line: Number(number[1]), text: record.slice(cut + 1 + number[0].length).replace(/\r$/, '').slice(0, SEARCH_TEXT_CHARS) });
+  };
+  try {
+    const decoder = new TextDecoder();
+    while (!stopped) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      partial += decoder.decode(value, { stream: true });
+      let end;
+      while (!stopped && (end = partial.indexOf('\n')) !== -1) { take(partial.slice(0, end)); partial = partial.slice(end + 1); }
+      if (partial.length > SEARCH_LINE_HEAD) partial = partial.slice(0, SEARCH_LINE_HEAD); // a very long line keeps only its head
+    }
+    if (!stopped && partial) take(partial);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', stop);
+    if (proc.exitCode === null) proc.kill();
+    await proc.exited;
+  }
+  const diagnostics = await stderr;
+  if (signal.aborted) throw new ProtocolError('interrupted', 'search cancelled');
+  // Ripgrep exits 2 when some files could not be read; what it found in the rest still stands. Git fails outside a repository.
+  if (stopped || proc.exitCode === 0 || proc.exitCode === 1 || (ripgrep && matches.length)) return { matches, truncated, source };
+  throw new ProtocolError('unavailable', ripgrep ? diagnostics.trim() || 'search failed' : 'searching in files needs ripgrep');
 }
