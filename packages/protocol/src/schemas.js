@@ -353,6 +353,14 @@ export const AgentModelSchema = z.object({
   efforts: z.array(z.string().max(40)).max(20).default([]),
 });
 
+/** One slash command an agent accepts as a whole message ("/name args"), as the agent itself describes it. */
+export const AgentCommandSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(600).default(""),
+  argumentHint: z.string().max(200).default(""),
+});
+export const AGENT_COMMANDS_LIMIT = 300;
+
 export const AgentIdKey = z.string().regex(/^[a-z][a-z0-9-]{0,38}$/, "lowercase kebab-case id");
 
 export const AgentManifestSchema = z.object({
@@ -1009,6 +1017,8 @@ Object.assign(MethodSchemas, {
       agentId: Id,
       models: z.array(AgentModelSchema),
       efforts: z.array(z.string().max(40)),
+      /** The slash commands this agent takes, read in the same probe; the composer lists them when "/" is typed. */
+      commands: z.array(AgentCommandSchema).max(AGENT_COMMANDS_LIMIT).default([]),
       source: z.enum(["agent", "none"]),
       note: z.string().max(300).nullable(),
     }),

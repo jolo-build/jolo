@@ -1,5 +1,6 @@
 import { typingModelMention, completeModelMention, modelMentionChoices, modelMentions, loadModelMentionCatalog } from '@jolo/protocol/model-mentions';
 import { typingMention, completeMention, mentionChoices, mentionHint, workspaceFileAttachment, workspaceFolderAttachment, projectPointerAttachment, FILE_ROWS } from '../mention-picker.js';
+import { completeSlashCommand, slashCommandChoices, typingSlashCommand } from '../slash-commands.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { engineCall } from '../engine-context.jsx';
@@ -25,6 +26,8 @@ const untilReset = (iso) => {
 
 /** The last plan limits each hosted agent reported, shared by every composer so a pane opens with numbers in it. */
 const knownLimits = new Map(); // agentId -> { report, error }
+/** The slash commands each hosted agent reported, shared likewise so the list opens at once the next time "/" is typed. */
+const knownCommands = new Map(); // agentId -> commands
 
 /** Ask one agent for its limits and keep the answer; a failed answer keeps the last good numbers on screen. */
 const askLimits = (agentId, refresh) => engineCall('agent.limits', { agentId, refresh })
@@ -232,6 +235,22 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       .catch(error => { if (current) setModelError(error.message); });
     return () => { current = false; };
   }, [mentioningModel]);
+  // "/" as the whole message lists the answering agent's own commands; Jolo's own loop has none, and an agent that
+  // publishes none shows nothing. The engine keeps a recent answer, so asking again on each open is usually instant and
+  // picks up a list refreshed from the model menu.
+  const slash = disabled ? null : typingSlashCommand(text, caret);
+  const commandSource = slash && answererId && answererId !== 'jolo' ? answererId : null;
+  const [, setCommandsKnown] = useState(0);
+  const [commandsLoading, setCommandsLoading] = useState(false);
+  useEffect(() => {
+    if (!commandSource) return;
+    let current = true;
+    if (!knownCommands.has(commandSource)) setCommandsLoading(true);
+    engineCall('agent.models', { agentId: commandSource })
+      .then(report => { knownCommands.set(commandSource, report.commands ?? []); }, () => { if (!knownCommands.has(commandSource)) knownCommands.set(commandSource, []); })
+      .finally(() => { if (current) { setCommandsLoading(false); setCommandsKnown(count => count + 1); } });
+    return () => { current = false; };
+  }, [commandSource]);
   const mention = disabled ? null : typingMention(text, caret);
   const mentionQuery = mention ? mention.query : null;
   const [fileResults, setFileResults] = useState({ query: null, entries: [] });
@@ -259,7 +278,7 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [taskQuery]);
-  const choices = modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : mentionChoices({ mention, agents, answererId, entries: fileResults.entries, projects });
+  const choices = slash ? slashCommandChoices(commandSource ? knownCommands.get(commandSource) ?? [] : [], slash.query).map(entry => ({ id: entry.name, name: entry.name, detail: entry.description, hint: entry.argumentHint, command: true })) : modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : mentionChoices({ mention, agents, answererId, entries: fileResults.entries, projects });
   const picking = choices.length > 0;
   const active = highlight < choices.length ? highlight : 0; // the list may have shrunk under the highlight
   const sectioned = new Set(choices.map(option => option.section).filter(Boolean)).size > 1; // one kind of row needs no heading
@@ -272,6 +291,12 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
   }, [picking, choices.length, text]);
   const choose = (option) => {
     if (!option) return;
+    if (option.command) {
+      const next = completeSlashCommand(option.name);
+      setText(next); setCaret(0);
+      requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(next.length, next.length); });
+      return;
+    }
     if (option.modelMention) {
       const next = completeModelMention(text, caret, option.selector);
       setText(next.value); setCaret(0);
@@ -353,16 +378,18 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     </div>)}</div>}
     {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
-    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Mention an agent, file, folder, or project"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
+    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={slash ? `${answererName} commands` : modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Mention an agent, file, folder, or project"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
       {choices.map((option, index) => <Fragment key={option.id}>
         {sectioned && option.section && choices[index - 1]?.section !== option.section && <li className="mention-section" role="presentation">{option.section}</li>}
         <li>
           <button type="button" role="option" aria-selected={index === active} className={index === active ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-            <span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.token}</span><span className="mention-detail">{option.modelMention ? "" : option.task ? option.name : option.label}{option.detail ? ` · ${option.detail}` : ""}</span>
+            {option.command
+              ? <><span className="mention-name">/{option.name}</span><span className="mention-detail">{option.detail}{option.hint ? ` ${option.hint}` : ""}</span></>
+              : <><span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.token}</span><span className="mention-detail">{option.modelMention ? "" : option.task ? option.name : option.label}{option.detail ? ` · ${option.detail}` : ""}</span></>}
           </button>
         </li>
       </Fragment>)}
-      <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : mentionHint(choices[active], answererName)}</li>
+      <li className="mention-hint">{slash ? `${answererName}’s own command · Enter inserts it` : modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : mentionHint(choices[active], answererName)}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
     <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={offline ? 'Connecting…' : disabled ? 'Open a folder to start…' : running ? 'Queue a message…' : standalone ? 'Ask anything…' : `Ask ${answererName}…`} disabled={disabled}
@@ -385,6 +412,7 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
           } else { void submit(); }
         }
       }} />
+    {commandSource && commandsLoading && !choices.length && <p className="hint" role="status">Loading {answererName}’s commands…</p>}
     {mentioningModel && !choices.length && <p className="hint" role="status">{modelError || (!modelReport || modelReport.loading ? 'Loading available models…' : modelReport.notes[0] || 'No matching models. Check your agent installation or provider credentials in Settings.')}</p>}
     {modelMentions(text).length > 0 && <div className="delegation-chips" aria-label="Selected child-task models">{modelMentions(text).map(mention => <span className="delegation-chip" key={mention.start} title={mention.selector}><Icon name="bolt" size={13} /><span>{modelMentionChoices(modelReport?.models ?? [], mention.selector).find(choice => choice.selector === mention.selector)?.label ?? mention.selector}</span><button type="button" aria-label={`Remove ${mention.selector}`} onClick={() => { setText(text.slice(0, mention.start) + text.slice(mention.end)); input.current?.focus(); }}><Icon name="close" size={12} /></button></span>)}</div>}
     <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
