@@ -441,7 +441,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           {multi && <><button onClick={() => onZoom(pane.id)} aria-label={zoomed ? "Restore panes" : "Maximize pane"} title={zoomed ? "Restore panes" : "Maximize pane"}><Icon name={zoomed ? "restore" : "maximize"} size={13} /></button><button onClick={() => onClose(pane.id)} aria-label="Close pane" title="Close pane · tasks keep running"><Icon name="close" size={13} /></button></>}
         </div>
       </div>}
-      <ContextSplit enabled={Boolean(context)}>
+      <ContextSplit enabled={Boolean(context)} kind={context === 'files' ? 'files' : 'panel'}>
         <main className="main" aria-label="Conversation">
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {pane.id === 'pane-1' && onboarding === 'active' && !sessionId ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : <>
