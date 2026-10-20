@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { openSession, removeHome, startEngine, tempHome } from "./helpers.js";
-import { pathMatchScore } from "../../apps/engine/src/search/files.js";
+import { pathMatchScore, searchWorkspaceFiles, topLevelMix } from "../../apps/engine/src/search/files.js";
+import { resolveToolEnvironment } from "../../apps/engine/src/tools/dispatcher.js";
 
 const engines = [];
 const homes = [];
@@ -103,6 +104,30 @@ test("a folder that is not a repository is still listed, without repository meta
     await client.close();
   }
 }, 20_000);
+
+test("nothing typed shows top-level folders and files in equal measure, even when folders outnumber the rows", async () => {
+  const home = tempHome(); homes.push(home);
+  const root = path.join(home, "wide");
+  // A folder is known by the files in it, so each gets one; an empty folder is nothing git or ripgrep would list.
+  for (let index = 0; index < 10; index++) { const folder = path.join(root, `folder-${String(index).padStart(2, "0")}`); mkdirSync(folder, { recursive: true }); writeFileSync(path.join(folder, "index.js"), "x\n"); }
+  for (const name of ["a.md", "b.md", "c.md"]) writeFileSync(path.join(root, name), "x\n");
+  Bun.spawnSync(["git", "init", "-q", root]);
+  const listed = await searchWorkspaceFiles({ root, env: resolveToolEnvironment(process.env), signal: AbortSignal.timeout(10_000), query: "", limit: 8 });
+  const kinds = listed.entries.map(entry => entry.kind);
+  expect(kinds.filter(kind => kind === "file")).toHaveLength(3);
+  expect(kinds.filter(kind => kind === "directory")).toHaveLength(5);
+  expect(listed.entries.slice(0, 5).map(entry => entry.path)).toEqual(["folder-00", "folder-01", "folder-02", "folder-03", "folder-04"]);
+  expect(listed.entries.slice(5).map(entry => entry.path)).toEqual(["a.md", "b.md", "c.md"]);
+  expect(listed).toMatchObject({ truncated: true, total: 13 });
+  // The split itself: half and half when both groups are long; the short group gives its rows to the other.
+  const folder = name => ({ path: name, kind: /** @type {const} */ ("directory") });
+  const file = name => ({ path: name, kind: /** @type {const} */ ("file") });
+  const wide = [...Array.from({ length: 6 }, (_, index) => folder(`d${index}`)), ...Array.from({ length: 6 }, (_, index) => file(`f${index}`)), file("nested/not-top")];
+  expect(topLevelMix(wide, 8).slice(0, 8).map(entry => entry.path)).toEqual(["d0", "d1", "d2", "d3", "f0", "f1", "f2", "f3"]);
+  expect(topLevelMix(wide, 8).map(entry => entry.path)).toEqual(["d0", "d1", "d2", "d3", "f0", "f1", "f2", "f3", "d4", "d5", "f4", "f5"]);
+  expect(topLevelMix([folder("only"), ...Array.from({ length: 9 }, (_, index) => file(`f${index}`))], 8).map(entry => entry.path)).toEqual(["only", "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8"]);
+  expect(topLevelMix([...Array.from({ length: 9 }, (_, index) => folder(`d${index}`)), file("one")], 8).slice(0, 8).map(entry => entry.path)).toEqual(["d0", "d1", "d2", "d3", "d4", "d5", "d6", "one"]);
+});
 
 test("ranking prefers the file's own name, contiguous runs and shorter paths", () => {
   const better = (query, a, b) => expect(pathMatchScore(query, a)).toBeGreaterThan(/** @type {number} */ (pathMatchScore(query, b)));

@@ -3,7 +3,7 @@ import { requireInteractive } from "./authorization.js";
 import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
-import { closeSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from 'node:path';
 import { resolveWorkspacePath, WorkspacePathError } from "../tools/paths.js";
 import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
@@ -409,6 +409,18 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     },
     // The composer's "@" picker. A typed fragment ranks the workspace's non-ignored files and folders;
     // a folder path lists that folder's top level, which a message carries so the agent knows where to look.
+    "workspace.writeFile": ({ workspaceId, path: relative, text }, conn) => {
+      requireInteractive(conn, "file editing is for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId }); // the user edits their own folder: opening it was the grant
+      let resolved;
+      try { resolved = resolveWorkspacePath(workspace.path, relative, { mustExist: false }); } catch (error) { throw new ProtocolError(error instanceof WorkspacePathError && error.code === "not_found" ? "not_found" : "permission_denied", error.message); }
+      if (resolved.stat && !resolved.stat.isFile()) throw new ProtocolError("invalid_params", "path is not a file");
+      if (!resolved.stat && !existsSync(path.dirname(resolved.absolute))) throw new ProtocolError("not_found", "the file's folder does not exist");
+      writeFileSync(resolved.absolute, text);
+      return { path: resolved.relative, bytes: Buffer.byteLength(text) };
+    },
     "workspace.files": async ({ workspaceId, query, path: folder, limit }, conn) => {
       requireInteractive(conn, "file pickers are for interactive clients");
       const workspace = storage.getWorkspace(workspaceId);

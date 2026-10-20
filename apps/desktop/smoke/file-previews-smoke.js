@@ -16,6 +16,24 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     const pdfWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, nodeIntegration: false } });
     try { await pdfWindow.loadURL('data:text/html,<h1>Jolo PDF preview</h1><p>This document opens inside the Files panel.</p>'); writeFileSync(path.join(project, 'report.pdf'), await pdfWindow.webContents.printToPDF({})); }
     finally { pdfWindow.destroy(); }
+    // The Files panel opens on the project tree; a file picked there opens as a tab and can be edited and saved.
+    await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
+    await waitFor("Boolean(document.querySelector('.panel-menu:popover-open [role=menuitemradio][aria-label=Files]'))", 'panel menu open');
+    await evaluate("document.querySelector('.panel-menu:popover-open [role=menuitemradio][aria-label=Files]').click()");
+    await waitFor("[...document.querySelectorAll('.explorer-row')].some(row => row.textContent === 'PLAN.md')", 'the tree lists the project');
+    await evaluate("[...document.querySelectorAll('.explorer-row')].find(row => row.textContent === 'PLAN.md').click()");
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content h3')?.textContent === 'Project plan'", 'a file picked in the tree opens as a tab');
+    await evaluate("document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Edit file\"]').click()");
+    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) textarea.file-editor'))", 'the editor opens');
+    await evaluate("(() => { const area = document.querySelector('.panel-item-content:not([hidden]) textarea.file-editor'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(area, area.value + '- Edited in Jolo\\n'); area.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]')) && [...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md •')", 'an edit marks the tab and offers Save');
+    await evaluate("document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]').click()");
+    for (let tries = 0; tries < 50 && !readFileSync(path.join(project, 'PLAN.md'), 'utf8').includes('- Edited in Jolo'); tries++) await new Promise(resolve => setTimeout(resolve, 100));
+    if (!readFileSync(path.join(project, 'PLAN.md'), 'utf8').includes('- Edited in Jolo')) throw new Error('the edit was not written to disk');
+    await waitFor("[...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md') && !document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]')", 'saving clears the mark');
+    await evaluate("document.querySelector('[aria-label=\"Close PLAN.md\"]').click()");
+    await waitFor("![...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md') && Boolean(document.querySelector('.explorer-tree'))", 'closing the tab returns to the tree');
+    report.checks.push('the Files panel lists the project as a tree, opens a file from it, and saves an edit back to disk');
     await evaluate("window.__joloSmoke.send('Show the generated files')");
     await waitFor("Array.from(document.querySelectorAll('.message.assistant a')).some(a => a.textContent === 'PLAN.md')", 'assistant file links');
     const click = async name => evaluate(`Array.from(document.querySelectorAll('.message.assistant a')).find(a => a.textContent === ${JSON.stringify(name)}).click()`);
