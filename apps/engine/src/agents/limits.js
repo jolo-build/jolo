@@ -120,7 +120,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
 
   /** Claude answers get_usage on the same structured stream a turn uses; skip_behaviors leaves out its transcript scan. */
   const fromClaude = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     return probeAgent({ supervisor, log }, manifest, claudeArgv(binary, extraArgs), PROBE_TIMEOUT_MS, {
       open: (send) => send({ type: "control_request", request_id: "jolo-limits", request: { subtype: "get_usage", skip_behaviors: true } }),
       ask: (message) => {
@@ -133,7 +133,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
 
   /** Codex reads the account's rate limits from its app-server after the usual handshake. */
   const fromCodex = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     return probeAgent({ supervisor, log }, manifest, [binary, ...extraArgs, "app-server"], PROBE_TIMEOUT_MS, {
       open: (send) => send({ id: 1, method: "initialize", params: { clientInfo: { name: "jolo", title: "Jolo", version: build }, capabilities: { experimentalApi: false } } }),
       ask: (message, send) => {
@@ -152,7 +152,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
 
   /** Antigravity answers its /usage command with one JSON result when asked for JSON output. */
   const fromAntigravity = (manifest) => {
-    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
     return probeAgent({ supervisor, log }, manifest, [binary, ...extraArgs, "--output-format", "json", "--print=/usage"], PROBE_TIMEOUT_MS, {
       open: () => {},
       ask: (message) => {

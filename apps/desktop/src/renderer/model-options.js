@@ -14,6 +14,15 @@ export function modelEfforts(report, modelId, supported = true) {
 export function effortForModel(report, modelId, current) {
   return modelEfforts(report, modelId).includes(current) ? current : null;
 }
+/** Whether the agent says this model, or its default when none is chosen, can run in fast mode. */
+export function modelSupportsFast(report, modelId) {
+  const model = modelId ? report?.models.find(entry => entry.id === modelId) : report?.models.find(entry => entry.isDefault);
+  return Boolean(model?.supportsFast);
+}
+/** Fast mode stays on only for a model that offers it; without the agent's model list there is nothing to judge. */
+export function fastForModel(report, modelId, current) {
+  return report ? Boolean(current) && modelSupportsFast(report, modelId) : Boolean(current);
+}
 
 // Presentation only: keep provider IDs intact when saving or running a model.
 export function modelLabel(name) {

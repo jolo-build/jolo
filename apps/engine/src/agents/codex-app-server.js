@@ -22,6 +22,10 @@ import { saveGeneratedImage } from './generated-images.js';
 
 const APPROVAL_POLICY = "untrusted";
 const SANDBOX = "workspace-write";
+/** Codex's name for fast mode: the service tier its model list offers as "Fast". */
+export const CODEX_FAST_TIER = "priority";
+/** Standard speed, named explicitly so the user's own Codex config cannot turn fast mode on behind Jolo's switch. */
+const CODEX_STANDARD_TIER = "default";
 const TEXT_ITEMS = new Set(["agentMessage", "plan"]);
 const SILENT_ITEMS = new Set(["userMessage", "hookPrompt", "contextCompaction", "enteredReviewMode", "exitedReviewMode", "subAgentActivity"]);
 const JSON_RPC_METHOD_NOT_FOUND = -32601;
@@ -376,7 +380,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         // Also per turn, so a model changed between turns takes effect on a thread that was resumed.
         // Codex compacts a thread on request, as a turn of its own that reports through the usual turn events.
         if (compactRequested(run)) { await request("thread/compact/start", { threadId: thread.id }); return; }
-        const started = await request("turn/start", { threadId: thread.id, input: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...readImages(storage, run).map(image => ({ type: 'localImage', path: image.path }))], ...(chosen.model ? { model: chosen.model } : {}), ...(chosen.effort ? { effort: chosen.effort } : {}) });
+        const started = await request("turn/start", { threadId: thread.id, input: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...readImages(storage, run).map(image => ({ type: 'localImage', path: image.path }))], ...(chosen.model ? { model: chosen.model } : {}), ...(chosen.effort ? { effort: chosen.effort } : {}), serviceTier: chosen.fast ? CODEX_FAST_TIER : CODEX_STANDARD_TIER });
         state.turnId ??= started?.turn?.id ?? null;
       };
 

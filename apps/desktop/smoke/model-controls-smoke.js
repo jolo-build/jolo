@@ -42,11 +42,19 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   key('Enter');
   await waitFor('!'+open,'model selection closes the menu');
   await click('.model-effort-select');
-  await waitFor("document.querySelector('.effort-slider input:not(:disabled)')?.max === '2' && document.querySelector('.model-select')?.textContent.includes('Fake Large')",'model persisted from list');
-  await evaluate("document.querySelector('.effort-slider input').focus()");
-  key('End');
-  await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'high'",'keyboard changes effort');
+  await waitFor("document.querySelectorAll('.effort-list [role=option]:not(.effort-fast)').length === 3 && document.querySelector('.model-select')?.textContent.includes('Fake Large')",'model persisted from list');
+  await waitFor("document.activeElement?.closest('.effort-list')",'effort list takes focus on open');
+  key('Down'); key('Down'); key('Enter');
+  await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'high'",'keyboard picks the last effort');
+  await waitFor('!'+open,'picking an effort closes the menu');
   assert.equal((await saved()).model,'fake-large'); assert.equal((await saved()).effort,'high');
+  await click('.model-effort-select');
+  await waitFor("document.querySelector('.effort-fast')?.getAttribute('aria-selected') === 'false' && document.querySelector('.model-effort-select').querySelectorAll('.icon').length === 1",'fast offered for a model with a fast tier, and nothing shows while it is off');
+  await click('.effort-fast');
+  await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').fast === true && document.querySelector('.model-effort-select')?.title === 'Fast mode is on' && document.querySelector('.model-effort-select').querySelectorAll('.icon').length === 2 && document.querySelector('.effort-fast')?.getAttribute('aria-selected') === 'true'",'fast mode saved, marked on the effort chip and in the list');
+  assert.equal((await saved()).fast,true); assert.equal((await saved()).effort,'high');
+  const chip = await evaluate("(() => { const r = document.querySelector('.model-effort-select').getBoundingClientRect(); return { x: Math.floor(r.x) - 120, y: Math.floor(r.y) - 10, width: Math.ceil(r.width) + 140, height: Math.ceil(r.height) + 20 }; })()");
+  writeFileSync(path.join(results,'fast-chip.png'),(await window.webContents.capturePage(chip)).toPNG());
   const originalTheme = nativeTheme.themeSource;
   try {
     for (const theme of /** @type {const} */ (['light','dark'])) {
@@ -57,24 +65,22 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
       writeFileSync(path.join(results,`model-effort-${theme}.png`),(await window.webContents.capturePage({x:Math.floor(box.x)-12,y:Math.floor(box.y)-12,width:Math.ceil(box.width)+24,height:Math.ceil(box.height)+24})).toPNG());
     }
   } finally {nativeTheme.themeSource=originalTheme;}
-  // Drag the actual native range. Pointer interaction must persist, not only preview.
-  const r=await evaluate("(() => {const r=document.querySelector('.effort-slider input').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};})()");
-  const y=Math.round(r.y+r.height/2), right=Math.round(r.x+r.width-r.height/2), middle=Math.round(r.x+r.width/2);
-  window.webContents.sendInputEvent({type:'mouseDown',x:right,y,button:'left',clickCount:1});
-  window.webContents.sendInputEvent({type:'mouseMove',x:middle,y,modifiers:['leftButtonDown']});
-  window.webContents.sendInputEvent({type:'mouseUp',x:middle,y,button:'left',clickCount:1});
-  await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'low'",'drag persists low effort');
+  await click('.effort-list [data-effort="low"]');
+  await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'low'",'clicking a row persists low effort');
   assert.equal((await saved()).effort,'low');
-  await click('.effort-reset');
-  await waitFor("!window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort",'reset restores default effort');
-  await evaluate("document.querySelector('.effort-slider input').focus()"); key('End');
+  await click('.model-effort-select'); await click('.effort-list [data-effort=""]');
+  await waitFor("!window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort",'Default restores default effort');
+  await click('.model-effort-select'); await waitFor("document.activeElement?.closest('.effort-list')",'effort list focused again'); key('Down'); key('Down'); key('Enter');
   await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'high'",'high before model switch');
-  await click('.effort-model'); await click('[data-model="fake-small"]');
+  await click('.model-select'); await waitFor("document.querySelector('[data-model=\"fake-small\"]')",'model list open'); await click('[data-model="fake-small"]');
   await waitFor('!'+open,'small model selected'); await click('.model-effort-select');
-  await waitFor("document.querySelector('.effort-slider input')?.max === '1'",'small model hides unsupported high effort');
+  await waitFor("document.querySelectorAll('.effort-list [role=option]:not(.effort-fast)').length === 2",'small model hides unsupported high effort');
   assert.equal((await saved()).effort,null);
-  await evaluate("document.querySelector('.effort-slider input').focus()"); key('End');
+  assert.equal((await saved()).fast,false,'a model without a fast tier turns fast mode off');
+  assert.equal(await evaluate("Boolean(document.querySelector('.effort-fast')) || document.querySelector('.model-effort-select').querySelectorAll('.icon').length !== 1"),false,'no fast switch or mark for a model without it');
+  await waitFor("document.activeElement?.closest('.effort-list')",'effort list focused for the small model'); key('Down'); key('Enter');
   await waitFor("window.__joloSmoke.hostedAgents().find(a=>a.id==='codex').effort === 'low'",'small model low effort');
+  await click('.model-effort-select'); await waitFor(open,'effort list reopens');
   key('Escape'); await waitFor('!'+open,'Escape dismisses');
   assert.equal(await evaluate("document.querySelector('.composer textarea').value"),'Keep this draft.');
   assert.equal(await evaluate('window.__joloSmoke.state().runCount'),0);
@@ -121,6 +127,6 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await evaluate('window.__joloSmoke.newChat()');
   await waitFor("window.__joloSmoke.state().sessionAgentId === 'codex' && document.querySelector('.model-select')?.textContent.includes('Fake Small')", 'choice survives app reload');
   assert.deepEqual((await bridge.rawCall('settings.get', {})).settings.model, originalDefault);
-  report.checks.push('Cascading provider menu, model search, supported effort stops, keyboard model selection and pointer effort selection, reset, double-click dismissal, draft preservation, light/dark layout agent/provider switching, and actual hosted/native execution passed.');
+  report.checks.push('Cascading provider menu, model search, supported effort stops, keyboard model selection and pointer effort selection, fast mode only where the model offers it, reset, double-click dismissal, draft preservation, light/dark layout agent/provider switching, and actual hosted/native execution passed.');
   report.checks.push('New tasks and standalone chats retain the last model, agent and effort, including after reload, without changing the provider default.');
 }

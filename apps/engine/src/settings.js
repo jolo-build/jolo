@@ -93,7 +93,7 @@ export class SettingsService {
           if (patch === null) { delete current[agentId]; continue; }
           const named = Object.fromEntries(Object.entries(AgentModelPatchSchema.parse(patch)).filter(([, value]) => value !== undefined));
           const merged = AgentModelSettingsSchema.parse({ ...EMPTY_AGENT, ...(current[agentId] ?? {}), ...named });
-          if (merged.model === null && merged.effort === null) delete current[agentId];
+          if (merged.model === null && merged.effort === null && !merged.fast) delete current[agentId];
           else current[agentId] = merged;
         }
         this.storage.setPreference(AGENTS_KEY, current);

@@ -26,7 +26,7 @@ async function boot({ clientKind = "test" } = {}) {
     chmodSync(file, 0o755);
     return file;
   };
-  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher("fake-claude", "fake-claude.js"), transport: "claude-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }));
+  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher("fake-claude", "fake-claude.js"), transport: "claude-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"], fastArgs: ["--settings", JSON.stringify({ fastMode: true })] }));
   writeFileSync(path.join(agentsDir, "codex.json"), JSON.stringify({ id: "codex", displayName: "Codex", binary: launcher("fake-codex", "fake-codex.js"), transport: "codex-app-server" }));
   writeFileSync(path.join(agentsDir, "grok.json"), JSON.stringify({ id: "grok", displayName: "Grok CLI", binary: launcher("fake-acp", "fake-acp.js", `FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))}\nexport FAKE_ACP_STATE\n`), args: ["--acp"], transport: "acp", modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }));
 
@@ -131,6 +131,13 @@ describe("choosing a model for each hosted agent", () => {
     expect(settings.hiddenSources).toEqual(["agent:grok", "provider:openai"]);
     expect((await client.call("settings.update", { hiddenSources: [] })).settings.hiddenSources).toEqual([]);
     expect(await catalogEntry("claude")).toMatchObject({ model: null, effort: null });
+
+    // Fast mode is kept on its own too, and offered only where the transport can carry it.
+    settings = (await client.call("settings.update", { agents: { claude: { fast: true } } })).settings;
+    expect(settings.agents.claude).toEqual({ model: null, effort: null, fast: true });
+    expect(await catalogEntry("claude")).toMatchObject({ fast: true, supportsFast: true });
+    expect(await catalogEntry("codex")).toMatchObject({ fast: false, supportsFast: true });
+    expect(await catalogEntry("grok")).toMatchObject({ fast: false, supportsFast: false });
     await expect(client.call("settings.update", { agents: { claude: { model: "" } } })).rejects.toMatchObject({ code: "invalid_params" });
   }, 30_000);
 
@@ -149,6 +156,14 @@ describe("choosing a model for each hosted agent", () => {
     // Changing it applies to the next turn, including on a thread the agent is resuming.
     await client.call("settings.update", { agents: { codex: { model: "fake-small" } } });
     expect((await ask("codex", "req_codex_again", "model?")).reply).toBe("Running fake-small at high.");
+
+    // Fast mode reaches Claude as its launch settings and Codex as the service tier. Off is said explicitly, so the
+    // fake Codex's own configured fast tier never applies behind Jolo's switch.
+    await client.call("settings.update", { agents: { claude: { fast: true }, codex: { model: "fake-large", fast: true } } });
+    expect((await ask("claude", "req_claude_fast", "model?")).reply).toBe("Running fable at max in fast mode.");
+    expect((await ask("codex", "req_codex_fast", "model?")).reply).toBe("Running fake-large at high in fast mode.");
+    await client.call("settings.update", { agents: { codex: { fast: false } } });
+    expect((await ask("codex", "req_codex_standard", "model?")).reply).toBe("Running fake-large at high.");
   }, 60_000);
 
   test("a chat chooses its own model and effort; other chats of that agent keep its setting", async () => {
@@ -187,11 +202,13 @@ describe("choosing a model for each hosted agent", () => {
     expect(claude.models[2].efforts).toEqual([]); // it said this one has no effort levels
     expect(claude.models[1].efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]); // xhigh is what ultracode needs
     expect(claude.efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]);
+    expect(claude.models.map((model) => model.supportsFast)).toEqual([false, true, false]);
 
     // Codex pages its answer, so the client has to follow the cursor; the hidden model is not offered.
     const codex = await client.call("agent.models", { agentId: "codex" });
     expect(codex.models.map((model) => model.id)).toEqual(["fake-large", "fake-small"]);
     expect(codex.models[0]).toMatchObject({ displayName: "Fake Large", isDefault: true, efforts: ["low", "high"] });
+    expect(codex.models.map((model) => model.supportsFast)).toEqual([true, false]); // Codex lists fast as the "priority" tier
 
     // An ACP agent publishes its models as a session config option.
     const grok = await client.call("agent.models", { agentId: "grok" });

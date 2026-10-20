@@ -335,16 +335,17 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   // (a mention included), and every installed agent that can report its plan's limits.
   const usageTabs = [...new Set([chosenAgentId ?? 'jolo', ...state.taskAgents(), ...hostedAgents.filter((entry) => entry.available && entry.supportsLimits).map((entry) => entry.id)])]
     .map((id) => ({ id, name: id === 'jolo' ? 'Jolo' : agentName(id), usage: state.usageFor(id) }));
-  const saveModelChoice = async ({ agentId, preset, model, effort }) => {
+  const saveModelChoice = async ({ agentId, preset, model, effort, fast }) => {
     if (agentId !== 'jolo') {
       if (session?.agentId === agentId) {
         // The chat's own agent: the choice belongs to this chat, and the agent's setting stays the default for new ones.
         const current = (await state.call('session.page', { sessionId, limit: 1 })).session;
         await state.call('session.setAgentModel', { sessionId, model: model ?? null, effort: effort ?? null, expectedRevision: current.revision });
+        if (fast !== undefined) { await state.call('settings.update', { agents: { [agentId]: { fast } } }); await Promise.all([state.refreshSettings(), state.refreshCatalog()]); } // Fast stays the agent's setting
         rememberModelChoice(agentId, selectedModel);
         return;
       }
-      await state.call('settings.update', { agents: { [agentId]: { model, effort } } });
+      await state.call('settings.update', { agents: { [agentId]: { model, effort, fast } } });
       rememberModelChoice(agentId, selectedModel);
       await Promise.all([state.refreshSettings(), state.refreshCatalog()]);
       setAnswerer(agentId);

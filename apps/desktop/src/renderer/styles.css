@@ -1079,30 +1079,15 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .model-select > svg:last-child { color: color-mix(in srgb, var(--muted) 75%, var(--bg)); flex: none; }
 .model-popover { position: fixed; inset: auto; margin: 0; width: min(264px, calc(100vw - 16px)); padding: 10px; border: 0; border-radius: 14px; color: var(--text); background: var(--panel); box-shadow: 0 10px 40px #0002, 0 2px 8px #0001; overflow: auto; }
 .model-popover::backdrop { background: transparent; }
-.effort-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) 24px; align-items: center; gap: 4px; }
-.effort-heading-label { color: var(--muted); font-size: 12px; padding-right: 4px; }
-.effort-model { display: flex; flex-direction: column; gap: 1px; min-width: 0; padding: 2px 4px 4px; border-radius: 10px; }
-.effort-model strong { display: flex; align-items: center; gap: 5px; color: var(--text); font-size: 13px; font-weight: 550; }
-.effort-model > span { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
-.effort-reset { padding: 5px; color: var(--muted); border-radius: 50%; }
-.effort-control { padding: 6px 1px 0; }
-.effort-slider { position: relative; height: 24px; isolation: isolate; }
-.effort-track { position: absolute; inset: 1px 0; border-radius: 999px; background: var(--field); overflow: hidden; }
-.effort-track::before { content: ''; display: block; height: 100%; width: calc(12px + (100% - 24px) * var(--progress)); background: var(--highlight); }
-.effort-ticks { position: absolute; inset: 0 12px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
-.effort-ticks span { width: 4px; height: 4px; border-radius: 50%; background: var(--muted); opacity: .45; }
-.effort-ticks span.filled { background: #fff; opacity: .65; }
-.effort-slider input { position: relative; z-index: 1; display: block; width: 100%; height: 24px; margin: 0; padding: 0; appearance: none; border-radius: 999px; background: transparent; cursor: default; }
-.effort-slider input:active { cursor: default; }
-.effort-slider input::-webkit-slider-runnable-track { height: 24px; background: transparent; border-radius: 999px; }
-.effort-slider input::-webkit-slider-thumb { appearance: none; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 5px #0003; }
-.effort-slider input:focus-visible::-webkit-slider-thumb { background: #fff; box-shadow: 0 2px 8px #0005; }
-.effort-slider:has(input:focus-visible) .effort-track { filter: brightness(.9); }
-.effort-slider input:disabled { cursor: default; opacity: .6; }
-.effort-scale { display: flex; justify-content: space-between; padding: 3px 2px 0; font-size: 10px; color: var(--muted); }
-.model-popover-footer { display: flex; align-items: center; gap: 4px; margin-top: 4px; padding-top: 2px; }
-.model-popover-footer > button { padding: 4px 5px; font-size: 11px; border-radius: 7px; }
-.model-popover-footer > span { margin-left: auto; color: var(--muted); font-size: 10px; }
+/* Effort is a plain list, like the model list: the current row is marked, and Fast is one more row below a hairline. */
+.model-popover:not(.model-browser) { width: min(192px, calc(100vw - 16px)); padding: 6px; }
+.effort-list { display: flex; flex-direction: column; gap: 1px; }
+.effort-list > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; text-align: left; }
+.effort-list > button > span { flex: 1; min-width: 0; }
+.effort-list > button[aria-selected="true"] { background: var(--hover); }
+.effort-list .effort-check { color: var(--highlight); }
+.effort-list .effort-fast > .icon:first-child { color: var(--muted); }
+.effort-divider { height: 1px; margin: 4px 6px; background: var(--border); }
 .model-effort-select { gap: 5px; padding: 5px 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .model-browser { width: min(544px, calc(100vw - 16px)); padding: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
 .model-cascade { display: grid; grid-template-columns: minmax(0, 224px) minmax(0, 312px); gap: 8px; align-items: end; }
