@@ -159,9 +159,9 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'closing active tab selects its neighbor');
     await evaluate("document.querySelector('[aria-label=\"Close first.md\"]').click()");
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'Files'", 'closing last file restores file list');
-    await waitFor("Array.from(document.querySelectorAll('.tree-file')).some(button => button.textContent.includes('first.md'))", 'new file appears in working files');
-    await evaluate("Array.from(document.querySelectorAll('.tree-file')).find(button => button.textContent.includes('first.md')).click()");
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'working file opens in a new tab');
+    await waitFor("Array.from(document.querySelectorAll('.explorer-file')).some(button => button.textContent.includes('first.md'))", 'new file appears in the tree');
+    await evaluate("Array.from(document.querySelectorAll('.explorer-file')).find(button => button.textContent.includes('first.md')).click()");
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'tree file opens in a new tab');
     await evaluate("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'Jolo smoke page'", 'item tabs support keyboard selection');
   } finally { dialog.showOpenDialog = originalDialog; }
