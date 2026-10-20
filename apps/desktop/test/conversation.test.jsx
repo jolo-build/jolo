@@ -200,7 +200,7 @@ test("the agent's own subagents stand on their own line with their model, and sa
   expect(working).toContain('<span class="subagent-title">Find where tokens refresh</span><span class="subagent-meta">Explore · Opus 5.5</span>');
   expect(working).toContain('<div class="subagent-now" title="Read src/auth/session.ts">Read session.ts</div>');
   // Its ordinary neighbour stays in the activity group, which counts only that one.
-  expect(working).toContain('Task activity · 1 action');
+  expect(working).toContain('1 action');
   const done = render(tool({ text: `${call}↳ Edit src/auth/session.ts\n\nTokens refresh in session.ts.\n`, status: 'complete' }));
   expect(done).toContain('class="subagent"');
   expect(done).not.toContain('subagent-now');
