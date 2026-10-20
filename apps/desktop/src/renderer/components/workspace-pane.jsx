@@ -9,6 +9,7 @@ import { Composer } from "./composer.jsx";
 import { BrowserPane } from "./browser-pane.jsx";
 import { ContextSplit } from './context-split.jsx';
 import { FilePreview } from './file-preview.jsx';
+import { FileTree } from './file-tree.jsx';
 import { FilePreviewContext } from '../file-preview-context.js';
 import { PanelItemTabs } from './panel-item-tabs.jsx';
 import { usePanelTabs } from '../use-panel-tabs.js';
@@ -130,6 +131,20 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const browserTitle = browser?.title ?? '';
   previewSession.current = sessionId;
   previewWorkspace.current = workspaceId;
+  /** A project file picked in the tree opens as a tab; a text file can be edited there and written back. */
+  const openWorkspaceFile = (relative) => reportError(async () => {
+    const result = await state.call('workspace.readFile', { workspaceId, path: relative });
+    const name = basename(relative);
+    const kind = result.binary ? 'details' : /\.(md|markdown|mdx)$/i.test(relative) ? 'markdown' : 'text';
+    fileTabs.add({ id: relative, path: relative, title: name, kind, workspaceId, sessionId, ...(result.binary
+      ? { size: result.bytes, extension: (relative.match(/\.([^./]+)$/)?.[1] ?? '').toUpperCase(), note: 'This file is not text, so it is not shown here.' }
+      : { text: result.text, truncated: result.truncated, editable: !result.truncated }) });
+    setContext('files');
+  });
+  const saveWorkspaceFile = async (file, text) => {
+    await state.call('workspace.writeFile', { workspaceId: file.workspaceId, path: file.path, text });
+    fileTabs.update(file.id, { text });
+  };
   const openFilePreview = file => {
     if (file.sessionId !== previewSession.current) { if (file.url) void window.jolo.releaseChatFile?.(file.url); return; }
     fileTabs.add({ ...file, id: file.path, title: basename(file.path) }); setContext('files');
@@ -432,8 +447,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div id={`${pane.id}-context-content`} className="context-content" role="tabpanel" aria-labelledby={panelTabs.activeId ? `${pane.id}-item-${encodeURIComponent(panelTabs.activeId)}` : undefined} aria-label={panelTabs.activeId ? undefined : 'Empty panel'}>
             <div className="changes-host" hidden={context !== "changes" && context !== "files"}>
-              <div className="panel-item-content" hidden={context === 'files' && Boolean(fileTabs.active)}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view={context} focus={changesFocus} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
-              {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || context !== 'files' || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} /></div>)}
+              <div className="panel-item-content" hidden={context !== 'changes'}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view="changes" focus={changesFocus} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
+              <div className="panel-item-content" hidden={context !== 'files' || Boolean(fileTabs.active)}>{workspaceId && !project?.standalone ? <FileTree key={workspaceId} call={state.call} workspaceId={workspaceId} name={projectLabel} active={context === 'files' && !fileTabs.active} revision={`${changes.length}:${lastRun?.updatedAt ?? ''}`} onOpen={openWorkspaceFile} onPick={() => void pickFile()} /> : <div className="panel-empty"><Icon name="folder" size={26} /><h2>No folder</h2><p>Open a folder to browse its files.</p></div>}</div>
+              {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || context !== 'files' || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} onSave={file.editable ? text => saveWorkspaceFile(file, text) : null} onDirty={file.editable ? dirty => fileTabs.update(file.id, { title: dirty ? `${basename(file.path)} •` : basename(file.path) }) : null} /></div>)}
             </div>
             <div className="browser-host" hidden={context !== 'browser'}>
               {workspaceId && browserTabs.items.map(tab => <div className="panel-item-content" key={tab.id} hidden={browserTabs.activeId !== tab.id}><BrowserPane workspaceId={workspaceId} working={Boolean(activeRun)} cursorKey={lastRun?.id ?? sessionId} initialUrl={tab.url} onTitle={title => browserTabs.update(tab.id, { title: title || 'New tab' })} onNavigate={url => browserTabs.update(tab.id, { url })} /></div>)}

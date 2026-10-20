@@ -650,6 +650,11 @@ export const MethodSchemas = {
     params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), maxBytes: z.number().int().min(1).max(1024 * 1024).default(256 * 1024), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0), encoding: z.enum(['utf8', 'base64']).default('utf8') }),
     result: z.object({ path: z.string(), text: z.string(), bytes: z.number().int().nonnegative(), truncated: z.boolean(), binary: z.boolean() }),
   },
+  /** The Files panel's editor: the whole text of one file, written inside the workspace under the same path policy as reads. */
+  "workspace.writeFile": {
+    params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), text: z.string().max(1024 * 1024) }),
+    result: z.object({ path: z.string(), bytes: z.number().int().nonnegative() }),
+  },
   /** The composer's "@" picker: entries that fit a typed fragment, or with `path`, one folder's top level. */
   "workspace.files": {
     params: z.object({ workspaceId: Id, query: z.string().max(200).default(''), path: z.string().max(4096).optional(), limit: z.number().int().min(1).max(200).default(20) }),
