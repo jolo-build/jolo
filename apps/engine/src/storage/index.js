@@ -206,6 +206,24 @@ export class Storage {
     this.db.query("UPDATE projects SET preferences = ?1, updated_at = ?2 WHERE id = ?3").run(JSON.stringify(preferences), now(), id);
   }
 
+  /** Off the board until its folder is opened again; the row, its workspaces and its chats all stay. */
+  setProjectRemoved(id, removed) {
+    const preferences = { ...this.getProjectPreferences(id) };
+    delete preferences.removedAt;
+    this.setProjectPreferences(id, removed ? { ...preferences, removedAt: now() } : preferences);
+  }
+
+  /** Every open chat of a project, in any of its workspaces. */
+  openSessionIdsForProject(projectId) {
+    return this.db.query("SELECT id FROM sessions WHERE project_id = ?1 AND state = 'open' AND deleted_at IS NULL").all(projectId).map(row => row.id);
+  }
+
+  /** A run in the project that has not finished, with the task it belongs to; null once every run is settled. */
+  unfinishedRunForProject(projectId) {
+    const r = this.db.query("SELECT r.id, r.session_id, s.title FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.project_id = ?1 AND s.deleted_at IS NULL AND r.state NOT IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY r.created_at LIMIT 1").get(projectId);
+    return r ? { runId: r.id, sessionId: r.session_id, sessionTitle: r.title } : null;
+  }
+
   /** The user looked at this workspace's latest outcome; "done since you last looked" clears (§4.1 board). */
   touchWorkspaceViewed(id) {
     const at = now();

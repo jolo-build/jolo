@@ -630,6 +630,11 @@ export const MethodSchemas = {
     params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096) }),
     result: z.object({ rootPath: z.string(), workspaceId: Id }),
   },
+  // Forget a folder in the sidebar: its chats are archived, nothing on disk changes, and opening the folder again brings it back.
+  'project.remove': {
+    params: z.object({ projectId: Id }),
+    result: z.object({ projectId: Id, archived: z.number().int().nonnegative() }),
+  },
   "workspace.create": {
     params: z.object({ projectId: Id, mode: z.literal("worktree").default("worktree"), branch: z.string().trim().min(1).max(120).optional(), base: z.string().trim().min(1).max(120).optional(), title: z.string().max(200).default("") }),
     result: z.object({ workspace: WorkspaceSchema }),

@@ -13,6 +13,7 @@ test('sidebar lists projects with independent disclosure controls and quiet arch
   expect(html).toContain('Show tasks in alpha');
   expect(html).toContain('Show tasks in beta');
   expect(html).toContain('New task in beta');
+  expect(html).toContain('Options for beta');
   expect(html).not.toContain('Settled');
   expect(html).not.toContain('All projects');
 });
@@ -29,6 +30,7 @@ test('archive keeps folder grouping without showing open task counts or selected
   expect(html).toContain('Hide tasks in alpha');
   expect(html).not.toContain('Open chat');
   expect(html).not.toContain('New task in beta');
+  expect(html).not.toContain('Options for beta');
 });
 test('nested chats keep one line and carry the latest answerer and checkout in their tooltip', () => {
   // Only the markup of a single row is under test, so this render leaves off the drag state and the

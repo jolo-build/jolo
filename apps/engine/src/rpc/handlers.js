@@ -106,6 +106,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         let project = storage.listProjects().find(p => p.rootPath === root) ?? storage.upsertProject({ identity: root, rootPath: root });
         const preferences = storage.getProjectPreferences(project.id);
         if (preferences.redirectProjectId) project = storage.getProject(preferences.redirectProjectId);
+        if (storage.getProjectPreferences(project.id).removedAt) storage.setProjectRemoved(project.id, false); // opening the folder again puts it back in the sidebar
         const workspace = storage.getProjectPreferences(project.id).syncPlaceholder ? storage.listWorkspaces(project.id)[0] : storage.ensureDirectWorkspace(project.id, project.rootPath);
         const needsFolder = storage.getWorkspace(workspace.id).needsFolder;
         if (!needsFolder) {
@@ -119,6 +120,27 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     'project.linkFolder': ({ workspaceId, path }, conn) => {
       requireInteractive(conn, 'Choose a local folder in Jolo to link this synced project.');
       return linkChatFolder({ storage, permissions, workspaceId, folder: path });
+    },
+    // Forget a folder in the sidebar without touching it: its chats are archived, so they stay in history and come
+    // back when the same folder is opened again, and its worktrees stay on disk. A run still going refuses.
+    'project.remove': ({ projectId }, conn) => {
+      requireInteractive(conn, 'only an interactive client can remove a project from the sidebar');
+      const archived = storage.transaction(() => {
+        const project = storage.getProject(projectId);
+        if (!project) throw new ProtocolError('not_found', 'unknown project');
+        if (project.preferences.standalone) throw new ProtocolError('invalid_params', 'a chat is archived from its own menu');
+        const busy = storage.unfinishedRunForProject(projectId);
+        if (busy) throw new ProtocolError('conflict', `“${busy.sessionTitle || 'New task'}” is still running in this folder; stop or finish it first`, { runId: busy.runId, sessionId: busy.sessionId });
+        const ids = storage.openSessionIdsForProject(projectId);
+        for (const sessionId of ids) {
+          const session = storage.updateSession(sessionId, { state: 'archived' });
+          storage.appendEvent({ sessionId, type: 'session.updated', payload: { session } });
+        }
+        if (!project.preferences.removedAt) storage.setProjectRemoved(projectId, true);
+        return ids;
+      });
+      for (const sessionId of archived) schedules?.reconcileSession(sessionId); // archived chats drop their heartbeats, as archiving one does
+      return { projectId, archived: archived.length };
     },
     "settings.get": () => ({ settings: settingsService.get() }),
     'task.list': params => tasks.list(params),

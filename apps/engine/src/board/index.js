@@ -125,13 +125,15 @@ export function createBoard({ storage, env, log }) {
 
   return {
     async list() {
-      const workspaces = storage.listProjects().filter(project => !project.preferences.standalone).flatMap(project => storage.listWorkspaces(project.id));
+      // A project removed from the sidebar keeps its rows in storage but shows none until its folder is opened again.
+      const listed = () => storage.listProjects().filter(project => !project.preferences.removedAt);
+      const workspaces = listed().filter(project => !project.preferences.standalone).flatMap(project => storage.listWorkspaces(project.id));
       // Two concurrent status calls, outside SQLite transactions.
       let index = 0;
       const worker = async () => { while (index < workspaces.length) await gitInfo(workspaces[index++].path); };
       await Promise.all([worker(), worker()]);
       // A folder remains available even before its first chat is created.
-      const rows = storage.transaction(() => storage.listProjects().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace))));
+      const rows = storage.transaction(() => listed().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace))));
       rows.sort((a, b) => ATTENTION_ORDER[a.attention] - ATTENTION_ORDER[b.attention] || (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || a.name.localeCompare(b.name));
       return { projects: rows, generatedAt: new Date().toISOString() };
     },
