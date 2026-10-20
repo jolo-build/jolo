@@ -86,6 +86,25 @@ describe("Claude Code through its structured stream", () => {
     } finally { await client.close(); }
   }, 20_000);
 
+  test("any slash command reaches Claude whole, with no handoff around it, and its command list comes with its models", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      const report = await client.call('agent.models', { agentId: 'claude' });
+      expect(report.commands).toEqual([
+        { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '<optional custom summarization instructions>' },
+        { name: 'deploy', description: 'Ship the current branch to an environment', argumentHint: '<environment>' },
+      ]);
+      expect((await runTo('before', 'hello')).state).toBe('completed'); // so a later message would otherwise carry the conversation along
+      const run = await runTo('deploy', '  /deploy staging  ');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Command received: /deploy staging']);
+      // A slash inside a sentence is prose, and travels with the conversation as usual.
+      const prose = await runTo('prose', 'what does /deploy do?');
+      expect(await text((await messagesOf(prose.id)).at(-1))).toMatch(/^Continuing session fake-\w+: what does \/deploy do\?$/);
+    } finally { await client.close(); }
+  }, 30_000);
+
   test('long Claude tools do not inherit the native tool deadline', async () => {
     const { client, events, session, messagesOf, text } = await boot();
     try {

@@ -276,6 +276,36 @@ async function handle(message) {
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       return;
     }
+    case "review/start": {
+      // Codex reviews as a turn of its own: it enters review mode, works, and hands the findings over as it leaves it.
+      // The model's own message inside the review is the raw findings; the client is expected to show the review text.
+      const entry = threads.get(params.threadId);
+      if (!entry) return fail(-32602, "unknown thread");
+      if (current) return fail(-32002, "a turn is already running");
+      if (!["uncommittedChanges", "baseBranch", "commit", "custom"].includes(params.target?.type)) return fail(-32602, `unexpected review target ${JSON.stringify(params.target)}`);
+      const turn = { id: `turn-${++counter}`, items: [], status: "inProgress", error: null, startedAt: Date.now(), completedAt: null, durationMs: null };
+      reply({ turn, reviewThreadId: entry.thread.id });
+      const threadId = entry.thread.id, turnId = turn.id;
+      const review = `Review of ${params.target.type}${params.target.instructions ? `: ${params.target.instructions}` : ""}\n- nothing to fix`;
+      const entered = { type: "enteredReviewMode", id: `review-${counter}`, review: "Reviewing" };
+      const findings = { type: "agentMessage", id: `findings-${counter}`, text: "", phase: "final_answer" };
+      notify("turn/started", { threadId, turn });
+      notify("item/started", { threadId, turnId, item: entered });
+      notify("item/completed", { threadId, turnId, item: entered });
+      notify("item/started", { threadId, turnId, item: findings });
+      notify("item/agentMessage/delta", { threadId, turnId, itemId: findings.id, delta: '{"findings":[]}' });
+      notify("item/completed", { threadId, turnId, item: { ...findings, text: '{"findings":[]}' } });
+      notify("item/completed", { threadId, turnId, item: { type: "exitedReviewMode", id: `review-exit-${counter}`, review } });
+      notify("turn/completed", { threadId, turn: { ...turn, status: "completed", completedAt: Date.now(), durationMs: 5 } });
+      return;
+    }
+    case "skills/list": {
+      // Skills are read from disk, so the list is immediate; a disabled one is not offered.
+      return reply({ data: [{ cwd: params.cwds?.[0] ?? process.cwd(), skills: [
+        { name: "release-notes", description: "Draft release notes from the merged pull requests", path: "/nowhere/skills/release-notes/SKILL.md", scope: "user", enabled: true },
+        { name: "hidden-skill", description: "not offered", path: "/nowhere/skills/hidden/SKILL.md", scope: "user", enabled: false },
+      ], errors: [] }] });
+    }
     case "thread/compact/start": {
       // Codex compacts as a turn of its own: an empty reply, then the usual turn events around one compaction item.
       const entry = threads.get(params.threadId);

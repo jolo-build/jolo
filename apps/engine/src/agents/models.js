@@ -6,6 +6,7 @@
 // actually offers today. Settings loads this automatically when opened; recent answers are shared
 // across interactive clients so opening another pane does not start the same agent again.
 import { tmpdir } from "node:os";
+import { AGENT_COMMANDS_LIMIT } from "@jolo/protocol";
 import { hostedEnvironment, spawnLineChild } from "./hosted.js";
 import { claudeArgv } from "./claude-stream.js";
 import { modelSelector } from "./acp.js";
@@ -15,6 +16,8 @@ import { modelSelector } from "./acp.js";
 const PROBE_TIMEOUT_MS = 8_000;
 const MAX_MODELS = 100;
 const CACHE_TTL_MS = 5 * 60_000;
+/** The transports that can name their slash commands, so they are asked even when their model cannot be set. */
+const COMMAND_TRANSPORTS = new Set(["claude-stream", "codex-app-server"]);
 
 const text = (value, fallback = "") => (typeof value === "string" && value ? value : fallback);
 const efforts = (list) => [...new Set((Array.isArray(list) ? list : []).map((entry) => (typeof entry === "string" ? entry : text(entry?.reasoningEffort ?? entry?.id ?? entry?.value))).filter(Boolean))];
@@ -29,6 +32,39 @@ const claudeEfforts = (levels) => (Array.isArray(levels) && levels.includes("xhi
 const model = ({ id, displayName, description, isDefault = false, efforts: levels = [] }) => ({
   id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20),
 });
+
+/** One slash command as the composer lists it: the name as typed after "/", one line about it, and what may follow it. */
+const command = ({ name, description, argumentHint = "" }) => ({ name: String(name).slice(0, 120), description: text(description).replace(/\s+/g, " ").trim().slice(0, 600), argumentHint: text(argumentHint).slice(0, 200) });
+
+/**
+ * Codex publishes no command list over its app-server, so the two its protocol has methods for are fixed here; the
+ * adapter maps them (thread/compact/start, review/start). Its skills, which it does list, are offered after them by
+ * name; a skill goes to Codex as text.
+ */
+export const CODEX_COMMANDS = Object.freeze([
+  command({ name: "compact", description: "Free up context by summarizing the conversation so far" }),
+  command({ name: "review", description: "Review the working tree, or what you describe after it", argumentHint: "[what to review]" }),
+]);
+
+/** The agent's own commands from its initialize reply: built-ins, plugins and skills alike, each as one line. */
+export function claudeCommands(listed) {
+  return (Array.isArray(listed) ? listed : []).filter((entry) => text(entry?.name)).map((entry) => command({ name: entry.name, description: entry.description, argumentHint: entry.argumentHint }));
+}
+
+/** Codex's enabled skills as commands, after the fixed two; a skill that shares a name with one of them is not repeated. */
+export function codexCommands(skillsListed) {
+  const commands = [...CODEX_COMMANDS];
+  const names = new Set(commands.map((entry) => entry.name));
+  for (const scope of Array.isArray(skillsListed?.data) ? skillsListed.data : []) {
+    for (const skill of Array.isArray(scope?.skills) ? scope.skills : []) {
+      const name = text(skill?.name);
+      if (!name || skill.enabled === false || names.has(name) || /\s/.test(name)) continue;
+      names.add(name);
+      commands.push(command({ name, description: text(skill.shortDescription) || skill.description }));
+    }
+  }
+  return commands;
+}
 
 /** The thinking levels Antigravity's --effort accepts, from least to most. */
 const ANTIGRAVITY_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -117,7 +153,8 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
         if (message.type !== "control_response" || message.response?.request_id !== "jolo-models") return null; // it may greet first
         if (message.response.subtype === "error") return { models: [], note: text(message.response.error, "Claude Code refused the request") };
         const listed = message.response.response?.models;
-        if (!Array.isArray(listed)) return { models: [], note: "Claude Code did not report a model list" };
+        const commands = claudeCommands(message.response.response?.commands); // the same reply names its slash commands
+        if (!Array.isArray(listed)) return { models: [], commands, note: "Claude Code did not report a model list" };
         return {
           models: listed.filter((entry) => text(entry?.value)).map((entry) => model({
             id: entry.value,
@@ -126,13 +163,14 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
             isDefault: entry.value === "default",
             efforts: entry.supportsEffort ? claudeEfforts(entry.supportedEffortLevels) : [],
           })),
+          commands,
           note: null,
         };
       },
     });
   };
 
-  /** Codex has a method for it, and pages its answer. */
+  /** Codex has a method for it, and pages its answer; its skills are read in the same sitting, since they are on disk. */
   const fromCodex = (manifest) => {
     const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
     const collected = [];
@@ -140,20 +178,22 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
       open: (send) => send({ id: 1, method: "initialize", params: { clientInfo: { name: "jolo", title: "Jolo", version: build }, capabilities: { experimentalApi: false } } }),
       ask: (message, send) => {
         if (message.id === 1) {
-          if (message.error) return { models: [], note: text(message.error.message, "Codex refused to start") };
+          if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: text(message.error.message, "Codex refused to start") };
           send({ method: "initialized" });
           send({ id: 2, method: "model/list", params: {} });
           return null;
         }
+        if (message.id === 4) return { models: collected, commands: codexCommands(message.error ? null : message.result), note: null }; // an older server without skills/list still has the fixed two
         if (message.id !== 2 && message.id !== 3) return null;
-        if (message.error) return { models: [], note: text(message.error.message, "Codex did not report a model list") };
+        if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: text(message.error.message, "Codex did not report a model list") };
         for (const entry of message.result?.data ?? []) {
           if (!text(entry?.id) || entry.hidden) continue;
           collected.push(model({ id: entry.id, displayName: entry.displayName, description: entry.description, isDefault: entry.isDefault, efforts: entry.supportedReasoningEfforts }));
         }
         const cursor = message.result?.nextCursor;
         if (cursor && collected.length < MAX_MODELS) { send({ id: 3, method: "model/list", params: { cursor } }); return null; }
-        return { models: collected, note: null };
+        send({ id: 4, method: "skills/list", params: {} });
+        return null;
       },
     });
   };
@@ -212,12 +252,13 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
     async list(agentId, { refresh = false } = {}) {
       const manifest = catalog.get(agentId); // an unknown id is the caller's mistake, and stays an error
       const support = catalog.config(manifest).support;
-      if (support.model === "none" && support.effort === "none") {
-        const reason = manifest.transport === "pty"
-          ? `${manifest.displayName} runs in a terminal, so it chooses its own model`
-          : `${manifest.displayName} has no model option in its manifest; add modelArgs to set one`;
-        return { agentId, models: [], efforts: [], source: "none", note: reason };
-      }
+      // An agent whose model Jolo cannot set is still asked for its commands, when its transport can name them; what it
+      // says about models is not offered, since nothing could be done with the choice.
+      const settable = support.model !== "none" || support.effort !== "none";
+      const reason = settable ? null : manifest.transport === "pty"
+        ? `${manifest.displayName} runs in a terminal, so it chooses its own model`
+        : `${manifest.displayName} has no model option in its manifest; add modelArgs to set one`;
+      if (!settable && !COMMAND_TRANSPORTS.has(manifest.transport)) return { agentId, models: [], efforts: [], commands: [], source: "none", note: reason };
       if (pending.has(agentId)) return pending.get(agentId);
       const remembered = answered.get(agentId);
       if (!refresh && remembered && Date.now() < remembered.expiresAt) return remembered.answer;
@@ -232,9 +273,11 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
         } catch (error) {
           result = { models: [], note: String(error?.message ?? error).slice(0, 300) };
         }
-        const models = result.models.slice(0, MAX_MODELS);
-        const levels = efforts([...models.flatMap((entry) => entry.efforts), ...(result.efforts ?? [])]);
-        const answer = { agentId, models, efforts: levels, source: models.length || levels.length ? "agent" : "none", note: result.note ? result.note.slice(0, 300) : null };
+        const models = settable ? result.models.slice(0, MAX_MODELS) : [];
+        const levels = settable ? efforts([...models.flatMap((entry) => entry.efforts), ...(result.efforts ?? [])]) : [];
+        const commands = (Array.isArray(result.commands) ? result.commands : []).slice(0, AGENT_COMMANDS_LIMIT);
+        const note = settable ? result.note : commands.length ? reason : result.note ?? reason;
+        const answer = { agentId, models, efforts: levels, commands, source: models.length || levels.length || commands.length ? "agent" : "none", note: note ? note.slice(0, 300) : null };
         // Only a real answer is kept: a failure should be retried, since signing in or installing fixes it.
         if (answer.source === "agent") answered.set(agentId, { answer, expiresAt: Date.now() + CACHE_TTL_MS });
         else answered.delete(agentId);
