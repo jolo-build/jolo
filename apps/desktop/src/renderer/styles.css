@@ -294,7 +294,10 @@ strong { font-weight: 550; }
 .sidebar-chat-row:is(:hover, :has(:focus-visible)) .sidebar-activity { opacity: 0; }
 /* A project's tasks sit one indent step in, marked by a single hairline. */
 .sidebar-workspace-chats { margin-left: 15px; padding: 1px 0 2px 7px; border-left: 1px solid var(--border); }
-.sidebar-workspace-chats:empty { padding: 0; border: 0; }
+/* A placeholder that is not yet shown takes no room and is not content, so an empty folder opens without its guide line flashing. */
+.sidebar-workspace-chats:not(:has(> :not(.deferred))) { padding: 0; border: 0; }
+.sidebar-empty.deferred { animation-name: deferred-in-place; }
+@keyframes deferred-in-place { from { visibility: hidden; display: none; } }
 .sidebar-load-more { justify-content: flex-start; color: var(--muted); font-size: 11px; padding: 7px 8px; }
 .recent-chats { margin-top: 22px; min-width: 0; }
 .recent-chats h2, .pinned-tasks h2 { margin: 0 13px 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
