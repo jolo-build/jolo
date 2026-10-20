@@ -66,6 +66,21 @@ export async function runStandaloneChatsSmoke({ window, bridge, project, results
   await evaluate("document.querySelector('.usage-panel .usage-compact').click()");
   await waitFor("!document.querySelector('.usage-panel') && window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().assistantText.includes('Context compacted.')", 'Claude compacted its context');
   report.checks.push('Compact in the usage panel asks Claude to compact its context and the task notes it');
+  // Typing "/" alone lists the answering agent's own commands; Enter completes the highlighted one into the message and sends nothing.
+  const key = code => { window.webContents.sendInputEvent({ type: 'keyDown', keyCode: code }); if (code === 'Enter') window.webContents.sendInputEvent({ type: 'char', keyCode: '\r' }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode: code }); };
+  const runsBefore = (await state()).runCount;
+  assert(await evaluate('!document.querySelector(".mention-list")'), 'A command list is visible before "/" is typed');
+  await evaluate('document.querySelector(".pane-slot.focused textarea").focus()');
+  await window.webContents.insertText('/');
+  await waitFor(`[...document.querySelectorAll('.mention-list [role="option"] .mention-name')].map(el => el.textContent).join(' ') === '/compact /deploy'`, 'typing "/" lists the agent’s commands');
+  assert(await evaluate(`document.querySelector('.mention-list [role="option"][aria-selected="true"] .mention-detail').textContent.startsWith('Free up context')`), 'Commands come without their one-line description');
+  key('Down');
+  await waitFor(`document.querySelector('.mention-list [role="option"][aria-selected="true"] .mention-name').textContent === '/deploy'`, 'arrow keys move along the commands');
+  key('Enter');
+  await waitFor(`document.querySelector('.pane-slot.focused textarea').value === '/deploy ' && !document.querySelector('.mention-list')`, 'Enter completes the highlighted command');
+  assert((await state()).runCount === runsBefore, 'Completing a command sent a message');
+  await evaluate(`(() => { const input = document.querySelector('.pane-slot.focused textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ''); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  report.checks.push('typing "/" in an empty message lists the agent’s slash commands with descriptions; arrows move and Enter completes the chosen one without sending');
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(recent)}))`, 'chats stay available from workspace');
   await evaluate(`document.querySelector(${JSON.stringify(recent)}).click()`);
   await waitFor('window.__joloSmoke.state().standalone && window.__joloSmoke.state().runCount === 2', 'chat preserves both turns');

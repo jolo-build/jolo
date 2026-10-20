@@ -48,6 +48,12 @@ const answerUsage = (requestId) => {
   if (USAGE_MODE) { process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_USAGE ${JSON.stringify(USAGE_MODE)}\n`); process.exit(64); }
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: USAGE } });
 };
+// The commands initialize names, in the shape Claude Code 2.1 sends: its built-ins carry `builtin`, the rest are plugins,
+// skills and user-defined commands. Two are enough to show the list and that one reached the fixture whole.
+const COMMANDS = [
+  { name: "compact", description: "Free up context by summarizing the conversation so far", argumentHint: "<optional custom summarization instructions>", builtin: true },
+  { name: "deploy", description: "Ship the current branch to an environment", argumentHint: "<environment>" },
+];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const pending = new Map();
@@ -90,6 +96,9 @@ async function turn(prompt, images = []) {
   if (prompt === '/compact') {
     // Claude takes its own /compact only as the whole message; anything wrapped around it would be answered in prose.
     out({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 41000 }, session_id: sessionId });
+  } else if (received.startsWith('/')) {
+    // Any other slash command, likewise: the whole message is echoed, so a handoff wrapped around it would show.
+    say(`Command received: ${received}`);
   } else if (prompt === 'subagent-review') {
     const parentId = 'toolu_reviewer';
     const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
@@ -185,7 +194,7 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);
     if (!line.trim()) continue;
     const message = JSON.parse(line);
-    if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS } } });
+    if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: COMMANDS, models: MODELS } } });
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
