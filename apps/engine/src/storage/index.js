@@ -292,7 +292,8 @@ export class Storage {
     // Native continuation IDs belong to one agent. A switch starts that agent
     // with the shared transcript, while retaining the Jolo session itself.
     const handoff = this.getSession(id)?.agentState?._jolo;
-    this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
+    // A model chosen for the last agent means nothing to the next.
+    this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, agent_model = NULL, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
     return this.getSession(id);
   }
 

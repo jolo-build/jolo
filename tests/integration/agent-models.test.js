@@ -168,6 +168,11 @@ describe("choosing a model for each hosted agent", () => {
       expect(await reply(session.id, "req_own")).toBe("Running fake-small at low.");
       const { session: other } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "other", agentId: "codex" });
       expect(await reply(other.id, "req_other")).toBe("Running fake-large at high.");
+      // Moving the chat to another agent drops the choice: it meant something only to the agent it was made for.
+      const before = (await client.call("session.page", { sessionId: session.id, limit: 1 })).session;
+      const moved = (await client.call("session.setAgent", { sessionId: session.id, agentId: "claude", expectedRevision: before.revision })).session;
+      expect(moved.agentModel).toBeNull();
+      await client.call("session.setAgent", { sessionId: session.id, agentId: "codex", expectedRevision: moved.revision });
       // Clearing the choice returns the chat to the agent's setting; a Jolo-answered task has no agent to choose for.
       const latest = (await client.call("session.page", { sessionId: session.id, limit: 1 })).session; // runs moved the revision on
       const cleared = (await client.call("session.setAgentModel", { sessionId: session.id, model: null, effort: null, expectedRevision: latest.revision })).session;
