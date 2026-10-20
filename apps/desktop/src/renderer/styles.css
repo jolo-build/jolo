@@ -378,6 +378,19 @@ details.block summary span { min-width: 0; overflow: hidden; text-overflow: elli
 details.block[open] > summary > .activity-disclosure, .activity-group[open] > summary > .activity-disclosure { transform: rotate(90deg); }
 details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; background: var(--subtle); padding: 10px 12px; border-radius: 7px; margin: 8px 0 0; font: 11px/1.65 var(--mono); }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
+/* Find in page: a small bar under the header, gone the moment it closes; the matches are highlights, not markup. */
+.find-bar { position: fixed; top: 57px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }
+.find-field { position: relative; display: flex; align-items: center; margin-right: 6px; }
+.find-field input { width: 230px; height: 30px; padding: 0 56px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--text); outline: none; }
+.find-field input:focus { border-color: var(--highlight); }
+.find-count { position: absolute; right: 10px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); pointer-events: none; }
+.find-count.none { color: var(--red); }
+.find-bar button { width: 28px; height: 28px; padding: 0; color: var(--muted); border-radius: 7px; }
+.find-bar button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.find-bar button:disabled { opacity: .45; }
+.find-up { transform: rotate(180deg); }
+::highlight(jolo-find) { background: color-mix(in srgb, var(--highlight) 28%, transparent); }
+::highlight(jolo-find-active) { background: var(--highlight); color: var(--bg); }
 .run-note { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .run-note > span { min-width: 0; overflow-wrap: anywhere; }
 .run-note.negative { color: var(--red); }
