@@ -103,6 +103,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   };
   const [worktreeDialog, setWorktreeDialog] = useState(false);
   const [changesFocus, setChangesFocus] = useState(null);
+  const [revealPath, setRevealPath] = useState(/** @type {{ path: string } | null} */ (null)); // a folder a breadcrumb asked the tree to show
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
@@ -450,10 +451,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
               <div className="panel-item-content" hidden={context !== 'changes'}><ChangesPanel key={sessionId ?? "empty"} changes={changes} status={state.changesStatus} onRefresh={state.refreshChanges} view="changes" focus={changesFocus} onSelectFile={() => selectContext("changes")} onOpenFile={pickFile} onLoadDiff={state.loadDiff} onLoadFile={state.loadFile} onRevert={state.revertChange} /></div>
               <div className="files-layout" hidden={context !== 'files'}>
                 <div className="files-main">
-                  {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} onSave={file.editable ? text => saveWorkspaceFile(file, text) : null} onDirty={file.editable ? dirty => fileTabs.update(file.id, { title: dirty ? `${basename(file.path)} •` : basename(file.path) }) : null} /></div>)}
+                  {panelTabs.retained.filter(({ item }) => item.panelType === 'file').map(({ scope, item: file }) => <div className="panel-item-content" key={`${scope}:${file.id}`} hidden={scope !== panelScope || fileTabs.activeId !== file.id}><FilePreview file={file} onClose={null} onSave={file.editable ? text => saveWorkspaceFile(file, text) : null} onDirty={file.editable ? dirty => fileTabs.update(file.id, { title: dirty ? `${basename(file.path)} •` : basename(file.path) }) : null} onReveal={file.workspaceId === workspaceId && !project?.standalone ? folder => setRevealPath({ path: folder }) : null} /></div>)}
                   {!fileTabs.active && <div className="panel-empty files-empty"><Icon name="folder" size={28} /><h2>Open files appear here</h2><p>{workspaceId && !project?.standalone ? 'Pick a file in the tree, or click a file path in the conversation.' : 'Click a file path in the conversation, or open a folder to browse its files.'}</p></div>}
                 </div>
-                {workspaceId && !project?.standalone && <FileTree key={workspaceId} call={state.call} workspaceId={workspaceId} name={projectLabel} active={context === 'files'} revision={`${changes.length}:${lastRun?.updatedAt ?? ''}`} onOpen={openWorkspaceFile} onPick={() => void pickFile()} />}
+                {workspaceId && !project?.standalone && <FileTree key={workspaceId} call={state.call} workspaceId={workspaceId} name={projectLabel} active={context === 'files'} revision={`${changes.length}:${lastRun?.updatedAt ?? ''}`} selectedPath={fileTabs.active?.path ?? null} reveal={revealPath} onOpen={openWorkspaceFile} onPick={() => void pickFile()} />}
               </div>
             </div>
             <div className="browser-host" hidden={context !== 'browser'}>

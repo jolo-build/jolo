@@ -549,6 +549,11 @@ details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 
 .file-op { color: var(--muted); font: 10px var(--mono); }
 .file-heading { display: flex; align-items: center; gap: 8px; padding: 13px; background: var(--bg); border-bottom: 1px solid var(--border); }
 .file-heading code { flex: 1; font: 11px var(--mono); overflow-wrap: anywhere; min-width: 0; }
+/* A project file's path as a breadcrumb: folders are quiet until pointed at, the file's own name reads as plain text. */
+.file-crumbs button { display: inline; padding: 0; border-radius: 3px; color: var(--muted); }
+.file-crumbs button:hover { background: none; color: var(--text); }
+.file-crumbs button:focus-visible { outline-offset: 1px; }
+.file-crumbs > span { margin: 0 4px; color: var(--muted); }
 .file-context { padding: 2px 6px; color: var(--muted); font-size: 11px; }
 .file-context[aria-pressed=true], .file-context:hover { color: var(--text); }
 .diff { flex: 1; min-height: 0; overflow: auto; background: var(--bg); padding: 10px 0; font: 11px/1.8 var(--mono); }
@@ -901,10 +906,13 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .explorer-filter > button { flex: none; padding: 4px; color: var(--muted); border-radius: 5px; }
 .explorer-filter > button:hover { color: var(--text); }
 .explorer-tree ul { list-style: none; margin: 0; padding: 0; }
-.explorer-row { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 0; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
+/* One hairline per open folder, under its chevron and down through everything inside it; the tree sets --guide per depth. */
+.explorer-tree ul ul { position: relative; }
+.explorer-tree ul ul::before { content: ""; position: absolute; top: 0; bottom: 0; left: var(--guide); border-left: 1px solid var(--border); pointer-events: none; }
+.explorer-row { display: flex; align-items: center; justify-content: flex-start; gap: 7px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 0; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
 .explorer-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .explorer-row > small { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
-.explorer-row:hover { background: var(--hover); }
+.explorer-row:hover, .explorer-row[aria-current=true] { background: var(--hover); }
 .explorer-matches .explorer-row { padding-left: 12px; }
 .explorer-chevron { flex: none; color: var(--muted); transition: transform .12s; }
 .explorer-chevron.open { transform: rotate(90deg); }
