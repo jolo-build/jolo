@@ -123,6 +123,22 @@ export function pathMatchScore(query, candidate) {
 }
 
 /**
+ * The top level with nothing typed: folders and files in equal measure, each group by name, so a project with
+ * many top-level folders still shows its files. Either group takes the rows the other leaves empty, and the
+ * rest of the top level follows so a dropped entry can be filled in from behind.
+ * @param {{ path: string, kind: 'file' | 'directory' }[]} entries
+ * @param {number} limit
+ */
+export function topLevelMix(entries, limit) {
+  const byPath = (a, b) => a.path.localeCompare(b.path);
+  const folders = entries.filter(entry => entry.kind === 'directory' && !entry.path.includes('/')).sort(byPath);
+  const files = entries.filter(entry => entry.kind === 'file' && !entry.path.includes('/')).sort(byPath);
+  const folderRows = Math.min(folders.length, Math.max(Math.ceil(limit / 2), limit - files.length));
+  const fileRows = Math.min(files.length, limit - folderRows);
+  return [...folders.slice(0, folderRows), ...files.slice(0, fileRows), ...folders.slice(folderRows), ...files.slice(fileRows)];
+}
+
+/**
  * The entries that fit a typed fragment, best first; with nothing typed, the top level of the workspace.
  * @param {{ root: string, env: { git?: string | null, ripgrep?: string | null, path: string }, signal: AbortSignal, query: string, limit: number }} options
  */
@@ -135,7 +151,7 @@ export async function searchWorkspaceFiles({ root, env, signal, query, limit }) 
   const ranked = query.trim()
     ? entries.map(entry => ({ entry, score: pathMatchScore(query, entry.path) })).filter(item => item.score !== null)
       .sort((a, b) => b.score - a.score || a.entry.path.length - b.entry.path.length || byName(a.entry, b.entry)).map(item => item.entry)
-    : entries.filter(entry => !entry.path.includes('/')).sort(byName);
+    : topLevelMix(entries, limit);
   const chosen = [];
   // Only what is handed back is checked against the disk, so a long enumeration costs no extra stats.
   let considered = 0;
