@@ -470,7 +470,6 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .usage-ring .usage-track { fill: none; stroke: var(--border); stroke-width: 2.5; }
 .usage-ring .usage-fill { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: butt; }
 .usage-ring.full .usage-fill { stroke: var(--red); }
-.composer:not(:hover) .usage-ring.quiet:not(:focus-visible, [aria-expanded="true"]) { opacity: 0; }
 .usage-panel { position: fixed; z-index: 60; width: 288px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); }
 .usage-panel .usage-head { font-size: 12px; font-weight: 550; margin-bottom: 6px; }
 .usage-panel dl { display: grid; gap: 3px; margin: 0 0 6px; }
