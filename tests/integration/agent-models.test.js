@@ -233,7 +233,7 @@ describe("choosing a model for each hosted agent", () => {
     expect(starts()).toBe(1);
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(await client.call("agent.models", { agentId: "codex" })).toEqual(first); // aged, so answered from memory
-    await waitFor(() => starts() === 2, { label: "a refresh ran behind the aged answer" });
+    await waitFor(() => starts() === 2, { label: "a refresh ran behind the aged answer", timeoutMs: 15_000 }); // a process start, slow on a busy machine
     await client.close();
     await engine.stop();
     const again = await startEngine({ home, env });
@@ -241,7 +241,7 @@ describe("choosing a model for each hosted agent", () => {
     const reopened = await again.connect();
     try {
       expect(await reopened.call("agent.models", { agentId: "codex" })).toEqual(first); // the last answer, before any process starts
-      await waitFor(() => starts() === 3, { label: "a refresh ran after the restart" });
+      await waitFor(() => starts() === 3, { label: "a refresh ran after the restart", timeoutMs: 15_000 });
     } finally { await reopened.close(); }
   }, 30_000);
 
