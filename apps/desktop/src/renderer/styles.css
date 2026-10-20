@@ -665,6 +665,8 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .mention-name { font-family: var(--mono); font-weight: 500; }
 .mention-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-hint { padding: 4px 8px 2px; color: var(--muted); font-size: 11px; }
+.mention-section { padding: 6px 8px 1px; color: var(--muted); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+.mention-section:first-child { padding-top: 2px; }
 .composer { position: relative; }
 
 /* Plans: a goal, its tasks in order, and who answers each (§6.6). */

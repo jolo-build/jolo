@@ -1,6 +1,6 @@
 import { typingModelMention, completeModelMention, modelMentionChoices, modelMentions, loadModelMentionCatalog } from '@jolo/protocol/model-mentions';
-import { modelLabel } from '../model-options.js';
-import { useEffect, useRef, useState } from 'react';
+import { typingMention, completeMention, mentionChoices, mentionHint, workspaceFileAttachment, workspaceFolderAttachment, projectPointerAttachment, FILE_ROWS } from '../mention-picker.js';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { engineCall } from '../engine-context.jsx';
 import { Icon } from './icon.jsx';
@@ -138,20 +138,7 @@ function UsageButton({ tabs, currentId, running, onCompact = null }) {
     </div>, document.body)}
   </span>;
 }
-/** The agents a message can call in by name, matching what has been typed after "@" (§6.5). */
-function mentionable(agents, typed, answerer) {
-  const options = [{ id: "jolo", name: "Jolo", detail: "Jolo's own loop" }, ...agents.filter((entry) => entry.available && entry.transport !== "pty").map((entry) => ({ id: entry.id, name: entry.displayName, detail: modelLabel(entry.model) }))];
-  const query = typed.toLowerCase();
-  return options.filter((option) => option.id !== (answerer ?? "jolo") && (option.id.startsWith(query) || option.name.toLowerCase().startsWith(query))).slice(0, 6);
-}
-
-/** The "@name" being typed at the caret, or null. Only at the start of the message: that is where it routes. */
-function typingMention(value, caret) {
-  const match = /^\s*@([a-z0-9._-]*)$/i.exec(value.slice(0, caret));
-  return match ? match[1] : null;
-}
-
-export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, offline = false, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, offline = false, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [], workspace = null, projects = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -213,6 +200,23 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       if (mounted.current) setReadingImages(pendingPastes.current > 0);
     });
   };
+  /** One attachment produced on demand, through the same queue, counters and limits as a paste. */
+  const queueAttachment = produce => {
+    lastQueued.current = null;
+    pendingPastes.current++;
+    setReadingImages(true);
+    setAttachmentError('');
+    pasteQueue.current = pasteQueue.current.then(async () => {
+      const attachment = await produce();
+      if (!mounted.current || attachmentsRef.current.some(item => item.name === attachment.name && item.mimeType === attachment.mimeType)) return;
+      const text = attachment.mimeType === 'text/plain';
+      if (attachmentsRef.current.filter(item => (item.mimeType === 'text/plain') === text && !item.mimeType.startsWith('image/')).length >= (text ? LIMITS.textAttachments : LIMITS.fileAttachments)) throw new Error('Attach up to 4 text files and 4 other files per message.');
+      updateAttachments([...attachmentsRef.current, attachment]);
+    }).catch(error => { if (mounted.current) setAttachmentError(error.message); }).finally(() => {
+      pendingPastes.current--;
+      if (mounted.current) setReadingImages(pendingPastes.current > 0);
+    });
+  };
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [listAt, setListAt] = useState(null);
@@ -228,7 +232,20 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       .catch(error => { if (current) setModelError(error.message); });
     return () => { current = false; };
   }, [mentioningModel]);
-  const typed = disabled ? null : typingMention(text, caret);
+  const mention = disabled ? null : typingMention(text, caret);
+  const mentionQuery = mention ? mention.query : null;
+  const [fileResults, setFileResults] = useState({ query: null, entries: [] });
+  useEffect(() => {
+    if (mentionQuery === null || !workspace) { setFileResults({ query: null, entries: [] }); return; }
+    let current = true;
+    // The last answer stays up while the next one is on its way, so the list does not blink between keystrokes.
+    const timer = setTimeout(() => {
+      engineCall('workspace.files', { workspaceId: workspace.id, query: mentionQuery, limit: FILE_ROWS }).then(({ entries }) => {
+        if (current) setFileResults({ query: mentionQuery, entries });
+      }).catch(() => { if (current) setFileResults({ query: mentionQuery, entries: [] }); });
+    }, 120);
+    return () => { current = false; clearTimeout(timer); };
+  }, [mentionQuery, workspace?.id]);
   const taskMatch = !disabled && /(?:^|[\s(\[])#([A-Z][A-Z0-9]{0,23}(?:-[0-9]{0,15})?|)$/i.exec(text.slice(0, caret));
   const taskQuery = taskMatch ? taskMatch[1].toUpperCase() : null;
   const [taskResults, setTaskResults] = useState({ query: null, tasks: [], error: '' });
@@ -242,8 +259,10 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [taskQuery]);
-  const choices = modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
+  const choices = modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : mentionChoices({ mention, agents, answererId, entries: fileResults.entries, projects });
   const picking = choices.length > 0;
+  const active = highlight < choices.length ? highlight : 0; // the list may have shrunk under the highlight
+  const sectioned = new Set(choices.map(option => option.section).filter(Boolean)).size > 1; // one kind of row needs no heading
   useEffect(() => { document.querySelector('.mention-list .selected')?.scrollIntoView({ block: 'nearest' }); }, [highlight]);
   // The compose area hides what overflows it, so the list is placed against the window instead of the form.
   useEffect(() => {
@@ -267,10 +286,15 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + insert.length, start + insert.length); });
       return;
     }
-    const next = text.replace(/^\s*@[a-z0-9._-]*/i, `@${option.id}`);
-    setText(next.endsWith(" ") ? next : `${next} `);
-    setCaret(0);
-    input.current?.focus();
+    const next = completeMention(text, caret, mention, option.token);
+    setText(next.value); setCaret(0);
+    // A select event React raises during this same key press can carry the old caret; once the caret is
+    // placed after the completed token, the state says so too, so the picker does not reopen on it.
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(next.cursor, next.cursor); setCaret(next.cursor); });
+    // The path or name is in the message; what it points at travels as an attachment, the way a dropped file does.
+    if (option.kind === 'file') queueAttachment(() => workspaceFileAttachment(engineCall, workspace.id, option.path));
+    else if (option.kind === 'folder') queueAttachment(() => workspaceFolderAttachment(engineCall, workspace, option.path));
+    else if (option.kind === 'project') queueAttachment(() => projectPointerAttachment(engineCall, option));
   };
   useEffect(() => {
     if (!autoFocusOnType || disabled) return;
@@ -329,13 +353,16 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     </div>)}</div>}
     {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
-    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
-      {choices.map((option, index) => <li key={option.id}>
-        <button type="button" role="option" aria-selected={index === highlight} className={index === highlight ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-          <span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.id}</span><span className="mention-detail">{option.modelMention ? "" : option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
-        </button>
-      </li>)}
-      <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
+    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Mention an agent, file, folder, or project"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
+      {choices.map((option, index) => <Fragment key={option.id}>
+        {sectioned && option.section && choices[index - 1]?.section !== option.section && <li className="mention-section" role="presentation">{option.section}</li>}
+        <li>
+          <button type="button" role="option" aria-selected={index === active} className={index === active ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
+            <span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.token}</span><span className="mention-detail">{option.modelMention ? "" : option.task ? option.name : option.label}{option.detail ? ` · ${option.detail}` : ""}</span>
+          </button>
+        </li>
+      </Fragment>)}
+      <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : mentionHint(choices[active], answererName)}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
     <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={offline ? 'Connecting…' : disabled ? 'Open a folder to start…' : running ? 'Queue a message…' : standalone ? 'Ask anything…' : `Ask ${answererName}…`} disabled={disabled}
@@ -345,8 +372,8 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
       onBlur={() => { setCaret(0); lastQueued.current = null; }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing) return;
-        if (picking && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setHighlight((current) => (current + (e.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length); return; }
-        if (picking && (e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) { e.preventDefault(); choose(choices[highlight]); return; }
+        if (picking && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setHighlight((active + (e.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length); return; }
+        if (picking && (e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) { e.preventDefault(); choose(choices[active]); return; }
         if (picking && e.key === 'Escape') { e.preventDefault(); setCaret(0); return; }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
           e.preventDefault();

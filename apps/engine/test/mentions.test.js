@@ -19,6 +19,14 @@ describe("calling an agent into a conversation by name", () => {
     expect(mentionOf("")).toBeNull();
   });
 
+  test("a path from the file picker is never an agent, even when its first folder is named like one", () => {
+    expect(mentionOf("@codex/notes.md look at this")).toBeNull();
+    expect(mentionOf("@src/app.js")).toBeNull();
+    expect(withoutMention("@codex/notes.md look at this")).toBe("@codex/notes.md look at this");
+    expect(routeFor({ prompt: "@codex/notes.md look", catalog, sessionAgentId: "claude" })).toBeNull();
+    expect(mentionOf("@codex notes.md")).toBe("codex"); // a space after the name still calls the agent
+  });
+
   test("the mention is addressed to Jolo, so the agent is asked only for what follows", () => {
     expect(withoutMention("@codex review the last change")).toBe("review the last change");
     expect(withoutMention("@codex\nreview this")).toBe("\nreview this");
