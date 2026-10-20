@@ -243,9 +243,6 @@ strong { font-weight: 550; }
 .with-context .body { grid-template-columns: var(--sidebar-width) minmax(320px, 1fr) minmax(320px, .95fr); }
 .sidebar { grid-column: 1; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 0; padding: 10px; min-height: 0; min-width: 0; border-right: 1px solid var(--border); }
 .new-task-row { display: flex; gap: 5px; }
-.new-task { flex: 0 1 auto; min-width: 0; height: 28px; justify-content: flex-start; gap: 6px; background: var(--bg); border: 0; padding: 4px 8px; font-size: 12px; line-height: 18px; white-space: nowrap; }
-.new-task-alt { flex: none; width: 28px; height: 28px; background: var(--bg); border: 0; padding: 0; color: var(--muted); }
-.new-task-alt:hover { color: var(--text); }
 .branch-tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--hover); color: var(--muted); font: 10px/1.6 var(--mono); vertical-align: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eyebrow .branch-tag { font-size: 11px; margin-left: 0; }
 .check-label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
@@ -261,7 +258,7 @@ strong { font-weight: 550; }
 .sidebar-workspace-heading { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 .sidebar-workspace-heading:hover, .sidebar-workspace-heading:has(:focus-visible) { background: var(--hover); }
 .sidebar-workspace-heading > button { background: transparent; }
-.sidebar .sidebar-workspace-toggle { flex: 1; min-width: 0; padding-right: 32px; text-align: left; justify-content: flex-start; }
+.sidebar .sidebar-workspace-toggle { flex: 1; min-width: 0; padding-right: 58px; text-align: left; justify-content: flex-start; }
 .sidebar-workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-workspace-heading.current .sidebar-workspace-name { font-weight: 500; }
 .workspace-folder { display: inline-flex; flex: none; color: var(--muted); }
@@ -270,14 +267,13 @@ strong { font-weight: 550; }
 .sidebar-workspace-toggle[aria-expanded="true"] .workspace-disclosure { transform: rotate(90deg); }
 .sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .workspace-disclosure { opacity: 1; }
 .sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .workspace-folder > .icon:first-child { opacity: 0; }
-.sidebar-workspace-new, .task-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 5px; color: var(--muted); opacity: 0; }
-.sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .sidebar-workspace-new,
+.sidebar-workspace-new, .sidebar-workspace-worktree, .task-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 5px; color: var(--muted); opacity: 0; }
+.sidebar-workspace-worktree { right: 30px; }
+.sidebar-workspace-heading:is(:hover, :has(:focus-visible)) :is(.sidebar-workspace-new, .sidebar-workspace-worktree),
 .sidebar-chat-row:is(:hover, :has(:focus-visible)) .task-more { opacity: 1; }
-.sidebar-workspace-new:hover, .task-more:hover { color: var(--text); background: var(--field-focus); }
+.sidebar-workspace-new:hover, .sidebar-workspace-worktree:hover, .task-more:hover { color: var(--text); background: var(--field-focus); }
 .new-task-row { margin-bottom: 20px; }
 .new-chat { flex: 1; min-width: 0; justify-content: flex-start; border-radius: 6px; white-space: nowrap; }
-.sidebar .new-task, .sidebar .new-task-alt { align-self: center; width: 24px; height: 26px; padding: 4px; background: transparent; color: var(--muted); opacity: 0; }
-.new-task-row:is(:hover, :focus-within) :is(.new-task, .new-task-alt) { opacity: 1; }
 .sidebar-chat-row { position: relative; min-width: 0; margin-bottom: 1px; border-radius: 6px; }
 .sidebar-chat-row:hover, .sidebar-chat-row:has(:focus-visible) { background: var(--hover); }
 .sidebar-chat-row.selected { background: var(--hover); }
@@ -626,7 +622,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .sidebar .task-tabs #archived-tasks-tab { width: 24px; height: 24px; padding: 4px; border-radius: 5px; }
 .sidebar .task-tabs #archived-tasks-tab.selected { color: var(--text); background: var(--hover); }
 @media (hover: hover) { .sidebar:not(:hover) .task-tabs:not(:focus-within) #archived-tasks-tab:not(.selected) { opacity: 0; } }
-@media (hover: none) { .sidebar :is(.task-more, .sidebar-workspace-new, .new-task, .new-task-alt) { opacity: 1; } }
+@media (hover: none) { .sidebar :is(.task-more, .sidebar-workspace-new, .sidebar-workspace-worktree) { opacity: 1; } }
 
 .task-scope-menu select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: default; }
 .task-where { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; font-size: 11px; }

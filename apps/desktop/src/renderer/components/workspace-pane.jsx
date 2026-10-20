@@ -393,7 +393,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       </header>, hosts.header)}
       {active && hosts.sidebar && createPortal(<Sidebar project={project} sessions={sessions} sessionId={sessionId} workspaceId={workspaceId} lastRun={lastRun} board={state.board} call={state.call}
         onOpenTask={row => reportError(() => state.openFromBoard(row))} onOpenFolder={openFolder} agentName={agentName}
-        onNewChat={newChat} onNewSession={() => reportError(() => state.newSession())} onNewWorktree={() => setWorktreeDialog(true)}
+        onNewChat={newChat} onNewSession={() => reportError(() => state.newSession())} onNewWorktree={row => reportError(async () => { if (row && project?.projectId !== row.projectId) await state.openProject(row.rootPath, { sessionId: null }); setWorktreeDialog(true); })}
         onNewWorkspaceTask={row => reportError(() => state.newFromBoard(row))} onSettings={() => setShowSettings(true)} onTaskMenu={taskMenu} onError={state.setError} historyState={state.historyState} onHistory={view => reportError(() => state.setHistory(view))} />, hosts.sidebar)}
       {/* Name each task once: in the window bar for one pane, or in its own bar when split. */}
       {multi && <div className="pane-heading">
