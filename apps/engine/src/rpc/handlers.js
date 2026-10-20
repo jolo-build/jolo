@@ -13,6 +13,7 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
+import { searchWorkspaceFiles, listWorkspaceFolder } from '../search/files.js';
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
@@ -405,6 +406,21 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       } finally {
         closeSync(fd);
       }
+    },
+    // The composer's "@" picker. A typed fragment ranks the workspace's non-ignored files and folders;
+    // a folder path lists that folder's top level, which a message carries so the agent knows where to look.
+    "workspace.files": async ({ workspaceId, query, path: folder, limit }, conn) => {
+      requireInteractive(conn, "file pickers are for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId });
+      if (folder !== undefined) return listWorkspaceFolder({ root: workspace.path, folder, limit });
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      const timer = setTimeout(cancel, 10_000);
+      conn.closeHooks.add(cancel);
+      try { return await searchWorkspaceFiles({ root: workspace.path, env: toolEnv, signal: controller.signal, query, limit }); }
+      finally { clearTimeout(timer); conn.closeHooks.delete(cancel); }
     },
     "workspace.changes": ({ workspaceId }) => {
       const workspace = storage.getWorkspace(workspaceId);

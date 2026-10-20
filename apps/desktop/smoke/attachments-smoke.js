@@ -152,4 +152,38 @@ export async function runAttachmentsSmoke({ window, bridge, evaluate, waitFor, r
   } finally { shell.openPath = originalOpen; }
   report.checks.push('file reference opening reaches the registered native handler and opens the resolved PDF');
 
+  // "@" brings a project file into the message: the picker offers the folder and the file, Enter completes the
+  // path and attaches the file, and the sent message shows it as a file card.
+  await evaluate("window.__joloSmoke.newTask()");
+  await evaluate("window.__joloSmoke.pickAnswerer('claude')");
+  await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", 'file mention answerer');
+  const typeMention = text => evaluate(`(() => {
+    const input = document.querySelector('.composer textarea');
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(text)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  const offered = "[...document.querySelectorAll('.mention-list .mention-name')].map(node => node.textContent)";
+  await typeMention('@src');
+  await waitFor(`${offered}.includes('@src/') && ${offered}.includes('@src/app.js')`, 'picker offers the project folder and its file');
+  await typeMention('@app');
+  await waitFor(`${offered}[0] === '@src/app.js'`, 'picker ranks the matching file first');
+  await evaluate("document.querySelector('.composer textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))");
+  try { await waitFor("document.querySelector('.composer textarea').value === '@src/app.js ' && !document.querySelector('.mention-list')", 'Enter completes the path and closes the picker'); }
+  catch (error) {
+    writeFileSync(path.join(results, 'file-mention-failure.png'), (await window.webContents.capturePage()).toPNG());
+    throw new Error(`${error.message}; composer=${await evaluate("JSON.stringify({ value: document.querySelector('.composer textarea').value, list: [...document.querySelectorAll('.mention-list li')].map(node => node.textContent), notes: [...document.querySelectorAll('.attachment-note')].map(node => node.textContent), attachments: document.querySelectorAll('.composer-attachment').length, active: document.activeElement?.tagName })")}`);
+  }
+  await waitFor("document.querySelector('.composer-attachment.text-file .text-attachment-card')?.textContent.includes('src/app.js') && !document.querySelector('.attachment-note[role=status]')", 'the picked file is attached to the draft');
+  // Earlier checks may have rewritten the fixture file, so the preview is held to what is on disk now.
+  const appSource = (await bridge.rawCall('workspace.readFile', { workspaceId: await evaluate('window.__joloSmoke.state().workspaceId'), path: 'src/app.js' })).text;
+  await evaluate("document.querySelector('.composer-attachment .text-attachment-card').click()");
+  await waitFor(`document.querySelector('.text-attachment-preview pre')?.textContent === ${JSON.stringify(appSource)}`, 'the attached file previews its contents');
+  await evaluate("document.querySelector('[aria-label=\"Close text preview\"]').click()");
+  await evaluate("document.querySelector('.composer button[type=submit]').click()");
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && document.querySelector('.message.user .text-attachment-card')?.textContent.includes('src/app.js')", 'the sent message shows the file card');
+  if (!(await evaluate("document.querySelector('.message.user').textContent.includes('@src/app.js') && !document.querySelector('.composer-attachment')"))) throw new Error('the sent message lost its path or the draft kept the attachment');
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  writeFileSync(path.join(results, 'file-mention-sent.png'), (await window.webContents.capturePage()).toPNG());
+  report.checks.push('typing "@" offers the project’s folders and files, Enter completes the path and attaches the file, and the sent message shows it as a file card');
 }

@@ -12,16 +12,23 @@ export const SELF_MENTION = "jolo";
 
 const MENTION = /^\s*@([a-z0-9][a-z0-9._-]{0,63})\b[ \t]*/i;
 
+/** "@src/app.js" opens a message with a file from the composer's picker, not with an agent: a slash right after the name says so. */
+function mentionMatch(text) {
+  const match = MENTION.exec(text);
+  return match && text[match[0].trimEnd().length] !== "/" ? match : null;
+}
+
 /** The name a message opens with, or null. Says nothing about whether such an agent exists. */
 export function mentionOf(prompt) {
-  const match = MENTION.exec(String(prompt ?? ""));
+  const match = mentionMatch(String(prompt ?? ""));
   return match ? match[1].toLowerCase() : null;
 }
 
 /** The message without its opening mention: what the agent is actually asked. */
 export function withoutMention(prompt) {
   const text = String(prompt ?? "");
-  const rest = text.replace(MENTION, "");
+  const match = mentionMatch(text);
+  const rest = match ? text.slice(match[0].length) : text;
   return rest.trim() ? rest : text;
 }
 
