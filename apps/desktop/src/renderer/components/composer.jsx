@@ -93,8 +93,8 @@ function UsageButton({ tabs, currentId, running, onCompact = null }) {
   const current = tabs.find(tab => tab.id === currentId) ?? tabs[0];
   const shown = tabs.find(tab => tab.id === chosenTab) ?? current;
   const ring = fillOf(current?.usage);
-  // Color is kept for a context that is nearly full; below 60% the ring shows only on hover or focus.
-  const level = ring !== null && ring >= 0.9 ? ' full' : ring === null || ring < 0.6 ? ' quiet' : '';
+  // The ring is always there, quiet; color is kept for a context that is nearly full.
+  const level = ring !== null && ring >= 0.9 ? ' full' : '';
   const title = ring !== null ? `Context ${Math.round(ring * 100)}% full · click for usage` : 'Usage · this agent does not report how full its context is';
   /** One agent's page: how full its window is, what it cost here, and how much of its plan is left. */
   const pageOf = (tab) => {
