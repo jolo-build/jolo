@@ -911,10 +911,11 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .explorer-filter > button { flex: none; padding: 4px; color: var(--muted); border-radius: 5px; }
 .explorer-filter > button:hover { color: var(--text); }
 .explorer-tree ul { list-style: none; margin: 0; padding: 0; }
+.explorer-root { padding-inline: 4px; } /* room for the rows' rounded corners, as the sidebar gives its chats */
 /* One hairline per open folder, under its chevron and down through everything inside it; the tree sets --guide per depth. */
 .explorer-tree ul ul { position: relative; }
 .explorer-tree ul ul::before { content: ""; position: absolute; top: 0; bottom: 0; left: var(--guide); border-left: 1px solid var(--border); pointer-events: none; }
-.explorer-row { display: flex; align-items: center; justify-content: flex-start; gap: 7px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 0; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
+.explorer-row { display: flex; align-items: center; justify-content: flex-start; gap: 7px; width: 100%; min-height: 26px; padding-right: 10px; border-radius: 6px; font-size: 12px; text-align: left; white-space: nowrap; color: var(--text); }
 .explorer-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .explorer-row > small { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
 .explorer-row:hover, .explorer-row[aria-current=true] { background: var(--hover); }
