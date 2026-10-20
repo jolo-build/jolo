@@ -8,6 +8,7 @@ import { ModelControls } from "./model-controls.jsx";
 import { Composer } from "./composer.jsx";
 import { BrowserPane } from "./browser-pane.jsx";
 import { ContextSplit } from './context-split.jsx';
+import { FindBar } from './find-bar.jsx';
 import { FilePreview } from './file-preview.jsx';
 import { FileTree } from './file-tree.jsx';
 import { FilePreviewContext } from '../file-preview-context.js';
@@ -67,9 +68,11 @@ const TerminalPane = lazy(() => import("./terminal-pane.jsx").then(module => ({ 
  *   onZoom: (paneId: string) => void,
  *   register: (paneId: string, controller: any) => void,
  *   onBrowserOpen: (paneId: string) => void,
+ *   finding?: boolean,
+ *   onFindClose?: () => void,
  * }} WorkspacePaneProps
  */
-export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePaneProps} */ { pane, active, visible, multi, zoomed, canSplit, hosts, settingsOpen, onSettingsChange, onFocus, onSplit, onClose, onZoom, register, onBrowserOpen }) {
+export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePaneProps} */ { pane, active, visible, multi, zoomed, canSplit, hosts, settingsOpen, onSettingsChange, onFocus, onSplit, onClose, onZoom, register, onBrowserOpen, finding, onFindClose }) {
   const root = useRef(null);
   const [watchChanges, setWatchChanges] = useState(false);
   const previewSession = useRef(null);
@@ -444,6 +447,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       </div>}
       <ContextSplit enabled={Boolean(context)}>
         <main className="main" aria-label="Conversation">
+          <FindBar open={Boolean(finding)} onClose={() => onFindClose?.()} />
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {pane.id === 'pane-1' && onboarding === 'active' && !sessionId ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : <>
           {(branch || family.children.length > 0 || family.parent) && <TaskHeader branch={branch} branchPath={workspace?.path}

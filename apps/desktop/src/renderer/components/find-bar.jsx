@@ -4,13 +4,14 @@ import { Icon } from './icon.jsx';
 const ALL = 'jolo-find', ACTIVE = 'jolo-find-active', MAX_MATCHES = 500;
 const highlights = () => /** @type {any} */ (globalThis).CSS?.highlights ?? null;
 
-/** Every visible run of text on the page that contains the query, as ranges, in page order. */
-function collect(query) {
+/** Every visible run of text under the root that contains the query, as ranges, in page order. */
+function collect(query, root) {
+  if (!root) return [];
   const needle = query.toLowerCase();
   const ranges = [];
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, { acceptNode: node => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: node => {
     const element = node.parentElement;
-    if (!element || !node.nodeValue?.trim() || element.closest('.find-bar, script, style, textarea, [hidden]')) return NodeFilter.FILTER_REJECT;
+    if (!element || !node.nodeValue?.trim() || element.closest('script, style, textarea, [hidden]')) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   } });
   for (let node = walker.nextNode(); node && ranges.length < MAX_MATCHES; node = walker.nextNode()) {
@@ -25,9 +26,9 @@ function collect(query) {
 }
 
 /**
- * Find on the page: Cmd/Ctrl+F opens it, Enter and Shift+Enter step through the matches, Esc closes it. Matching
- * happens in the page itself and the marks are highlights, so the chat, the sidebar and any open panel are covered
- * without the page changing underneath.
+ * Find in the chat: Cmd/Ctrl+F opens it over the conversation, Enter and Shift+Enter step through the matches, Esc
+ * closes it. It sits inside the chat column and only the transcript beside it is matched; the sidebar and the panels
+ * are left alone. Matching happens in the page itself and the marks are highlights, so nothing changes underneath.
  * @param {{ open: boolean, onClose: () => void }} props
  */
 export function FindBar({ open, onClose }) {
@@ -35,6 +36,7 @@ export function FindBar({ open, onClose }) {
   const [query, setQuery] = useState('');
   const [found, setFound] = useState({ total: 0, active: 0 });
   const ranges = useRef(/** @type {Range[]} */ ([]));
+  const chat = () => input.current?.closest('.main')?.querySelector('.conversation') ?? null;
   const show = (list, active) => {
     ranges.current = list;
     const api = highlights(), Mark = /** @type {any} */ (globalThis).Highlight;
@@ -44,22 +46,25 @@ export function FindBar({ open, onClose }) {
   };
   const clear = () => { ranges.current = []; highlights()?.delete(ALL); highlights()?.delete(ACTIVE); setFound({ total: 0, active: 0 }); };
   const step = (direction) => { const list = ranges.current; if (!list.length) return; show(list, (found.active + direction + list.length) % list.length); };
+  // Focus and select once per opening only: selecting on every keystroke would replace each typed letter with the next.
+  useEffect(() => { if (open) { input.current?.focus(); input.current?.select(); } }, [open]);
+  useEffect(() => () => { highlights()?.delete(ALL); highlights()?.delete(ACTIVE); }, []); // a closed pane takes its marks with it
   useEffect(() => {
-    if (!open) { clear(); return; }
-    input.current?.focus(); input.current?.select();
-    if (!query.trim()) { clear(); return; }
-    show(collect(query.trim()), 0);
-    // The page keeps changing while a reply streams in, so the marks follow it, a little behind.
+    if (!open || !query.trim()) { clear(); return; }
+    const root = chat();
+    show(collect(query.trim(), root), 0);
+    if (!root) return;
+    // The chat keeps changing while a reply streams in, so the marks follow it, a little behind.
     let timer = null;
-    const observer = new MutationObserver(() => { if (timer) return; timer = setTimeout(() => { timer = null; const list = collect(query.trim()); show(list, Math.min(found.active, Math.max(0, list.length - 1))); }, 300); });
-    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    const observer = new MutationObserver(() => { if (timer) return; timer = setTimeout(() => { timer = null; const list = collect(query.trim(), root); show(list, Math.min(found.active, Math.max(0, list.length - 1))); }, 300); });
+    observer.observe(root, { childList: true, characterData: true, subtree: true });
     return () => { observer.disconnect(); if (timer) clearTimeout(timer); };
   }, [open, query]);
   if (!open) return null;
   const count = query.trim() ? (found.total ? `${found.active + 1}/${found.total}` : '0/0') : '';
-  return <div className="find-bar" role="search" aria-label="Find in page">
+  return <div className="find-bar" role="search" aria-label="Find in chat">
     <div className="find-field">
-      <input ref={input} type="text" value={query} placeholder="Find in page" spellCheck={false} aria-label="Find in page" onChange={event => setQuery(event.target.value)}
+      <input ref={input} type="text" value={query} placeholder="Find in chat" spellCheck={false} aria-label="Find in chat" onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); step(event.shiftKey ? -1 : 1); } else if (event.key === 'Escape') { event.preventDefault(); onClose(); } }} />
       <span className={`find-count${query.trim() && !found.total ? ' none' : ''}`} aria-live="polite">{count}</span>
     </div>

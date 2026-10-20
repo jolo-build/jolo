@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Notices } from "./components/notices.jsx";
-import { FindBar } from "./components/find-bar.jsx";
 import { EngineProvider } from "./engine-context.jsx";
 import { WorkspacePane } from "./components/workspace-pane.jsx";
 import { initialLayout, MAX_PANES, paneRects, paneReducer } from "./pane-layout.js";
@@ -85,6 +84,7 @@ function DesktopWorkspace() {
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const width = sidebarWidth(sidebarState.width, viewport);
   const [finding, setFinding] = useState(false);
+  const closeFind = useCallback(() => setFinding(false), []);
   const toggleSidebar = useCallback(() => setSidebarState(value => ({ ...value, collapsed: !value.collapsed })), []);
   const resizeSidebar = value => setSidebarState(state => ({ ...state, width: sidebarWidth(value, viewport) }));
   const hosts = useMemo(() => ({ header, sidebar, settings, sidebarCollapsed: sidebarHidden, toggleSidebar }), [header, sidebar, settings, sidebarHidden, toggleSidebar]);
@@ -191,7 +191,7 @@ function DesktopWorkspace() {
           return <section key={pane.id} className={`pane-slot${layout.active === pane.id ? " focused" : ""}${layout.panes.length > 1 ? " compact-pane" : ""}`} data-pane-id={pane.id} aria-label={`Workspace pane ${pane.id.slice(5)}`} hidden={hidden}
             style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
             onPointerDownCapture={() => dispatch({ type: "focus", id: pane.id })} onFocusCapture={() => dispatch({ type: "focus", id: pane.id })}>
-            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onFocus={focusPane} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} />
+            <WorkspacePane pane={pane} active={layout.active === pane.id} visible={!hidden && !settingsOwner} multi={layout.panes.length > 1} zoomed={layout.zoom === pane.id} canSplit={layout.panes.length < MAX_PANES} hosts={hosts} settingsOpen={settingsOwner === pane.id} onSettingsChange={setSettingsOwner} onFocus={focusPane} onSplit={split} onClose={close} onZoom={zoom} register={register} onBrowserOpen={onBrowserOpen} finding={finding && layout.active === pane.id} onFindClose={closeFind} />
             {draggedTask && !hidden && !settingsOwner && <div className="task-split-target"
               onDragOver={event => {
                 if (!acceptsTaskDrop(event)) return;
@@ -218,7 +218,6 @@ function DesktopWorkspace() {
       <div className="workspace-settings" ref={setSettings} hidden={!settingsOwner} />
     </div>
     <Notices />
-    <FindBar open={finding} onClose={() => setFinding(false)} />
   </div></TaskDragContext.Provider>;
 }
 
