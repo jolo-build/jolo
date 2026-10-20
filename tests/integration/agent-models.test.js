@@ -151,6 +151,33 @@ describe("choosing a model for each hosted agent", () => {
     expect((await ask("codex", "req_codex_again", "model?")).reply).toBe("Running fake-small at high.");
   }, 60_000);
 
+  test("a chat chooses its own model and effort; other chats of that agent keep its setting", async () => {
+    const { client, events, project } = await boot();
+    try {
+      await client.call("settings.update", { agents: { codex: { model: "fake-large", effort: "high" } } });
+      const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "own", agentId: "codex" });
+      const chosen = (await client.call("session.setAgentModel", { sessionId: session.id, model: "fake-small", effort: "low", expectedRevision: session.revision })).session;
+      expect(chosen.agentModel).toEqual({ model: "fake-small", effort: "low" });
+      const reply = async (sessionId, requestId) => {
+        const { run } = await client.call("run.start", { sessionId, requestId, prompt: "model?" });
+        await waitFor(() => events.some((e) => e.type === "run.state" && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: `${requestId} finished`, timeoutMs: 20_000 });
+        const snapshot = await client.call("run.snapshot", { runId: run.id });
+        const last = snapshot.messages.filter((message) => message.role === "assistant" && message.kind === "text").at(-1);
+        return (await client.call("artifact.read", { artifactId: last.artifactId })).text;
+      };
+      expect(await reply(session.id, "req_own")).toBe("Running fake-small at low.");
+      const { session: other } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "other", agentId: "codex" });
+      expect(await reply(other.id, "req_other")).toBe("Running fake-large at high.");
+      // Clearing the choice returns the chat to the agent's setting; a Jolo-answered task has no agent to choose for.
+      const latest = (await client.call("session.page", { sessionId: session.id, limit: 1 })).session; // runs moved the revision on
+      const cleared = (await client.call("session.setAgentModel", { sessionId: session.id, model: null, effort: null, expectedRevision: latest.revision })).session;
+      expect(cleared.agentModel).toBeNull();
+      expect(await reply(session.id, "req_cleared")).toBe("Running fake-large at high.");
+      const { session: jolo } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "jolo" });
+      await expect(client.call("session.setAgentModel", { sessionId: jolo.id, model: "fake-small", effort: null, expectedRevision: jolo.revision })).rejects.toMatchObject({ code: "invalid_params" });
+    } finally { await client.close(); }
+  }, 60_000);
+
   test("agents report the models they can run, and Jolo keeps no list of its own", async () => {
     const { client } = await boot();
     const claude = await client.call("agent.models", { agentId: "claude" });

@@ -128,8 +128,15 @@ export const RunSchema = z.object({
   updatedAt: IsoTimestamp,
 });
 
+/** A task's own choice of model and effort for the hosted agent that answers it; null fields follow the agent's setting. */
+export const SessionAgentModelSchema = z.object({
+  model: z.string().min(1).max(200).nullable().default(null),
+  effort: z.string().min(1).max(40).nullable().default(null),
+});
+
 export const SessionSchema = z.object({
   model: ModelRefSchema.nullable().default(null),
+  agentModel: SessionAgentModelSchema.nullable().default(null),
   id: Id,
   projectId: Id,
   workspaceId: Id,
@@ -661,6 +668,10 @@ export const MethodSchemas = {
   },
   "session.setAgent": {
     params: z.object({ sessionId: Id, agentId: Id.nullable(), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
+  "session.setAgentModel": {
+    params: z.object({ sessionId: Id, model: z.string().min(1).max(200).nullable(), effort: z.string().min(1).max(40).nullable(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
   "session.archive": {

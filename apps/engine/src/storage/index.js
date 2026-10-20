@@ -368,6 +368,12 @@ export class Storage {
     return this.getSession(id);
   }
 
+  /** The model and effort this task's own agent runs with here; null follows the agent's setting. */
+  setSessionAgentModel(id, choice) {
+    this.db.query("UPDATE sessions SET agent_model = ?2, revision = revision + 1 WHERE id = ?1").run(id, choice ? JSON.stringify(choice) : null);
+    return this.getSession(id);
+  }
+
   /** Name an empty task from its first prompt without changing its activity order. */
   assignSessionTitle(id, prompt) {
     const title = Array.from(prompt.replace(/\s+/g, ' ').trim()).slice(0, 80).join('');

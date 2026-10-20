@@ -219,6 +219,15 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
       return { session: updated };
     }),
+    "session.setAgentModel": ({ sessionId, model, effort, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError("not_found", "task no longer exists");
+      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+      if (!session.agentId) throw new ProtocolError("invalid_params", "Jolo answers this task; choose its model with session.setModel");
+      const updated = storage.setSessionAgentModel(sessionId, model || effort ? { model: model ?? null, effort: effort ?? null } : null);
+      storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
+      return { session: updated };
+    }),
     "session.page": ({ sessionId, beforeOrdinal, limit }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
@@ -241,15 +250,24 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const existing = storage.findRunByRequest(params.sessionId, params.requestId);
       if (existing) return { run: existing, deduplicated: true };
       const selected = await delegations?.prepare(params.prompt) ?? [];
+      const session = storage.getSession(params.sessionId);
+      // A task's own choice of model and effort applies when its own agent answers, under anything named for this run.
+      const ownChoice = request => {
+        const choice = session?.agentId && session.agentModel && (request.execution?.agentId ?? session.agentId) === session.agentId && !request.execution?.preset && !request.execution?.pinned ? session.agentModel : null;
+        if (!choice) return request;
+        const execution = { ...(request.execution ?? {}) };
+        if (choice.model && !execution.model) execution.model = choice.model;
+        if (choice.effort && !execution.effort) execution.effort = choice.effort;
+        return { ...request, execution };
+      };
       const admit = request => storage.transaction(() => {
         delegations?.register(request.sessionId, selected);
-        return runs.start(request);
+        return runs.start(ownChoice(request));
       });
       const resolved = tasks ? await tasks.resolve(params.prompt) : { references: [], assertCurrent() {} };
       resolved.assertCurrent();
       params = { ...params, taskReferences: resolved.references };
       // "@codex …" at the start of a message calls that agent into this conversation for one turn (§6.5).
-      const session = storage.getSession(params.sessionId);
       const named = params.execution?.preset ? { agentId: SELF_MENTION } : params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
       if (!named) return admit(params);
       if (named.agentId !== SELF_MENTION) {

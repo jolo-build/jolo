@@ -17,6 +17,7 @@ import modelHarness from "./0012_model_harness.ts";
 import schedules from "./0013_schedules.ts";
 import delegations from "./0014_delegations.ts";
 import pinnedSessions from "./0015_pinned_sessions.ts";
+import sessionAgentModel from "./0016_session_agent_model.ts";
 
 export interface Migration {
   readonly version: number;
@@ -46,4 +47,5 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 13, name: "0013_schedules.sql", sql: schedules },
   { version: 14, name: "0014_delegations.sql", sql: delegations },
   { version: 15, name: "0015_pinned_sessions.sql", sql: pinnedSessions },
+  { version: 16, name: "0016_session_agent_model.sql", sql: sessionAgentModel },
 ]);
