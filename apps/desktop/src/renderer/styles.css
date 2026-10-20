@@ -262,7 +262,7 @@ strong { font-weight: 550; }
 .sidebar-workspace-heading { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 6px; }
 .sidebar-workspace-heading:hover, .sidebar-workspace-heading:has(:focus-visible) { background: var(--hover); }
 .sidebar-workspace-heading > button { background: transparent; }
-.sidebar .sidebar-workspace-toggle { flex: 1; min-width: 0; padding-right: 58px; text-align: left; justify-content: flex-start; }
+.sidebar .sidebar-workspace-toggle { flex: 1; min-width: 0; padding-right: 84px; text-align: left; justify-content: flex-start; }
 .sidebar-workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-workspace-heading.current .sidebar-workspace-name { font-weight: 500; }
 .workspace-folder { display: inline-flex; flex: none; color: var(--muted); }
@@ -271,11 +271,12 @@ strong { font-weight: 550; }
 .sidebar-workspace-toggle[aria-expanded="true"] .workspace-disclosure { transform: rotate(90deg); }
 .sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .workspace-disclosure { opacity: 1; }
 .sidebar-workspace-heading:is(:hover, :has(:focus-visible)) .workspace-folder > .icon:first-child { opacity: 0; }
-.sidebar-workspace-new, .sidebar-workspace-worktree, .task-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 5px; color: var(--muted); opacity: 0; }
+.sidebar-workspace-new, .sidebar-workspace-worktree, .sidebar-workspace-more, .task-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; padding: 5px; color: var(--muted); opacity: 0; }
 .sidebar-workspace-worktree { right: 30px; }
-.sidebar-workspace-heading:is(:hover, :has(:focus-visible)) :is(.sidebar-workspace-new, .sidebar-workspace-worktree),
+.sidebar-workspace-more { right: 56px; }
+.sidebar-workspace-heading:is(:hover, :has(:focus-visible)) :is(.sidebar-workspace-new, .sidebar-workspace-worktree, .sidebar-workspace-more),
 .sidebar-chat-row:is(:hover, :has(:focus-visible)) .task-more { opacity: 1; }
-.sidebar-workspace-new:hover, .sidebar-workspace-worktree:hover, .task-more:hover { color: var(--text); background: var(--field-focus); }
+.sidebar-workspace-new:hover, .sidebar-workspace-worktree:hover, .sidebar-workspace-more:hover, .task-more:hover { color: var(--text); background: var(--field-focus); }
 .new-task-row { margin-bottom: 20px; }
 .new-chat { flex: 1; min-width: 0; justify-content: flex-start; border-radius: 6px; white-space: nowrap; }
 .sidebar-chat-row { position: relative; min-width: 0; margin-bottom: 1px; border-radius: 6px; }
@@ -659,7 +660,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .sidebar .task-tabs #archived-tasks-tab { width: 24px; height: 24px; padding: 4px; border-radius: 5px; }
 .sidebar .task-tabs #archived-tasks-tab.selected { color: var(--text); background: var(--hover); }
 @media (hover: hover) { .sidebar:not(:hover) .task-tabs:not(:focus-within) #archived-tasks-tab:not(.selected) { opacity: 0; } }
-@media (hover: none) { .sidebar :is(.task-more, .sidebar-workspace-new, .sidebar-workspace-worktree) { opacity: 1; } }
+@media (hover: none) { .sidebar :is(.task-more, .sidebar-workspace-new, .sidebar-workspace-worktree, .sidebar-workspace-more) { opacity: 1; } }
 
 .task-scope-menu select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: default; }
 .task-where { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; font-size: 11px; }

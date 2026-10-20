@@ -54,6 +54,8 @@ const log = {
 const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "project.linkFolder", "chat.create", "session.create", "session.list", "session.page",
   "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel", "workspace.writeFile",
+  "engine.status", "project.open", "project.linkFolder", "project.remove", "chat.create", "session.create", "session.list", "session.page",
+  "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel",
   "delegation.models",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
@@ -241,6 +243,14 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
         { type: "separator" },
         { label: "Delete…", click: () => { action = "delete"; } },
       ])).popup({ window, callback: () => resolve(action) });
+    });
+  });
+  // A folder row's ⋯ menu. Its one entry forgets the folder in the sidebar; the folder itself is never touched.
+  ipcMain.handle("jolo:projectMenu", (event) => {
+    if (!trusted(event)) throw new Error("untrusted project menu request");
+    return new Promise((resolve) => {
+      let action = null;
+      Menu.buildFromTemplate([{ label: "Remove from sidebar…", click: () => { action = "remove"; } }]).popup({ window, callback: () => resolve(action) });
     });
   });
   // The composer's "who answers" picker: Jolo with its model, or a hosted agent that speaks a structured protocol.

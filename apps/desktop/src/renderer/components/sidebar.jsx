@@ -44,7 +44,7 @@ function PinnedTasks({ rows, revision, call, sessionId, onOpenTask, onMenu, agen
   </section>;
 }
 
-export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onError, historyState = 'open', onHistory }) {
+export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onProjectMenu, onError, historyState = 'open', onHistory }) {
   const [expanded, setExpanded] = useState(() => new Set(workspaceId ? [workspaceId] : []));
   const rows = useMemo(() => (board?.projects ?? []).filter(row => !row.standalone).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path)), [board]);
   const archived = historyState === 'archived';
@@ -79,11 +79,12 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
         const open = expanded.has(row.workspaceId);
         const working = !archived && (row.working ?? row.attention === 'running');
         return <div className="sidebar-workspace" key={row.workspaceId} data-workspace-id={row.workspaceId}>
-          <div className={`sidebar-workspace-heading${workspaceId === row.workspaceId ? ' current' : ''}`}>
+          <div className={`sidebar-workspace-heading${workspaceId === row.workspaceId ? ' current' : ''}`} onContextMenu={!archived ? event => { event.preventDefault(); onProjectMenu?.(row); } : undefined}>
             <button className="sidebar-workspace-toggle" onClick={() => toggle(row.workspaceId)} aria-expanded={open} aria-controls={open ? `sidebar-chats-${row.workspaceId}` : undefined} aria-label={`${open ? 'Hide' : 'Show'} tasks in ${name}`} title={`${row.workspace.path}${!archived && row.taskCount !== undefined ? ` · ${row.taskCount} tasks` : ''}`}>
               <span className={`workspace-folder${working ? ' working' : ''}`} role={working ? 'img' : undefined} aria-label={working ? 'Tasks working' : undefined}><Icon name="folder" size={16} /><Icon name="chevron" size={14} className="workspace-disclosure" /></span><span className="sidebar-workspace-name">{name}</span>
               {!archived && !open && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
             </button>
+            {!archived && <button className="sidebar-workspace-more" onClick={() => onProjectMenu?.(row)} aria-label={`Options for ${name}`} title={`Options for ${name}`}><Icon name="more" size={13} /></button>}
             {!archived && <button className="sidebar-workspace-worktree" onClick={() => onNewWorktree(row)} aria-label={`New worktree task in ${name}`} title={`New task in a worktree of ${name}`}><Icon name="branch" size={13} /></button>}
             {!archived && <button className="sidebar-workspace-new" onClick={() => onNewWorkspaceTask(row)} aria-label={`New task in ${name}`} title={`New task in ${name}`}><Icon name="plus" size={13} /></button>}
           </div>

@@ -30,6 +30,7 @@ declare global {
     openFolder: () => Promise<string | null>;
     answererMenu: (options: { items: { id: string, label: string, checked?: boolean, enabled?: boolean }[] }) => Promise<string | null>;
     taskMenu: (options: { archived?: boolean, pinned?: boolean, worktree?: boolean }) => Promise<string | null>;
+    projectMenu: () => Promise<string | null>;
     openChatFile?: (params: { sessionId: string, path: string, urlEncoded?: boolean }) => Promise<{ ok: boolean, error?: string, code?: string }>;
     previewChatFile?: (params: { sessionId: string | null, projectId?: string, workspaceId?: string, path: string, urlEncoded?: boolean }) => Promise<{ ok: boolean, result?: any, error?: string, code?: string }>;
     pickChatFile?: (params: { sessionId: string | null, projectId: string, workspaceId: string }) => Promise<{ ok: boolean, result?: any, error?: string }>;

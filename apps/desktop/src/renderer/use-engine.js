@@ -376,6 +376,22 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (projectRef.current?.projectId !== row.projectId) await openProject(row.rootPath, { sessionId: null });
     return newSession('', { workspaceId: row.workspaceId });
   }, [openProject, newSession]);
+  /** Forget a folder in the sidebar. When it was the folder shown, the next folder takes its place, or the empty state. */
+  const removeProject = useCallback(async (projectId) => {
+    await call("project.remove", { projectId });
+    const board = await refreshBoard();
+    if (projectRef.current?.projectId !== projectId) return;
+    const next = (board?.projects ?? []).filter((row) => !row.standalone && row.projectId !== projectId).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path))[0];
+    if (next) { await openFromBoard(next); return; }
+    projectRequest.current++;
+    projectRef.current = null;
+    workspaceRef.current = null;
+    await selectSession(null);
+    setProject(null);
+    setSessions([]);
+    setWorkspaces([]);
+    try { localStorage.removeItem("jolo.lastProject"); } catch { /* optional */ }
+  }, [refreshBoard, openFromBoard, selectSession]);
   const decideFromBoard = useCallback(async (row, decision) => {
     if (!row.pendingPermission) return;
     await call("permission.resolve", { permissionId: row.pendingPermission.permissionId, decision });
@@ -466,7 +482,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   return {
     engine, project, restoringProject, sessions, sessionId, settings, error, setError, historyState, setHistory, manageSession,
     panelScope: sessionId ? sessionPanelScopes.current.get(sessionId) ?? sessionId : draftSession.current.panelScope,
-    workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree,
+    workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree, removeProject,
     agents, agentCatalog, refreshAgents, refreshCatalog, startAgent, stopAgent,
     projection: projection.current,
     history: history.current,

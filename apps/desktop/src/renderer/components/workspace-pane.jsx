@@ -23,6 +23,7 @@ import { PlanPane } from "./plan-pane.jsx";
 import { SchedulesPanel } from "./schedules-panel.jsx";
 import { JoloLogo } from "./brand.jsx";
 import { TaskDialog } from "./task-dialog.jsx";
+import { RemoveProjectDialog } from "./remove-project-dialog.jsx";
 import { TaskHeader } from "./task-header.jsx";
 import { useWorkspaceTasks } from "../use-workspace-tasks.js";
 import { taskFamily } from "../workspace-tasks.js";
@@ -410,6 +411,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     else if (action === "rename" || action === "delete") setTaskDialog({ session, action });
     else if (action === "remove-worktree") setTaskDialog({ session, action, workspace: sessionWorkspace });
   });
+  const projectMenu = (row) => reportError(async () => {
+    const action = await window.jolo.projectMenu();
+    if (action === "remove") setTaskDialog({ action: "remove-project", row });
+  });
   const startWorktree = async ({ branch, base }) => { await state.newSession("", { worktree: { branch, base } }); };
   const mac = window.jolo.platform === 'darwin';
   return (
@@ -436,7 +441,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       {active && hosts.sidebar && createPortal(<Sidebar project={project} sessions={sessions} sessionId={sessionId} workspaceId={workspaceId} lastRun={lastRun} board={state.board} call={state.call}
         onOpenTask={row => reportError(() => state.openFromBoard(row))} onOpenFolder={openFolder} agentName={agentName}
         onNewChat={newChat} onNewSession={() => reportError(() => state.newSession())} onNewWorktree={row => reportError(async () => { if (row && project?.projectId !== row.projectId) await state.openProject(row.rootPath, { sessionId: null }); setWorktreeDialog(true); })}
-        onNewWorkspaceTask={row => reportError(() => state.newFromBoard(row))} onSettings={() => setShowSettings(true)} onTaskMenu={taskMenu} onError={state.setError} historyState={state.historyState} onHistory={view => reportError(() => state.setHistory(view))} />, hosts.sidebar)}
+        onNewWorkspaceTask={row => reportError(() => state.newFromBoard(row))} onSettings={() => setShowSettings(true)} onTaskMenu={taskMenu} onProjectMenu={projectMenu} onError={state.setError} historyState={state.historyState} onHistory={view => reportError(() => state.setHistory(view))} />, hosts.sidebar)}
       {/* Name each task once: in the window bar for one pane, or in its own bar when split. */}
       {multi && <div className="pane-heading">
         <span className={`pane-indicator ${pendingPermission ? "needs-attention" : activeRun ? "is-running" : ""}`} title={pendingPermission ? "Needs your approval" : runLabel(lastRun)} />
@@ -498,7 +503,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       {active && pickerOpen && !pendingPermission && <PanePicker project={project} sessionId={sessionId} board={state.board} onOpen={(path, sessionId) => state.openProject(path, { sessionId })} onClose={() => setPickerOpen(false)} />}
       {active && showSettings && hosts.settings && createPortal(<Suspense fallback={null}><SettingsPage settings={settings} onHideSource={async (key, hide) => { const current = settings?.hiddenSources ?? []; await state.call("settings.update", { hiddenSources: hide ? [...current, key] : current.filter((entry) => entry !== key) }); await state.refreshSettings(); }} initialSection={settingsSection} onGetStarted={pane.id === 'pane-1' ? () => { setShowSettings(false); reportError(async () => { await state.selectSession(null); updateOnboarding('active'); }); } : null} session={session} onPresets={() => state.call("provider.presets", {})} onDiscoverProviderModels={(preset, options) => state.call("provider.models", { preset, ...options })} onSaveConnection={async (providers) => { await state.call("settings.update", { providers }); await state.refreshSettings(); }} onUseModel={async (model) => { let current = (await state.call("session.page", { sessionId: session.id })).session; if (current.agentId) current = (await state.call("session.setAgent", { sessionId: current.id, agentId: null, expectedRevision: current.revision })).session; await state.call("session.setModel", { sessionId: current.id, model, expectedRevision: current.revision }); setAnswerer("jolo"); rememberModelChoice(null, model); }} agents={agentCatalog} onSaveAgents={async (agents) => { await state.call("settings.update", { agents }); await state.refreshSettings(); await state.refreshCatalog(); }} onDiscoverModels={(agentId, { refresh = false } = {}) => state.call("agent.models", { agentId, refresh })} onSave={async (model) => { await state.call("settings.update", { model }); rememberModelChoice(null, model); await state.refreshSettings(); }} onSetCredential={async (provider, value) => (await state.call("credential.set", { provider, value })).stored} onClose={() => setShowSettings(false)} /></Suspense>, hosts.settings)}
       {active && pendingPermission && <PermissionDialog key={pendingPermission.permissionId} request={pendingPermission} workspacePath={workspaces.find(item => item.id === pendingPermission.workspaceId)?.path ?? workspace?.path} onDecide={(decision) => state.resolvePermission(pendingPermission.permissionId, decision)} />}
-      {active && taskDialog && !pendingPermission && <TaskDialog key={`${taskDialog.session.id}:${taskDialog.action}`} {...taskDialog} onSubmit={(value) => taskDialog.action === "remove-worktree" ? state.removeWorktree(taskDialog.workspace.id, value.force) : state.manageSession(sessions.find((item) => item.id === taskDialog.session.id) ?? taskDialog.session, taskDialog.action, value)} onClose={() => setTaskDialog(null)} />}
+      {active && taskDialog?.action === "remove-project" && !pendingPermission && <RemoveProjectDialog key={`${taskDialog.row.projectId}:remove`} name={basename(taskDialog.row.rootPath)} onSubmit={() => state.removeProject(taskDialog.row.projectId)} onClose={() => setTaskDialog(null)} />}
+      {active && taskDialog && taskDialog.action !== "remove-project" && !pendingPermission && <TaskDialog key={`${taskDialog.session.id}:${taskDialog.action}`} {...taskDialog} onSubmit={(value) => taskDialog.action === "remove-worktree" ? state.removeWorktree(taskDialog.workspace.id, value.force) : state.manageSession(sessions.find((item) => item.id === taskDialog.session.id) ?? taskDialog.session, taskDialog.action, value)} onClose={() => setTaskDialog(null)} />}
       {active && worktreeDialog && !pendingPermission && project && <WorktreeDialog projectName={basename(project.rootPath)} onSubmit={startWorktree} onClose={() => setWorktreeDialog(false)} />}
     </div>
     </FilePreviewContext.Provider>
