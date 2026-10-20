@@ -12,10 +12,12 @@ export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentNam
 
 function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, onOpen, onMenu, agentName }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, workspaceId: row.workspaceId, revision, state });
-  const tasks = result?.tasks ?? [];
+  // A task joins the list once it has a title or a run: an untitled task nobody has written to stays off it, as a new chat does.
+  const begun = task => Boolean(task.run || task.title);
+  const tasks = (result?.tasks ?? []).filter(begun);
   const tree = unpinnedTree(taskTree(tasks));
   // Keep an explicitly opened older chat selected even before its page is loaded; a pinned one is listed under Pinned.
-  const rows = selectedTask && !selectedTask.pinnedAt && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
+  const rows = selectedTask && begun(selectedTask) && !selectedTask.pinnedAt && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
   const taskRow = task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName}
     childTasks={tree.children.get(task.sessionId) ?? []} />;
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
@@ -59,8 +61,6 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
   return <aside className="sidebar" aria-label="Workspace navigation">
     <div className="new-task-row">
       <button className="new-chat" onClick={onNewChat}><Icon name="squarePen" size={16} /><span>New chat</span></button>
-      {project && !project.standalone && <button className="new-task" onClick={onNewSession} title="New task in this workspace" aria-label="New task in this workspace"><Icon name="plus" size={14} /></button>}
-      {project && !project.standalone && <button className="new-task-alt" onClick={onNewWorktree} title="New task in a worktree" aria-label="New task in a worktree"><Icon name="branch" size={14} /></button>}
     </div>
     {!archived && <PinnedTasks rows={rows} revision={board?.generatedAt} call={call} sessionId={sessionId} onOpenTask={onOpenTask} onMenu={menu} agentName={agentName} />}
     <div className="task-tabs" role="tablist" aria-label="Workspace tasks" onKeyDown={event => {
@@ -84,6 +84,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
               <span className={`workspace-folder${working ? ' working' : ''}`} role={working ? 'img' : undefined} aria-label={working ? 'Tasks working' : undefined}><Icon name="folder" size={16} /><Icon name="chevron" size={14} className="workspace-disclosure" /></span><span className="sidebar-workspace-name">{name}</span>
               {!archived && !open && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
             </button>
+            {!archived && <button className="sidebar-workspace-worktree" onClick={() => onNewWorktree(row)} aria-label={`New worktree task in ${name}`} title={`New task in a worktree of ${name}`}><Icon name="branch" size={13} /></button>}
             {!archived && <button className="sidebar-workspace-new" onClick={() => onNewWorkspaceTask(row)} aria-label={`New task in ${name}`} title={`New task in ${name}`}><Icon name="plus" size={13} /></button>}
           </div>
           {open && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}

@@ -33,12 +33,16 @@ export async function runWorkspaceSidebarSmoke({ window, bridge, evaluate, waitF
   await evaluate(`document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-new').click()`);
   await waitFor(`window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)} && window.__joloSmoke.state().sessionId`, 'folder plus creates task in worktree');
   const firstNew = await evaluate('window.__joloSmoke.state().sessionId');
+  if (await evaluate(`Boolean(document.querySelector('.sidebar .task[data-session-id="${firstNew}"]'))`)) throw new Error('an untitled task nobody has written to was listed');
   // A folder keeps one task that was never written to: plus and the top New task both reopen it.
   await evaluate(`document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-new').click()`);
-  await evaluate("document.querySelector('.new-task').click()");
+  await evaluate(`document.querySelector(${worktreeGroup}).querySelector('.sidebar-workspace-new').click()`);
   await evaluate('new Promise(resolve => setTimeout(resolve, 500))');
-  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(firstNew)} && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)} && document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 1`, 'plus and the top New task reopen the folder’s empty task instead of adding more');
-  const selectedNew = (await bridge.rawCall('session.create', { projectId: alpha.projectId, workspaceId: worktree.id, title: '' })).session.id;
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(firstNew)} && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)} && document.querySelector(${worktreeGroup}).querySelectorAll('.task').length === 0`, 'pressing the folder’s plus again reopens its empty task instead of adding more');
+  // Titled tasks are listed; these two stand in for tasks that were written to.
+  const firstSession = (await bridge.rawCall('session.page', { sessionId: firstNew, limit: 1 })).session;
+  await bridge.rawCall('session.rename', { sessionId: firstNew, expectedRevision: firstSession.revision, title: 'First worktree task' });
+  const selectedNew = (await bridge.rawCall('session.create', { projectId: alpha.projectId, workspaceId: worktree.id, title: 'Second worktree task' })).session.id;
   await evaluate("document.querySelector('#archived-tasks-tab').click()");
   await waitFor(`document.querySelector('#archived-tasks-tab').getAttribute('aria-selected') === 'true' && window.__joloSmoke.state().workspaceId === ${JSON.stringify(worktree.id)}`, 'archive preserves the selected workspace');
   await evaluate("document.querySelector('#open-tasks-tab').click()");
