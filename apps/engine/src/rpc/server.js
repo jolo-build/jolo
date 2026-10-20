@@ -56,8 +56,9 @@ export function createRpcServer(options) {
     catch { return fail(conn, id, new ProtocolError("limit_exceeded", "response exceeds frame limit; request a smaller page or range")); }
     return send(conn, message);
   };
-  const fail = (conn, id, error) => {
+  const fail = (conn, id, error, method = null) => {
     if (!(error instanceof ProtocolError)) log.error("request failed", { error: String(error?.stack ?? error) });
+    else if (method) log.warn("request refused", { method, code: error.code, message: error.message }); // the log says why a click did nothing
     return send(conn, { jsonrpc: "2.0", id, error: toRpcError(error) });
   };
 
@@ -169,7 +170,7 @@ export function createRpcServer(options) {
       if (!validated.ok) throw validated.error;
       respond(conn, id, validated.value);
     } catch (error) {
-      fail(conn, id, error);
+      fail(conn, id, error, method);
     }
   };
 

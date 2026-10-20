@@ -90,6 +90,19 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/fake-small/);
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/low/);
   const currentSession=await evaluate('window.__joloSmoke.state().sessionId');
+  // In a chat on one agent, a pick from another agent's list moves the chat to that agent with that model, and the agent's
+  // own default for new chats is left alone; the chip follows the chat.
+  const claudeDefault=(await bridge.rawCall('settings.get',{})).settings.agents.claude;
+  await click('.model-select'); await waitFor(open,'menu opens for an agent switch');
+  await click('[data-source="agent:claude"]'); await waitFor("document.querySelector('[data-model=\"fable\"]')",'Claude models listed');
+  await click('[data-model="fable"]');
+  await waitFor('!'+open+" && window.__joloSmoke.state().sessionAgentId === 'claude' && document.querySelector('.model-select')?.textContent.includes('Fable')",'chat moved to Claude with the picked model');
+  const moved=(await bridge.rawCall('session.page',{sessionId:currentSession})).session;
+  assert.equal(moved.agentId,'claude'); assert.equal(moved.agentModel?.model,'fable');
+  assert.deepEqual((await bridge.rawCall('settings.get',{})).settings.agents.claude,claudeDefault,'a pick inside a chat must not change the agent default');
+  await type('.composer textarea','model'); await click('.composer-submit');
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().runCount === 2",'Claude answers with the chat model');
+  assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/fable/);
   const originalDefault=(await bridge.rawCall('settings.get',{})).settings.model;
   await click('.model-select'); await waitFor(open,'provider switch popover');
   await waitFor("document.querySelector('[data-source=\"provider:smoke-model\"]')",'connected providers');
@@ -104,7 +117,7 @@ export async function runModelControlsSmoke({window, bridge, evaluate, waitFor, 
   await click('.model-select'); await waitFor(open,'native menu reopens');
   await click('.model-select'); await waitFor('!'+open,'native menu closes on second click');
   await type('.composer textarea','Reply with the selected provider.'); await click('.composer-submit');
-  await waitFor("window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().runCount === 2",'native provider answers in same task');
+  await waitFor("window.__joloSmoke.state().runState === 'completed' && window.__joloSmoke.state().runCount === 3",'native provider answers in same task');
   assert.equal(await evaluate('window.__joloSmoke.state().sessionId'),currentSession);
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'),/Fixture answer/);
   await evaluate('window.__joloSmoke.newTask()');

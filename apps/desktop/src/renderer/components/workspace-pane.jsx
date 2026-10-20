@@ -375,12 +375,15 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     .map((id) => ({ id, name: id === 'jolo' ? 'Jolo' : agentName(id), usage: state.usageFor(id) }));
   const saveModelChoice = async ({ agentId, preset, model, effort, fast }) => {
     if (agentId !== 'jolo') {
-      if (session?.agentId === agentId) {
-        // The chat's own agent: the choice belongs to this chat, and the agent's setting stays the default for new ones.
-        const current = (await state.call('session.page', { sessionId, limit: 1 })).session;
+      if (sessionId && session) {
+        // An existing chat: the choice belongs to this chat, and the agent's setting stays the default for new ones.
+        // Another agent's model moves the chat to that agent first; the engine refuses while a run is still going.
+        let current = (await state.call('session.page', { sessionId, limit: 1 })).session;
+        if (current.agentId !== agentId) ({ session: current } = await state.call('session.setAgent', { sessionId, agentId, expectedRevision: current.revision }));
         await state.call('session.setAgentModel', { sessionId, model: model ?? null, effort: effort ?? null, expectedRevision: current.revision });
         if (fast !== undefined) { await state.call('settings.update', { agents: { [agentId]: { fast } } }); await Promise.all([state.refreshSettings(), state.refreshCatalog()]); } // Fast stays the agent's setting
         rememberModelChoice(agentId, selectedModel);
+        setAnswerer(null); // the chip follows the chat's agent again
         return;
       }
       await state.call('settings.update', { agents: { [agentId]: { model, effort, fast } } });
