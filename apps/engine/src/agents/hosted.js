@@ -165,8 +165,11 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       catch (error) { return { deny: `Jolo policy: approval is no longer valid (${error.message})` }; }
       return "allow";
     },
-    /** The agent began a tool call: an invocation record, a tool.started event, and a tool message to stream into. */
-    toolStarted({ callId, name, input, display }) {
+    /**
+     * The agent began a tool call: an invocation record, a tool.started event, and a tool message to stream into.
+     * A call whose output is worth more room, such as a subagent's progress and report, passes larger bounds.
+     */
+    toolStarted({ callId, name, input, display, outputMax = OUTPUT_DISPLAY_MAX, resultMax = RESULT_DISPLAY_MAX }) {
       ctx.toolStarted?.(callId);
       const argumentDigest = digestOf(input);
       const shown = display ?? `${name} ${JSON.stringify(input ?? {})}`;
@@ -177,7 +180,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       });
       const messageId = ctx.startMessage("tool", "tool");
       ctx.appendText(messageId, `${shown.slice(0, TOOL_DISPLAY_MAX_BYTES)}\n`);
-      tools.set(String(callId), { invocationId: invocation.id, messageId, name, startedAt: Date.now(), bytes: 0, shown: 0, truncated: false });
+      tools.set(String(callId), { invocationId: invocation.id, messageId, name, startedAt: Date.now(), bytes: 0, shown: 0, truncated: false, outputMax, resultMax });
       return messageId;
     },
     hasTool: (callId) => tools.has(String(callId)),
@@ -187,7 +190,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       if (!tool || !text) return;
       const bytes = Buffer.byteLength(text);
       tool.bytes += bytes;
-      const room = OUTPUT_DISPLAY_MAX - tool.shown;
+      const room = tool.outputMax - tool.shown;
       if (room <= 0) { tool.truncated = true; return; }
       const piece = text.slice(0, room);
       appendBounded(tool.messageId, piece);
@@ -204,7 +207,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       const tool = tools.get(String(callId));
       if (!tool) return;
       if (text) {
-        const shown = text.slice(0, RESULT_DISPLAY_MAX);
+        const shown = text.slice(0, tool.resultMax);
         appendBounded(tool.messageId, `${shown}${text.length > shown.length ? "…" : ""}\n`);
         tool.bytes += Buffer.byteLength(text);
         if (text.length > shown.length) tool.truncated = true;

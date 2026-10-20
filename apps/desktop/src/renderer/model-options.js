@@ -23,7 +23,7 @@ export function modelLabel(name) {
     .replace(/\[(?:1m|200k)\]/gi, '')
     .replace(/^claude[ -]+/i, '')
     .replace(/[-_]\d{4}-?\d{2}-?\d{2}$/, '')
-    .replace(/^(opus|sonnet|haiku)-(\d+)-(\d+)(?=$|-)/i, '$1-$2.$3')
+    .replace(/^(opus|sonnet|haiku|fable)-(\d+)-(\d+)(?=$|-)/i, '$1-$2.$3')
     .trim();
   if (!clean) return '';
   return clean.split(/[-_ ]+/).map(word => {
