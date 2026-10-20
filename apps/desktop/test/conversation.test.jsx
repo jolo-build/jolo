@@ -25,18 +25,18 @@ const reasoning = (overrides = {}) => ({ id: 'thinking', role: 'assistant', kind
 /** @param {PartialMessage[]} messages what the projection returns, newest last */
 const render = (...messages) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true }))} />);
 
-test('saved history exposes a load action, progress, and retryable errors', () => {
+test('saved history loads without a button, shows a deferred mark, and offers retry only on failure', () => {
   const history = { hasOlder: true, loading: false };
   const markup = () => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ history, hasProject: true }))} />);
-  expect(markup()).toContain('Load earlier messages');
+  expect(markup()).not.toContain('history-loader');
   history.loading = true;
-  expect(markup()).toContain('Loading earlier messages…');
-  expect(markup()).toContain('disabled');
+  expect(markup()).toContain('<p class="hint deferred" role="status" aria-label="Loading earlier messages">…</p>');
+  expect(markup()).not.toContain('<button');
   history.loading = false;
   history.error = 'offline';
-  expect(markup()).toContain('Try again.');
+  expect(markup()).toContain('Couldn’t load earlier messages · <button type="button">Retry</button>');
   history.hasOlder = false;
-  expect(markup()).not.toContain('Load earlier messages');
+  expect(markup()).not.toContain('history-loader');
 });
 
 describe('conversation activity', () => {
@@ -59,35 +59,42 @@ describe('conversation activity', () => {
     }))} {...props}
   />);
 
-  test('a called-in agent and its model label one thinking indicator', () => {
+  test('a called-in agent names one thinking indicator and keeps its model for hover', () => {
     const html = renderWorking({ agentId: 'claude' });
-    expect(html).toContain('Thinking… · Claude Code · Opus');
+    expect(html).toContain('Thinking… · Claude Code<');
+    expect(html).toContain('title="Claude Code · Opus 4.6"');
     expect(html.match(/role="status"/g)).toHaveLength(1);
-    expect(html).not.toContain('Working · Codex');
+    expect(html).not.toContain('Working');
   });
 
   test('saved run overrides identify the guest and model before its answer arrives', () => {
     const html = renderWorking({ execution: { agentId: 'claude', model: 'task-specific-model' } }, []);
-    expect(html).toContain('Working · Claude Code · Task Specific Model');
+    expect(html).toContain('Working · Claude Code<');
+    expect(html).toContain('title="Claude Code · Task Specific Model"');
     expect(html).not.toContain('Opus');
   });
 
   test('tool activity uses the usual agent when no guest is called in', () => {
     const html = renderWorking({ state: 'tools' }, [{ id: 'tool', runId: 'active', role: 'tool', kind: 'tool', text: 'run_command bun test', status: 'streaming' }]);
-    expect(html).toContain('Task activity · 1 action');
-    expect(html).toContain('Using tools · Codex · GPT 6 Astra');
+    expect(html).toContain('>1 action<');
+    expect(html).toContain('<span>Using tools</span>');
+    expect(html).toContain('title="Codex · GPT 6 Astra"');
     expect(html.match(/activity-spin/g)).toHaveLength(1);
+    expect(html).not.toContain('activity-pulse');
   });
 
   test('calling Jolo into a hosted task uses Jolo’s provider model', () => {
     const html = renderWorking({ agentId: 'jolo' });
-    expect(html).toContain('Thinking… · Jolo · GPT 5.6 Sol');
+    expect(html).toContain('Thinking… · Jolo<');
+    expect(html).toContain('title="Jolo · GPT 5.6 Sol"');
     expect(html).not.toContain('GPT 6 Astra');
   });
 
-  test('an unknown model is labeled as the default without borrowing another provider’s model', () => {
+  test('an unknown model names only the agent without borrowing another provider’s model', () => {
     const html = renderWorking({ agentId: 'claude' }, undefined, { agents: [{ id: 'claude', displayName: 'Claude Code', model: null }] });
-    expect(html).toContain('Thinking… · Claude Code · Default model');
+    expect(html).toContain('Thinking… · Claude Code<');
+    expect(html).toContain('title="Claude Code"');
+    expect(html).not.toContain('Default model');
     expect(html).not.toContain('GPT 5.6 Sol');
   });
 
@@ -97,8 +104,9 @@ describe('conversation activity', () => {
       reasoning({ id: 'current', runId: 'active', text: 'Current work.', status: 'streaming' }),
     ]);
     expect(html.match(/class="activity-group"/g)).toHaveLength(2);
-    expect(html).toContain('Task activity · Reasoning');
-    expect(html).toContain('Thinking… · Claude Code · Opus');
+    expect(html.match(/class="activity-label" title="[^"]*">Reasoning</g)).toHaveLength(2);
+    expect(html).toContain('title="Claude Code · Opus 4.6">Reasoning<');
+    expect(html).toContain('Thinking… · Claude Code<');
   });
 
   test('background tools spanning commentary keep separate groups but one task progress indicator', () => {
@@ -108,10 +116,10 @@ describe('conversation activity', () => {
       { id: 'check', runId: 'active', role: 'tool', kind: 'tool', text: 'command check-results', status: 'streaming' },
     ]);
     expect(html.match(/class="activity-group"/g)).toHaveLength(2);
-    expect(html.match(/Task activity · 1 action/g)).toHaveLength(2);
+    expect(html.match(/>1 action</g)).toHaveLength(2);
     expect(html.match(/activity-spin/g)).toHaveLength(1);
-    expect(html.match(/Using tools · Codex · GPT 6 Astra/g)).toHaveLength(1);
-    expect(html).not.toContain('Working ·');
+    expect(html.match(/Using tools/g)).toHaveLength(1);
+    expect(html).not.toContain('Working');
     expect(html).toContain('command long-build');
     expect(html).toContain('command check-results');
   });
@@ -135,10 +143,24 @@ describe('conversation activity', () => {
     expect(html).not.toContain('Stopped');
     expect(html).toContain('Working');
   });
+  test('a stopped last run leaves no run note behind, while a failed one still explains itself', () => {
+    const page = (/** @type {string} */ state) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [{ id: 'user', runId: 'last', role: 'user', kind: 'text', text: 'work', status: 'complete' }], runs: new Map([['last', { id: 'last', state, failure: state === 'failed' ? 'quota' : null }]]) }, hasProject: true }))} />);
+    expect(page('cancelled')).not.toContain('run-note');
+    expect(page('cancelled')).not.toContain('Stopped');
+    expect(page('failed')).toContain('Task failed: quota');
+  });
+  test('the task’s own agent reads its replies without a visible label; a guest is named', () => {
+    const reply = { id: 'reply', runId: 'turn', role: 'assistant', kind: 'text', text: '', status: 'complete', committedBytes: 12, renderedBytes: 0 };
+    const page = (/** @type {object} */ run) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [reply], runs: new Map([['turn', { id: 'turn', state: 'completed', ...run }]]) }, hasProject: true, assistantName: 'Codex', assistantAgentId: 'codex', agents }))} />);
+    expect(page({})).toContain('<div class="message-label sr-only">Codex</div>');
+    expect(page({ agentId: 'codex' })).toContain('<div class="message-label sr-only">Codex</div>');
+    expect(page({ agentId: 'claude' })).toContain('<div class="message-label" title="Called in for this message">Claude Code</div>');
+    expect(page({ agentId: 'claude' })).not.toContain('called-in');
+  });
   test('completed empty reasoning leaves no empty disclosure or activity heading', () => {
     const html = render(reasoning({ text: ' \n ' }));
     expect(html).not.toContain('<details');
-    expect(html).not.toContain('Task activity');
+    expect(html).not.toContain('activity-label');
     expect(html).not.toContain('Loading reasoning');
   });
 
@@ -153,7 +175,7 @@ describe('conversation activity', () => {
   test('reasoning awaiting artifact bytes stays visible until its text arrives', () => {
     expect(render(reasoning({ committedBytes: 12 }))).toContain('Loading reasoning…');
     const html = render(reasoning({ text: 'Checking the layout.', committedBytes: 20, renderedBytes: 20 }));
-    expect(html).toContain('Task activity');
+    expect(html).toMatch(/class="activity-label"[^>]*>Reasoning</);
     expect(html).toContain('<pre>Checking the layout.</pre>');
     expect(html).not.toContain('Loading reasoning');
   });
@@ -168,4 +190,22 @@ describe('conversation activity', () => {
   test('released reasoning retains the existing history notice', () => {
     expect(render(reasoning({ evicted: true }))).toContain('Older text was released from memory.');
   });
+});
+
+test("the agent's own subagents stand on their own line with their model, and say what they are doing while they work", () => {
+  const call = 'Agent {"subagent_type":"Explore","description":"Find where tokens refresh","prompt":"Look"}\n↳ model: claude-opus-5-5\n↳ Read src/auth/session.ts\n';
+  const tool = (/** @type {PartialMessage} */ overrides) => ({ id: 'agent', role: 'tool', kind: 'tool', runId: 'run', text: call, status: 'streaming', renderedBytes: 0, committedBytes: 0, ...overrides });
+  const working = render(tool({}), { id: 'bash', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 });
+  expect(working).toContain('class="subagent working"');
+  expect(working).toContain('<span class="subagent-title">Find where tokens refresh</span><span class="subagent-meta">Explore · Opus 5.5</span>');
+  expect(working).toContain('<div class="subagent-now" title="Read src/auth/session.ts">Read session.ts</div>');
+  // Its ordinary neighbour stays in the activity group, which counts only that one.
+  expect(working).toContain('1 action');
+  const done = render(tool({ text: `${call}↳ Edit src/auth/session.ts\n\nTokens refresh in session.ts.\n`, status: 'complete' }));
+  expect(done).toContain('class="subagent"');
+  expect(done).not.toContain('subagent-now');
+  expect(done).toContain('<span class="subagent-meta">1 file edited</span>'); // the file list itself opens with the row
+  // A default kind is not named: only the model.
+  const plain = render(tool({ text: 'Agent {"subagent_type":"general-purpose","description":"Fix round 6","prompt":"x"}\n↳ model: claude-opus-5-5\n', status: 'streaming' }));
+  expect(plain).toContain('<span class="subagent-title">Fix round 6</span><span class="subagent-meta">Opus 5.5</span>');
 });

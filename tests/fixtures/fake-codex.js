@@ -3,8 +3,9 @@ import path from 'node:path';
 // A stand-in for `codex app-server` that speaks its JSON-RPC protocol, so the adapter is tested end to end
 // without the real CLI or its account. Shapes mirror what the real binary sent in live sessions (0.153.3).
 // Behaviour is scripted by the prompt text: "run <cmd>" asks approval for a command, "patch <file> <text>"
-// asks approval for a file change, "fail" ends the turn in an error, "model" reports the model and effort the
-// thread and turn were started with, and anything else answers in prose, after a short reasoning summary.
+// asks approval for a file change, "fail" ends the turn in an error, "model" reports the model, effort and fast mode
+// the thread and turn were started with, and anything else answers in prose, after a short reasoning summary.
+// Like a Codex whose config.toml says service_tier = "priority", a turn that names no service tier runs fast.
 const argv = process.argv.slice(2);
 if (argv.at(-1) !== "app-server") {
   process.stderr.write(`fake-codex: unexpected argv ${JSON.stringify(argv)}\n`);
@@ -20,10 +21,11 @@ const threads = new Map();
 let current = null;
 const ask = (method, params) => new Promise((resolve) => { const id = counter++; pending.set(id, resolve); out({ method, id, params }); });
 const MODELS = [
-  { id: "fake-large", displayName: "Fake Large", description: "the capable one", isDefault: true, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "quick" }, { reasoningEffort: "high", description: "thorough" }], defaultReasoningEffort: "low" },
-  { id: "fake-small", displayName: "Fake Small", description: "the quick one", isDefault: false, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "quick" }], defaultReasoningEffort: "low" },
-  { id: "fake-hidden", displayName: "Hidden", description: "not offered", isDefault: false, hidden: true, supportedReasoningEfforts: [] },
+  { id: "fake-large", displayName: "Fake Large", description: "the capable one", isDefault: true, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "quick" }, { reasoningEffort: "high", description: "thorough" }], defaultReasoningEffort: "low", serviceTiers: [{ id: "priority", name: "Fast", description: "1.5x speed, increased usage" }], defaultServiceTier: null },
+  { id: "fake-small", displayName: "Fake Small", description: "the quick one", isDefault: false, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "quick" }], defaultReasoningEffort: "low", serviceTiers: [], defaultServiceTier: null },
+  { id: "fake-hidden", displayName: "Hidden", description: "not offered", isDefault: false, hidden: true, supportedReasoningEfforts: [], serviceTiers: [], defaultServiceTier: null },
 ];
+const CONFIGURED_SERVICE_TIER = "priority";
 const usage = (input, output) => ({ totalTokens: input + output, inputTokens: input, cachedInputTokens: Math.floor(input / 2), cacheWriteInputTokens: 0, outputTokens: output, reasoningOutputTokens: 0 });
 
 const makeThread = (cwd, id = `fake-thread-${Math.random().toString(36).slice(2, 10)}`, resumed = false, model = null) => {
@@ -226,7 +228,10 @@ async function runTurn(entry, turn, prompt, resumed, images = []) {
     say(`${resumed ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
     tokens(15, 12);
-    say(`Running ${entry.model ?? "the default model"} at ${effort ?? "the default effort"}.`);
+    // A tier the model does not list is left out of its requests, as Codex does.
+    const listed = MODELS.find((model) => (entry.model ? model.id === entry.model : model.isDefault))?.serviceTiers ?? [];
+    const fast = entry.serviceTier === "priority" && listed.some((tier) => tier.id === "priority");
+    say(`Running ${entry.model ?? "the default model"} at ${effort ?? "the default effort"}${fast ? " in fast mode" : ""}.`);
   } else {
     think("Answering plainly.");
     tokens(15, 12);
@@ -276,12 +281,58 @@ async function handle(message) {
       reply({ thread, approvalPolicy: "untrusted", sandbox: { type: "workspaceWrite" }, cwd: params.cwd, model: "fake", modelProvider: "fake" });
       return;
     }
+    case "review/start": {
+      // Codex reviews as a turn of its own: it enters review mode, works, and hands the findings over as it leaves it.
+      // The model's own message inside the review is the raw findings; the client is expected to show the review text.
+      const entry = threads.get(params.threadId);
+      if (!entry) return fail(-32602, "unknown thread");
+      if (current) return fail(-32002, "a turn is already running");
+      if (!["uncommittedChanges", "baseBranch", "commit", "custom"].includes(params.target?.type)) return fail(-32602, `unexpected review target ${JSON.stringify(params.target)}`);
+      const turn = { id: `turn-${++counter}`, items: [], status: "inProgress", error: null, startedAt: Date.now(), completedAt: null, durationMs: null };
+      reply({ turn, reviewThreadId: entry.thread.id });
+      const threadId = entry.thread.id, turnId = turn.id;
+      const review = `Review of ${params.target.type}${params.target.instructions ? `: ${params.target.instructions}` : ""}\n- nothing to fix`;
+      const entered = { type: "enteredReviewMode", id: `review-${counter}`, review: "Reviewing" };
+      const findings = { type: "agentMessage", id: `findings-${counter}`, text: "", phase: "final_answer" };
+      notify("turn/started", { threadId, turn });
+      notify("item/started", { threadId, turnId, item: entered });
+      notify("item/completed", { threadId, turnId, item: entered });
+      notify("item/started", { threadId, turnId, item: findings });
+      notify("item/agentMessage/delta", { threadId, turnId, itemId: findings.id, delta: '{"findings":[]}' });
+      notify("item/completed", { threadId, turnId, item: { ...findings, text: '{"findings":[]}' } });
+      notify("item/completed", { threadId, turnId, item: { type: "exitedReviewMode", id: `review-exit-${counter}`, review } });
+      notify("turn/completed", { threadId, turn: { ...turn, status: "completed", completedAt: Date.now(), durationMs: 5 } });
+      return;
+    }
+    case "skills/list": {
+      // Skills are read from disk, so the list is immediate; a disabled one is not offered.
+      return reply({ data: [{ cwd: params.cwds?.[0] ?? process.cwd(), skills: [
+        { name: "release-notes", description: "Draft release notes from the merged pull requests", path: "/nowhere/skills/release-notes/SKILL.md", scope: "user", enabled: true },
+        { name: "hidden-skill", description: "not offered", path: "/nowhere/skills/hidden/SKILL.md", scope: "user", enabled: false },
+      ], errors: [] }] });
+    }
+    case "thread/compact/start": {
+      // Codex compacts as a turn of its own: an empty reply, then the usual turn events around one compaction item.
+      const entry = threads.get(params.threadId);
+      if (!entry) return fail(-32602, "unknown thread");
+      if (current) return fail(-32002, "a turn is already running");
+      const turn = { id: `turn-${++counter}`, items: [], status: "inProgress", error: null, startedAt: Date.now(), completedAt: null, durationMs: null };
+      reply({});
+      const threadId = entry.thread.id, item = { type: "contextCompaction", id: `compaction-${counter}` };
+      notify("turn/started", { threadId, turn });
+      notify("item/started", { threadId, turnId: turn.id, item });
+      notify("item/completed", { threadId, turnId: turn.id, item });
+      notify("thread/compacted", { threadId, turnId: turn.id });
+      notify("turn/completed", { threadId, turn: { ...turn, status: "completed", completedAt: Date.now(), durationMs: 5 } });
+      return;
+    }
     case "turn/start": {
       const entry = threads.get(params.threadId);
       if (!entry) return fail(-32602, "unknown thread");
       if (current) return fail(-32002, "a turn is already running");
       const text = (params.input ?? []).map((part) => part?.text ?? "").join("");
       if (params.model) entry.model = params.model; // a turn may name a model of its own
+      entry.serviceTier = params.serviceTier ?? entry.serviceTier ?? CONFIGURED_SERVICE_TIER; // a named tier also holds for later turns
       const turn = { id: `turn-${++counter}`, items: [], status: "inProgress", error: null, startedAt: Date.now(), completedAt: null, durationMs: null, interrupted: false, effort: params.effort ?? null };
       current = turn;
       reply({ turn: { ...turn, interrupted: undefined } });

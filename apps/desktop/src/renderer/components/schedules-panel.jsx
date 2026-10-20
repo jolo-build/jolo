@@ -57,6 +57,7 @@ function NewSchedule({ onCreate, onCancel }) {
         </select>
       </label>
       <div className="plan-new-actions">
+        <span className="muted">Keeps running while Jolo is closed; archiving pauses it.</span>
         <span className="grow" />
         <button type="button" onClick={onCancel}>Cancel</button>
         <button className="primary" type="submit" disabled={!ready}>Set heartbeat</button>
@@ -89,9 +90,9 @@ export function SchedulesPanel({ sessionId, schedules, call, refresh }) {
         {sessionId && !writing && <button className="primary" onClick={() => setWriting(true)}><Icon name="plus" size={13} />New heartbeat</button>}
       </div>
       {error && <p className="plan-failure" role="alert">{error}</p>}
-      {!sessionId && <p className="muted plan-empty">Open a task to give it a heartbeat. A heartbeat posts your check-in back into the task on an interval — it keeps firing while the app is closed. Archiving the task pauses it; restoring starts it again.</p>}
+      {!sessionId && <p className="muted plan-empty">Open a task to give it a heartbeat.</p>}
       {sessionId && writing && <NewSchedule onCreate={onCreate} onCancel={() => setWriting(false)} />}
-      {sessionId && !writing && schedules.length === 0 && <p className="muted plan-empty">No heartbeats on this task. Set one here, or just ask in the chat — "check the delegated tasks every 15 minutes".</p>}
+      {sessionId && !writing && schedules.length === 0 && <p className="muted plan-empty">No heartbeats on this task. You can also ask for one in the chat.</p>}
       <ul className="schedule-list">
         {schedules.map((schedule) => <ScheduleRow key={schedule.id} schedule={schedule} onCall={(method) => onCall(method, schedule)} />)}
       </ul>

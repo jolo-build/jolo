@@ -9,6 +9,9 @@ test('Appearance offers all shared themes through a labeled native selection', (
   expect(html).toContain('aria-label="Color theme"');
   for (const theme of DESKTOP_THEMES) expect(html).toContain(`value="${theme.id}"`);
   expect(html).toContain('System default');
+  expect(html).not.toContain('Save changes');
+  expect(html).not.toContain('Theme preview');
+  expect(html).toContain('font-family:Inter');
 });
 
 test("desktop waits for the engine catalog instead of inventing selectable providers", () => {

@@ -88,22 +88,25 @@ export async function runOnboardingSmoke({ window, bridge, project, results, eva
     await waitFor(`window.__joloSmoke.state().sessionId !== ${JSON.stringify(first.sessionId)}`, 'next task created');
     assert.equal(await evaluate("document.querySelector('.composer textarea').value"), '', 'first-task suggestion leaks into another task');
     assert.equal((await evaluate('window.__joloSmoke.state()')).sessionAgentId, 'codex');
-    await evaluate('window.__joloSmoke.showBoard()');
-    await waitFor("document.querySelector('.board-get-started button') && !document.querySelector('.onboarding')", 'completed guide stays closed');
-    await click('.board-get-started button');
+    await waitFor("document.querySelector('.composer') && !document.querySelector('.onboarding')", 'completed guide stays closed');
+    await click('.settings-link');
+    await waitFor("document.querySelector('.settings-nav [data-section=about]')", 'settings open');
+    await click('.settings-nav [data-section=about]');
+    await waitFor("[...document.querySelectorAll('.settings-page button')].some(button => button.textContent === 'Open guide')", 'guide reachable from Settings');
+    await evaluate("[...document.querySelectorAll('.settings-page button')].find(button => button.textContent === 'Open guide').click()");
     await atStep('Choose an agent');
     await click('.onboarding-footer button');
     await reload();
-    await waitFor("document.querySelector('.board-get-started button') && !document.querySelector('.onboarding')", 'skip survives reload');
+    await waitFor("document.querySelector('.composer') && !document.querySelector('.onboarding')", 'skip survives reload');
     // Existing users have no guide marker when upgrading; their projects must be respected.
     await evaluate("localStorage.removeItem('jolo.onboarding.v1')");
     await reload();
-    await waitFor("document.querySelector('.board-get-started button') && !document.querySelector('.onboarding')", 'existing profile is not interrupted on upgrade');
+    await waitFor("document.querySelector('.composer') && !document.querySelector('.onboarding')", 'existing profile is not interrupted on upgrade');
     assert.equal(await evaluate("localStorage.getItem('jolo.onboarding.v1')"), 'dismissed');
     report.checks.push('Fresh-profile onboarding detects installed agents, blocks unconfigured providers, and resumes after API provider setup.');
     report.checks.push('Folder cancellation and failure recover; chosen agent and folder survive reload; step focus and light/dark/narrow layouts pass.');
     report.checks.push('Suggested first task is an editable draft with no automatic run; sending executes the selected agent; later tasks retain its choice with empty drafts.');
-    report.checks.push('Guide can reopen from the board; completion, dismissal and existing-profile upgrade keep it from appearing automatically.');
+    report.checks.push('Guide can reopen from Settings; completion, dismissal and existing-profile upgrade keep it from appearing automatically.');
   } finally {
     dialog.showOpenDialog = originalDialog;
     nativeTheme.themeSource = theme;

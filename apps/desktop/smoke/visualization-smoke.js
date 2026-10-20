@@ -93,10 +93,8 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   if (rejected.ok || !rejected.error.includes('outside')) throw new Error('preview read outside its chat workspace');
   const saved = await evaluate('window.__joloSmoke.state()');
   window.webContents.reload();
-  await waitFor(`Boolean(document.querySelector('.board-card[data-workspace-id="${saved.workspaceId}"]'))`, 'workspace listed after reload');
-  await evaluate(`document.querySelector('.board-card[data-workspace-id="${saved.workspaceId}"] .board-expand').click()`);
-  await waitFor(`Boolean(document.querySelector('.board-task[data-session-id="${saved.sessionId}"]'))`, 'saved task listed after reload');
-  await evaluate(`document.querySelector('.board-task[data-session-id="${saved.sessionId}"]').click()`);
+  await waitFor(`Boolean(document.querySelector('.sidebar .sidebar-chat[data-session-id="${saved.sessionId}"]'))`, 'saved task listed after reload');
+  await evaluate(`document.querySelector('.sidebar .sidebar-chat[data-session-id="${saved.sessionId}"]').click()`);
   await waitFor("document.querySelectorAll('.visualization').length === 2", 'saved markers render after reload');
   await evaluate("document.querySelector('.visualization').scrollIntoView({block:'center'})");
   await waitFor("Boolean(document.querySelector('.visualization iframe'))", 'saved visualization reloads');
@@ -106,10 +104,8 @@ export async function runVisualizationSmoke({ window, project, results, evaluate
   // Reproduce a freshly reloaded renderer talking to a main process without the handler.
   ipcMain.removeHandler('jolo:visualization:prepare');
   window.webContents.reload();
-  await waitFor(`Boolean(document.querySelector('.board-card[data-workspace-id="${saved.workspaceId}"]'))`, 'workspace listed with outdated host');
-  await evaluate(`document.querySelector('.board-card[data-workspace-id="${saved.workspaceId}"] .board-expand').click()`);
-  await waitFor(`Boolean(document.querySelector('.board-task[data-session-id="${saved.sessionId}"]'))`, 'saved task listed with outdated host');
-  await evaluate(`document.querySelector('.board-task[data-session-id="${saved.sessionId}"]').click()`);
+  await waitFor(`Boolean(document.querySelector('.sidebar .sidebar-chat[data-session-id="${saved.sessionId}"]'))`, 'saved task listed with outdated host');
+  await evaluate(`document.querySelector('.sidebar .sidebar-chat[data-session-id="${saved.sessionId}"]').click()`);
   await waitFor("Boolean(document.querySelector('.visualization'))", 'saved preview on outdated host');
   await evaluate("document.querySelector('.visualization').scrollIntoView({block:'center'})");
   await waitFor("document.querySelector('.visualization [role=alert]')?.textContent.includes('Restart Jolo')", 'missing handler explains desktop restart');

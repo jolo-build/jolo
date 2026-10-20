@@ -6,8 +6,8 @@ export const CONTEXT_PANELS = [
   ['terminal', 'Terminal', 'terminal'], ['plans', 'Plans', 'plan'], ['schedules', 'Schedules', 'clock'], ['checks', 'Checks', 'circleCheck'],
 ];
 
-export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, compact = false }) {
-  const trigger = useRef(null), menu = useRef(null);
+export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, onToggle = null, extra = [], onExtra = null, compact = false }) {
+  const trigger = useRef(null), menu = useRef(null), wasOpen = useRef(false);
   const menuId = useId();
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -23,17 +23,22 @@ export function PanelMenu({ selected, panels, disabled, details, onSelect, onHid
     return () => { element.removeEventListener('toggle', changed); window.removeEventListener('resize', close); onOpenChange(false); };
   }, [onOpenChange]);
   const dismiss = () => { menu.current.hidePopover(); trigger.current.focus(); };
+  const place = () => {
+    const rect = trigger.current.getBoundingClientRect();
+    menu.current.style.top = `${rect.bottom + 6}px`;
+    menu.current.style.left = `${Math.max(8, Math.min(innerWidth - 252, rect.right - 244))}px`;
+  };
   return <>
+    {/* A press while the menu is open closes it by light dismiss, so the click that follows must not open it again. */}
+    {!compact && <button className={`panel-toggle${selected ? ' active' : ''}`} aria-label="Panel" aria-pressed={Boolean(selected)} title={`${selected ? 'Hide' : 'Show'} panel (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}J)`} disabled={disabled}
+      onPointerDown={() => { wasOpen.current = menu.current.matches(':popover-open'); }}
+      onClick={() => { if (!onToggle?.() && !wasOpen.current) { place(); menu.current.showPopover(); } wasOpen.current = false; }}><Icon name="sidebarRight" /></button>}
     {/* The native invoker toggles without light-dismiss reopening the menu on a second click. */}
-    <button ref={trigger} className={compact ? 'panel-item-new' : selected ? 'active' : ''} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={() => {
-      const rect = trigger.current.getBoundingClientRect();
-      menu.current.style.top = `${rect.bottom + 6}px`;
-      menu.current.style.left = `${Math.max(8, Math.min(innerWidth - 252, rect.right - 244))}px`;
-    }}>{compact ? <Icon name="plus" size={15} /> : <><Icon name="sidebarRight" /><span className="header-action-label">Panels</span><Icon name="down" size={12} /></>}</button>
+    <button ref={trigger} className={compact ? 'panel-item-new' : 'panel-menu-trigger'} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={place}>{compact ? <Icon name="plus" size={15} /> : <Icon name="down" size={12} />}</button>
     <div ref={menu} id={menuId} className="panel-menu" popover="auto" role="menu" aria-label={compact ? 'New panel tab' : 'Panels'} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
       if (event.key === 'Tab') { menu.current.hidePopover(); return; }
-      const items = [...event.currentTarget.querySelectorAll('button')];
+      const items = [...event.currentTarget.querySelectorAll('button')].filter(item => !item.disabled);
       const index = items.findIndex(item => item === document.activeElement);
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (index + 1) % items.length : event.key === 'ArrowUp' ? (index - 1 + items.length) % items.length : -1;
       if (next >= 0) { event.preventDefault(); items[next].focus(); }
@@ -41,7 +46,9 @@ export function PanelMenu({ selected, panels, disabled, details, onSelect, onHid
       {panels.map(([id, label, icon]) => <button key={id} role="menuitemradio" aria-label={label} aria-checked={selected === id} tabIndex={-1} onClick={() => { dismiss(); onSelect(id); }}>
         <Icon name={icon} size={16} /><span>{label}</span>{details[id] && <small>{details[id]}</small>}{selected === id && <Icon name="check" size={14} />}
       </button>)}
-      {selected && <><hr /><button role="menuitem" tabIndex={-1} onClick={() => { dismiss(); onHide(); }}><Icon name="close" size={16} /><span>Hide panel</span></button></>}
+      {(selected || extra.length > 0) && <hr />}
+      {selected && <button role="menuitem" tabIndex={-1} onClick={() => { dismiss(); onHide(); }}><Icon name="close" size={16} /><span>Hide panel</span></button>}
+      {extra.map(([id, label, icon, shortcut, off]) => <button key={id} role="menuitem" aria-label={label} tabIndex={-1} disabled={off} onClick={() => { dismiss(); onExtra(id); }}><Icon name={icon} size={16} /><span>{label}</span><small>{shortcut}</small></button>)}
     </div>
   </>;
 }

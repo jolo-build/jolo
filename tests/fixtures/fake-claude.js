@@ -2,8 +2,8 @@
 // A stand-in for the Claude Code binary that speaks its stream-json host protocol, so the adapter is tested
 // end to end without the real CLI or its API. Shapes mirror what the real binary sent in a live session.
 // Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call, "write <file>" for a
-// Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model and effort it was
-// started with, and anything else just answers in prose.
+// Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model, effort and fast mode
+// it was started with, and anything else just answers in prose.
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
@@ -15,9 +15,11 @@ const offersBrowser = config => config?.args?.at(-1)?.split(',').includes('brows
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
 const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
+// Headless, Claude Code runs fast only when the launch's own --settings ask for it.
+const fastMode = JSON.parse(valueOf("--settings") ?? "{}").fastMode === true;
 const MODELS = [
   { value: "default", resolvedModel: "fake-default", displayName: "Default (recommended)", description: "the everyday choice", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
-  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"] },
+  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"], supportsFastMode: true },
   { value: "haiku", resolvedModel: "fake-haiku", displayName: "Haiku", description: "the quick one" },
 ];
 // The parts of a get_usage answer Jolo reads, in the shape Claude Code 2.1 sends.
@@ -46,6 +48,12 @@ const answerUsage = (requestId) => {
   if (USAGE_MODE) { process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_USAGE ${JSON.stringify(USAGE_MODE)}\n`); process.exit(64); }
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: USAGE } });
 };
+// The commands initialize names, in the shape Claude Code 2.1 sends: its built-ins carry `builtin`, the rest are plugins,
+// skills and user-defined commands. Two are enough to show the list and that one reached the fixture whole.
+const COMMANDS = [
+  { name: "compact", description: "Free up context by summarizing the conversation so far", argumentHint: "<optional custom summarization instructions>", builtin: true },
+  { name: "deploy", description: "Ship the current branch to an environment", argumentHint: "<environment>" },
+];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const pending = new Map();
@@ -85,19 +93,25 @@ async function turn(prompt, images = []) {
   };
   let turns = 1;
   let match;
-  if (prompt === 'subagent-review') {
+  if (prompt === '/compact') {
+    // Claude takes its own /compact only as the whole message; anything wrapped around it would be answered in prose.
+    out({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 41000 }, session_id: sessionId });
+  } else if (received.startsWith('/')) {
+    // Any other slash command, likewise: the whole message is echoed, so a handoff wrapped around it would show.
+    say(`Command received: ${received}`);
+  } else if (prompt === 'subagent-review') {
     const parentId = 'toolu_reviewer';
     const child = message => out({ ...message, parent_tool_use_id: parentId, session_id: sessionId });
     const event = value => out({ type: 'stream_event', event: value, parent_tool_use_id: null, session_id: sessionId });
     const report = '[{"file":"app.js","line":10,"summary":"INTERNAL_REVIEW","failure_scenario":"internal details"}]';
-    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { prompt: 'Review the code' } }] }, session_id: sessionId });
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { description: 'Review the code', subagent_type: 'code-reviewer', prompt: 'Review the code' } }] }, session_id: sessionId });
     // Two overlapping streams use the same block index. A child stop must not clear the parent's block.
     event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
     event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'I found one issue. ' } });
     child({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
     child({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: report } } });
     child({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
-    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: report }, { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'echo child-review' } }] } });
+    child({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: report }, { type: 'tool_use', id: 'child-bash', name: 'Bash', input: { command: 'echo child-review' } }] } });
     // Child permissions still go through the host policy even though their transcript stays internal.
     const decision = await new Promise(resolve => {
       pending.set('child-permission', resolve);
@@ -105,12 +119,21 @@ async function turn(prompt, images = []) {
     });
     child({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'child-bash', content: decision.behavior }] } });
     child({ type: 'stream_event', event: { type: 'message_stop' } });
-    child({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'SECOND_INTERNAL_REVIEW' }] } });
+    child({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'SECOND_INTERNAL_REVIEW' }, { type: 'tool_use', id: 'child-read', name: 'Read', input: { file_path: 'app.js' } }] } });
     out({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: parentId, content: report }] }, session_id: sessionId });
     event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Validate the interval before saving.' } });
     event({ type: 'content_block_stop', index: 0 });
     out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'I found one issue. Validate the interval before saving.' }] }, session_id: sessionId });
     event({ type: 'message_stop' });
+  } else if (prompt === 'subagent-long') {
+    // A subagent long enough to pass the bound on its progress, with paths long enough to be cut at a step's width.
+    const parentId = 'toolu_long';
+    out({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: parentId, name: 'Agent', input: { description: 'Read everything', subagent_type: 'Explore', prompt: 'Read everything' } }] }, session_id: sessionId });
+    for (let index = 0; index < 200; index++) {
+      out({ type: 'assistant', parent_tool_use_id: parentId, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `child-${index}`, name: 'Read', input: { file_path: `src/${String(index).padStart(3, '0')}/${'deep/'.repeat(40)}file.js` } }] }, session_id: sessionId });
+    }
+    out({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: parentId, content: 'LONG_REPORT' }] }, session_id: sessionId });
+    say('Read it all.');
   } else if (prompt === 'browser-discovery') {
     say(offersBrowser(JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo) ? 'Browser tools available' : 'Browser tools unavailable');
   } else if (prompt === 'browser-check') {
@@ -152,7 +175,7 @@ async function turn(prompt, images = []) {
   } else if (prompt === "history") {
     say(`${resumed ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
-    say(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}.`);
+    say(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}${fastMode ? " in fast mode" : ""}.`);
   } else if (prompt.startsWith("fail")) {
     out({ type: "result", subtype: "error_during_execution", is_error: true, result: "scripted failure", session_id: sessionId, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } });
     return;
@@ -171,7 +194,7 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);
     if (!line.trim()) continue;
     const message = JSON.parse(line);
-    if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS } } });
+    if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: COMMANDS, models: MODELS } } });
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.

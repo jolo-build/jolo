@@ -2,32 +2,49 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { basename } from '../presentation.js';
 import { useWorkspaceTasks } from '../use-workspace-tasks.js';
-import { taskTree } from '../workspace-tasks.js';
+import { taskTree, unpinnedTree } from '../workspace-tasks.js';
 import { RecentChats } from './recent-chats.jsx';
 import { SidebarChatRow } from './sidebar-chat-row.jsx';
 
-export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName, subtasks, renderSubtask, currentSessionId }) {
-  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} subtasks={subtasks} renderSubtask={renderSubtask} currentSessionId={currentSessionId} />;
+export function SidebarTask({ task, dragTask, selected, onOpen, onMenu, agentName, childTasks }) {
+  return <SidebarChatRow task={task} target={dragTask} selected={selected} onOpen={() => onOpen(task)} onMenu={onMenu} agentName={agentName} childTasks={childTasks} />;
 }
 
 function WorkspaceChats({ row, revision, call, state, selectedTask, sessionId, onOpen, onMenu, agentName }) {
   const { result, loading, error, retry, loadMore } = useWorkspaceTasks({ call, workspaceId: row.workspaceId, revision, state });
-  const tasks = result?.tasks ?? [];
-  const tree = taskTree(tasks);
-  // Keep an explicitly opened older chat selected even before its page is loaded.
-  const rows = selectedTask && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
+  // A task joins the list once it has a title or a run: an untitled task nobody has written to stays off it, as a new chat does.
+  const begun = task => Boolean(task.run || task.title);
+  const tasks = (result?.tasks ?? []).filter(begun);
+  const tree = unpinnedTree(taskTree(tasks));
+  // Keep an explicitly opened older chat selected even before its page is loaded; a pinned one is listed under Pinned.
+  const rows = selectedTask && begun(selectedTask) && !selectedTask.pinnedAt && !tasks.some(task => task.sessionId === selectedTask.sessionId) ? [selectedTask, ...tree.roots] : tree.roots;
   const taskRow = task => <SidebarTask key={task.sessionId} task={task} dragTask={{ ...row, session: { id: task.sessionId, title: task.title }, historyState: state }} selected={sessionId === task.sessionId} onOpen={onOpen} onMenu={onMenu} agentName={agentName}
-    subtasks={tree.children.get(task.sessionId) ?? []} renderSubtask={taskRow} currentSessionId={sessionId} />;
+    childTasks={tree.children.get(task.sessionId) ?? []} />;
   return <div className="sidebar-workspace-chats" id={`sidebar-chats-${row.workspaceId}`}>
     {rows.map(taskRow)}
     {error && <div className="sidebar-empty" role="alert">{error}<button onClick={retry}>Retry</button></div>}
-    {!result && loading && <p className="sidebar-empty" role="status">Loading tasks…</p>}
+    {!result && loading && <p className="sidebar-empty deferred" role="status">Loading tasks…</p>}
     {state === 'archived' && result && !rows.length && !loading && !error && <p className="sidebar-empty">No archived tasks.</p>}
     {result?.hasMore && <button className="sidebar-load-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Load more tasks'}</button>}
   </div>;
 }
 
-export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, visible = true, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onError, historyState = 'open', onHistory }) {
+/** Tasks and chats the user pinned, from every project, above everything else; nothing shows until one is pinned. */
+function PinnedTasks({ rows, revision, call, sessionId, onOpenTask, onMenu, agentName }) {
+  const { result } = useWorkspaceTasks({ call, revision, pinned: true });
+  const tasks = result?.tasks ?? [];
+  if (!tasks.length) return null;
+  return <section className="pinned-tasks" aria-label="Pinned">
+    <h2>Pinned</h2>
+    {tasks.map(task => {
+      const row = task.standalone ? null : rows.find(entry => entry.workspaceId === task.workspaceId);
+      const target = row ? { ...row, session: { id: task.sessionId, title: task.title }, historyState: 'open' } : { ...task, session: { id: task.sessionId }, historyState: 'open' };
+      return <SidebarChatRow key={task.sessionId} task={task} target={target} selected={sessionId === task.sessionId} onOpen={() => onOpenTask(target)} onMenu={onMenu} agentName={agentName} standalone={task.standalone} />;
+    })}
+  </section>;
+}
+
+export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRun, board, call, agentName = id => id, onOpenFolder, onNewChat, onNewSession, onNewWorktree, onNewWorkspaceTask, onOpenTask, onSettings, onTaskMenu, onProjectMenu, onError, historyState = 'open', onHistory }) {
   const [expanded, setExpanded] = useState(() => new Set(workspaceId ? [workspaceId] : []));
   const rows = useMemo(() => (board?.projects ?? []).filter(row => !row.standalone).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path)), [board]);
   const archived = historyState === 'archived';
@@ -35,7 +52,7 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
   const selected = sessions.find(session => session.id === sessionId && session.state === historyState);
   const selectedTask = selected ? { sessionId: selected.id, title: selected.title, agentId: selected.agentId, workspaceId: selected.workspaceId,
     answerer: lastRun && selected.agentState?._jolo?.lastRunId === lastRun.id ? selected.agentState._jolo.lastAnswerer : undefined,
-    updatedAt: lastRun?.updatedAt ?? selected.updatedAt, run: lastRun, attention: lastRun && ['paused', 'failed', 'interrupted', 'awaiting_permission'].includes(lastRun.state) ? 'needs_you' : 'idle' } : null;
+    updatedAt: lastRun?.updatedAt ?? selected.updatedAt, run: lastRun, pinnedAt: selected.pinnedAt ?? null, attention: lastRun && ['paused', 'failed', 'interrupted', 'awaiting_permission'].includes(lastRun.state) ? 'needs_you' : 'idle' } : null;
   const toggle = id => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const menu = async task => {
     try { const { session } = await call('session.page', { sessionId: task.sessionId, limit: 1 }); await onTaskMenu(session); }
@@ -44,9 +61,8 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
   return <aside className="sidebar" aria-label="Workspace navigation">
     <div className="new-task-row">
       <button className="new-chat" onClick={onNewChat}><Icon name="squarePen" size={16} /><span>New chat</span></button>
-      {project && !project.standalone && <button className="new-task" onClick={onNewSession} title="New task in this workspace" aria-label="New task in this workspace"><Icon name="plus" size={14} /></button>}
-      {project && !project.standalone && <button className="new-task-alt" onClick={onNewWorktree} title="New task in a worktree" aria-label="New task in a worktree"><Icon name="branch" size={14} /></button>}
     </div>
+    {!archived && <PinnedTasks rows={rows} revision={board?.generatedAt} call={call} sessionId={sessionId} onOpenTask={onOpenTask} onMenu={menu} agentName={agentName} />}
     <div className="task-tabs" role="tablist" aria-label="Workspace tasks" onKeyDown={event => {
       if (/** @type {Element} */ (event.target).getAttribute('role') !== 'tab' || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -63,19 +79,21 @@ export function Sidebar({ project, sessions = [], sessionId, workspaceId, lastRu
         const open = expanded.has(row.workspaceId);
         const working = !archived && (row.working ?? row.attention === 'running');
         return <div className="sidebar-workspace" key={row.workspaceId} data-workspace-id={row.workspaceId}>
-          <div className={`sidebar-workspace-heading${workspaceId === row.workspaceId ? ' current' : ''}`}>
+          <div className={`sidebar-workspace-heading${workspaceId === row.workspaceId ? ' current' : ''}`} onContextMenu={!archived ? event => { event.preventDefault(); onProjectMenu?.(row); } : undefined}>
             <button className="sidebar-workspace-toggle" onClick={() => toggle(row.workspaceId)} aria-expanded={open} aria-controls={open ? `sidebar-chats-${row.workspaceId}` : undefined} aria-label={`${open ? 'Hide' : 'Show'} tasks in ${name}`} title={`${row.workspace.path}${!archived && row.taskCount !== undefined ? ` · ${row.taskCount} tasks` : ''}`}>
               <span className={`workspace-folder${working ? ' working' : ''}`} role={working ? 'img' : undefined} aria-label={working ? 'Tasks working' : undefined}><Icon name="folder" size={16} /><Icon name="chevron" size={14} className="workspace-disclosure" /></span><span className="sidebar-workspace-name">{name}</span>
-              {!archived && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
+              {!archived && !open && (working || row.attention === 'needs_you') && <span className={`sidebar-activity${row.attention === 'needs_you' ? ' needs' : ''}`} role="img" aria-label={row.attention === 'needs_you' ? 'Needs attention' : 'Tasks working'} />}
             </button>
+            {!archived && <button className="sidebar-workspace-more" onClick={() => onProjectMenu?.(row)} aria-label={`Options for ${name}`} title={`Options for ${name}`}><Icon name="more" size={13} /></button>}
+            {!archived && <button className="sidebar-workspace-worktree" onClick={() => onNewWorktree(row)} aria-label={`New worktree task in ${name}`} title={`New task in a worktree of ${name}`}><Icon name="branch" size={13} /></button>}
             {!archived && <button className="sidebar-workspace-new" onClick={() => onNewWorkspaceTask(row)} aria-label={`New task in ${name}`} title={`New task in ${name}`}><Icon name="plus" size={13} /></button>}
           </div>
-          {open && visible && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
+          {open && <WorkspaceChats key={historyState} row={row} revision={board?.generatedAt} call={call} state={historyState} selectedTask={selectedTask?.workspaceId === row.workspaceId ? selectedTask : null} sessionId={sessionId} agentName={agentName} onMenu={menu} onOpen={task => onOpenTask({ ...row, session: { id: task.sessionId }, historyState })} />}
         </div>;
       })}
-      {!rows.length && <p className="sidebar-empty">{board ? 'No workspaces yet.' : 'Loading workspaces…'}</p>}
-      {visible && <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
-        selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />}
+      {!board && <p className="sidebar-empty deferred" role="status">Loading workspaces…</p>}
+      <RecentChats key={`recents-${historyState}`} call={call} revision={board?.generatedAt} state={historyState} sessionId={sessionId}
+        selectedTask={project?.standalone && selectedTask ? { ...selectedTask, projectId: project.projectId, rootPath: project.rootPath, standalone: true } : null} onOpen={onOpenTask} onMenu={menu} agentName={agentName} />
     </nav>
     <div className="side-bottom"><button className="sidebar-open-folder" onClick={onOpenFolder}><Icon name="folderPlus" size={16} /><span>Open folder</span></button><button className="settings-link" onClick={onSettings}><Icon name="settings" size={16} /><span>Settings</span></button></div>
   </aside>;

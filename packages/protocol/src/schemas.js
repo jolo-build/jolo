@@ -128,8 +128,15 @@ export const RunSchema = z.object({
   updatedAt: IsoTimestamp,
 });
 
+/** A task's own choice of model and effort for the hosted agent that answers it; null fields follow the agent's setting. */
+export const SessionAgentModelSchema = z.object({
+  model: z.string().min(1).max(200).nullable().default(null),
+  effort: z.string().min(1).max(40).nullable().default(null),
+});
+
 export const SessionSchema = z.object({
   model: ModelRefSchema.nullable().default(null),
+  agentModel: SessionAgentModelSchema.nullable().default(null),
   id: Id,
   projectId: Id,
   workspaceId: Id,
@@ -140,6 +147,8 @@ export const SessionSchema = z.object({
   agentId: Id.nullable().default(null),
   /** Set when this session was opened to carry out one task of a plan (§6.6). */
   planTaskId: Id.nullable().default(null),
+  /** When the user pinned this task or chat to the top of the sidebar; null when it is not pinned. */
+  pinnedAt: IsoTimestamp.nullable().default(null),
   createdAt: IsoTimestamp,
   updatedAt: IsoTimestamp,
 });
@@ -326,6 +335,8 @@ export const AgentRuleSchema = z.object({
 export const AgentModelSettingsSchema = z.object({
   model: z.string().min(1).max(200).nullable().default(null),
   effort: z.string().min(1).max(40).nullable().default(null),
+  /** Fast mode: the vendor's faster, pricier serving of the same model, where the model offers it. */
+  fast: z.boolean().optional(),
 });
 
 /** The same fields as a patch. Defaults are deliberately absent: an unnamed field keeps its stored value,
@@ -333,6 +344,7 @@ export const AgentModelSettingsSchema = z.object({
 export const AgentModelPatchSchema = z.object({
   model: z.string().min(1).max(200).nullable().optional(),
   effort: z.string().min(1).max(40).nullable().optional(),
+  fast: z.boolean().optional(),
 });
 
 /** A model a hosted agent says it can run, as reported by that agent (§4.3). */
@@ -342,7 +354,17 @@ export const AgentModelSchema = z.object({
   description: z.string().max(500).default(""),
   isDefault: z.boolean().default(false),
   efforts: z.array(z.string().max(40)).max(20).default([]),
+  /** Whether the agent says this model can run in fast mode. */
+  supportsFast: z.boolean().default(false),
 });
+
+/** One slash command an agent accepts as a whole message ("/name args"), as the agent itself describes it. */
+export const AgentCommandSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(600).default(""),
+  argumentHint: z.string().max(200).default(""),
+});
+export const AGENT_COMMANDS_LIMIT = 300;
 
 export const AgentIdKey = z.string().regex(/^[a-z][a-z0-9-]{0,38}$/, "lowercase kebab-case id");
 
@@ -361,6 +383,8 @@ export const AgentManifestSchema = z.object({
   modelArgsPosition: z.enum(["before", "after"]).default("before"),
   /** The same for reasoning effort; {effort} is replaced. */
   effortArgs: z.array(z.string().max(200)).max(8).optional(),
+  /** Added when fast mode is on. Omit when the CLI has no such option or the transport carries it, as Codex does. */
+  fastArgs: z.array(z.string().max(200)).max(8).optional(),
   transport: z.enum(AGENT_TRANSPORTS).default("pty"),
   statusModel: z.enum(["process", "screen"]).default("process"),
   idleMs: z.number().int().min(AGENT_LIMITS.minIdleMs).max(AGENT_LIMITS.maxIdleMs).default(4_000),
@@ -377,11 +401,13 @@ export const AgentCatalogEntrySchema = z.object({
   available: z.boolean(),
   resolvedPath: z.string().nullable(),
   source: z.enum(["builtin", "user"]),
-  /** The configured model and effort for this agent, and whether Jolo can set them at all. */
+  /** The configured model, effort and fast mode for this agent, and whether Jolo can set them at all. */
   model: z.string().nullable(),
   effort: z.string().nullable(),
+  fast: z.boolean().default(false),
   supportsModel: z.boolean(),
   supportsEffort: z.boolean(),
+  supportsFast: z.boolean().default(false),
   /** Whether this agent can report the signed-in plan's usage limits (agent.limits). */
   supportsLimits: z.boolean(),
 });
@@ -607,6 +633,7 @@ export const SearchTextParams = z.object({
 export const MethodSchemas = {
   hello: { params: HelloParams, result: HelloResult },
   "engine.status": { params: z.object({}), result: EngineStatusResult },
+  /** Agents' search_text over the wire, which scoped guest credentials reach; the Files panel searches with workspace.searchInFiles. */
   "workspace.search": {
     params: SearchTextParams.extend({ workspaceId: Id }),
     result: z.object({ pattern: z.string(), engine: z.enum(['tgrep', 'ripgrep', 'builtin']), freshness: z.enum(['indexed', 'live']), matches: z.array(z.object({ path: z.string(), line: z.number().int(), text: z.string() })), truncated: z.boolean(), nextCursor: z.string().optional(), scanned: z.number().int() }),
@@ -621,6 +648,11 @@ export const MethodSchemas = {
     params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096) }),
     result: z.object({ rootPath: z.string(), workspaceId: Id }),
   },
+  // Forget a folder in the sidebar: its chats are archived, nothing on disk changes, and opening the folder again brings it back.
+  'project.remove': {
+    params: z.object({ projectId: Id }),
+    result: z.object({ projectId: Id, archived: z.number().int().nonnegative() }),
+  },
   "workspace.create": {
     params: z.object({ projectId: Id, mode: z.literal("worktree").default("worktree"), branch: z.string().trim().min(1).max(120).optional(), base: z.string().trim().min(1).max(120).optional(), title: z.string().max(200).default("") }),
     result: z.object({ workspace: WorkspaceSchema }),
@@ -632,6 +664,21 @@ export const MethodSchemas = {
   "workspace.readFile": {
     params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), maxBytes: z.number().int().min(1).max(1024 * 1024).default(256 * 1024), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0), encoding: z.enum(['utf8', 'base64']).default('utf8') }),
     result: z.object({ path: z.string(), text: z.string(), bytes: z.number().int().nonnegative(), truncated: z.boolean(), binary: z.boolean() }),
+  },
+  /** The Files panel's editor: the whole text of one file, written inside the workspace under the same path policy as reads. */
+  "workspace.writeFile": {
+    params: z.object({ workspaceId: Id, path: z.string().min(1).max(4096), text: z.string().max(1024 * 1024) }),
+    result: z.object({ path: z.string(), bytes: z.number().int().nonnegative() }),
+  },
+  /** The composer's "@" picker: entries that fit a typed fragment, or with `path`, one folder's top level. */
+  "workspace.files": {
+    params: z.object({ workspaceId: Id, query: z.string().max(200).default(''), path: z.string().max(4096).optional(), limit: z.number().int().min(1).max(200).default(20) }),
+    result: z.object({ entries: z.array(z.object({ path: z.string(), kind: z.enum(['file', 'directory']) })), truncated: z.boolean(), total: z.number().int().nonnegative(), source: z.enum(['git', 'ripgrep', 'builtin', 'listing']) }),
+  },
+  /** The Files panel's search in files: lines of non-ignored files holding the literal query, case-blind unless it has a capital, at most 20 a file. */
+  "workspace.searchInFiles": {
+    params: z.object({ workspaceId: Id, query: z.string().min(1).max(200).regex(/^[^\r\n\0]*$/, 'one line of text'), limit: z.number().int().min(1).max(200).default(50) }),
+    result: z.object({ matches: z.array(z.object({ path: z.string(), line: z.number().int().min(1), text: z.string() })), truncated: z.boolean(), source: z.enum(['ripgrep', 'git']) }),
   },
   "workspace.remove": {
     params: z.object({ workspaceId: Id, force: z.boolean().default(false) }),
@@ -661,8 +708,16 @@ export const MethodSchemas = {
     params: z.object({ sessionId: Id, agentId: Id.nullable(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
+  "session.setAgentModel": {
+    params: z.object({ sessionId: Id, model: z.string().min(1).max(200).nullable(), effort: z.string().min(1).max(40).nullable(), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
   "session.archive": {
     params: z.object({ sessionId: Id, archived: z.boolean(), expectedRevision: Revision }),
+    result: z.object({ session: SessionSchema }),
+  },
+  "session.pin": {
+    params: z.object({ sessionId: Id, pinned: z.boolean(), expectedRevision: Revision }),
     result: z.object({ session: SessionSchema }),
   },
   "session.delete": {
@@ -824,6 +879,8 @@ export const SettingsSchema = z.object({
   budgets: BudgetSettingsSchema,
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
+  /** Agents ("agent:<id>") and providers ("provider:<preset>") the user keeps out of the model menu. */
+  hiddenSources: z.array(z.string().min(1).max(80)).max(100).default([]),
 });
 
 const CredentialProvider = PresetId;
@@ -894,6 +951,7 @@ Object.assign(MethodSchemas, {
       providers: ProviderOverridesSchema.optional(),
       budgets: BudgetPatchSchema.optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
+      hiddenSources: z.array(z.string().min(1).max(80)).max(100).optional(),
     }),
     result: z.object({ settings: SettingsSchema }),
   },
@@ -950,6 +1008,8 @@ export const BoardTaskSchema = z.object({
   sessionId: Id,
   /** The conversation whose agent started this one as a child task, which lists it with the rest of its children. */
   parentSessionId: Id.nullable().default(null),
+  /** When the user pinned it to the top of the sidebar; null when it is not pinned. */
+  pinnedAt: IsoTimestamp.nullable().default(null),
   title: z.string().max(200),
   agentId: Id.nullable(),
   answerer: z.object({ id: Id, displayName: z.string().nullable(), model: z.string().nullable() }).optional(),
@@ -969,7 +1029,8 @@ export const BoardTaskSchema = z.object({
 Object.assign(MethodSchemas, {
   "board.list": { params: z.object({}), result: z.object({ projects: z.array(BoardRowSchema), generatedAt: IsoTimestamp }) },
   "board.tasks": {
-    params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
+    /** `pinned: true` lists only pinned tasks and chats, most recently pinned first; `false` leaves them out. */
+    params: z.object({ limit: z.number().int().min(1).max(500).default(200), workspaceId: Id.optional(), standalone: z.boolean().optional(), pinned: z.boolean().optional(), state: z.enum(["open", "archived"]).optional(), before: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).optional() }),
     result: z.object({ tasks: z.array(BoardTaskSchema), generatedAt: IsoTimestamp, hasMore: z.boolean().optional(), nextCursor: z.object({ updatedAt: IsoTimestamp, sessionId: Id }).nullable().optional() }),
   },
   "board.viewed": { params: z.object({ workspaceId: Id }), result: z.object({ projectId: Id, workspaceId: Id, lastViewedAt: IsoTimestamp }) },
@@ -981,6 +1042,8 @@ Object.assign(MethodSchemas, {
       agentId: Id,
       models: z.array(AgentModelSchema),
       efforts: z.array(z.string().max(40)),
+      /** The slash commands this agent takes, read in the same probe; the composer lists them when "/" is typed. */
+      commands: z.array(AgentCommandSchema).max(AGENT_COMMANDS_LIMIT).default([]),
       source: z.enum(["agent", "none"]),
       note: z.string().max(300).nullable(),
     }),

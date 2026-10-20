@@ -57,10 +57,10 @@ describe("choosing a model for a hosted agent", () => {
 
   test("support is judged per manifest, so a user's own ACP agent without a model option says so", () => {
     const acp = BUILTIN_MANIFESTS.find((manifest) => manifest.id === "grok");
-    expect(modelSupport(acp)).toEqual({ model: "flag", effort: "flag" });
-    expect(modelSupport({ ...acp, modelArgs: undefined, effortArgs: undefined })).toEqual({ model: "none", effort: "none" });
-    expect(modelSupport({ transport: "codex-app-server" })).toEqual({ model: "protocol", effort: "protocol" });
-    expect(modelSupport({ transport: "pty", modelArgs: ["-m", "{model}"] })).toEqual({ model: "none", effort: "none" });
+    expect(modelSupport(acp)).toEqual({ model: "flag", effort: "flag", fast: "none" });
+    expect(modelSupport({ ...acp, modelArgs: undefined, effortArgs: undefined })).toEqual({ model: "none", effort: "none", fast: "none" });
+    expect(modelSupport({ transport: "codex-app-server" })).toEqual({ model: "protocol", effort: "protocol", fast: "protocol" });
+    expect(modelSupport({ transport: "pty", modelArgs: ["-m", "{model}"] })).toEqual({ model: "none", effort: "none", fast: "none" });
   });
 });
 

@@ -17,13 +17,14 @@ test('desktop account section keeps local use available and shows pending approv
 test('desktop shows account details, session-only storage, and device management', () => {
   const html = render({ ...initial, state: 'signed_in', account: { name: '<Developer>', email: 'dev@example.com' }, device: { name: 'My laptop' }, source: 'session' });
   expect(html).toContain('&lt;Developer&gt;'); expect(html).toContain('dev@example.com'); expect(html).toContain('My laptop');
+  expect(html).toContain('data-state="signed_in"');
   expect(html).toContain('OS keychain is unavailable'); expect(html).toContain('Manage devices'); expect(html).toContain('Sign out');
 });
 
 test('task approval is explicit and pending upgrades keep the approval screen visible',()=>{
   const signedIn={...initial,state:'signed_in',account:{name:'Developer',email:'dev@example.com'},device:{name:'Laptop',scopes:['account:read']}};
   expect(render(signedIn)).toContain('Connect tasks');
-  expect(render({...signedIn,device:{...signedIn.device,scopes:['account:read','tasks:read']}})).toContain('Open tasks');
+  expect(render({...signedIn,device:{...signedIn.device,scopes:['account:read','tasks:read']}})).toContain('Connected');
   const upgrading=render({...signedIn,state:'pending',pending:{userCode:'ABCD-EFGH'}});
   expect(upgrading).toContain('Approve this device'); expect(upgrading).toContain('Cancel sign-in');
 });

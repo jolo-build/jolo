@@ -1,6 +1,7 @@
 import { typingModelMention, completeModelMention, modelMentionChoices, modelMentions, loadModelMentionCatalog } from '@jolo/protocol/model-mentions';
-import { modelLabel } from '../model-options.js';
-import { useEffect, useRef, useState } from 'react';
+import { typingMention, completeMention, mentionChoices, mentionHint, workspaceFileAttachment, workspaceFolderAttachment, projectPointerAttachment, FILE_ROWS } from '../mention-picker.js';
+import { completeSlashCommand, slashCommandChoices, typingSlashCommand } from '../slash-commands.js';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { engineCall } from '../engine-context.jsx';
 import { Icon } from './icon.jsx';
@@ -25,6 +26,8 @@ const untilReset = (iso) => {
 
 /** The last plan limits each hosted agent reported, shared by every composer so a pane opens with numbers in it. */
 const knownLimits = new Map(); // agentId -> { report, error }
+/** The slash commands each hosted agent reported, shared likewise so the list opens at once the next time "/" is typed. */
+const knownCommands = new Map(); // agentId -> commands
 
 /** Ask one agent for its limits and keep the answer; a failed answer keeps the last good numbers on screen. */
 const askLimits = (agentId, refresh) => engineCall('agent.limits', { agentId, refresh })
@@ -66,7 +69,7 @@ const fillOf = (usage) => (usage?.contextWindow > 0 && usage.contextUsed !== nul
  * so (§7.2). The panel has a tab per agent, so one called in by a mention can be checked too; for a hosted
  * agent it also shows how much of the signed-in plan is left.
  */
-function UsageButton({ tabs, currentId, running }) {
+function UsageButton({ tabs, currentId, running, onCompact = null }) {
   const [at, setAt] = useState(null); // where to put the panel, and whether it is open at all
   const [chosenTab, setChosenTab] = useState(null); // null: the answering agent's tab
   const wrap = useRef(null);
@@ -93,7 +96,8 @@ function UsageButton({ tabs, currentId, running }) {
   const current = tabs.find(tab => tab.id === currentId) ?? tabs[0];
   const shown = tabs.find(tab => tab.id === chosenTab) ?? current;
   const ring = fillOf(current?.usage);
-  const level = ring === null ? '' : ring >= 0.9 ? ' full' : ring >= 0.75 ? ' warn' : '';
+  // The ring is always there, quiet; color is kept for a context that is nearly full.
+  const level = ring !== null && ring >= 0.9 ? ' full' : '';
   const title = ring !== null ? `Context ${Math.round(ring * 100)}% full · click for usage` : 'Usage · this agent does not report how full its context is';
   /** One agent's page: how full its window is, what it cost here, and how much of its plan is left. */
   const pageOf = (tab) => {
@@ -107,7 +111,8 @@ function UsageButton({ tabs, currentId, running }) {
         <div><dt>Tokens out</dt><dd>{usage?.outputTokens ? tokens(usage.outputTokens) : '—'}</dd></div>
         <div><dt>Model turns</dt><dd>{usage?.iterations ? String(usage.iterations) : '—'}</dd></div>
       </dl>
-      <div className="hint">{usage?.runs ? `Across ${usage.runs} ${tab.name} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : `${tab.name} has not answered in this task yet.`}</div>
+      <div className="usage-foot"><span className="hint">{usage?.runs ? `Across ${usage.runs} ${tab.name} ${usage.runs === 1 ? 'run' : 'runs'} in this task.` : `${tab.name} has not answered in this task yet.`}</span>
+        {onCompact && tab.id === currentId && !running && usage?.runs > 0 && <button type="button" className="usage-compact" title="Summarize the conversation so far to free up the context window" onClick={() => { setAt(null); onCompact(); }}>Compact</button>}</div>
       {tab.id !== 'jolo' && <section className="usage-limits" aria-label="Plan limits">
         <div className="usage-limits-head"><span className="usage-head">Plan limits</span>{limits?.report?.plan ? <span className="usage-plan">{limits.report.plan}</span> : null}</div>
         {limits?.report?.windows.length > 0
@@ -136,20 +141,7 @@ function UsageButton({ tabs, currentId, running }) {
     </div>, document.body)}
   </span>;
 }
-/** The agents a message can call in by name, matching what has been typed after "@" (§6.5). */
-function mentionable(agents, typed, answerer) {
-  const options = [{ id: "jolo", name: "Jolo", detail: "Jolo's own loop" }, ...agents.filter((entry) => entry.available && entry.transport !== "pty").map((entry) => ({ id: entry.id, name: entry.displayName, detail: modelLabel(entry.model) }))];
-  const query = typed.toLowerCase();
-  return options.filter((option) => option.id !== (answerer ?? "jolo") && (option.id.startsWith(query) || option.name.toLowerCase().startsWith(query))).slice(0, 6);
-}
-
-/** The "@name" being typed at the caret, or null. Only at the start of the message: that is where it routes. */
-function typingMention(value, caret) {
-  const match = /^\s*@([a-z0-9._-]*)$/i.exec(value.slice(0, caret));
-  return match ? match[1] : null;
-}
-
-export function Composer({ usageTabs = [], standalone = false, disabled, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, projectName, changesCount, onReview, onSettings, agents = [] }) {
+export function Composer({ onCompact = null, usageTabs = [], standalone = false, disabled, offline = false, autoFocusOnType = false, initialText = '', onInitialTextUsed = null, running, queuedRuns = [], onSend, onSendNow, onRemoveQueued, onStop, model, answerer, answererId = null, answererName = "Jolo", onPickAnswerer = null, modelControl = null, changesCount, onReview, onSettings, agents = [], workspace = null, projects = [] }) {
   const input = useRef(null);
   const fileInput = useRef(null);
   const submitting = useRef(false);
@@ -211,6 +203,23 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       if (mounted.current) setReadingImages(pendingPastes.current > 0);
     });
   };
+  /** One attachment produced on demand, through the same queue, counters and limits as a paste. */
+  const queueAttachment = produce => {
+    lastQueued.current = null;
+    pendingPastes.current++;
+    setReadingImages(true);
+    setAttachmentError('');
+    pasteQueue.current = pasteQueue.current.then(async () => {
+      const attachment = await produce();
+      if (!mounted.current || attachmentsRef.current.some(item => item.name === attachment.name && item.mimeType === attachment.mimeType)) return;
+      const text = attachment.mimeType === 'text/plain';
+      if (attachmentsRef.current.filter(item => (item.mimeType === 'text/plain') === text && !item.mimeType.startsWith('image/')).length >= (text ? LIMITS.textAttachments : LIMITS.fileAttachments)) throw new Error('Attach up to 4 text files and 4 other files per message.');
+      updateAttachments([...attachmentsRef.current, attachment]);
+    }).catch(error => { if (mounted.current) setAttachmentError(error.message); }).finally(() => {
+      pendingPastes.current--;
+      if (mounted.current) setReadingImages(pendingPastes.current > 0);
+    });
+  };
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [listAt, setListAt] = useState(null);
@@ -226,7 +235,36 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       .catch(error => { if (current) setModelError(error.message); });
     return () => { current = false; };
   }, [mentioningModel]);
-  const typed = disabled ? null : typingMention(text, caret);
+  // "/" as the whole message lists the answering agent's own commands; Jolo's own loop has none, and an agent that
+  // publishes none shows nothing. The engine keeps a recent answer, so asking again on each open is usually instant and
+  // picks up a list refreshed from the model menu.
+  const slash = disabled ? null : typingSlashCommand(text, caret);
+  const commandSource = slash && answererId && answererId !== 'jolo' ? answererId : null;
+  const [, setCommandsKnown] = useState(0);
+  const [commandsLoading, setCommandsLoading] = useState(false);
+  useEffect(() => {
+    if (!commandSource) return;
+    let current = true;
+    if (!knownCommands.has(commandSource)) setCommandsLoading(true);
+    engineCall('agent.models', { agentId: commandSource })
+      .then(report => { knownCommands.set(commandSource, report.commands ?? []); }, () => { if (!knownCommands.has(commandSource)) knownCommands.set(commandSource, []); })
+      .finally(() => { if (current) { setCommandsLoading(false); setCommandsKnown(count => count + 1); } });
+    return () => { current = false; };
+  }, [commandSource]);
+  const mention = disabled ? null : typingMention(text, caret);
+  const mentionQuery = mention ? mention.query : null;
+  const [fileResults, setFileResults] = useState({ query: null, entries: [] });
+  useEffect(() => {
+    if (mentionQuery === null || !workspace) { setFileResults({ query: null, entries: [] }); return; }
+    let current = true;
+    // The last answer stays up while the next one is on its way, so the list does not blink between keystrokes.
+    const timer = setTimeout(() => {
+      engineCall('workspace.files', { workspaceId: workspace.id, query: mentionQuery, limit: FILE_ROWS }).then(({ entries }) => {
+        if (current) setFileResults({ query: mentionQuery, entries });
+      }).catch(() => { if (current) setFileResults({ query: mentionQuery, entries: [] }); });
+    }, 120);
+    return () => { current = false; clearTimeout(timer); };
+  }, [mentionQuery, workspace?.id]);
   const taskMatch = !disabled && /(?:^|[\s(\[])#([A-Z][A-Z0-9]{0,23}(?:-[0-9]{0,15})?|)$/i.exec(text.slice(0, caret));
   const taskQuery = taskMatch ? taskMatch[1].toUpperCase() : null;
   const [taskResults, setTaskResults] = useState({ query: null, tasks: [], error: '' });
@@ -240,8 +278,10 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [taskQuery]);
-  const choices = modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : typed === null ? [] : mentionable(agents, typed, answererId);
+  const choices = slash ? slashCommandChoices(commandSource ? knownCommands.get(commandSource) ?? [] : [], slash.query).map(entry => ({ id: entry.name, name: entry.name, detail: entry.description, hint: entry.argumentHint, command: true })) : modelMention ? modelMentionChoices(modelReport?.models ?? [], modelMention.query).map(choice => ({ ...choice, id: choice.selector, name: choice.name, detail: `${choice.sourceName} · ${choice.effort ?? 'default effort'}`, modelMention: true })) : taskQuery !== null ? (taskResults.query === taskQuery ? taskResults.tasks.slice(0, 6).map(task => ({ id: task.url, key: task.key, name: task.title, detail: task.team?.name ?? 'Personal', task: true })) : []) : mentionChoices({ mention, agents, answererId, entries: fileResults.entries, projects });
   const picking = choices.length > 0;
+  const active = highlight < choices.length ? highlight : 0; // the list may have shrunk under the highlight
+  const sectioned = new Set(choices.map(option => option.section).filter(Boolean)).size > 1; // one kind of row needs no heading
   useEffect(() => { document.querySelector('.mention-list .selected')?.scrollIntoView({ block: 'nearest' }); }, [highlight]);
   // The compose area hides what overflows it, so the list is placed against the window instead of the form.
   useEffect(() => {
@@ -251,6 +291,12 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
   }, [picking, choices.length, text]);
   const choose = (option) => {
     if (!option) return;
+    if (option.command) {
+      const next = completeSlashCommand(option.name);
+      setText(next); setCaret(0);
+      requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(next.length, next.length); });
+      return;
+    }
     if (option.modelMention) {
       const next = completeModelMention(text, caret, option.selector);
       setText(next.value); setCaret(0);
@@ -265,10 +311,15 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
       requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(start + insert.length, start + insert.length); });
       return;
     }
-    const next = text.replace(/^\s*@[a-z0-9._-]*/i, `@${option.id}`);
-    setText(next.endsWith(" ") ? next : `${next} `);
-    setCaret(0);
-    input.current?.focus();
+    const next = completeMention(text, caret, mention, option.token);
+    setText(next.value); setCaret(0);
+    // A select event React raises during this same key press can carry the old caret; once the caret is
+    // placed after the completed token, the state says so too, so the picker does not reopen on it.
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setSelectionRange(next.cursor, next.cursor); setCaret(next.cursor); });
+    // The path or name is in the message; what it points at travels as an attachment, the way a dropped file does.
+    if (option.kind === 'file') queueAttachment(() => workspaceFileAttachment(engineCall, workspace.id, option.path));
+    else if (option.kind === 'folder') queueAttachment(() => workspaceFolderAttachment(engineCall, workspace, option.path));
+    else if (option.kind === 'project') queueAttachment(() => projectPointerAttachment(engineCall, option));
   };
   useEffect(() => {
     if (!autoFocusOnType || disabled) return;
@@ -327,24 +378,29 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
     </div>)}</div>}
     {readingImages && <p className="attachment-note" role="status">Reading attachment…</p>}
     {attachmentError && <p className="attachment-note negative" role="alert">{attachmentError}</p>}
-    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Call another agent into this task"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
-      {choices.map((option, index) => <li key={option.id}>
-        <button type="button" role="option" aria-selected={index === highlight} className={index === highlight ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-          <span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.id}</span><span className="mention-detail">{option.modelMention ? "" : option.name}{option.detail ? ` · ${option.detail}` : ""}</span>
-        </button>
-      </li>)}
-      <li className="mention-hint">{modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : `answers this one message, then ${answererName} carries on`}</li>
+    {picking && listAt && createPortal(<ul className="mention-list" role="listbox" aria-label={slash ? `${answererName} commands` : modelMention ? "Choose a model for a child task" : taskQuery !== null ? "Reference a web task" : "Mention an agent, file, folder, or project"} style={{ left: `${listAt.left}px`, width: `${listAt.width}px`, bottom: `${listAt.bottom}px` }}>
+      {choices.map((option, index) => <Fragment key={option.id}>
+        {sectioned && option.section && choices[index - 1]?.section !== option.section && <li className="mention-section" role="presentation">{option.section}</li>}
+        <li>
+          <button type="button" role="option" aria-selected={index === active} className={index === active ? "selected" : ""} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
+            {option.command
+              ? <><span className="mention-name">/{option.name}</span><span className="mention-detail">{option.detail}{option.hint ? ` ${option.hint}` : ""}</span></>
+              : <><span className="mention-name">{option.modelMention ? "^" : option.task ? "#" : "@"}{option.modelMention ? option.name : option.task ? option.key : option.token}</span><span className="mention-detail">{option.modelMention ? "" : option.task ? option.name : option.label}{option.detail ? ` · ${option.detail}` : ""}</span></>}
+          </button>
+        </li>
+      </Fragment>)}
+      <li className="mention-hint">{slash ? `${answererName}’s own command · Enter inserts it` : modelMention ? "Makes this model available for child tasks in this conversation. ↑/↓ select · Enter insert." : taskQuery !== null ? "Attaches this task’s current description when you send." : mentionHint(choices[active], answererName)}</li>
     </ul>, document.body)}
     {taskQuery !== null && taskResults.query === taskQuery && taskResults.error && <p className="attachment-note" role="status">{taskResults.error} <button type="button" onClick={onSettings}>Settings</button></p>}
-    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={disabled ? standalone ? 'Connecting…' : 'Open a folder to start…' : running ? 'Queue a message… Enter twice to send now' : standalone ? 'Ask anything…' : `Ask ${answererName} to build, fix, or explore…`} disabled={disabled}
+    <textarea ref={input} aria-label="Message Jolo" value={text} placeholder={offline ? 'Connecting…' : disabled ? 'Open a folder to start…' : running ? 'Queue a message…' : standalone ? 'Ask anything…' : `Ask ${answererName}…`} disabled={disabled}
       onPaste={paste}
       onChange={(e) => { lastQueued.current = null; setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setHighlight(0); }}
       onSelect={(e) => setCaret(/** @type {HTMLTextAreaElement} */ (e.target).selectionStart ?? 0)}
       onBlur={() => { setCaret(0); lastQueued.current = null; }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing) return;
-        if (picking && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setHighlight((current) => (current + (e.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length); return; }
-        if (picking && (e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) { e.preventDefault(); choose(choices[highlight]); return; }
+        if (picking && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setHighlight((active + (e.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length); return; }
+        if (picking && (e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) { e.preventDefault(); choose(choices[active]); return; }
         if (picking && e.key === 'Escape') { e.preventDefault(); setCaret(0); return; }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
           e.preventDefault();
@@ -356,14 +412,15 @@ export function Composer({ usageTabs = [], standalone = false, disabled, autoFoc
           } else { void submit(); }
         }
       }} />
+    {commandSource && commandsLoading && !choices.length && <p className="hint" role="status">Loading {answererName}’s commands…</p>}
     {mentioningModel && !choices.length && <p className="hint" role="status">{modelError || (!modelReport || modelReport.loading ? 'Loading available models…' : modelReport.notes[0] || 'No matching models. Check your agent installation or provider credentials in Settings.')}</p>}
     {modelMentions(text).length > 0 && <div className="delegation-chips" aria-label="Selected child-task models">{modelMentions(text).map(mention => <span className="delegation-chip" key={mention.start} title={mention.selector}><Icon name="bolt" size={13} /><span>{modelMentionChoices(modelReport?.models ?? [], mention.selector).find(choice => choice.selector === mention.selector)?.label ?? mention.selector}</span><button type="button" aria-label={`Remove ${mention.selector}`} onClick={() => { setText(text.slice(0, mention.start) + text.slice(mention.end)); input.current?.focus(); }}><Icon name="close" size={12} /></button></span>)}</div>}
     <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
-      <div className="composer-context">{changesCount ? <button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button> : <span title={projectName ?? 'No project selected'}><Icon name={standalone ? 'chat' : 'folder'} size={13} /><span>{projectName ?? 'No project'}</span></span>}</div>
-      <span className="composer-divider" aria-hidden="true" />
-      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} />
+      {/* The project is in the window's title; the bar names only changes waiting for review. */}
+      {changesCount ? <div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div> : null}
+      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} onCompact={onCompact} />
       {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />

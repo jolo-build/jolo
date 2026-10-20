@@ -11,7 +11,6 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await waitFor("Boolean(document.querySelector('.panel-menu:popover-open[aria-label=\"New panel tab\"]'))", 'new tab menu');
     await evaluate(`document.querySelector('.panel-menu:popover-open [aria-label="${label}"]').click()`);
   };
-  await evaluate('window.__joloSmoke.showTask()');
   await evaluate('window.__joloSmoke.newTask()');
   const firstSession = await evaluate('window.__joloSmoke.state().sessionId');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(fixtureUrl)})`);
@@ -144,33 +143,35 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
   try {
     await selectPanel(evaluate, waitFor, 'Files');
     await newTab('Open file…');
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'first.md'", 'picked first file');
-    await evaluate("document.querySelector('.file-heading [role=tab]:last-child').click()");
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'picked first file');
+    await evaluate("document.querySelector('.files-main .panel-item-content:not([hidden]) .file-heading [role=tab]:last-child').click()");
     selected = 'second.txt';
     await newTab('Open file…');
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'second.txt'", 'picked second file');
-    await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).find(tab => tab.textContent === 'first.md').click()");
-    assert(await evaluate("document.querySelector('.changes-host > .panel-item-content:not([hidden]) .file-preview-source')?.textContent.startsWith('# First file')"), 'file source mode was not retained');
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'second.txt'", 'picked second file');
+    await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).find(tab => tab.getAttribute('aria-label') === 'first.md').click()");
+    await waitFor("document.querySelector('.changes-host .panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString().startsWith('# First file')", 'file source mode retained');
     await newTab('Open file…');
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'second.txt'", 'existing file reselected');
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'second.txt'", 'existing file reselected');
     assert(await evaluate("document.querySelectorAll('[aria-label=\"Panel tabs\"] [data-panel-type=file]').length === 2"), 'same file opened duplicate tabs');
     assert(await evaluate("document.querySelectorAll('.context-bar [role=tablist]').length === 1 && !document.querySelector('.context-content [role=tablist][aria-label=\"Panel tabs\"]')"), 'panel items must share one tab row');
     writeFileSync(path.join(results, 'panel-file-tabs.png'), (await window.webContents.capturePage()).toPNG());
     await evaluate("document.querySelector('[aria-label=\"Close second.txt\"]').click()");
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'first.md'", 'closing active tab selects its neighbor');
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'closing active tab selects its neighbor');
     await evaluate("document.querySelector('[aria-label=\"Close first.md\"]').click()");
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'Files'", 'closing last file restores file list');
-    await waitFor("Array.from(document.querySelectorAll('.tree-file')).some(button => button.textContent.includes('first.md'))", 'new file appears in working files');
-    await evaluate("Array.from(document.querySelectorAll('.tree-file')).find(button => button.textContent.includes('first.md')).click()");
-    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'first.md'", 'working file opens in a new tab');
+    await waitFor("Array.from(document.querySelectorAll('.explorer-file')).some(button => button.textContent.includes('first.md'))", 'new file appears in the tree');
+    await evaluate("Array.from(document.querySelectorAll('.explorer-file')).find(button => button.textContent.includes('first.md')).click()");
+    await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.getAttribute('aria-label') === 'first.md'", 'tree file opens in a new tab');
     await evaluate("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'Jolo smoke page'", 'item tabs support keyboard selection');
   } finally { dialog.showOpenDialog = originalDialog; }
   const firstTabs = await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).map(tab => tab.textContent)");
   const firstUrl = await evaluate("document.querySelector('webview').getURL()");
-  await evaluate('window.__joloSmoke.newTask()');
-  const secondSession = await evaluate('window.__joloSmoke.state().sessionId');
-  assert(firstSession !== secondSession, 'new task did not create another chat');
+  // The first task was never written to, so New task would reopen it; the second one is made directly.
+  const { projectId, workspaceId } = await evaluate('window.__joloSmoke.state()');
+  const secondSession = (await bridge.rawCall('session.create', { projectId, workspaceId, title: '' })).session.id;
+  await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(secondSession)})`);
+  await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(secondSession)}`, 'second chat in the same workspace open');
   await waitFor("document.querySelector('.inspector').hidden && !document.querySelector('[aria-label=\"Panel tabs\"] [role=tab]') && !document.querySelector('webview')", 'new chat in the same workspace starts without panels');
   await evaluate(`window.__joloSmoke.openBrowser(${JSON.stringify(`${fixtureUrl}?second-chat`)})`);
   await waitFor("document.querySelector('webview')?.getURL().includes('second-chat')", 'second chat owns a different browser');

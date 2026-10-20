@@ -1,16 +1,5 @@
 import { expect, test } from 'bun:test';
-import { everyLabel, pauseDescription, screenshotArtifactId, untilLabel, workspacePath } from '../src/renderer/presentation.js';
-
-test('workspace paths abbreviate the actual home without confusing sibling or outside folders', () => {
-  expect(workspacePath('/Users/me/work/jolo', '/Users/me')).toBe('~/work/jolo');
-  expect(workspacePath('/Users/me', '/Users/me/')).toBe('~');
-  expect(workspacePath('/Users/me-other/work/jolo', '/Users/me')).toBe('/Users/me-other/work/jolo');
-  expect(workspacePath('/Users/other/work/jolo', '/Users/me')).toBe('/Users/other/work/jolo');
-  expect(workspacePath('/private/tmp/testcode', '/Users/me')).toBe('/private/tmp/testcode');
-  expect(workspacePath('/Users/me/work/jolo', null)).toBe('/Users/me/work/jolo');
-  expect(workspacePath('C:\\Users\\Me\\work\\jolo', 'c:\\users\\me')).toBe('~/work/jolo');
-  expect(workspacePath('C:\\Users\\Me-other', 'C:\\Users\\Me')).toBe('C:\\Users\\Me-other');
-});
+import { everyLabel, pauseDescription, screenshotArtifactId, untilLabel } from '../src/renderer/presentation.js';
 
 test('schedule intervals spell themselves the way the CLI does', () => {
   expect(everyLabel(60_000)).toBe('1m');

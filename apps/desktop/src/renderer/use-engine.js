@@ -17,7 +17,7 @@ async function newModelChoice(agentId = undefined) {
   return newSessionModelChoice(agents, settings.model, agentId);
 }
 export function useEngine({ restoreLastProject = false, initialProject = null, initialTask = null, initialNewChat = false, visible = true, watchChanges = false } = {}) {
-  const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog } = useEngineConnection();
+  const { engine, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, showNotice } = useEngineConnection();
   const [agents, setAgents] = useState([]);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -28,7 +28,6 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const [historyState, setHistoryState] = useState("open");
   const [sessionId, setSessionId] = useState(null);
   const [error, setError] = useState(null);
-  const [relayNote, setRelayNote] = useState(null);
   const permissions = useRef(new PendingPermissions());
   const [changes, setChanges] = useState([]);
   const [plans, setPlans] = useState([]);
@@ -191,6 +190,16 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   }, [openProject, refreshBoard]);
 
   /** New task in the selected folder, or a fresh worktree when requested (§9.1). */
+  /** The folder's top-level task that was never written to, if it has one, with the agent and model just chosen. */
+  const emptyTask = async (workspaceId, choice) => {
+    const { tasks } = await call("board.tasks", { workspaceId, limit: 100 });
+    const empty = tasks.find((task) => !task.run && !task.title && !task.parentSessionId && !task.pinnedAt);
+    if (!empty) return null;
+    let { session } = await call("session.page", { sessionId: empty.sessionId, limit: 1 });
+    if ((choice.agentId ?? null) !== session.agentId) ({ session } = await call("session.setAgent", { sessionId: session.id, agentId: choice.agentId ?? null, expectedRevision: session.revision }));
+    if (choice.model && JSON.stringify(choice.model) !== JSON.stringify(session.model)) ({ session } = await call("session.setModel", { sessionId: session.id, model: choice.model, expectedRevision: session.revision }));
+    return session;
+  };
   const newSession = useCallback(async (title = "", options = {}) => {
     const current = projectRef.current;
     if (!current) throw new Error("open a project first");
@@ -204,7 +213,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       const { workspaces } = await call('workspace.list', { projectId: current.projectId });
       if (!workspaces.some(workspace => workspace.id === workspaceId)) workspaceId = current.workspaceId;
     }
-    const { session } = await call("session.create", { projectId: current.projectId, workspaceId, title, ...await newModelChoice(options.agentId) });
+    const choice = await newModelChoice(options.agentId);
+    // A folder keeps one task that has not been written to: asking for another opens that one, set to today's choice.
+    const reused = !title && !options.worktree ? await emptyTask(workspaceId, choice) : null;
+    const session = reused ?? (await call("session.create", { projectId: current.projectId, workspaceId, title, ...choice })).session;
     historyRef.current = "open";
     setHistoryState("open");
     const preferredMode = workspaceId === current.workspaceId ? "direct" : "worktree";
@@ -238,9 +250,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const params = { sessionId: session.id, expectedRevision: session.revision };
     if (action === "rename") params.title = title;
     if (action === "archive") params.archived = session.state !== "archived";
+    if (action === "pin") params.pinned = !session.pinnedAt;
     try {
       await call(`session.${action}`, params);
-      if (action !== "rename" && sessionRef.current === session.id) await selectSession(null);
+      if ((action === "archive" || action === "delete") && sessionRef.current === session.id) await selectSession(null);
     } finally {
       await refreshSessions();
     }
@@ -363,6 +376,22 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     if (projectRef.current?.projectId !== row.projectId) await openProject(row.rootPath, { sessionId: null });
     return newSession('', { workspaceId: row.workspaceId });
   }, [openProject, newSession]);
+  /** Forget a folder in the sidebar. When it was the folder shown, the next folder takes its place, or the empty state. */
+  const removeProject = useCallback(async (projectId) => {
+    await call("project.remove", { projectId });
+    const board = await refreshBoard();
+    if (projectRef.current?.projectId !== projectId) return;
+    const next = (board?.projects ?? []).filter((row) => !row.standalone && row.projectId !== projectId).sort((a, b) => a.workspace.path.localeCompare(b.workspace.path))[0];
+    if (next) { await openFromBoard(next); return; }
+    projectRequest.current++;
+    projectRef.current = null;
+    workspaceRef.current = null;
+    await selectSession(null);
+    setProject(null);
+    setSessions([]);
+    setWorkspaces([]);
+    try { localStorage.removeItem("jolo.lastProject"); } catch { /* optional */ }
+  }, [refreshBoard, openFromBoard, selectSession]);
   const decideFromBoard = useCallback(async (row, decision) => {
     if (!row.pendingPermission) return;
     await call("permission.resolve", { permissionId: row.pendingPermission.permissionId, decision });
@@ -423,7 +452,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
               const session = item.value.payload.session;
               setSessions(sessionsRef.current.map(existing => existing.id === session.id ? session : existing));
             }
-            if (item.value.type === "context.compacted") setRelayNote(`context compacted: ${item.value.payload.summarizedItems} earlier items summarized`);
+            if (item.value.type === "context.compacted") showNotice({ key: `compact:${item.value.sessionId}`, tone: "muted", title: "Context compacted", body: `${item.value.payload.summarizedItems} earlier items summarized` });
             permissions.current.apply(item.value);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));
           }
@@ -440,10 +469,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       if (schedulesChanged) void refreshSchedules();
     });
     return offEvents;
-  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans, refreshSchedules]);
+  }, [refreshSessions, refreshWorkspaces, selectSession, markViewed, refreshPlans, refreshSchedules, showNotice]);
 
   useEffect(() => {
-    const off = window.jolo.onEvents((items, meta) => { if (meta?.resyncRequired) setRelayNote("renderer fell behind; reloading the session"), void selectSession(sessionRef.current); });
+    const off = window.jolo.onEvents((items, meta) => { if (meta?.resyncRequired) console.info("renderer fell behind; reloading the session"), void selectSession(sessionRef.current); });
     return off;
   }, [selectSession]);
 
@@ -451,9 +480,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const working = useWorkingChanges({ workspaceId, connected: engine.connected, watching: visible && watchChanges, events: changes,
     runState: projection.current ? [...projection.current.runs.values()].filter(run => TERMINAL.has(run.state)).map(run => `${run.id}:${run.state}`).join(',') : '' });
   return {
-    engine, project, restoringProject, sessions, sessionId, settings, error, relayNote, setError, historyState, setHistory, manageSession,
+    engine, project, restoringProject, sessions, sessionId, settings, error, setError, historyState, setHistory, manageSession,
     panelScope: sessionId ? sessionPanelScopes.current.get(sessionId) ?? sessionId : draftSession.current.panelScope,
-    workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree,
+    workspaces, workspaceId, workspace: workspaces.find((item) => item.id === workspaceId) ?? null, removeWorktree, removeProject,
     agents, agentCatalog, refreshAgents, refreshCatalog, startAgent, stopAgent,
     projection: projection.current,
     history: history.current,

@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import { Modal } from './modal.jsx';
-import { Icon } from './icon.jsx';
 import { Select } from './select.jsx';
 export function PermissionDialog({ request, onDecide, workspacePath = null }) {
   const [scope, setScope] = useState('allow_once');
@@ -17,7 +16,7 @@ export function PermissionDialog({ request, onDecide, workspacePath = null }) {
     try { await onDecide(decision); }
     catch (e) { deciding.current = false; setError(e.message); setPending(false); }
   };
-  return <Modal label="Permission request" onClose={() => decide('deny')} initialFocus={allowButton} className="permission-modal" onKeyDown={event => {
+  return <Modal label="Permission request" onClose={() => decide('deny')} dismissOnBackdrop={false} initialFocus={allowButton} className="permission-modal" onKeyDown={event => {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
     // Holding Enter must not approve a second request that appears after this one.
     if (event.repeat || deciding.current) { event.preventDefault(); return; }
@@ -28,9 +27,7 @@ export function PermissionDialog({ request, onDecide, workspacePath = null }) {
     event.preventDefault();
     void decide(scope);
   }}>
-    <div className="modal-eyebrow"><Icon name="shield" />{command ? 'Command permission' : 'Tool permission'}</div>
     <h2>{command ? 'Run this command?' : 'Allow this action?'}</h2>
-    <p className="muted">Jolo needs your approval to continue this task.</p>
     <div className="command-card"><pre className="command">{command || request.summary || request.tool || 'Tool details unavailable'}</pre><div className="hint">Runs in: {directory}</div></div>
     <p className="hint">Runs with your account’s access. This action can read or change files outside this project.</p>
     <label className="permission-scope">Allow for<Select value={scope} onChange={(event) => setScope(event.target.value)} disabled={pending}><option value="allow_once">{command ? 'This command only' : 'This action only'}</option><option value="allow_run">This task</option><option value="allow_project">This project</option></Select></label>

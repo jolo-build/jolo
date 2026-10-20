@@ -8,7 +8,6 @@ export async function runRealBrowserAgentSmoke({ window, bridge, browserHost, fi
   const state = await evaluate('window.__joloSmoke.state()');
   const { session } = await bridge.rawCall('session.create', { projectId: state.projectId, workspaceId: state.workspaceId, agentId, title: 'Inline browser integration check' });
   await evaluate(`window.__joloSmoke.selectSession(${JSON.stringify(session.id)})`);
-  await evaluate('window.__joloSmoke.showTask()');
   await waitFor(`document.querySelector('.model-select')?.textContent.includes(${JSON.stringify(agentId)})`, 'real agent selected');
   for (const attempt of ['first', 'resumed']) {
     if (browserHost.guests.size) await evaluate('window.__joloSmoke.closeBrowser()');

@@ -2,19 +2,6 @@ export const basename = (path) => path?.split(/[\\/]/).filter(Boolean).at(-1) ||
 export { desktopRunLabel as runLabel } from "@jolo/client/run-state";
 export { formatEveryMs as everyLabel } from "@jolo/protocol/schemas";
 
-// Abbreviate only this user's home, preserving other folders' identity.
-export function workspacePath(path, homeDirectory) {
-  if (!homeDirectory) return path;
-  const normalized = path.replaceAll('\\', '/');
-  const home = homeDirectory.replaceAll('\\', '/').replace(/\/+$/, '');
-  if (!home) return path;
-  const windows = /^[a-z]:\//i.test(home) || home.startsWith('//');
-  const value = windows ? normalized.toLowerCase() : normalized;
-  const prefix = windows ? home.toLowerCase() : home;
-  if (value === prefix) return '~';
-  return value.startsWith(`${prefix}/`) ? `~${normalized.slice(home.length)}` : path;
-}
-
 export function pauseDescription(run) {
   if (run.pauseReason === 'budget') {
     const detail = {

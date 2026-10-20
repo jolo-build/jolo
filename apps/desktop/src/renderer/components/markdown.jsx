@@ -7,6 +7,7 @@ import { Visualization } from './visualization.jsx';
 import { ImageAttachment } from './image-attachment.jsx';
 import { FilePreviewContext } from '../file-preview-context.js';
 import { CopyCodeButton } from './copy-code-button.jsx';
+import { Icon } from './icon.jsx';
 
 // Naming what the loader resolves to keeps the highlighter and its plain-text fallback one component
 // type, rather than two unrelated ones the union of which nothing accepts.
@@ -86,9 +87,9 @@ const MARKDOWN_LANGUAGES = new Set(["md", "markdown", "mdx"]);
 const MERMAID_LANGUAGES = new Set(["mermaid", "mmd"]);
 const MAX_EMBED_DEPTH = 2;
 
-/** A fence as code: highlighted, with its language named. */
+/** A fence as code: highlighted, with its language named on its copy button. */
 function CodeBlock({ block }) {
-  return <div className="md-code-block"><div className="md-code-language"><span>{block.language || 'text'}</span><span className="grow" /><CopyCodeButton text={block.text} /></div><pre className="md-code" data-language={block.language ?? ""}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre></div>;
+  return <div className="md-code-block"><div className="md-code-tools"><CopyCodeButton text={block.text} language={block.language} /></div><pre className="md-code" data-language={block.language ?? ""}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre></div>;
 }
 
 /** A markdown fence is a document, not code: render it, keep its source one click away. */
@@ -97,7 +98,7 @@ function MarkdownEmbed({ block, depth }) {
   const webBaseUrl = useContext(WebBase);
   const [source, setSource] = useState(false);
   return <div className="md-embed">
-    <div className="md-code-language"><span>{block.language}</span><span className="grow" /><CopyCodeButton text={block.text} /><button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Rendered" : "Source"}</button></div>
+    <div className="md-code-tools"><CopyCodeButton text={block.text} language={block.language} /><button type="button" className="md-embed-toggle" aria-pressed={source} aria-label="Show source" title="Show source" onClick={() => setSource((value) => !value)}><Icon name="code" size={14} /></button></div>
     {source ? <pre className="md-code" data-language={block.language}><Suspense fallback={<code>{block.text}</code>}><SyntaxCode text={block.text} language={block.language} /></Suspense></pre> : <div className="md-embed-body"><Markdown text={block.text} cacheKey={block.text.length} depth={depth + 1} sessionId={sessionId} webBaseUrl={webBaseUrl} /></div>}
   </div>;
 }

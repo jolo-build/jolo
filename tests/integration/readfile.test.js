@@ -53,3 +53,25 @@ test("workspace.readFile previews files under the path policy with bounds, and o
     await client.close();
   }
 }, 15_000);
+
+test("workspace.writeFile writes inside the workspace only, creates files in existing folders, and refuses the rest", async () => {
+  const home = tempHome(); homes.push(home);
+  const repo = path.join(home, "repo"); mkdirSync(path.join(repo, "docs"), { recursive: true });
+  writeFileSync(path.join(repo, "docs", "guide.md"), "# Guide\n");
+  mkdirSync(path.join(home, "outside")); writeFileSync(path.join(home, "outside", "secret.txt"), "secret");
+  symlinkSync(path.join(home, "outside"), path.join(repo, "link"));
+  const engine = await startEngine({ home }); engines.push(engine);
+  const client = await engine.connect();
+  try {
+    const { project } = await openSession(client, repo);
+    const workspaceId = project.workspaceId;
+    expect(await client.call("workspace.writeFile", { workspaceId, path: "docs/guide.md", text: "# Guide\n\nEdited.\n" })).toEqual({ path: "docs/guide.md", bytes: 17 });
+    expect((await client.call("workspace.readFile", { workspaceId, path: "docs/guide.md" })).text).toBe("# Guide\n\nEdited.\n");
+    expect(await client.call("workspace.writeFile", { workspaceId, path: "docs/new.txt", text: "fresh" })).toEqual({ path: "docs/new.txt", bytes: 5 });
+    await expect(client.call("workspace.writeFile", { workspaceId, path: "missing/new.txt", text: "x" })).rejects.toMatchObject({ code: "not_found" });
+    await expect(client.call("workspace.writeFile", { workspaceId, path: "../outside/secret.txt", text: "x" })).rejects.toMatchObject({ code: "permission_denied" });
+    await expect(client.call("workspace.writeFile", { workspaceId, path: "link/secret.txt", text: "x" })).rejects.toMatchObject({ code: "permission_denied" });
+    await expect(client.call("workspace.writeFile", { workspaceId, path: ".git/config", text: "x" })).rejects.toMatchObject({ code: "permission_denied" });
+    await expect(client.call("workspace.writeFile", { workspaceId, path: "docs", text: "x" })).rejects.toMatchObject({ code: "invalid_params" });
+  } finally { await client.close(); }
+}, 20_000);

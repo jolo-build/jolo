@@ -51,10 +51,10 @@ export function Onboarding({ connected, active, settings, project, call, onSetti
   };
   return <section className="onboarding" aria-label="Getting started">
     <div className="onboarding-content">
-      <header className="onboarding-heading"><span className="onboarding-eyebrow">Welcome to Jolo</span><h1>Make your first task a useful one.</h1><p>Bring your coding agent, open a project, and explore it together.</p></header>
+      <header className="onboarding-heading"><h1>Make your first task a useful one.</h1><p>Bring your coding agent, open a project, and explore it together.</p></header>
       <ol className="onboarding-steps" aria-label="Setup progress">{steps.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined} className={index < step ? 'complete' : ''}><span>{index < step ? <Icon name="check" size={13} /> : index + 1}</span>{label}</li>)}</ol>
       <div className="onboarding-card">
-        <h2 ref={heading} tabIndex={-1}>{steps[step]}</h2>
+        <h2 ref={heading} tabIndex={-1} className="sr-only">{steps[step]}</h2>
         {step === 0 && <>
           <p className="onboarding-description">Jolo uses your existing agent installation and subscription, or an API provider you connect.</p>
           {checking && connected ? <p className="onboarding-note" role="status">Checking installed agents and providers…</p> : <>

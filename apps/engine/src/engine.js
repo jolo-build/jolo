@@ -112,7 +112,7 @@ export function createEngine(options) {
     } catch (error) { log.warn("could not reconcile worktrees from a previous boot", { error: String(error) }); }
     const providerFactory = new ProviderFactory({ credentials, catalog: providerCatalog, settings: settingsService, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
     const catalog = createCatalog({ dir: paths.agentsDir, env: toolEnv, shell: (options.env ?? process.env).JOLO_SHELL ?? (options.env ?? process.env).SHELL ?? null, settings: settingsService, log });
-    agentModels = createModelDirectory({ catalog, supervisor, build, log });
+    agentModels = createModelDirectory({ catalog, supervisor, build, log, storage });
     agentLimits = createLimitDirectory({ catalog, supervisor, build, log });
     agents = new AgentService({ catalog, terminals, storage, log });
     const jolo = createAgentExecutor({ storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });

@@ -20,8 +20,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
   };
   const save = async id => {
     await choose(id);
-    await evaluate("document.querySelector('.settings-savebar button[type=submit]').click()");
-    await waitFor(`document.documentElement.dataset.theme === ${JSON.stringify(id)} && localStorage.getItem('jolo.theme') === ${JSON.stringify(id)} && document.querySelector('.settings-savebar button[type=submit]').disabled`, `${id} saved and applied`);
+    await waitFor(`document.documentElement.dataset.theme === ${JSON.stringify(id)} && localStorage.getItem('jolo.theme') === ${JSON.stringify(id)}`, `${id} saved and applied`);
     await settle();
   };
   const openSettings = async () => {
@@ -42,7 +41,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     window.show();
     window.focus();
     app.focus({ steal: true });
-    try { await waitFor("Boolean(window.__joloSmoke) && Boolean(document.querySelector('.board')) && document.querySelector('#startup-screen').hidden", 'themed renderer restored'); }
+    try { await waitFor("Boolean(window.__joloSmoke) && Boolean(document.querySelector('.composer')) && document.querySelector('#startup-screen').hidden", 'themed renderer restored'); }
     catch (error) {
       const state = await evaluate("({ url: location.href, ready: document.readyState, visibility: document.visibilityState, theme: document.documentElement.dataset.theme, sheets: [...document.styleSheets].map(sheet => sheet.href), bridge: Boolean(window.jolo), smoke: window.jolo?.smoke, html: document.body.innerHTML.slice(0, 2500) })");
       throw new Error(`${error.message}; page=${JSON.stringify(state)}; console=${JSON.stringify(messages)}`);
@@ -51,7 +50,6 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
   const cssColor = hex => `rgb(${[1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16)).join(', ')})`;
   try {
     window.setSize(1200, 840);
-    await evaluate('window.__joloSmoke.showTask()');
     await waitFor("window.__joloSmoke.state().workspaceId && !window.__joloSmoke.state().standalone", 'folder workspace ready');
     // Resizing closes popovers; let the new task layout settle before opening its menu.
     await settle();
@@ -61,10 +59,10 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     await openSettings();
     assert.deepEqual(await evaluate("[...document.querySelector('[aria-label=\"Color theme\"]').options].map(option => option.value)"), ['system', ...BUILTIN_THEMES.slice(1).map(theme => theme.id)]);
     await choose('catppuccin-mocha');
-    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'system', 'draft selection only changes its preview');
-    await evaluate("[...document.querySelectorAll('.settings-savebar button')].find(button => button.textContent === 'Discard changes').click()");
-    assert.equal(await evaluate("document.querySelector('[aria-label=\"Color theme\"]').value"), 'system');
-    report.checks.push('Appearance lists all CLI palettes and discards an unsaved theme choice');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'catppuccin-mocha', 'choosing a theme applies it at once');
+    await choose('system');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'system');
+    report.checks.push('Appearance lists all CLI palettes and applies a theme the moment it is chosen');
 
     for (const theme of BUILTIN_THEMES.slice(1)) {
       const light = ['white', 'catppuccin-latte', 'github-light'].includes(theme.id);
@@ -100,7 +98,7 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     report.checks.push(`All ${BUILTIN_THEMES.length - 1} palettes color the interface, syntax, and the existing terminal even with the opposite OS appearance`);
     window.setSize(720, 560);
     await settle();
-    assert(await evaluate("[...document.querySelectorAll('.settings-theme-preview, .settings-savebar, [aria-label=\"Color theme\"]')].every(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && el.scrollWidth <= el.clientWidth; })"), 'theme controls overflow a narrow window');
+    assert(await evaluate("[...document.querySelectorAll('[aria-label=\"Color theme\"]')].every(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && el.scrollWidth <= el.clientWidth; })"), 'theme controls overflow a narrow window');
     writeFileSync(path.join(results, 'theme-narrow.png'), (await window.webContents.capturePage()).toPNG());
 
     await save('system');
@@ -118,7 +116,6 @@ export async function runThemesSmoke({ window, evaluate, waitFor, report, result
     await reload();
     assert.equal(await evaluate('document.documentElement.dataset.theme'), 'white');
     assert.equal(await evaluate('getComputedStyle(document.body).backgroundColor'), 'rgb(255, 255, 255)');
-    await evaluate("window.__joloSmoke.showTask()");
     await openSettings();
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Color theme\"]').value"), 'white');
     writeFileSync(path.join(results, 'theme-white-reload.png'), (await window.webContents.capturePage()).toPNG());

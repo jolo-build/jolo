@@ -9,7 +9,7 @@
 // Every shape below was read from the installed binary and confirmed against a live session; see the
 // initialize/can_use_tool/control_response forms in the engine's agents README.
 import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, spawnLineChild } from "./hosted.js";
-import { createSummarizer, handoffPrompt } from "./handoff.js";
+import { compactRequested, createSummarizer, handoffPrompt, slashCommand } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
@@ -20,6 +20,21 @@ export { insideWorkspace };
 const MUTATION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "TodoWrite", "TodoRead"]);
 const PROCESS_TOOLS = new Set(["Bash", "PowerShell"]);
+/** Claude's own subagents run inside one of these calls; older builds name it Task. */
+const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
+/**
+ * A subagent's progress is written into its parent call's output, one line each, before its report: the model it runs
+ * on, then each tool it uses. The desktop reads these lines back by this prefix; a blank line comes before the report.
+ */
+export const SUBAGENT_LINE = "↳ ";
+const SUBAGENT_DISPLAY_MAX = 16 * 1024;
+const SUBAGENT_STEPS_MAX = 150;
+/** Progress stops short of the call's bound, whole lines only, and says so once in the room kept for it. */
+const SUBAGENT_PROGRESS_MAX = SUBAGENT_DISPLAY_MAX - 64;
+const SUBAGENT_MORE = `${SUBAGENT_LINE}… more steps not shown\n`;
+
+/** The head of a subagent call: what it is for and which kind of agent runs it, kept short enough to stay whole. */
+const subagentDisplay = (name, input) => `${name} ${JSON.stringify({ subagent_type: input?.subagent_type, description: input?.description, model: input?.model, prompt: String(input?.prompt ?? "").slice(0, 600) })}`;
 
 /** Jolo's tool classes for Claude's tools: the same policy Jolo applies to itself, applied to a guest. */
 export function classify(toolName) {
@@ -80,7 +95,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const hosted = mcpConfig?.(workspace, run);
       const mcpServers = hosted ? { jolo: hosted.server } : {};
       const argv = claudeArgv(binary, [...extraArgs, '--append-system-prompt', [inlineBrowserInstructions({ available: Boolean(hosted?.hasBrowser), hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n'), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered);
-      const contentPromise = handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) })
+      // A slash command is Claude's own — /compact, a built-in, a plugin's, a skill, one the user defined — and it works
+      // only as the whole message, so it goes to Claude alone, without the handoff that would otherwise surround it.
+      const command = slashCommand(run);
+      const contentPromise = (command ? Promise.resolve(command.text) : handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }))
         .then(prompt => {
           const images = readImages(storage, run);
           return images.length ? [...claudeImageContent(images), { type: 'text', text: prompt }] : prompt;
@@ -89,6 +107,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
 
       const state = {
         blocks: new Map(), // stream block index -> { kind, messageId }
+        subagents: new Map(), // subagent call id -> { model, last, steps, bytes, capped }
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
         result: null, failure: null,
         model: null, // the main model as Claude names it in its usage report
@@ -129,14 +148,45 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
 
       const onToolResult = (block) => {
         const text = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : JSON.stringify(block.content ?? "");
-        turn.toolFinished(block.tool_use_id, { text: browserPreview(text), isError: Boolean(block.is_error) });
+        // A subagent's report starts after a blank line, so none of its lines can be read as progress.
+        const shown = browserPreview(text);
+        turn.toolFinished(block.tool_use_id, { text: state.subagents.has(block.tool_use_id) ? `\n${shown}` : shown, isError: Boolean(block.is_error) });
+      };
+
+      /** A subagent's own message: only its model and the tools it uses become progress lines on the parent call. */
+      const onSubagent = (message) => {
+        const parentId = message.parent_tool_use_id;
+        const progress = state.subagents.get(parentId);
+        if (message.type !== "assistant" || !progress || progress.capped || !turn.hasTool(parentId)) return;
+        const out = [];
+        const write = (line) => {
+          const chunk = `${SUBAGENT_LINE}${line}\n`;
+          const size = Buffer.byteLength(chunk);
+          if (progress.steps >= SUBAGENT_STEPS_MAX || progress.bytes + size > SUBAGENT_PROGRESS_MAX) { progress.capped = true; out.push(SUBAGENT_MORE); return false; }
+          progress.bytes += size;
+          out.push(chunk);
+          return true;
+        };
+        const model = message.message?.model;
+        let room = true;
+        if (typeof model === "string" && model && model !== progress.model) { progress.model = model; room = write(`model: ${model}`); }
+        for (const block of room ? message.message?.content ?? [] : []) {
+          if (block?.type !== "tool_use") continue;
+          const step = describeTool(String(block.name ?? "tool"), block.input).summary.split("\n", 1)[0].trim().slice(0, 160);
+          if (!step || step === progress.last) continue;
+          if (!write(step)) break;
+          progress.last = step;
+          progress.steps += 1;
+        }
+        if (out.length) turn.toolOutput(parentId, out.join(""));
       };
 
       const onMessage = async (message) => {
         // Claude multiplexes subagent transcripts onto this stream. Their block indexes are local
         // to the child, and their reports belong to the parent's Agent/Task tool result, not the
-        // conversation. Permission requests from any agent must still reach Jolo's policy.
-        if (message.parent_tool_use_id != null && message.type !== 'control_request') return;
+        // conversation; only their progress is kept, on the parent call. Permission requests from
+        // any agent must still reach Jolo's policy.
+        if (message.parent_tool_use_id != null && message.type !== 'control_request') return onSubagent(message);
         switch (message.type) {
           case "control_response":
             if (message.response?.request_id === "jolo-init") link.write({ type: "user", message: { role: "user", content: await contentPromise } });
@@ -144,6 +194,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           case "control_request": return onControlRequest(message);
           case "system":
             if (message.subtype === "init" && message.model) state.model = message.model;
+            if (message.subtype === "compact_boundary" && compactRequested(run)) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, "Context compacted."); ctx.finishMessage(messageId, "complete"); }
             if (message.subtype === "init" && message.session_id && session.agentState?.claudeSessionId !== message.session_id) turn.remember({ claudeSessionId: message.session_id });
             return;
           case "stream_event": {
@@ -173,7 +224,8 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           }
           case "assistant": {
             for (const block of message.message?.content ?? []) {
-              if (block.type === "tool_use") { ctx.transition("tools"); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: `${block.name} ${JSON.stringify(block.input ?? {})}` }); }
+              if (block.type === "tool_use" && SUBAGENT_TOOLS.has(block.name)) { ctx.transition("tools"); state.subagents.set(block.id, { model: null, last: null, steps: 0, bytes: 0, capped: false }); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: subagentDisplay(block.name, block.input), outputMax: SUBAGENT_DISPLAY_MAX, resultMax: SUBAGENT_DISPLAY_MAX }); }
+              else if (block.type === "tool_use") { ctx.transition("tools"); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: `${block.name} ${JSON.stringify(block.input ?? {})}` }); }
               else if (block.type === "text" && block.text && ![...state.blocks.values()].some((entry) => entry.kind === "text")) {
                 const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, block.text); ctx.finishMessage(messageId, "complete"); // no partial stream arrived for this block
               }

@@ -1,8 +1,11 @@
 import { lazy, Suspense, memo } from 'react';
-import { diffLineKind } from '../diff-lines.js';
+import { diffLineKind, fileHeaders } from '../diff-lines.js';
 
 function PlainDiff({ text, context = true }) {
-  return text.split('\n').map((line, index) => {
+  const lines = text.split('\n');
+  const headers = fileHeaders(lines);
+  return lines.map((line, index) => {
+    if (headers.has(index)) return headers.get(index) && <div className="diff-line meta" key={index}><code>{headers.get(index)}</code></div>;
     const kind = diffLineKind(line);
     return context || kind !== 'context' ? <div className={`diff-line ${kind}`} key={index}><code>{line}</code></div> : null;
   });

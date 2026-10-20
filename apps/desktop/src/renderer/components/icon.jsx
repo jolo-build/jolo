@@ -1,10 +1,11 @@
 // Small, static icon set. No icon runtime or font is loaded by the renderer.
 const paths = {
   copy: 'M9 9h12v12H9ZM15 9V3H3v12h6',
+  code: 'm8 7-5 5 5 5M16 7l5 5-5 5',
   download: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
   zoomIn: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6M10.5 7.5v6',
   zoomOut: 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L21 21M7.5 10.5h6',
-  bolt: 'm13 2-9 12h7l-1 8 10-13h-7l1-7Z',
+  bolt: 'm13 2-9 12h7l-1 8 10-13h-7l1-7Z', fast: 'm5 6 6 6-6 6M12 6l6 6-6 6',
   circle: 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z', pause: 'M8 5v14M16 5v14',
   circleSlash: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM5.6 5.6l12.8 12.8',
   worktree: 'M12 3v7M5 14v-4h14v4M2 14h6v6H2ZM16 14h6v6h-6Z',
@@ -14,6 +15,7 @@ const paths = {
   sidebarRight: 'M3 4h18v16H3ZM15 4v16',
   splitRight: 'M3 4h18v16H3ZM12 4v16', splitBelow: 'M3 4h18v16H3ZM3 12h18',
   maximize: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5', restore: 'M8 3v5H3M16 3v5h5M21 16h-5v5M3 16h5v5',
+  expand: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7', collapse: 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7',
   more: 'M5 11.5h.01v.01H5ZM12 11.5h.01v.01H12ZM19 11.5h.01v.01H19Z',
   plus: 'M12 5v14M5 12h14', arrow: 'm7 10 5-5 5 5M12 5v14', right: 'M5 12h14m-6-6 6 6-6 6',
   chevron: 'm9 5 7 7-7 7', down: 'm6 9 6 6 6-6', close: 'm6 6 12 12M6 18 18 6', check: 'm5 12 4 4L19 6',

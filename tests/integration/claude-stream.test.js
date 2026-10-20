@@ -67,13 +67,63 @@ describe("Claude Code through its structured stream", () => {
       expect(replies.every(message => message.status === 'complete')).toBe(true);
       const tools = messages.filter(message => message.kind === 'tool');
       expect(tools).toHaveLength(1);
-      expect(await text(tools[0])).toContain('Agent');
-      expect(await text(tools[0])).toContain('INTERNAL_REVIEW');
+      const call = await text(tools[0]);
+      expect(call.split('\n', 1)[0]).toBe('Agent {"subagent_type":"code-reviewer","description":"Review the code","prompt":"Review the code"}');
+      // The subagent's model and each tool it used come first, one line each, then its report.
+      expect(call).toContain('\n↳ model: claude-opus-5-5\n↳ Bash: echo child-review\n↳ Read app.js\n\n[{"file":"app.js"');
+      expect(call).toContain('INTERNAL_REVIEW');
+      expect(call).not.toContain('SECOND_INTERNAL_REVIEW');
       expect(tools[0].status).toBe('complete');
       expect(events.filter(event => event.type === 'permission.requested')).toHaveLength(1);
       expect(run.note.summary).toBe('I found one issue. Validate the interval before saving.');
     } finally { await client.close(); }
   }, 20_000);
+
+  test("/compact reaches Claude as its own command, alone, and the task notes the compaction", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      expect((await runTo('before', 'hello')).state).toBe('completed');
+      const run = await runTo('compact', ' /compact ');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Context compacted.']);
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test("a long subagent's progress stops at whole lines, says more happened, and keeps its report whole", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      const run = await runTo('long review', 'subagent-long');
+      expect(run.state).toBe('completed');
+      const [tool] = (await messagesOf(run.id)).filter(message => message.kind === 'tool');
+      const lines = (await text(tool)).split('\n');
+      const steps = lines.slice(1, lines.indexOf(''));
+      expect(steps[0]).toBe('↳ model: claude-opus-5-5');
+      expect(steps.at(-1)).toBe('↳ … more steps not shown');
+      expect(steps.length).toBeGreaterThan(50);
+      expect(steps.slice(1, -1).every(line => /^↳ Read src\/\d{3}\/(deep\/)+/.test(line))).toBe(true);
+      expect(lines.slice(lines.indexOf('') + 1).join('\n').trim()).toBe('LONG_REPORT');
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test("any slash command reaches Claude whole, with no handoff around it, and its command list comes with its models", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      const report = await client.call('agent.models', { agentId: 'claude' });
+      expect(report.commands).toEqual([
+        { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '<optional custom summarization instructions>' },
+        { name: 'deploy', description: 'Ship the current branch to an environment', argumentHint: '<environment>' },
+      ]);
+      expect((await runTo('before', 'hello')).state).toBe('completed'); // so a later message would otherwise carry the conversation along
+      const run = await runTo('deploy', '  /deploy staging  ');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Command received: /deploy staging']);
+      // A slash inside a sentence is prose, and travels with the conversation as usual.
+      const prose = await runTo('prose', 'what does /deploy do?');
+      expect(await text((await messagesOf(prose.id)).at(-1))).toMatch(/^Continuing session fake-\w+: what does \/deploy do\?$/);
+    } finally { await client.close(); }
+  }, 30_000);
 
   test('long Claude tools do not inherit the native tool deadline', async () => {
     const { client, events, session, messagesOf, text } = await boot();

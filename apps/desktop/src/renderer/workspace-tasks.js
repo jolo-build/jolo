@@ -1,14 +1,35 @@
 // Each folder has its own cursor; a busy workspace cannot hide another folder's chats.
-export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = 'open', standalone) {
+export async function readWorkspaceTasks(call, workspaceId, pages = 1, state = 'open', standalone, pinned) {
   const tasks = new Map();
   let before, result;
   for (let index = 0; index < pages; index++) {
-    result = await call('board.tasks', { workspaceId, limit: 100, ...(standalone !== undefined ? { standalone } : {}), ...(state !== 'open' ? { state } : {}), ...(before ? { before } : {}) });
+    result = await call('board.tasks', { workspaceId, limit: 100, ...(standalone !== undefined ? { standalone } : {}), ...(pinned !== undefined ? { pinned } : {}), ...(state !== 'open' ? { state } : {}), ...(before ? { before } : {}) });
     for (const task of result.tasks) tasks.set(task.sessionId, task);
     if (!result.hasMore || !result.nextCursor) break;
     before = result.nextCursor;
   }
   return { tasks: [...tasks.values()], hasMore: Boolean(result?.hasMore && result?.nextCursor) };
+}
+
+/** The chats the sidebar lists: a new chat joins the list with its first message, even while it is open. */
+export function sidebarChats(tasks) {
+  return tasks.filter((task) => task.run);
+}
+
+/**
+ * The open conversation's family: the child tasks it started, directly or through its children, and, when it is a
+ * child itself, the top-level task that started it.
+ * @returns {{ children: any[], parent: any | null }}
+ */
+export function taskFamily(tasks, sessionId) {
+  const tree = taskTree(tasks);
+  const parentId = [...tree.children].find(([, list]) => list.some((task) => task.sessionId === sessionId))?.[0] ?? null;
+  return { children: tree.children.get(sessionId) ?? [], parent: parentId ? tasks.find((task) => task.sessionId === parentId) ?? null : null };
+}
+
+/** A tree without its pinned tasks, which the sidebar lists in a section of their own; a pinned task's children go with it. */
+export function unpinnedTree(tree) {
+  return { roots: tree.roots.filter((task) => !task.pinnedAt), children: new Map([...tree.children].map(([id, list]) => [id, list.filter((task) => !task.pinnedAt)])) };
 }
 
 /**

@@ -1,34 +1,38 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Icon } from './icon.jsx';
 import { ModelLogo } from './brand.jsx';
-import { effortLabel, modelEfforts, effortForModel, modelLabel } from '../model-options.js';
+import { effortLabel, modelEfforts, effortForModel, fastForModel, modelLabel, modelSupportsFast } from '../model-options.js';
 
 /** Quick access to the same saved model preferences used by Settings. */
-export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange }) {
+/** Model lists already seen in this window, so a menu opened in another chat or pane shows them at once. */
+const knownReports = new Map();
+
+export function ModelControls({ agentId, agents, nativeModel, hasSession, disabled, onSave, call, onSettings, onOpenChange, hiddenSources = [] }) {
   const trigger = useRef(null), effortTrigger = useRef(null), opener = useRef(null), search = useRef(null), panel = useRef(null), busy = useRef(false), alive = useRef(true);
   const id = useId();
   const [open, setOpen] = useState(false), [view, setView] = useState('models');
-  const [reports, setReports] = useState({}), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
+  const [reports, setReports] = useState(() => Object.fromEntries(knownReports)), [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [error, setError] = useState(''), [presets, setPresets] = useState([]);
   const [browsing, setBrowsing] = useState({ agentId, preset: nativeModel?.preset ?? '' });
   const [query, setQuery] = useState('');
   const browsingModels = view === 'models';
   const activeAgentId = browsingModels ? browsing.agentId : agentId;
   const preset = browsingModels ? browsing.preset : nativeModel?.preset ?? '';
-  const [preview, setPreview] = useState(undefined);
   const [refresh, setRefresh] = useState(0);
   const agent = agents.find(entry => entry.id === activeAgentId);
   const agentName = agent?.displayName ?? 'Jolo';
   const source = activeAgentId === 'jolo' ? `provider:${preset}` : `agent:${activeAgentId}`;
   const selectedModel = agent ? agent.model : nativeModel?.preset === preset ? nativeModel?.model : null;
   const effort = agent ? agent.effort : nativeModel?.preset === preset ? nativeModel?.effort : null;
+  // Fast mode is an installed agent's own option; Jolo's providers do not offer it yet.
+  const fast = Boolean(agent?.fast);
   const report = reports[source];
   const chosen = report?.models.find(entry => selectedModel ? entry.id === selectedModel : entry.isDefault);
   const label = chosen?.displayName ?? selectedModel ?? `${agentName} default`;
   const levels = modelEfforts(report, selectedModel, agent ? agent.supportsEffort : true);
+  // Offered where the model has it, and kept in view while on, so a model chosen elsewhere never hides the way out.
+  const fastOffered = Boolean(agent?.supportsFast) && (fast || modelSupportsFast(report, selectedModel));
   const steps = [null, ...levels];
-  const shownEffort = preview === undefined ? effort : preview;
-  const index = Math.max(0, steps.indexOf(shownEffort ?? null));
   const latest = useRef({ onOpenChange, call }); latest.current = { onOpenChange, call };
 
   useEffect(() => {
@@ -44,10 +48,11 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
     return () => { alive.current = false; element.removeEventListener('toggle', changed); window.removeEventListener('resize', close); latest.current.onOpenChange(false); };
   }, []);
   useEffect(() => {
-    if (open) (panel.current.querySelector('input[type=search]') ?? panel.current.querySelector('input[type=range]') ?? panel.current.querySelector('button'))?.focus({ preventScroll: true });
+    // The effort list opens on its current row, so arrow keys and Enter work at once.
+    if (open) (panel.current.querySelector('input[type=search]') ?? panel.current.querySelector('.effort-list [aria-selected="true"]') ?? panel.current.querySelector('button'))?.focus({ preventScroll: true });
   }, [open, view]);
   useEffect(() => { if (disabled) panel.current.hidePopover(); }, [disabled]);
-  useEffect(() => { setPreview(undefined); setError(''); }, [source, selectedModel, effort]);
+  useEffect(() => { setError(''); }, [source, selectedModel, effort]);
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -60,28 +65,26 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
     let cancelled = false;
     setLoading(true); setError('');
     latest.current.call(agent ? 'agent.models' : 'provider.models', agent ? { agentId: activeAgentId, refresh: Boolean(refresh) } : { preset, refresh: Boolean(refresh) })
-      .then(result => { if (!cancelled) setReports(current => ({ ...current, [source]: result })); })
+      .then(result => { knownReports.set(source, result); if (!cancelled) setReports(current => ({ ...current, [source]: result })); })
       .catch(error => { if (!cancelled) setError(error.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, source, refresh]);
   const dismiss = () => { panel.current.hidePopover(); opener.current?.focus(); };
-  const save = async (model, nextEffort, nextView = view) => {
+  const save = async (model, nextEffort, nextFast, nextView = view) => {
     if (busy.current) return;
     busy.current = true; setSaving(true); setError('');
-    try { await onSave({ agentId: activeAgentId, preset, model: model || null, effort: nextEffort || null }); if (alive.current) { if (browsingModels) dismiss(); else setView(nextView); } }
+    // Fast is named only when it changes, so an engine from before fast mode still takes every other choice.
+    try { await onSave({ agentId: activeAgentId, preset, model: model || null, effort: nextEffort || null, fast: nextFast === fast ? undefined : nextFast }); if (alive.current) { if (browsingModels) dismiss(); else setView(nextView); } }
     catch (error) { if (alive.current) setError(error.message); }
-    finally { busy.current = false; if (alive.current) { setSaving(false); setPreview(undefined); } }
+    finally { busy.current = false; if (alive.current) setSaving(false); }
   };
-  const commit = event => {
-    const next = steps[Number(event.currentTarget.value)];
-    if (next !== (effort ?? null)) void save(selectedModel, next);
-    else setPreview(undefined);
-  };
+  // The menu lists what is set up and not hidden in Settings; the source in use, or being browsed, always stays reachable.
+  const inUse = agents.some(entry => entry.id === agentId) ? `agent:${agentId}` : `provider:${nativeModel?.preset}`;
   const sources = [
     ...agents.map(entry => ({ key: `agent:${entry.id}`, agentId: entry.id, preset: '', name: entry.displayName, available: entry.available })),
     ...presets.map(entry => ({ key: `provider:${entry.id}`, agentId: 'jolo', preset: entry.id, name: entry.displayName, available: entry.available })),
-  ];
+  ].filter(entry => (entry.available && !hiddenSources.includes(entry.key)) || entry.key === source || entry.key === inUse);
   const term = query.trim().toLowerCase();
   const sourceName = sources.find(entry => entry.key === source)?.name ?? agentName;
   const choices = (report?.models ?? []).filter(model => `${modelLabel(model.displayName || model.id)} ${model.id} ${sourceName}`.toLowerCase().includes(term));
@@ -90,6 +93,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
   const currentModel = currentAgent ? currentAgent.model : nativeModel?.model;
   const currentEffort = currentAgent ? currentAgent.effort : nativeModel?.effort;
   const currentReport = reports[currentAgent ? `agent:${agentId}` : `provider:${nativeModel?.preset}`];
+  const currentFast = Boolean(currentAgent?.fast) && (!currentReport || modelSupportsFast(currentReport, currentModel));
   const currentLabel = currentReport?.models.find(model => currentModel ? model.id === currentModel : model.isDefault)?.displayName ?? currentModel ?? currentAgent?.displayName ?? 'Choose model';
   const show = (nextView, button) => {
     if (open && view === nextView) { dismiss(); return; }
@@ -112,7 +116,7 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
   const focusSource = () => panel.current.querySelector('.model-provider-list button[aria-pressed=true]')?.focus();
   return <>
     <button ref={trigger} type="button" className="model-select" aria-label="Choose model" aria-haspopup="dialog" aria-expanded={open && browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} title={modelLabel(currentLabel)} onClick={event => { event.preventDefault(); show('models', event.currentTarget); }}><ModelLogo model={currentModel} agentId={agentId} preset={nativeModel?.preset} /><span>{modelLabel(currentLabel)}</span><Icon name="down" size={12} /></button>
-    <button ref={effortTrigger} type="button" className="model-effort-select" aria-label="Choose reasoning effort" aria-haspopup="dialog" aria-expanded={open && !browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} onClick={event => { event.preventDefault(); show('effort', event.currentTarget); }}>{effortLabel(currentEffort)}<Icon name="down" size={12} /></button>
+    <button ref={effortTrigger} type="button" className="model-effort-select" aria-label="Choose reasoning effort" aria-haspopup="dialog" aria-expanded={open && !browsingModels} aria-controls={id} popoverTarget={id} disabled={disabled} title={currentFast ? 'Fast mode is on' : undefined} onClick={event => { event.preventDefault(); show('effort', event.currentTarget); }}>{currentFast && <Icon name="fast" size={12} />}{effortLabel(currentEffort)}<Icon name="down" size={12} /></button>
     <div ref={panel} id={id} className={`model-popover${browsingModels ? ' model-browser' : ''}`} popover="auto" role="dialog" aria-label="Model and reasoning effort" onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); }
       // Enter in a popover must never submit the surrounding message composer.
@@ -122,16 +126,17 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
         if ((event.shiftKey && document.activeElement === items[0]) || (!event.shiftKey && document.activeElement === items.at(-1))) dismiss();
       }
     }}>
-      {view === 'effort' ? <>
-        <div className="effort-heading"><span className="effort-heading-label">Effort</span><button type="button" className="effort-model" disabled={saving} onClick={() => show('models', trigger.current)}><strong>{effortLabel(shownEffort)}<Icon name="chevron" size={13} /></strong><span title={modelLabel(label)}>{modelLabel(label)}</span></button><button type="button" className="effort-reset" title="Reset effort to default" aria-label="Reset effort to default" disabled={saving || !effort} onClick={() => save(selectedModel, null)}><Icon name="refresh" size={17} /></button></div>
-        {levels.length > 0 ? <div className="effort-control">
-          <div className="effort-slider" style={/** @type {import('react').CSSProperties} */ ({ '--progress': index / (steps.length - 1) })}>
-            <div className="effort-track" aria-hidden="true" /><div className="effort-ticks" aria-hidden="true">{steps.map((step, i) => <span key={step ?? 'default'} className={i <= index ? 'filled' : ''} />)}</div>
-            <input type="range" min="0" max={steps.length - 1} step="1" value={index} disabled={saving || loading} aria-label="Reasoning effort" aria-valuetext={effortLabel(shownEffort)} onChange={event => setPreview(steps[Number(event.target.value)])} onPointerUp={commit} onPointerCancel={() => setPreview(undefined)} onBlur={commit} onKeyUp={event => { if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(event.key)) commit(event); }} />
-          </div><div className="effort-scale"><span>Default</span><span>{effortLabel(levels.at(-1))}</span></div>
-        </div> : <p className="model-status" role="status">{loading ? 'Loading effort levels…' : !report && !agent ? 'Choose a connected model to get started.' : report?.note ?? 'Effort levels aren’t reported for this model.'}</p>}
-        <div className="model-popover-footer"><button type="button" disabled={saving} onClick={() => show('models', trigger.current)}>{agentName}<Icon name="down" size={12} /></button><span>{saving ? 'Saving…' : agent ? 'Agent defaults' : hasSession ? 'Current task' : 'Jolo defaults'}</span><button type="button" aria-label="Model settings" title="Model settings" onClick={() => { dismiss(); onSettings(agent ? 'agents' : 'provider'); }}><Icon name="settings" size={15} /></button></div>
-      </> : <div className="model-cascade">
+      {view === 'effort' ? <div className="effort-list" role="listbox" aria-label="Reasoning effort" onKeyDown={event => {
+        if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const options = /** @type {HTMLButtonElement[]} */ ([...event.currentTarget.querySelectorAll('button:not(:disabled)')]);
+        const at = options.indexOf(/** @type {HTMLButtonElement} */ (document.activeElement));
+        options[event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (at + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length]?.focus();
+      }}>
+        {levels.length > 0 ? steps.map(step => <button type="button" role="option" key={step ?? 'default'} data-effort={step ?? ''} aria-selected={(effort ?? null) === step} disabled={saving || loading} onClick={() => { if (step !== (effort ?? null)) void save(selectedModel, step, fast); dismiss(); }}><span>{effortLabel(step)}</span>{(effort ?? null) === step && <Icon name="check" size={14} className="effort-check" />}</button>)
+          : <p className="model-status" role="status">{loading ? 'Loading effort levels…' : !report && !agent ? 'Choose a connected model to get started.' : report?.note ?? 'Effort levels aren’t reported for this model.'}</p>}
+        {fastOffered && <><div className="effort-divider" aria-hidden="true" /><button type="button" role="option" className="effort-fast" data-effort="fast" aria-selected={fast} disabled={saving} title="Faster replies that use more of your plan" onClick={() => void save(selectedModel, effort, !fast)}><Icon name="fast" size={14} /><span>Fast</span>{fast && <Icon name="check" size={14} className="effort-check" />}</button></>}
+      </div> : <div className="model-cascade">
         <div className="model-providers">
           <div className="model-provider-list" role="group" aria-label="Agents and providers" onKeyDown={event => {
             if (event.key === 'ArrowRight') { event.preventDefault(); search.current?.focus(); }
@@ -164,8 +169,8 @@ export function ModelControls({ agentId, agents, nativeModel, hasSession, disabl
             }
           }}>
             {term && sources.filter(entry => entry.key !== source && entry.name.toLowerCase().includes(term)).map(entry => <button type="button" key={entry.key} disabled={saving} onClick={() => { browse(entry); setQuery(''); search.current?.focus(); }}><span><strong>{entry.name}</strong><small>Browse models</small></span><Icon name="chevron" size={14} /></button>)}
-            {agent && canModel && !term && <button type="button" aria-pressed={!selectedModel} disabled={saving || !agent.available} onClick={() => save(null, null)}><span><strong>Default</strong><small>{agentName} chooses the model</small></span>{!selectedModel && <Icon name="check" size={15} />}</button>}
-            {choices.map(model => <button type="button" key={model.id} data-model={model.id} aria-pressed={selectedModel === model.id} disabled={saving || !canModel || !sources.find(entry => entry.key === source)?.available} onClick={() => save(model.id, effortForModel(report, model.id, effort))}><span><strong>{modelLabel(model.displayName || model.id)}</strong></span>{selectedModel === model.id && <Icon name="check" size={15} />}</button>)}
+            {agent && canModel && !term && <button type="button" aria-pressed={!selectedModel} disabled={saving || !agent.available} onClick={() => save(null, null, fastForModel(report, null, fast))}><span><strong>Default</strong><small>{agentName} chooses the model</small></span>{!selectedModel && <Icon name="check" size={15} />}</button>}
+            {choices.map(model => <button type="button" key={model.id} data-model={model.id} aria-pressed={selectedModel === model.id} disabled={saving || !canModel || !sources.find(entry => entry.key === source)?.available} onClick={() => save(model.id, effortForModel(report, model.id, effort), fastForModel(report, model.id, fast))}><span><strong>{modelLabel(model.displayName || model.id)}</strong></span>{selectedModel === model.id && <Icon name="check" size={15} />}</button>)}
             {loading && <p className="model-status" role="status">Loading models…</p>}
             {!loading && !choices.length && <p className="model-status" role="status">{term ? 'No matching models for this provider.' : report?.note ?? 'Choose a provider or connect one in Settings.'}</p>}
             {error && <p className="model-error" role="alert">{error}</p>}

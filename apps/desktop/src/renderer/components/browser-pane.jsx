@@ -51,12 +51,12 @@ export function BrowserPane({ workspaceId, initialUrl, onTitle, onNavigate, work
     <div className="browser-content" aria-busy={loading} data-has-page={hasPage}>
       <webview ref={view} src={src} partition={`jolo-browser-${workspaceId}`} title={title || 'Browser page'} />
       <BrowserCursor key={cursorKey} view={view} working={working} />
-      {loadError ? <div className="browser-start browser-error panel-empty" role="alert">
+      {loadError && <div className="browser-start browser-error panel-empty" role="alert">
         <Icon name="browser" size={30} />
         <h2>Couldn’t load this page</h2>
         <p>Check the address and try again.</p>
         <code>{loadError}</code>
-      </div> : !loading && (!pageUrl || pageUrl === 'about:blank') && <div className="browser-start panel-empty"><Icon name="browser" size={30} /><h2>Your app, right here.</h2><p>Open a website or ask your agent to navigate, inspect, and interact with it.</p></div>}
+      </div>}
     </div>
   </section>;
 }

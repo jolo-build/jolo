@@ -41,12 +41,12 @@ export async function runHistorySmoke({ window, bridge, results, evaluate, waitF
     if (olderRequests !== 1) throw new Error('failed history automatically retried in a loop');
     const anchorBefore = await evaluate("document.querySelector('[data-message-id=\"history-288\"]').getBoundingClientRect().top");
     await evaluate("document.querySelector('.history-loader button').click()");
-    await waitFor("window.__joloSmoke.state().messageCount === 200 && !document.querySelector('.history-loader button')?.disabled", 'retry loads previous page');
+    await waitFor("window.__joloSmoke.state().messageCount === 200 && !document.querySelector('.history-loader')", 'retry loads previous page');
     const anchorAfter = await evaluate("document.querySelector('[data-message-id=\"history-288\"]').getBoundingClientRect().top");
     if (Math.abs(anchorAfter - anchorBefore) > 2) throw new Error(`history moved the reading position: ${anchorBefore} -> ${anchorAfter}`);
     report.checks.push('failed history pages show a retry action and loading preserves the reading position');
     await scrollTop();
-    await waitFor("window.__joloSmoke.state().messageCount === 300 && !document.querySelector('.history-loader button')?.disabled", 'scroll loads another page');
+    await waitFor("window.__joloSmoke.state().messageCount === 300 && !document.querySelector('.history-loader')", 'scroll loads another page');
     await scrollTop();
     await waitFor("window.__joloSmoke.state().messageCount === 388 && document.querySelector('[data-message-id=\"history-0\"]')?.textContent.includes('Saved message 0')", 'earliest saved message restored');
     if (await evaluate("Boolean(document.querySelector('.history-loader'))")) throw new Error('history control remained after the first page');

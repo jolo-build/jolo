@@ -32,7 +32,7 @@ export function TextAttachment({ attachment }) {
     </button>
     {open && <Modal label={attachment.name} className="text-attachment-preview" onClose={() => setOpen(false)}>
       <div className="text-attachment-heading"><strong>{attachment.name}</strong><button type="button" aria-label="Close text preview" onClick={() => setOpen(false)}><Icon name="close" /></button></div>
-      {error ? <p role="alert">{error}</p> : text === null ? <p role="status">Loading text…</p> : <pre>{text}</pre>}
+      {error ? <p role="alert">{error}</p> : text === null ? <p className="deferred" role="status">Loading text…</p> : <pre>{text}</pre>}
     </Modal>}
   </>;
 }

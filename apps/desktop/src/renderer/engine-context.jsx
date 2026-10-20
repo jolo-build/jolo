@@ -42,29 +42,37 @@ export function EngineProvider({ children }) {
   // when it is, so a task that finishes in another project is never missed just because it was not on screen.
   const [notices, setNotices] = useState([]);
   const onScreen = useRef(new Map()); // sessions a visible pane is showing: they need no telling
+  const approvalOnScreen = useRef(new Map()); // of those, the ones whose approval request is on screen too
   const focusListeners = useRef(new Set());
   const dismissNotice = useCallback((key) => setNotices((list) => list.filter((notice) => notice.key !== key)), []);
   const showNotice = useCallback((notice) => setNotices((list) => [...list.filter((entry) => entry.key !== notice.key), notice].slice(-NOTIFY_LIMIT)), []);
-  /** A pane says which task it is showing, so finishing in front of the user is not announced to them. */
-  const watchSession = useCallback((sessionId) => {
+  /** A pane says which task it is showing, and whether it shows that task's approvals, so neither is announced twice. */
+  const watchSession = useCallback((sessionId, { approvals = false } = {}) => {
     if (!sessionId) return () => {};
-    onScreen.current.set(sessionId, (onScreen.current.get(sessionId) ?? 0) + 1);
-    return () => { const count = onScreen.current.get(sessionId) - 1; if (count) onScreen.current.set(sessionId, count); else onScreen.current.delete(sessionId); };
+    const maps = approvals ? [onScreen.current, approvalOnScreen.current] : [onScreen.current];
+    for (const map of maps) map.set(sessionId, (map.get(sessionId) ?? 0) + 1);
+    return () => { for (const map of maps) { const count = map.get(sessionId) - 1; if (count) map.set(sessionId, count); else map.delete(sessionId); } };
   }, []);
   /** Opening a task from a notice takes the same path a clicked OS notification does. */
   const requestFocus = useCallback((payload) => { for (const listener of focusListeners.current) listener(payload); }, []);
   const onFocusRequest = useCallback((listener) => { focusListeners.current.add(listener); return () => focusListeners.current.delete(listener); }, []);
 
   useEffect(() => {
-    let disposed = false, notified = false, timer = null;
+    let disposed = false, notified = false, timer = null, offline = null;
     const receive = (next) => {
       if (disposed) return;
       setEngine(next);
+      clearTimeout(offline);
       if (next.connected) {
+        dismissNotice("engine");
         void Promise.allSettled([refreshSettings(), refreshBoard(), refreshCatalog()]).then(() => {
           if (!disposed) setInitializing(false);
         });
-      } else if (next.error) setInitializing(false); // let the interface show connection failures
+        return;
+      }
+      if (next.error) setInitializing(false); // let the interface show connection failures
+      // A blip under a second says nothing; a longer outage stays on screen until the engine is back.
+      offline = setTimeout(() => showNotice({ key: "engine", tone: "needs", title: next.error ? "Local engine stopped" : "Reconnecting to the local engine…", body: next.error ?? "" }), 1000);
     };
     const offEngine = window.jolo.onEngine((next) => { notified = true; receive(next); });
     void engineCall("engine.status", {}).then((status) => { if (!notified) receive({ connected: true, status }); }).catch((error) => { if (!notified) receive({ connected: false, error: error.message }); });
@@ -85,7 +93,7 @@ export function EngineProvider({ children }) {
         setNotices(list => list.filter(notice => notice.focus?.permissionId !== payload.permissionId));
         return;
       }
-      if (payload.kind !== "approval" && payload.sessionId && onScreen.current.has(payload.sessionId)) return;
+      if (payload.sessionId && (payload.kind === "approval" ? approvalOnScreen : onScreen).current.has(payload.sessionId)) return;
       showNotice({
         key: `${payload.sessionId ?? payload.projectId ?? payload.kind}:${payload.kind}:${payload.title}`,
         tone: payload.tone ?? "muted",
@@ -95,8 +103,8 @@ export function EngineProvider({ children }) {
         focus: { projectId: payload.projectId, rootPath: payload.rootPath, sessionId: payload.sessionId, permissionId: payload.permissionId ?? null },
       });
     });
-    return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); };
-  }, [refreshSettings, refreshBoard, refreshCatalog, showNotice]);
+    return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); clearTimeout(offline); };
+  }, [refreshSettings, refreshBoard, refreshCatalog, showNotice, dismissNotice]);
   // One object per change, not per render: every pane reads this context, so a fresh object each time
   // would re-render all of them whenever a notice comes or goes.
   const value = useMemo(() => ({ engine, initializing, settings, board, agentCatalog, refreshSettings, refreshBoard, refreshCatalog, setOverlay, notices, showNotice, dismissNotice, watchSession, requestFocus, onFocusRequest }),

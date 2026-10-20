@@ -12,7 +12,7 @@ import { realpathSync } from "node:fs";
 // The shapes below were generated from the installed binary (`codex app-server generate-json-schema`) and
 // confirmed in live sessions; see the engine's agents README.
 import { createHostedTurn, digestOf, displayPath, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
-import { createSummarizer, handoffPrompt } from "./handoff.js";
+import { compactRequested, createSummarizer, handoffPrompt, slashCommand } from "./handoff.js";
 import { browserPreview } from '../browser/mcp.js';
 import { codexMcpArgs } from '../hosted-mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
@@ -22,8 +22,14 @@ import { saveGeneratedImage } from './generated-images.js';
 
 const APPROVAL_POLICY = "untrusted";
 const SANDBOX = "workspace-write";
+/** Codex's name for fast mode: the service tier its model list offers as "Fast". */
+export const CODEX_FAST_TIER = "priority";
+/** Standard speed, named explicitly so the user's own Codex config cannot turn fast mode on behind Jolo's switch. */
+const CODEX_STANDARD_TIER = "default";
 const TEXT_ITEMS = new Set(["agentMessage", "plan"]);
 const SILENT_ITEMS = new Set(["userMessage", "hookPrompt", "contextCompaction", "enteredReviewMode", "exitedReviewMode", "subAgentActivity"]);
+/** How a "/review" message is put to Codex: the words after it are the brief; without any, it reviews the working tree. */
+export const reviewTarget = (args) => (args ? { type: "custom", instructions: args } : { type: "uncommittedChanges" });
 const JSON_RPC_METHOD_NOT_FOUND = -32601;
 const JSON_RPC_INTERNAL = -32603;
 
@@ -104,6 +110,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         texts: new Map(), // agentMessage/plan/reasoning item id -> { messageId, streamed }
         streamed: new Set(), // tool items whose output already arrived as deltas
         images: new Set(), // completed image items already published
+        reviewing: false, // inside a review Codex runs for /review: its findings arrive whole when the review mode ends
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
       };
       const pending = new Map(); // JSON-RPC id -> { resolve, reject }
@@ -230,7 +237,8 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       };
       const onItemStarted = (item) => {
         state.items.set(item.id, item);
-        if (SILENT_ITEMS.has(item.type)) return;
+        if (item.type === "enteredReviewMode") state.reviewing = true;
+        if (SILENT_ITEMS.has(item.type) || (state.reviewing && TEXT_ITEMS.has(item.type))) return; // the review's own text is its findings, shown once it ends
         if (TEXT_ITEMS.has(item.type)) { modelActivity(); textMessage(item.id, "text"); return; }
         if (item.type === "reasoning") { modelActivity(); textMessage(item.id, "reasoning"); return; }
         ctx.transition("tools");
@@ -240,7 +248,14 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
       const onItemCompleted = (item) => {
         if (item.type === 'imageGeneration' && state.images.has(item.id)) return;
         state.items.delete(item.id);
-        if (SILENT_ITEMS.has(item.type)) return;
+        if (item.type === "contextCompaction" && compactRequested(run)) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, "Context compacted."); ctx.finishMessage(messageId, "complete"); return; }
+        if (item.type === "exitedReviewMode") {
+          // The review Codex ran on request reads as its reply; a review it entered on its own stays quiet, as before.
+          state.reviewing = false;
+          if (slashCommand(run)?.name === "review" && typeof item.review === "string" && item.review.trim()) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, item.review.trim()); ctx.finishMessage(messageId, "complete"); }
+          return;
+        }
+        if (SILENT_ITEMS.has(item.type) || (state.reviewing && TEXT_ITEMS.has(item.type) && !state.texts.has(item.id))) return;
         if (TEXT_ITEMS.has(item.type)) {
           const entry = textMessage(item.id, "text");
           if (!entry.streamed && item.text) turn.appendBounded(entry.messageId, item.text); // no deltas arrived for it
@@ -294,6 +309,7 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
             return;
           case "item/agentMessage/delta":
           case "item/plan/delta": {
+            if (state.reviewing) return; // the review's findings arrive whole when its mode ends
             const entry = textMessage(params.itemId, "text");
             entry.streamed = true;
             if (params.delta) turn.appendBounded(entry.messageId, params.delta);
@@ -373,7 +389,16 @@ export function createCodexAppServerExecutor({ storage, catalog, permissions, su
         state.threadId = thread.id;
         if (thread.id !== remembered) turn.remember({ codexThreadId: thread.id });
         // Also per turn, so a model changed between turns takes effect on a thread that was resumed.
-        const started = await request("turn/start", { threadId: thread.id, input: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...readImages(storage, run).map(image => ({ type: 'localImage', path: image.path }))], ...(chosen.model ? { model: chosen.model } : {}), ...(chosen.effort ? { effort: chosen.effort } : {}) });
+        // Codex compacts a thread on request, as a turn of its own that reports through the usual turn events; a review is
+        // a method of its own too. Any other slash word has no meaning over this protocol and goes to Codex as text.
+        if (compactRequested(run)) { await request("thread/compact/start", { threadId: thread.id }); return; }
+        const command = slashCommand(run);
+        if (command?.name === "review") {
+          const review = await request("review/start", { threadId: thread.id, target: reviewTarget(command.args) });
+          state.turnId ??= review?.turn?.id ?? null;
+          return;
+        }
+        const started = await request("turn/start", { threadId: thread.id, input: [{ type: "text", text: await handoffPrompt({ storage, run, session, resumed, ...handoffParties({ catalog, session, manifest, storage, run, model: chosen.model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) }) }, ...readImages(storage, run).map(image => ({ type: 'localImage', path: image.path }))], ...(chosen.model ? { model: chosen.model } : {}), ...(chosen.effort ? { effort: chosen.effort } : {}), serviceTier: chosen.fast ? CODEX_FAST_TIER : CODEX_STANDARD_TIER });
         state.turnId ??= started?.turn?.id ?? null;
       };
 

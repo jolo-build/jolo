@@ -3,7 +3,7 @@ import { requireInteractive } from "./authorization.js";
 import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
-import { closeSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from 'node:path';
 import { resolveWorkspacePath, WorkspacePathError } from "../tools/paths.js";
 import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
@@ -13,6 +13,7 @@ import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
+import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '../search/files.js';
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
@@ -106,6 +107,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         let project = storage.listProjects().find(p => p.rootPath === root) ?? storage.upsertProject({ identity: root, rootPath: root });
         const preferences = storage.getProjectPreferences(project.id);
         if (preferences.redirectProjectId) project = storage.getProject(preferences.redirectProjectId);
+        if (storage.getProjectPreferences(project.id).removedAt) storage.setProjectRemoved(project.id, false); // opening the folder again puts it back in the sidebar
         const workspace = storage.getProjectPreferences(project.id).syncPlaceholder ? storage.listWorkspaces(project.id)[0] : storage.ensureDirectWorkspace(project.id, project.rootPath);
         const needsFolder = storage.getWorkspace(workspace.id).needsFolder;
         if (!needsFolder) {
@@ -119,6 +121,27 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     'project.linkFolder': ({ workspaceId, path }, conn) => {
       requireInteractive(conn, 'Choose a local folder in Jolo to link this synced project.');
       return linkChatFolder({ storage, permissions, workspaceId, folder: path });
+    },
+    // Forget a folder in the sidebar without touching it: its chats are archived, so they stay in history and come
+    // back when the same folder is opened again, and its worktrees stay on disk. A run still going refuses.
+    'project.remove': ({ projectId }, conn) => {
+      requireInteractive(conn, 'only an interactive client can remove a project from the sidebar');
+      const archived = storage.transaction(() => {
+        const project = storage.getProject(projectId);
+        if (!project) throw new ProtocolError('not_found', 'unknown project');
+        if (project.preferences.standalone) throw new ProtocolError('invalid_params', 'a chat is archived from its own menu');
+        const busy = storage.unfinishedRunForProject(projectId);
+        if (busy) throw new ProtocolError('conflict', `“${busy.sessionTitle || 'New task'}” is still running in this folder; stop or finish it first`, { runId: busy.runId, sessionId: busy.sessionId });
+        const ids = storage.openSessionIdsForProject(projectId);
+        for (const sessionId of ids) {
+          const session = storage.updateSession(sessionId, { state: 'archived' });
+          storage.appendEvent({ sessionId, type: 'session.updated', payload: { session } });
+        }
+        if (!project.preferences.removedAt) storage.setProjectRemoved(projectId, true);
+        return ids;
+      });
+      for (const sessionId of archived) schedules?.reconcileSession(sessionId); // archived chats drop their heartbeats, as archiving one does
+      return { projectId, archived: archived.length };
     },
     "settings.get": () => ({ settings: settingsService.get() }),
     'task.list': params => tasks.list(params),
@@ -211,6 +234,23 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     /** @param {{ archived: boolean, sessionId: string, expectedRevision: number }} params */
     "session.archive": ({ archived, ...params }) => editSession({ ...params, state: archived ? "archived" : "open" }),
     "session.delete": (params) => editSession({ ...params, deleted: true }),
+    "session.pin": ({ sessionId, pinned, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError("not_found", "task no longer exists");
+      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+      const updated = storage.setSessionPinned(sessionId, pinned);
+      storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
+      return { session: updated };
+    }),
+    "session.setAgentModel": ({ sessionId, model, effort, expectedRevision }) => storage.transaction(() => {
+      const session = storage.getSession(sessionId);
+      if (!session) throw new ProtocolError("not_found", "task no longer exists");
+      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+      if (!session.agentId) throw new ProtocolError("invalid_params", "Jolo answers this task; choose its model with session.setModel");
+      const updated = storage.setSessionAgentModel(sessionId, model || effort ? { model: model ?? null, effort: effort ?? null } : null);
+      storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
+      return { session: updated };
+    }),
     "session.page": ({ sessionId, beforeOrdinal, limit }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
@@ -233,15 +273,24 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const existing = storage.findRunByRequest(params.sessionId, params.requestId);
       if (existing) return { run: existing, deduplicated: true };
       const selected = await delegations?.prepare(params.prompt) ?? [];
+      const session = storage.getSession(params.sessionId);
+      // A task's own choice of model and effort applies when its own agent answers, under anything named for this run.
+      const ownChoice = request => {
+        const choice = session?.agentId && session.agentModel && (request.execution?.agentId ?? session.agentId) === session.agentId && !request.execution?.preset && !request.execution?.pinned ? session.agentModel : null;
+        if (!choice) return request;
+        const execution = { ...(request.execution ?? {}) };
+        if (choice.model && !execution.model) execution.model = choice.model;
+        if (choice.effort && !execution.effort) execution.effort = choice.effort;
+        return { ...request, execution };
+      };
       const admit = request => storage.transaction(() => {
         delegations?.register(request.sessionId, selected);
-        return runs.start(request);
+        return runs.start(ownChoice(request));
       });
       const resolved = tasks ? await tasks.resolve(params.prompt) : { references: [], assertCurrent() {} };
       resolved.assertCurrent();
       params = { ...params, taskReferences: resolved.references };
       // "@codex …" at the start of a message calls that agent into this conversation for one turn (§6.5).
-      const session = storage.getSession(params.sessionId);
       const named = params.execution?.preset ? { agentId: SELF_MENTION } : params.execution?.agentId ? { agentId: params.execution.agentId } : routeFor({ prompt: params.prompt, catalog: agents.catalog, sessionAgentId: session?.agentId ?? null });
       if (!named) return admit(params);
       if (named.agentId !== SELF_MENTION) {
@@ -379,6 +428,48 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       } finally {
         closeSync(fd);
       }
+    },
+    // The composer's "@" picker. A typed fragment ranks the workspace's non-ignored files and folders;
+    // a folder path lists that folder's top level, which a message carries so the agent knows where to look.
+    "workspace.writeFile": ({ workspaceId, path: relative, text }, conn) => {
+      requireInteractive(conn, "file editing is for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId }); // the user edits their own folder: opening it was the grant
+      let resolved;
+      try { resolved = resolveWorkspacePath(workspace.path, relative, { mustExist: false }); } catch (error) { throw new ProtocolError(error instanceof WorkspacePathError && error.code === "not_found" ? "not_found" : "permission_denied", error.message); }
+      if (resolved.stat && !resolved.stat.isFile()) throw new ProtocolError("invalid_params", "path is not a file");
+      if (!resolved.stat && !existsSync(path.dirname(resolved.absolute))) throw new ProtocolError("not_found", "the file's folder does not exist");
+      writeFileSync(resolved.absolute, text);
+      return { path: resolved.relative, bytes: Buffer.byteLength(text) };
+    },
+    "workspace.files": async ({ workspaceId, query, path: folder, limit }, conn) => {
+      requireInteractive(conn, "file pickers are for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId });
+      if (folder !== undefined) return listWorkspaceFolder({ root: workspace.path, folder, limit });
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      const timer = setTimeout(cancel, 10_000);
+      conn.closeHooks.add(cancel);
+      try { return await searchWorkspaceFiles({ root: workspace.path, env: toolEnv, signal: controller.signal, query, limit }); }
+      finally { clearTimeout(timer); conn.closeHooks.delete(cancel); }
+    },
+    // The Files panel's search in files. It shares the engine-wide bound on searches running at once with
+    // workspace.search, stops with the client that asked, and answers with what it found by its own deadline.
+    "workspace.searchInFiles": async ({ workspaceId, query, limit }, conn) => {
+      requireInteractive(conn, "searching in files is for interactive clients");
+      const workspace = storage.getWorkspace(workspaceId);
+      if (!workspace || workspace.removedAt) throw new ProtocolError("not_found", "unknown workspace");
+      permissions.authorize({ toolClass: "read", workspaceId });
+      if (activeSearches >= 8) throw new ProtocolError('limit_exceeded', 'search is busy; retry shortly');
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      conn.closeHooks.add(cancel);
+      activeSearches++;
+      try { return await searchWorkspaceText({ root: workspace.path, env: toolEnv, signal: controller.signal, query, limit }); }
+      finally { activeSearches--; conn.closeHooks.delete(cancel); }
     },
     "workspace.changes": ({ workspaceId }) => {
       const workspace = storage.getWorkspace(workspaceId);

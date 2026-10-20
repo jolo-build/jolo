@@ -8,7 +8,8 @@ export async function selectPanel(evaluate, waitFor, label) {
 
 export async function hidePanel(evaluate, waitFor) {
   await evaluate("if (!document.querySelector('.panel-menu[aria-label=\"Panels\"]:popover-open')) document.querySelector('.header [aria-label=\"Panels\"]').click()");
-  await waitFor("Boolean(document.querySelector('.panel-menu:popover-open [role=menuitem]'))", 'hide panel action available');
-  await evaluate("document.querySelector('.panel-menu:popover-open [role=menuitem]').click()");
+  const hide = "[...document.querySelectorAll('.panel-menu:popover-open [role=menuitem]')].find(item => item.textContent === 'Hide panel')";
+  await waitFor(`Boolean(${hide})`, 'hide panel action available');
+  await evaluate(`${hide}.click()`);
   await waitFor("document.querySelector('.pane-slot.focused .inspector').hidden", 'context panel hidden');
 }

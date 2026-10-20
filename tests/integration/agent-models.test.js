@@ -14,7 +14,7 @@ afterEach(async () => {
 const FIXTURE = (name) => path.join(ROOT, "tests", "fixtures", name);
 
 /** One profile with all three structured transports played by fixtures, so nothing reaches a real CLI. */
-async function boot({ clientKind = "test" } = {}) {
+async function boot({ clientKind = "test", env = {} } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, "repo");
   mkdirSync(repo, { recursive: true });
@@ -26,11 +26,11 @@ async function boot({ clientKind = "test" } = {}) {
     chmodSync(file, 0o755);
     return file;
   };
-  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher("fake-claude", "fake-claude.js"), transport: "claude-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }));
+  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher("fake-claude", "fake-claude.js"), transport: "claude-stream", modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"], fastArgs: ["--settings", JSON.stringify({ fastMode: true })] }));
   writeFileSync(path.join(agentsDir, "codex.json"), JSON.stringify({ id: "codex", displayName: "Codex", binary: launcher("fake-codex", "fake-codex.js"), transport: "codex-app-server" }));
   writeFileSync(path.join(agentsDir, "grok.json"), JSON.stringify({ id: "grok", displayName: "Grok CLI", binary: launcher("fake-acp", "fake-acp.js", `FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))}\nexport FAKE_ACP_STATE\n`), args: ["--acp"], transport: "acp", modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }));
 
-  const engine = await startEngine({ home });
+  const engine = await startEngine({ home, env });
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
@@ -126,7 +126,18 @@ describe("choosing a model for each hosted agent", () => {
     // Clearing both fields is the same as forgetting the agent: it goes back to its own default.
     settings = (await client.call("settings.update", { agents: { claude: { model: null, effort: null }, codex: null } })).settings;
     expect(settings.agents).toEqual({});
+    // Hidden sources are a plain list the menu reads; repeats collapse, and an empty list clears it.
+    settings = (await client.call("settings.update", { hiddenSources: ["agent:grok", "provider:openai", "agent:grok"] })).settings;
+    expect(settings.hiddenSources).toEqual(["agent:grok", "provider:openai"]);
+    expect((await client.call("settings.update", { hiddenSources: [] })).settings.hiddenSources).toEqual([]);
     expect(await catalogEntry("claude")).toMatchObject({ model: null, effort: null });
+
+    // Fast mode is kept on its own too, and offered only where the transport can carry it.
+    settings = (await client.call("settings.update", { agents: { claude: { fast: true } } })).settings;
+    expect(settings.agents.claude).toEqual({ model: null, effort: null, fast: true });
+    expect(await catalogEntry("claude")).toMatchObject({ fast: true, supportsFast: true });
+    expect(await catalogEntry("codex")).toMatchObject({ fast: false, supportsFast: true });
+    expect(await catalogEntry("grok")).toMatchObject({ fast: false, supportsFast: false });
     await expect(client.call("settings.update", { agents: { claude: { model: "" } } })).rejects.toMatchObject({ code: "invalid_params" });
   }, 30_000);
 
@@ -145,6 +156,46 @@ describe("choosing a model for each hosted agent", () => {
     // Changing it applies to the next turn, including on a thread the agent is resuming.
     await client.call("settings.update", { agents: { codex: { model: "fake-small" } } });
     expect((await ask("codex", "req_codex_again", "model?")).reply).toBe("Running fake-small at high.");
+
+    // Fast mode reaches Claude as its launch settings and Codex as the service tier. Off is said explicitly, so the
+    // fake Codex's own configured fast tier never applies behind Jolo's switch.
+    await client.call("settings.update", { agents: { claude: { fast: true }, codex: { model: "fake-large", fast: true } } });
+    expect((await ask("claude", "req_claude_fast", "model?")).reply).toBe("Running fable at max in fast mode.");
+    expect((await ask("codex", "req_codex_fast", "model?")).reply).toBe("Running fake-large at high in fast mode.");
+    await client.call("settings.update", { agents: { codex: { fast: false } } });
+    expect((await ask("codex", "req_codex_standard", "model?")).reply).toBe("Running fake-large at high.");
+  }, 60_000);
+
+  test("a chat chooses its own model and effort; other chats of that agent keep its setting", async () => {
+    const { client, events, project } = await boot();
+    try {
+      await client.call("settings.update", { agents: { codex: { model: "fake-large", effort: "high" } } });
+      const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "own", agentId: "codex" });
+      const chosen = (await client.call("session.setAgentModel", { sessionId: session.id, model: "fake-small", effort: "low", expectedRevision: session.revision })).session;
+      expect(chosen.agentModel).toEqual({ model: "fake-small", effort: "low" });
+      const reply = async (sessionId, requestId) => {
+        const { run } = await client.call("run.start", { sessionId, requestId, prompt: "model?" });
+        await waitFor(() => events.some((e) => e.type === "run.state" && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: `${requestId} finished`, timeoutMs: 20_000 });
+        const snapshot = await client.call("run.snapshot", { runId: run.id });
+        const last = snapshot.messages.filter((message) => message.role === "assistant" && message.kind === "text").at(-1);
+        return (await client.call("artifact.read", { artifactId: last.artifactId })).text;
+      };
+      expect(await reply(session.id, "req_own")).toBe("Running fake-small at low.");
+      const { session: other } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "other", agentId: "codex" });
+      expect(await reply(other.id, "req_other")).toBe("Running fake-large at high.");
+      // Moving the chat to another agent drops the choice: it meant something only to the agent it was made for.
+      const before = (await client.call("session.page", { sessionId: session.id, limit: 1 })).session;
+      const moved = (await client.call("session.setAgent", { sessionId: session.id, agentId: "claude", expectedRevision: before.revision })).session;
+      expect(moved.agentModel).toBeNull();
+      await client.call("session.setAgent", { sessionId: session.id, agentId: "codex", expectedRevision: moved.revision });
+      // Clearing the choice returns the chat to the agent's setting; a Jolo-answered task has no agent to choose for.
+      const latest = (await client.call("session.page", { sessionId: session.id, limit: 1 })).session; // runs moved the revision on
+      const cleared = (await client.call("session.setAgentModel", { sessionId: session.id, model: null, effort: null, expectedRevision: latest.revision })).session;
+      expect(cleared.agentModel).toBeNull();
+      expect(await reply(session.id, "req_cleared")).toBe("Running fake-large at high.");
+      const { session: jolo } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "jolo" });
+      await expect(client.call("session.setAgentModel", { sessionId: jolo.id, model: "fake-small", effort: null, expectedRevision: jolo.revision })).rejects.toMatchObject({ code: "invalid_params" });
+    } finally { await client.close(); }
   }, 60_000);
 
   test("agents report the models they can run, and Jolo keeps no list of its own", async () => {
@@ -156,11 +207,13 @@ describe("choosing a model for each hosted agent", () => {
     expect(claude.models[2].efforts).toEqual([]); // it said this one has no effort levels
     expect(claude.models[1].efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]); // xhigh is what ultracode needs
     expect(claude.efforts).toEqual(["low", "high", "xhigh", "max", "ultracode"]);
+    expect(claude.models.map((model) => model.supportsFast)).toEqual([false, true, false]);
 
     // Codex pages its answer, so the client has to follow the cursor; the hidden model is not offered.
     const codex = await client.call("agent.models", { agentId: "codex" });
     expect(codex.models.map((model) => model.id)).toEqual(["fake-large", "fake-small"]);
     expect(codex.models[0]).toMatchObject({ displayName: "Fake Large", isDefault: true, efforts: ["low", "high"] });
+    expect(codex.models.map((model) => model.supportsFast)).toEqual([true, false]); // Codex lists fast as the "priority" tier
 
     // An ACP agent publishes its models as a session config option.
     const grok = await client.call("agent.models", { agentId: "grok" });
@@ -169,6 +222,28 @@ describe("choosing a model for each hosted agent", () => {
     expect(grok.models[1].efforts).toEqual(["low", "high"]);
     expect(grok.efforts).toEqual(["low", "high"]);
   }, 60_000);
+
+  test("an aged model list is shown at once and refreshed behind it, and the last answer survives a restart", async () => {
+    const env = { JOLO_MODELS_TTL_MS: "100" };
+    const { client, home, engine } = await boot({ env });
+    const binary = path.join(home, "fake-codex");
+    const starts = () => readFileSync(`${binary}.starts`, "utf8").trim().split("\n").length;
+    const first = await client.call("agent.models", { agentId: "codex" });
+    expect(first.source).toBe("agent");
+    expect(starts()).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await client.call("agent.models", { agentId: "codex" })).toEqual(first); // aged, so answered from memory
+    await waitFor(() => starts() === 2, { label: "a refresh ran behind the aged answer", timeoutMs: 15_000 }); // a process start, slow on a busy machine
+    await client.close();
+    await engine.stop();
+    const again = await startEngine({ home, env });
+    engines.push(again);
+    const reopened = await again.connect();
+    try {
+      expect(await reopened.call("agent.models", { agentId: "codex" })).toEqual(first); // the last answer, before any process starts
+      await waitFor(() => starts() === 3, { label: "a refresh ran after the restart", timeoutMs: 15_000 });
+    } finally { await reopened.close(); }
+  }, 30_000);
 
   test("automatic discovery shares probes, reuses results, and refreshes on request", async () => {
     const { client, home } = await boot();

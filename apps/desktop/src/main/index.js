@@ -53,14 +53,16 @@ const log = {
 /** Methods the renderer may invoke through the bridge; everything else fails closed. */
 const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "project.linkFolder", "chat.create", "session.create", "session.list", "session.page",
-  "session.rename", "session.archive", "session.delete", "session.setAgent", "session.setModel",
+  "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel", "workspace.writeFile",
+  "engine.status", "project.open", "project.linkFolder", "project.remove", "chat.create", "session.create", "session.list", "session.page",
+  "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel",
   "delegation.models",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
   'account.status', 'account.sync', 'account.login', 'account.cancel', 'account.logout',
   'task.list', 'task.get',
   "permission.resolve", "run.resume", "workspace.diff", "patch.revert", "board.list", "board.tasks", "board.viewed",
-  "workspace.create", "workspace.list", "workspace.remove", "workspace.readFile", "workspace.changes",
+  "workspace.create", "workspace.list", "workspace.remove", "workspace.readFile", "workspace.files", "workspace.searchInFiles", "workspace.changes",
   "agent.catalog", "agent.models", "agent.limits", "agent.start", "agent.list", "agent.stop",
   "plan.create", "plan.list", "plan.get", "plan.start", "plan.pause", "plan.cancel",
   "plan.task.add", "plan.task.update", "plan.task.remove", "plan.task.retry", "plan.task.skip",
@@ -234,12 +236,21 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
       // An array literal widens "separator" to string, which Electron's item kinds do not accept, so the
       // template says what it is rather than every separator carrying its own annotation.
       Menu.buildFromTemplate(/** @type {import("electron").MenuItemConstructorOptions[]} */ ([
+        { label: opts.pinned === true ? "Unpin" : "Pin", click: () => { action = "pin"; } },
         { label: "Rename…", click: () => { action = "rename"; } },
         { label: opts.archived ? "Restore task" : "Archive task", click: () => { action = "archive"; } },
         ...(opts.worktree === true ? [{ type: "separator" }, { label: "Remove worktree…", click: () => { action = "remove-worktree"; } }] : []),
         { type: "separator" },
         { label: "Delete…", click: () => { action = "delete"; } },
       ])).popup({ window, callback: () => resolve(action) });
+    });
+  });
+  // A folder row's ⋯ menu. Its one entry forgets the folder in the sidebar; the folder itself is never touched.
+  ipcMain.handle("jolo:projectMenu", (event) => {
+    if (!trusted(event)) throw new Error("untrusted project menu request");
+    return new Promise((resolve) => {
+      let action = null;
+      Menu.buildFromTemplate([{ label: "Remove from sidebar…", click: () => { action = "remove"; } }]).popup({ window, callback: () => resolve(action) });
     });
   });
   // The composer's "who answers" picker: Jolo with its model, or a hosted agent that speaks a structured protocol.

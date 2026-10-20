@@ -196,6 +196,27 @@ export function createSummarizer({ providerFactory, settings, log, sessionId, ru
 }
 
 /**
+ * The slash command a message is, when it is one: "/name" with optional arguments after it, and nothing before the
+ * slash. A command is the whole message or it is not a command: "/compact" in the middle of a sentence is prose, and so
+ * is a bare "/" or a path like "/usr/bin". Names are spelled as the agents spell theirs: letters, digits, and the
+ * separators Claude Code's plugin and namespaced commands use ("plugin:skill", "release-notes").
+ * @param {any} run
+ * @returns {{ name: string, args: string, text: string } | null} `text` is the message as the agent should see it
+ */
+export function slashCommand(run) {
+  const match = /^\/([a-z0-9][a-z0-9_:.-]*)(?:\s+([\s\S]*))?$/i.exec(String(run?.prompt ?? "").trim());
+  if (!match) return null;
+  const args = (match[2] ?? "").trim();
+  return { name: match[1], args, text: args ? `/${match[1]} ${args}` : `/${match[1]}` };
+}
+
+/**
+ * Whether the user asked the agent to compact its own context, spelled as its CLI spells it. The adapter then asks the
+ * agent in its own terms rather than passing the words on as a request.
+ */
+export const compactRequested = (run) => slashCommand(run)?.name === "compact" && !run.attachments?.length;
+
+/**
  * A vendor thread contains only turns that vendor saw. On resumption, catch it up
  * with messages added after its last completed turn; a legacy thread gets a full
  * bounded handoff once because it has no reliable delivery position yet.

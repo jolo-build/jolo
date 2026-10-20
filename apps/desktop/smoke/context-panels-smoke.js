@@ -38,7 +38,6 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       && !document.querySelector('.task-tools');
   })()`);
   const originalSize = window.getSize(), originalTheme = nativeTheme.themeSource;
-  await evaluate('window.__joloSmoke.showTask()');
   window.setSize(1280, 860);
   try {
     await frame();
@@ -71,6 +70,9 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await evaluate("window.__panelBrowser = document.querySelector('.browser webview'); window.__panelBrowser.executeJavaScript('window.retainedPanelPage = 42')");
     await select('Checks');
     await evaluate("document.querySelector('.context-close').click()");
+    await waitFor("document.querySelector('.inspector').hidden", 'context close hides the panel');
+    await click('.header [aria-label="Panel"]');
+    await waitFor("!document.querySelector('.inspector').hidden && document.querySelector('.panel-item-tabs [aria-label=Checks]').getAttribute('aria-selected') === 'true' && !document.querySelector('.panel-menu:popover-open')", 'the panel icon restores the hidden tab');
     await select('Browser');
     assert(await evaluate("document.querySelector('.browser webview') === window.__panelBrowser && window.__panelBrowser.executeJavaScript('window.retainedPanelPage === 42')"), 'closing Checks discarded the browser page');
     // Test the bundled font: fallback fonts hid the slash substitution in earlier input checks.
@@ -135,7 +137,7 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       }
       await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
       await waitFor("Boolean(document.querySelector('.panel-menu:popover-open'))", 'panel menu visible');
-      assert(await evaluate("document.querySelectorAll('.panel-menu:popover-open [role=menuitemradio]').length === 6 && document.querySelector('.panel-menu:popover-open [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
+      assert(await evaluate("document.querySelectorAll('.panel-menu:popover-open [role=menuitemradio]').length === 7 && document.querySelector('.panel-menu:popover-open [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
       await frame();
       writeFileSync(path.join(results, `panel-menu-${color}.png`), (await window.webContents.capturePage()).toPNG());
       await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
@@ -158,11 +160,11 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await evaluate("document.querySelector('.context-close').click()");
     await waitFor("document.querySelector('.pane-body > .main').getBoundingClientRect().width > 300", 'closing compact context restores the chat');
     await select('Terminal');
-    await evaluate("document.querySelector('.terminal [aria-label=\"Close terminal\"]').click()");
+    await evaluate("document.querySelector('.panel-item-tab[data-active=true] .panel-item-close').click()");
     await waitFor('!window.__joloTerminal && !document.querySelector(".panel-item-tabs [data-panel-type=terminal]")', 'explicit terminal close releases its shell');
     report.checks.push('one Panels menu lists all six panels; repeated native mouse clicks open and close it without hiding the selected panel, and outside clicks, keyboard navigation and Escape work');
     report.checks.push('Terminal, Checks and Plans open on the right and fit light, dark and compact layouts; the bottom tools bar is gone');
-    report.checks.push('tab switching and hiding preserve shell state, browser pages and plan drafts; explicit terminal close releases its shell');
+    report.checks.push('tab switching and hiding preserve shell state, browser pages and plan drafts; the panel icon restores the hidden tab; explicit terminal close releases its shell');
     report.checks.push('keyboard tab navigation works and closing a compact panel restores the conversation');
   } finally { window.setSize(...originalSize); nativeTheme.themeSource = originalTheme; }
 }

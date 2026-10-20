@@ -88,6 +88,36 @@ describe("Codex through its app-server", () => {
     } finally { await client.close(); }
   });
 
+  test("/compact asks Codex to compact its thread rather than answer the words, and the task notes it", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      expect((await runTo('before', 'hello')).state).toBe('completed');
+      const run = await runTo('compact', '/compact');
+      expect(run.state).toBe('completed');
+      const replies = (await messagesOf(run.id)).filter(message => message.role === 'assistant');
+      expect(await Promise.all(replies.map(text))).toEqual(['Context compacted.']);
+    } finally { await client.close(); }
+  }, 20_000);
+
+  test("/review asks Codex to review through its own method, other slash words go to it as text, and the list is the fixed two plus its skills", async () => {
+    const { client, runTo, messagesOf, text } = await boot();
+    try {
+      const report = await client.call('agent.models', { agentId: 'codex' });
+      expect(report.commands.map(command => command.name)).toEqual(['compact', 'review', 'release-notes']); // the disabled skill is not offered
+      expect(report.commands[2]).toEqual({ name: 'release-notes', description: 'Draft release notes from the merged pull requests', argumentHint: '' });
+      expect((await runTo('before', 'hello')).state).toBe('completed');
+      const replies = async (requestId, prompt) => {
+        const run = await runTo(requestId, prompt);
+        expect(run.state).toBe('completed');
+        return Promise.all((await messagesOf(run.id)).filter(message => message.role === 'assistant' && message.kind === 'text').map(text));
+      };
+      // The words after /review are the brief; without any, Codex reviews the working tree. Its findings are the reply, once.
+      expect(await replies('review-brief', '/review the error handling')).toEqual(['Review of custom: the error handling\n- nothing to fix']);
+      expect(await replies('review-tree', '/review')).toEqual(['Review of uncommittedChanges\n- nothing to fix']);
+      expect(await replies('skill', '/release-notes v2')).toEqual([expect.stringMatching(/^Continuing thread fake-thread-\w+: \/release-notes v2$/)]);
+    } finally { await client.close(); }
+  }, 30_000);
+
   test('a server exit during resume settles the run and releases queued follow-ups', async () => {
     const { client, repo, session, events, runTo } = await boot();
     try {

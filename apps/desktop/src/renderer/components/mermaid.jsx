@@ -345,11 +345,10 @@ export function MermaidDiagram({ block, fallback }) {
   const groups = laid.kind === "flow" ? laid.groups.filter((group) => group.nodeIds.length) : [];
   const pad = 2;
   return <div className="md-embed md-diagram">
-    <div className="md-code-language">
-      <span>{block.language}</span><span className="grow" />
-      <CopyCodeButton text={block.text} />
-      {!source && <button type="button" className="mermaid-expand" aria-label="Open full-window diagram" title="Open full-window diagram" onClick={() => setExpanded(true)}><Icon name="maximize" size={15} /></button>}
-      <button type="button" className="md-embed-toggle" aria-pressed={source} onClick={() => setSource((value) => !value)}>{source ? "Diagram" : "Source"}</button>
+    <div className="md-code-tools">
+      <CopyCodeButton text={block.text} language={block.language} />
+      {!source && <button type="button" className="mermaid-expand" aria-label="Open full-window diagram" title="Open full-window diagram" onClick={() => setExpanded(true)}><Icon name="maximize" size={14} /></button>}
+      <button type="button" className="md-embed-toggle" aria-pressed={source} aria-label="Show source" title="Show source" onClick={() => setSource((value) => !value)}><Icon name="code" size={14} /></button>
     </div>
     {source
       ? <pre className="md-code" data-language={block.language}><code>{block.text}</code></pre>

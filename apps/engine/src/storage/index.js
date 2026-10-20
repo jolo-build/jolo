@@ -206,6 +206,24 @@ export class Storage {
     this.db.query("UPDATE projects SET preferences = ?1, updated_at = ?2 WHERE id = ?3").run(JSON.stringify(preferences), now(), id);
   }
 
+  /** Off the board until its folder is opened again; the row, its workspaces and its chats all stay. */
+  setProjectRemoved(id, removed) {
+    const preferences = { ...this.getProjectPreferences(id) };
+    delete preferences.removedAt;
+    this.setProjectPreferences(id, removed ? { ...preferences, removedAt: now() } : preferences);
+  }
+
+  /** Every open chat of a project, in any of its workspaces. */
+  openSessionIdsForProject(projectId) {
+    return this.db.query("SELECT id FROM sessions WHERE project_id = ?1 AND state = 'open' AND deleted_at IS NULL").all(projectId).map(row => row.id);
+  }
+
+  /** A run in the project that has not finished, with the task it belongs to; null once every run is settled. */
+  unfinishedRunForProject(projectId) {
+    const r = this.db.query("SELECT r.id, r.session_id, s.title FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.project_id = ?1 AND s.deleted_at IS NULL AND r.state NOT IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY r.created_at LIMIT 1").get(projectId);
+    return r ? { runId: r.id, sessionId: r.session_id, sessionTitle: r.title } : null;
+  }
+
   /** The user looked at this workspace's latest outcome; "done since you last looked" clears (§4.1 board). */
   touchWorkspaceViewed(id) {
     const at = now();
@@ -292,7 +310,8 @@ export class Storage {
     // Native continuation IDs belong to one agent. A switch starts that agent
     // with the shared transcript, while retaining the Jolo session itself.
     const handoff = this.getSession(id)?.agentState?._jolo;
-    this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
+    // A model chosen for the last agent means nothing to the next.
+    this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, agent_model = NULL, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
     return this.getSession(id);
   }
 
@@ -325,7 +344,7 @@ export class Storage {
    * Every open task across every project, newest activity first, with the project and checkout it belongs to
    * and its most recent run. One query, so a sidebar listing all projects costs the same as listing one.
    */
-  listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null } = {}) {
+  listSessionActivity({ limit = 200, state = "open", workspaceId = null, before = null, standalone = null, pinned = null } = {}) {
     const rows = this.db.query(`
       SELECT s.*, p.root_path AS project_root, COALESCE(json_extract(p.preferences, '$.standalone'), 0) AS standalone, w.branch AS workspace_branch, w.mode AS workspace_mode, w.last_viewed_at AS workspace_last_viewed_at, w.removed_at AS workspace_removed_at,
              r.id AS run_id, r.state AS run_state, r.pause_reason AS run_pause_reason, r.created_at AS run_created_at, r.updated_at AS run_updated_at, r.note AS run_note,
@@ -339,10 +358,11 @@ export class Storage {
       WHERE s.deleted_at IS NULL AND s.state = ?1 AND w.removed_at IS NULL
         AND (?3 IS NULL OR s.workspace_id = ?3)
         AND (?6 IS NULL OR COALESCE(json_extract(p.preferences, '$.standalone'), 0) = ?6)
+        AND (?7 IS NULL OR (s.pinned_at IS NOT NULL) = ?7)
         AND (?4 IS NULL OR COALESCE(r.updated_at, s.updated_at) < ?4 OR (COALESCE(r.updated_at, s.updated_at) = ?4 AND s.id < ?5))
-      ORDER BY COALESCE(r.updated_at, s.updated_at) DESC, s.id DESC
+      ORDER BY CASE WHEN ?7 = 1 THEN s.pinned_at END DESC, COALESCE(r.updated_at, s.updated_at) DESC, s.id DESC
       LIMIT ?2
-    `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone));
+    `).all(state, limit, workspaceId, before?.updatedAt ?? null, before?.sessionId ?? null, standalone === null ? null : Number(standalone), pinned === null ? null : Number(pinned));
     return rows.map((row) => ({
       session: mapSession(row),
       parentSessionId: row.parent_session_id ?? null,
@@ -358,6 +378,18 @@ export class Storage {
   updateSession(id, { title, state, deleted = false }) {
     this.db.query("UPDATE sessions SET title = COALESCE(?2, title), state = COALESCE(?3, state), deleted_at = CASE WHEN ?4 THEN ?5 ELSE deleted_at END, updated_at = ?5, revision = revision + 1 WHERE id = ?1")
       .run(id, title ?? null, state ?? null, deleted ? 1 : 0, now());
+    return this.getSession(id);
+  }
+
+  /** Pin a task or chat to the top of the sidebar, or unpin it, without changing its activity order. */
+  setSessionPinned(id, pinned) {
+    this.db.query("UPDATE sessions SET pinned_at = ?2, revision = revision + 1 WHERE id = ?1").run(id, pinned ? now() : null);
+    return this.getSession(id);
+  }
+
+  /** The model and effort this task's own agent runs with here; null follows the agent's setting. */
+  setSessionAgentModel(id, choice) {
+    this.db.query("UPDATE sessions SET agent_model = ?2, revision = revision + 1 WHERE id = ?1").run(id, choice ? JSON.stringify(choice) : null);
     return this.getSession(id);
   }
 
