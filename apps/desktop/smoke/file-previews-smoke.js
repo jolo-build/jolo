@@ -28,8 +28,9 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await evaluate("[...document.querySelectorAll('.explorer-row')].find(row => row.textContent === 'MDPLAN.md').click()");
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content h3')?.textContent === 'Project plan'", 'a file picked in the tree opens as a tab');
     await evaluate("document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Edit file\"]').click()");
-    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) textarea.file-editor'))", 'the editor opens');
-    await evaluate("(() => { const area = document.querySelector('.panel-item-content:not([hidden]) textarea.file-editor'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(area, area.value + '- Edited in Jolo\\n'); area.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    // Source is a CodeMirror editor: read-only until Edit, then editable and focused; the smoke types through its view.
+    await waitFor("(() => { const view = document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView; return Boolean(view) && !view.state.readOnly && view.contentDOM.contentEditable === 'true' && document.activeElement === view.contentDOM && view.state.doc.toString().startsWith('# Project plan'); })()", 'the editor opens');
+    await evaluate("(() => { const view = document.querySelector('.panel-item-content:not([hidden]) .file-preview-source').cmView; view.dispatch({ changes: { from: view.state.doc.length, insert: '- Edited in Jolo\\n' }, userEvent: 'input.type' }); })()");
     await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]')) && [...document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === 'PLAN.md •')", 'an edit marks the tab and offers Save');
     await evaluate("document.querySelector('.panel-item-content:not([hidden]) [aria-label=\"Save file\"]').click()");
     for (let tries = 0; tries < 50 && !readFileSync(path.join(project, 'PLAN.md'), 'utf8').includes('- Edited in Jolo'); tries++) await new Promise(resolve => setTimeout(resolve, 100));
@@ -44,14 +45,21 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await click('PLAN.md');
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content h3')?.textContent === 'Project plan'", 'Markdown rendered in Files');
     await evaluate("Array.from(document.querySelectorAll('.file-heading [role=tab]')).find(b=>b.textContent==='Source').click()");
-    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source toggle');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString()?.includes('# Project plan')", 'Markdown source toggle');
     await click('app.js');
-    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('export const answer = 42')", 'code opens internally');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString()?.includes('export const answer = 42') && Boolean(document.querySelector('.panel-item-content:not([hidden]) .file-preview-source .cm-line span[class]'))", 'code opens internally, with syntax colours');
     await click('location.js');
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-source-location')?.textContent.startsWith('// Line 120:')", 'source location highlighted');
-    await waitFor("(() => { const node = document.querySelector('.panel-item-content:not([hidden]) .file-source-caret'); if (!node) return false; const target = node.getBoundingClientRect(); const view = node.closest('.file-preview-content').getBoundingClientRect(); return target.top >= view.top && target.bottom <= view.bottom && target.left >= view.left && target.right <= view.right; })()", 'line and column scrolled into view');
+    const revealed = "(() => { const editor = document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView; if (!editor) return false; const head = editor.state.selection.main.head, line = editor.state.doc.lineAt(head); if (line.number !== 120 || head - line.from !== 81) return false; const target = editor.coordsAtPos(head); const view = editor.dom.closest('.file-preview-content').getBoundingClientRect(); return Boolean(target) && target.top >= view.top && target.bottom <= view.bottom && target.left >= view.left && target.right <= view.right; })()";
+    await waitFor(revealed, 'line and column scrolled into view');
+    await waitFor("Boolean(document.querySelector('.panel-item-content:not([hidden]) .file-source-location span[class]'))", 'the revealed line has syntax colours');
+    writeFileSync(path.join(results, 'file-preview-source.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate("(() => { const editor = document.querySelector('.panel-item-content:not([hidden]) .file-preview-source').cmView; editor.dispatch({ selection: { anchor: 0 }, scrollIntoView: true }); })()");
+    await waitFor("(() => { const editor = document.querySelector('.panel-item-content:not([hidden]) .file-preview-source').cmView; const target = editor.coordsAtPos(editor.state.doc.line(120).from); return editor.state.selection.main.head === 0 && (!target || target.top > editor.dom.closest('.file-preview-content').getBoundingClientRect().bottom); })()", 'the reader scrolls away from the location');
+    await click('location.js');
+    await waitFor(revealed, 'following the same link again scrolls back to the location');
     await click('My report');
-    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent === 'Encoded path opened correctly.'", 'encoded Markdown path decoded once');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString() === 'Encoded path opened correctly.'", 'encoded Markdown path decoded once');
     if (await evaluate("Array.from(document.querySelectorAll('.message.assistant a')).some(a => ['/install.sh', 'releases/latest.txt', 'desktop.json'].includes(a.textContent))")) throw new Error('Ambiguous website assets became local file links');
     const messageHeight = await evaluate("Array.from(document.querySelectorAll('.message.assistant')).find(m => m.textContent.includes('missing.js')).getBoundingClientRect().height");
     await click('missing.js');
@@ -72,7 +80,7 @@ export async function runFilePreviewsSmoke({ window, project, results, evaluate,
     await click('archive.zip');
     await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-content')?.textContent.includes('A visual preview is not available')", 'unknown binary remains inside Jolo');
     await click('PLAN.md');
-    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.textContent.includes('# Project plan')", 'Markdown source view retained');
+    await waitFor("document.querySelector('.panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString()?.includes('# Project plan')", 'Markdown source view retained');
     writeFileSync(path.join(results, 'file-preview-markdown.png'), (await window.webContents.capturePage()).toPNG());
     if (external.length) throw new Error(`File links escaped Jolo: ${external.join(', ')}`);
     const fixture = new BrowserWindow({ show: false, width: 1200, height: 1100, webPreferences: { sandbox: true, nodeIntegration: false } });

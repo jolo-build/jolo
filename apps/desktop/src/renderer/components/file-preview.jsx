@@ -1,10 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Markdown } from './markdown.jsx';
 import { Icon } from './icon.jsx';
 
+// CodeMirror and its languages load the first time a file is shown as source.
+const CodeEditor = lazy(() => import('./code-editor.jsx').then(module => ({ default: module.CodeEditor })));
+
 /**
- * A file as a tab shows: rendered or as source, and for a project file, editable in place. Edits stay in the tab until
- * saved, so leaving edit mode loses nothing; Cmd/Ctrl+S saves.
+ * A file as a tab shows: rendered or as source, and for a project file, editable in place. Source is one editor that is
+ * read-only until Edit; edits stay in the tab until saved, so leaving edit mode loses nothing; Cmd/Ctrl+S saves.
  * @param {{ file: any, onClose: (() => void) | null, onSave?: ((text: string) => Promise<void>) | null, onDirty?: ((dirty: boolean) => void) | null }} props
  */
 export function FilePreview({ file, onClose, onSave = null, onDirty = null }) {
@@ -20,12 +23,10 @@ export function FilePreview({ file, onClose, onSave = null, onDirty = null }) {
     try { await onSave(draft); setDraft(null); } catch (error) { setSaveError(error.message); } finally { setSaving(false); }
   };
   const [source, setSource] = useState(false);
-  const selected = useRef(null);
   const showSource = source || file.kind === 'text' || Boolean(file.line);
-  const lines = typeof file.text === 'string' ? file.text.split('\n') : [];
-  const hasLocation = file.line > 0 && file.line <= lines.length;
-  useLayoutEffect(() => { selected.current?.scrollIntoView({ block: 'center', inline: 'center' }); }, [file, showSource]);
+  const hasLocation = file.line > 0 && typeof file.text === 'string' && file.line <= file.text.split('\n').length;
   const text = file.kind === 'text' || file.kind === 'markdown';
+  const code = text && (editing || showSource);
   return <>
     {(file.line || file.kind === 'markdown' || onClose || onSave) && <div className="file-heading"><code title={file.path}>{file.path.split('/').at(-1)}</code>{file.line && <span className="file-location">Line {file.line}{file.column ? `, column ${file.column}` : ''}</span>}
       {file.kind === 'markdown' && !file.line && <div className="file-modes" role="tablist" aria-label="File view"><button role="tab" aria-selected={!source} onClick={() => setSource(false)}>Preview</button><button role="tab" aria-selected={source} onClick={() => setSource(true)}>Source</button></div>}
@@ -36,9 +37,9 @@ export function FilePreview({ file, onClose, onSave = null, onDirty = null }) {
       {onClose && <button aria-label="Close file preview" title="Close file preview" onClick={onClose}><Icon name="close" size={14} /></button>}
     </div>}
     {saveError && <p className="panel-note file-save-error" role="alert">{saveError}</p>}
-    <div className={`file-preview-content${text ? ' md-preview' : ''}${editing ? ' editing' : ''}`} aria-label={`Preview of ${file.path}`}>
-      {text && editing && <textarea className="file-editor" aria-label={`Edit ${file.path}`} value={draft ?? ''} spellCheck={false} autoFocus onChange={event => setDraft(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 's') { event.preventDefault(); void save(); } }} />}
-      {text && !editing && (showSource ? <pre className="file-preview-source"><code>{hasLocation ? <>{lines.slice(0, file.line - 1).join('\n')}{file.line > 1 ? '\n' : ''}<mark className="file-source-location">{lines[file.line - 1].slice(0, Math.max(0, (file.column ?? 1) - 1))}<span ref={selected} className="file-source-caret">{lines[file.line - 1].slice(Math.max(0, (file.column ?? 1) - 1), file.column ?? 1)}</span>{lines[file.line - 1].slice(file.column ?? 1)}</mark>{file.line < lines.length ? '\n' : ''}{lines.slice(file.line).join('\n')}</> : file.text}</code></pre> : <Markdown text={file.text} cacheKey={file.text} sessionId={file.sessionId} />)}
+    <div className={`file-preview-content${text ? ' md-preview' : ''}${code ? ' code' : ''}`} aria-label={`Preview of ${file.path}`}>
+      {code && <Suspense fallback={null}><CodeEditor path={file.path} value={draft ?? file.text ?? ''} readOnly={!editing} onChange={setDraft} onSave={() => void save()} line={hasLocation ? file.line : null} column={file.column ?? null} reveal={hasLocation ? file : null} /></Suspense>}
+      {text && !code && <Markdown text={file.text} cacheKey={file.text} sessionId={file.sessionId} />}
       {file.kind === 'image' && <img src={file.url} alt={file.path.split('/').at(-1)} />}
       {file.kind === 'pdf' && <embed src={file.url} type="application/pdf" title={file.path.split('/').at(-1)} />}
       {file.kind === 'audio' && <audio src={file.url} controls preload="metadata" />}

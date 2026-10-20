@@ -144,12 +144,12 @@ export async function runPanelTabsSmoke({ window, bridge, browserHost, project, 
     await selectPanel(evaluate, waitFor, 'Files');
     await newTab('Open file…');
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'first.md'", 'picked first file');
-    await evaluate("document.querySelector('.file-heading [role=tab]:last-child').click()");
+    await evaluate("document.querySelector('.files-main .panel-item-content:not([hidden]) .file-heading [role=tab]:last-child').click()");
     selected = 'second.txt';
     await newTab('Open file…');
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'second.txt'", 'picked second file');
     await evaluate("Array.from(document.querySelectorAll('[aria-label=\"Panel tabs\"] [role=tab]')).find(tab => tab.textContent === 'first.md').click()");
-    assert(await evaluate("document.querySelector('.changes-host > .panel-item-content:not([hidden]) .file-preview-source')?.textContent.startsWith('# First file')"), 'file source mode was not retained');
+    await waitFor("document.querySelector('.changes-host .panel-item-content:not([hidden]) .file-preview-source')?.cmView?.state.doc.toString().startsWith('# First file')", 'file source mode retained');
     await newTab('Open file…');
     await waitFor("document.querySelector('[aria-label=\"Panel tabs\"] [aria-selected=true]')?.textContent === 'second.txt'", 'existing file reselected');
     assert(await evaluate("document.querySelectorAll('[aria-label=\"Panel tabs\"] [data-panel-type=file]').length === 2"), 'same file opened duplicate tabs');
