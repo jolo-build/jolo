@@ -311,7 +311,7 @@ strong { font-weight: 550; }
 .project-switch small { color: var(--muted); font-size: 10px; }
 .settings-link { margin-top: 2px; }
 .settings-link:hover, .settings-link:focus-visible { background: var(--hover); color: var(--text); }
-.main { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
+.main { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
 .task-header { display: flex; align-items: center; gap: 12px; padding: 12px 28px 0; }
 .task-header .task-meta { flex: 1; min-width: 0; }
 /* The header's right end: a conversation's child tasks, or a child's way back to the task that started it. */
@@ -379,7 +379,7 @@ details.block[open] > summary > .activity-disclosure, .activity-group[open] > su
 details.block pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; background: var(--subtle); padding: 10px 12px; border-radius: 7px; margin: 8px 0 0; font: 11px/1.65 var(--mono); }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 /* Find in page: a small bar under the header, gone the moment it closes; the matches are highlights, not markup. */
-.find-bar { position: fixed; top: 57px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }
+.find-bar { position: absolute; top: 10px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }
 .find-field { position: relative; display: flex; align-items: center; margin-right: 6px; }
 .find-field input { width: 230px; height: 30px; padding: 0 56px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--text); outline: none; }
 .find-field input:focus { border-color: var(--highlight); }

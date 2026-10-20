@@ -23,18 +23,24 @@ export async function runCloseShortcutsSmoke({ window, browserHost, fixtureUrl, 
     assert(quits === 0 && !window.isDestroyed(), 'browser shortcut did not close the app');
     report.checks.push('Cmd/Ctrl+W from a focused native browser closes its tab and preserves the neighboring file tab');
 
-    // Cmd/Ctrl+F opens find on the page; the window's own matching reports a count, and Esc closes it.
-    const press = (keyCode, modifiers = []) => { window.webContents.focus(); window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers }); };
+    // Cmd/Ctrl+F opens find over the chat: typed letters accumulate, only the conversation is matched, Enter steps, Esc closes.
+    const modifiers = [process.platform === 'darwin' ? 'meta' : 'control'];
+    const press = (keyCode, mods = []) => { window.webContents.focus(); window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers: mods }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers: mods }); };
+    const type = letter => { for (const kind of ['keyDown', 'char', 'keyUp']) window.webContents.sendInputEvent({ type: kind, keyCode: letter }); };
     await evaluate("document.querySelector('.composer textarea')?.focus()");
-    press('F', [process.platform === 'darwin' ? 'meta' : 'control']);
-    await waitFor("document.activeElement === document.querySelector('.find-bar input')", 'find bar opens focused');
-    await evaluate("(() => { const input = document.querySelector('.find-bar input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(input, 'New chat'); input.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    press('F', modifiers);
+    await waitFor("document.activeElement === document.querySelector('.pane-slot.focused .main .find-bar input')", 'find bar opens focused inside the chat column');
+    type('h');
+    await waitFor("document.querySelector('.find-bar input')?.value === 'h' && /^\\d+\\/\\d+$/.test(document.querySelector('.find-count')?.textContent ?? '')", 'first letter counted');
+    type('e');
+    await waitFor("document.querySelector('.find-bar input')?.value === 'he'", 'typing keeps the earlier letters');
     await waitFor("/^1\\/\\d+$/.test(document.querySelector('.find-count')?.textContent ?? '') && CSS.highlights.get('jolo-find')?.size > 0", 'find counts and marks its matches');
+    assert(await evaluate("[...CSS.highlights.get('jolo-find')].every(range => document.querySelector('.pane-slot.focused .conversation').contains(range.startContainer))"), 'find marked text outside the chat');
     await evaluate("document.querySelector('.find-bar [aria-label=\"Next match\"]').click()");
     await waitFor("/^2\\/\\d+$|^1\\/1$/.test(document.querySelector('.find-count')?.textContent ?? '')", 'next steps to the following match');
     press('Escape');
     await waitFor("!document.querySelector('.find-bar') && !CSS.highlights.get('jolo-find')", 'Esc closes find and clears the marks');
-    report.checks.push('Cmd/Ctrl+F opens find in page with highlighted matches and a count, Enter steps, and Esc closes it');
+    report.checks.push('Cmd/Ctrl+F opens find over the chat only, typed letters accumulate, matches are counted and marked, Enter steps, and Esc closes it');
 
     await selectPanel(evaluate, waitFor, 'Terminal');
     await waitFor("Boolean(document.querySelector('.xterm-helper-textarea'))", 'terminal mounted');
