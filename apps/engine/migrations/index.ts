@@ -16,8 +16,10 @@ import taskReferences from "./0011_task_references.ts";
 import modelHarness from "./0012_model_harness.ts";
 import schedules from "./0013_schedules.ts";
 import delegations from "./0014_delegations.ts";
-import pinnedSessions from "./0015_pinned_sessions.ts";
-import sessionAgentModel from "./0016_session_agent_model.ts";
+import chatModels from "./0015_chat_models.ts";
+import runChangeEvents from "./0016_run_change_events.ts";
+import pinnedSessions from "./0017_pinned_sessions.ts";
+import sessionAgentModel from "./0018_session_agent_model.ts";
 
 export interface Migration {
   readonly version: number;
@@ -25,6 +27,10 @@ export interface Migration {
   readonly name: string;
   readonly sql: string;
   readonly compatibleChecksums?: readonly string[];
+  /** Exact SQL from a branch that reused this version for a different schema. */
+  readonly historicalVariants?: readonly { readonly name: string; readonly sql: string }[];
+  /** Record this migration without repeating its SQL if that branch already ran it. */
+  readonly alreadyAppliedAs?: number;
 }
 
 export const migrations: readonly Migration[] = Object.freeze([
@@ -46,6 +52,10 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 12, name: "0012_model_harness.sql", sql: modelHarness },
   { version: 13, name: "0013_schedules.sql", sql: schedules },
   { version: 14, name: "0014_delegations.sql", sql: delegations },
-  { version: 15, name: "0015_pinned_sessions.sql", sql: pinnedSessions },
-  { version: 16, name: "0016_session_agent_model.sql", sql: sessionAgentModel },
+  // Preserve the original identities. The desktop refresh branch reused 15/16; recognize its
+  // exact SQL and verify that branch's schema before appending the missing changes below.
+  { version: 15, name: "0015_chat_models.sql", sql: chatModels, historicalVariants: [{ name: "0015_pinned_sessions.sql", sql: pinnedSessions }] },
+  { version: 16, name: "0016_run_change_events.sql", sql: runChangeEvents, historicalVariants: [{ name: "0016_session_agent_model.sql", sql: sessionAgentModel }] },
+  { version: 17, name: "0017_pinned_sessions.sql", sql: pinnedSessions, alreadyAppliedAs: 15 },
+  { version: 18, name: "0018_session_agent_model.sql", sql: sessionAgentModel, alreadyAppliedAs: 16 },
 ]);
