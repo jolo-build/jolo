@@ -71,8 +71,9 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     await select('Checks');
     await evaluate("document.querySelector('.context-close').click()");
     await waitFor("document.querySelector('.inspector').hidden", 'context close hides the panel');
-    await click('.header [aria-label="Panel"]');
-    await waitFor("!document.querySelector('.inspector').hidden && document.querySelector('.panel-item-tabs [aria-label=Checks]').getAttribute('aria-selected') === 'true' && !document.querySelector('.panel-menu:popover-open')", 'the panel icon restores the hidden tab');
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ${process.platform === 'darwin' ? 'metaKey' : 'ctrlKey'}: true, bubbles: true, cancelable: true }))`);
+    await waitFor("!document.querySelector('.inspector').hidden && document.querySelector('.panel-item-tabs [aria-label=Checks]').getAttribute('aria-selected') === 'true' && !document.querySelector('.panel-menu:popover-open')", 'Cmd/Ctrl+J restores the hidden tab');
+    assert(await evaluate("document.querySelectorAll('.header-actions button[aria-label=Panels]').length === 1 && !document.querySelector('.header [aria-label=Panel]')"), 'the header still shows the panel icon and its chevron as separate buttons');
     await select('Browser');
     assert(await evaluate("document.querySelector('.browser webview') === window.__panelBrowser && window.__panelBrowser.executeJavaScript('window.retainedPanelPage === 42')"), 'closing Checks discarded the browser page');
     // Test the bundled font: fallback fonts hid the slash substitution in earlier input checks.
@@ -109,6 +110,9 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
     };
     await dragPanel(-80);
     assert(await chatWidth() < initialChatWidth - 60, `dragging left did not widen the browser: ${initialChatWidth} → ${await chatWidth()}`);
+    // A narrow chat keeps send inside the box and moves model and effort to a line below it.
+    const composer = await evaluate("(() => { const form = document.querySelector('.composer').getBoundingClientRect(), meta = document.querySelector('.composer-meta'), below = getComputedStyle(meta).display !== 'contents'; return { width: form.width, sendInside: [...document.querySelectorAll('.composer-submit')].every(button => button.getBoundingClientRect().right <= form.right), below, metaBelow: below && meta.getBoundingClientRect().top >= form.bottom }; })()");
+    assert(composer.sendInside && (composer.width > 460 || composer.metaBelow), `the composer controls left the box in a narrow chat: ${JSON.stringify(composer)}`);
     // Separate the two native drags so macOS does not interpret them as a double click.
     await new Promise(resolve => setTimeout(resolve, 600));
     await dragPanel(160);

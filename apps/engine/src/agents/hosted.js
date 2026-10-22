@@ -51,6 +51,20 @@ export function insideWorkspace(root, candidate) {
  * What a run was told to be answered with, as an override the catalog understands: a value the task chose, or
  * nothing at all, so the agent's own configuration stands (§6.6).
  */
+/**
+ * A run's own model and effort, or else the task's: what the user picked for this chat applies to every turn its agent
+ * answers, the turns Jolo starts by itself (carrying on, heartbeats) as much as the ones the user sends.
+ * @param {any} session @param {any} [execution]
+ */
+export const withTaskChoice = (session, execution = null) => {
+  const choice = session?.agentId && session.agentModel && (execution?.agentId ?? session.agentId) === session.agentId && !execution?.preset && !execution?.pinned ? session.agentModel : null;
+  if (!choice) return execution;
+  const chosen = { ...(execution ?? {}) };
+  if (choice.model && !chosen.model) chosen.model = choice.model;
+  if (choice.effort && !chosen.effort) chosen.effort = choice.effort;
+  return chosen;
+};
+
 export const runChoice = (run) => run?.execution?.pinned ? { model: run.execution.model, effort: run.execution.effort ?? null } : ({
   ...(run?.execution?.model ? { model: run.execution.model } : {}),
   ...(run?.execution?.effort ? { effort: run.execution.effort } : {}),
@@ -86,18 +100,23 @@ export { spawnLineChild } from "../processes/line-child.js";
 
 /**
  * The Jolo side of one hosted turn: the user's message, tool records, permission decisions, and the wrap-up.
- * @param {{ ctx: any, storage: any, permissions: any, manifest: any, session: any, workspace: any }} deps
+ * A transport whose process outlives the turn passes `scratch`, the directory that process already has; the
+ * turn then neither makes nor removes one.
+ * @param {{ ctx: any, storage: any, permissions: any, manifest: any, session: any, workspace: any, scratch?: (() => string) | null }} deps
  */
-export function createHostedTurn({ ctx, storage, permissions, manifest, session, workspace }) {
+export function createHostedTurn({ ctx, storage, permissions, manifest, session, workspace, scratch: shared = null }) {
   const { run, signal } = ctx;
-  // One private scratch directory per turn. Never grant access to all of /tmp.
-  let scratchDir;
-  const scratch = () => scratchDir ??= realpathSync(mkdtempSync(path.join(tmpdir(), 'jolo-agent-')));
-  const containsFile = target => insideWorkspace(workspace.path, target) || Boolean(scratchDir && insideWorkspace(scratchDir, target));
+  // One private scratch directory per turn, unless the process brought its own. Never grant access to all of /tmp.
+  let scratchDir = null;
+  const scratch = () => shared ? (scratchDir = shared()) : (scratchDir ??= realpathSync(mkdtempSync(path.join(tmpdir(), 'jolo-agent-'))));
+  const containsFile = target => insideWorkspace(workspace.path, target) || Boolean((shared ? scratch() : scratchDir) && insideWorkspace(shared ? scratch() : scratchDir, target));
   permissions.grantEdit(workspace.id, run.id); // a task may edit its own workspace; the guest's edits get the same grant (§10.1)
-  const userMessage = ctx.startMessage("user", "text");
-  ctx.appendText(userMessage, run.prompt);
-  ctx.finishMessage(userMessage, "complete");
+  // A turn the agent began by itself has no message from the user to show.
+  if (run.prompt) {
+    const userMessage = ctx.startMessage("user", "text");
+    ctx.appendText(userMessage, run.prompt);
+    ctx.finishMessage(userMessage, "complete");
+  }
 
   const tools = new Map(); // the agent's call id -> { invocationId, messageId, name, startedAt, bytes, shown, truncated }
   const appendBounded = (messageId, text) => { for (let i = 0; i < text.length; i += PREVIEW_CHUNK) ctx.appendText(messageId, text.slice(i, i + PREVIEW_CHUNK)); };
@@ -107,8 +126,8 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
    * when nobody has said yes yet. Both admission paths go through here, so an "allow once" covers exactly one
    * call whether the grant was already on file or the user has just given it.
    */
-  const admit = (argumentDigest, toolName) => {
-    const grant = permissions.authorize({ toolClass: "process", workspaceId: workspace.id, runId: run.id, argumentDigest, toolName: qualified(toolName) });
+  const admit = (argumentDigest, toolName, grantRun = run.id) => {
+    const grant = permissions.authorize({ toolClass: "process", workspaceId: workspace.id, runId: grantRun, argumentDigest, toolName: qualified(toolName) });
     if (grant?.constraints?.once) storage.expireGrant(grant.id); // a one-time approval covers exactly one call
     return grant;
   };
@@ -119,7 +138,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
     get fileInstructions() { return `Temporary files: use ${JSON.stringify(scratch())} (also TMPDIR, TMP and TEMP), not a hard-coded /tmp path. Jolo permits reads and writes in this private directory for this turn and removes it when the turn ends. Save final mockups, visualizations, and other deliverables inside the workspace before linking them in your reply; only workspace files can be previewed in chat.`; },
     containsFile,
     filePath(target, options = {}) {
-      const root = insideWorkspace(workspace.path, target) ? workspace.path : scratchDir;
+      const root = insideWorkspace(workspace.path, target) ? workspace.path : (shared ? scratch() : scratchDir);
       if (!root) throw new Error('path is outside the workspace');
       return { ...hostedPath(root, target, options), temporary: root === scratchDir };
     },
@@ -138,9 +157,13 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
      * or null when the run was cancelled while the user was being asked.
      * Only a call that can reach the user carries the summary, script, working directory and digest
      * that its request is written from; a read or a mutation is answered from its targets alone.
-     * @param {{ toolClass: string, toolName: string, targets?: any[], summary?: string, script?: string, cwd?: string, argumentDigest?: string }} request
+     * `signal` ends the wait for an answer when the question is withdrawn; the run's own cancellation always does.
+     * `holding` answers true while another question of the run still waits on the user, so the run keeps waiting on them.
+     * `grantRun` is what an "allow for this run" answer covers: the run itself, or the background work that asked, which
+     * outlives the run it happened to ask under.
+     * @param {{ toolClass: string, toolName: string, targets?: any[], summary?: string, script?: string, cwd?: string, argumentDigest?: string, signal?: AbortSignal, holding?: () => boolean, grantRun?: string }} request
      */
-    async decide({ toolClass, toolName, targets = [], summary, script, cwd, argumentDigest }) {
+    async decide({ toolClass, toolName, targets = [], summary, script, cwd, argumentDigest, signal: withdrawn = signal, holding, grantRun = run.id }) {
       if (toolClass === "read" || toolClass === "mutation") {
         const outside = targets.find((target) => !containsFile(target));
         if (outside !== undefined) return { deny: `Jolo policy: ${toolName} outside the workspace is not allowed` };
@@ -148,20 +171,24 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
         catch (error) { return { deny: `Jolo policy: ${error.message}` }; }
       }
       try {
-        admit(argumentDigest, toolName);
+        admit(argumentDigest, toolName, grantRun);
         return "allow";
       } catch (error) {
         if (!(error instanceof PermissionRequired)) return { deny: `Jolo policy: ${error?.message ?? "not allowed"}` };
       }
-      const permission = permissions.request({ run, workspaceId: workspace.id, tool: { name: qualified(toolName) }, argumentDigest, summary: { summary: summary.slice(0, 500), script: script.slice(0, 4000) }, cwd: cwd ?? "." });
+      const permission = permissions.request({ run, workspaceId: workspace.id, tool: { name: qualified(toolName) }, argumentDigest, summary: { summary: summary.slice(0, 500), script: script.slice(0, 4000) }, cwd: cwd ?? ".", ...(grantRun !== run.id ? { grantRunId: grantRun } : {}) });
       ctx.transition("awaiting_permission");
       let resolved;
-      try { resolved = await permissions.waitForResolution(permission.id, signal); }
-      catch { return null; } // cancelled while waiting: the child is being terminated
-      ctx.transition("tools");
+      try { resolved = await permissions.waitForResolution(permission.id, withdrawn); }
+      catch {
+        // Taken back by the agent while the run goes on: the prompt must not stay up for a question nobody asks.
+        if (withdrawn !== signal && withdrawn.aborted && !signal.aborted) permissions.withdraw(permission.id);
+        return null; // cancelled while waiting: the child is being terminated
+      }
+      if (!holding?.()) ctx.transition("tools");
       if (resolved.state !== "allowed") return { deny: "The user declined this action in Jolo." };
       // Spend the grant the decision just created, so "allow once" covers this call and not the next identical one.
-      try { admit(argumentDigest, toolName); }
+      try { admit(argumentDigest, toolName, grantRun); }
       catch (error) { return { deny: `Jolo policy: approval is no longer valid (${error.message})` }; }
       return "allow";
     },
@@ -222,7 +249,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
     },
     /** The turn is over: whatever is still open was interrupted; usage is recorded; nothing was verified. */
     finish({ usage }) {
-      if (scratchDir) rmSync(scratchDir, { recursive: true, force: true });
+      if (scratchDir && !shared) rmSync(scratchDir, { recursive: true, force: true });
       for (const [callId, tool] of tools) { ctx.finishMessage(tool.messageId, "interrupted"); tools.delete(callId); }
       const recorded = {
         inputTokens: Math.max(0, usage.inputTokens | 0), outputTokens: Math.max(0, usage.outputTokens | 0),

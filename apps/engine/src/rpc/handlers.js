@@ -2,6 +2,7 @@ import { delegationTools } from '../tools/delegation.js';
 import { requireInteractive } from "./authorization.js";
 import { permissionCwd } from '../permissions/service.js';
 import { browserCallHandler } from '../browser/rpc.js';
+import { liveRunFor } from './capabilities.js';
 // Application RPC surface. Transport authentication stays in server.js; service composition stays in engine.js.
 import { closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from 'node:path';
@@ -10,6 +11,8 @@ import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
 import { revertPatchPath } from "../workspaces/revert.js";
 import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
+import { CONTINUATION_PREFIX, isContinuation } from "../agents/claude-stream.js";
+import { withTaskChoice } from "../agents/hosted.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
@@ -22,13 +25,13 @@ import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, agentLimits: any, credentials: any,
  *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
- *   paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
+ *   hostedLinks?: any, paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
  *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
  * }} RpcDependencies
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -45,15 +48,17 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     });
     // Archive, restore and delete each carry the task's heartbeats with them.
     schedules?.reconcileSession(sessionId);
+    // A task put away or removed has no further turns: its agent process, if one is kept, is closed.
+    if (state === "archived" || deleted) void hostedLinks?.close(sessionId, deleted ? "task deleted" : "task archived");
     return result;
   };
 
   let activeSearches = 0;
   let inFlight = 0, reloading = false;
-  /** The task a capability credential is bound to, resolved from the run it was issued for. Fails closed. */
+  /** The task a capability credential is bound to: named on the credential, else resolved from the run it was issued for. Fails closed. */
   const capabilitySession = (conn) => {
     if (!conn?.capability) return null;
-    const sessionId = storage.getRun(conn.capability.runId)?.sessionId;
+    const sessionId = conn.capability.sessionId ?? storage.getRun(conn.capability.runId)?.sessionId;
     if (!sessionId) throw new ProtocolError("permission_denied", "this credential no longer names a task");
     return sessionId;
   };
@@ -80,13 +85,13 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       clients: getServer().clientCount, activeRuns: runs.activeCount, queuedRuns: runs.queuedCount, uptimeMs: Date.now() - startedMs, startedAt, cursor: storage.maxSeq(),
     }),
     "engine.stop": ({ cancelActive }) => {
-      if (!cancelActive && (runs.activeCount > 0 || runs.queuedCount > 0)) throw new ProtocolError("conflict", "runs are active; pass cancelActive to stop anyway", { activeRuns: runs.activeCount, queuedRuns: runs.queuedCount });
+      if (!cancelActive && (runs.activeCount > 0 || runs.queuedCount > 0 || hostedLinks?.working)) throw new ProtocolError("conflict", "runs or agents' background work are active; pass cancelActive to stop anyway", { activeRuns: runs.activeCount, queuedRuns: runs.queuedCount });
       setTimeout(() => void stop("requested"), 50);
       return { stopping: true };
     },
     "engine.reload": (_params, conn) => {
       requireInteractive(conn);
-      if (inFlight > 1 || runs.activeCount || runs.queuedCount || terminals.list().length) {
+      if (inFlight > 1 || runs.activeCount || runs.queuedCount || terminals.list().length || hostedLinks?.working) {
         throw new ProtocolError("conflict", "engine will reload after active tasks, terminals and requests finish");
       }
       // The check and admission gate are synchronous: no new request can start
@@ -140,7 +145,10 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         if (!project.preferences.removedAt) storage.setProjectRemoved(projectId, true);
         return ids;
       });
-      for (const sessionId of archived) schedules?.reconcileSession(sessionId); // archived chats drop their heartbeats, as archiving one does
+      for (const sessionId of archived) {
+        schedules?.reconcileSession(sessionId); // archived chats drop their heartbeats, as archiving one does
+        void hostedLinks?.close(sessionId, "task archived"); // and their agent processes, as archiving one does
+      }
       return { projectId, archived: archived.length };
     },
     "settings.get": () => ({ settings: settingsService.get() }),
@@ -166,9 +174,11 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       if (!storage.getProject(projectId)) throw new ProtocolError("not_found", "unknown project");
       return { workspaces: worktrees.list(projectId) };
     },
-    "workspace.remove": (params, conn) => {
+    "workspace.remove": async (params, conn) => {
       requireInteractive(conn, "only an interactive client can remove a worktree");
-      return worktrees.remove(params);
+      // No process keeps a file open in a folder being deleted, but only once the removal has passed its checks: a refused
+      // removal must not have stopped the background work of the conversations in it.
+      return worktrees.remove(params, { beforeRemove: () => hostedLinks?.closeWorkspace(params.workspaceId, "workspace removed") });
     },
     // Hosted coding agents still require a cwd. Each standalone chat gets its own
     // private working directory, never the user's last selected repository.
@@ -216,21 +226,26 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       storage.appendEvent({ sessionId, type: 'session.updated', payload: { session: updated } });
       return { session: updated };
     }),
-    "session.setAgent": ({ sessionId, agentId, expectedRevision }) => storage.transaction(() => {
-      const session = storage.getSession(sessionId);
-      if (!session) throw new ProtocolError("not_found", "task no longer exists");
-      if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
-      if (session.agentId === agentId) return { session };
-      if (storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "Finish or stop the current task before switching agents; your conversation will stay here.");
-      if (agentId) {
-        const manifest = agents.catalog.get(agentId);
-        if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a separate terminal, not a chat`);
-        agents.catalog.command(manifest); // Refuse an unavailable binary before changing the session.
-      }
-      const updated = storage.setSessionAgent(sessionId, agentId);
-      storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
-      return { session: updated };
-    }),
+    "session.setAgent": ({ sessionId, agentId, expectedRevision }) => {
+      const result = storage.transaction(() => {
+        const session = storage.getSession(sessionId);
+        if (!session) throw new ProtocolError("not_found", "task no longer exists");
+        if (session.revision !== expectedRevision) throw new ProtocolError("conflict", "task changed; refresh and try again");
+        if (session.agentId === agentId) return { session, changed: false };
+        if (storage.sessionHasUnfinishedRuns(sessionId)) throw new ProtocolError("conflict", "Finish or stop the current task before switching agents; your conversation will stay here.");
+        if (agentId) {
+          const manifest = agents.catalog.get(agentId);
+          if (manifest.transport === "pty") throw new ProtocolError("invalid_params", `${manifest.displayName} runs in a separate terminal, not a chat`);
+          agents.catalog.command(manifest); // Refuse an unavailable binary before changing the session.
+        }
+        const updated = storage.setSessionAgent(sessionId, agentId);
+        storage.appendEvent({ sessionId, type: "session.updated", payload: { session: updated } });
+        return { session: updated, changed: true };
+      });
+      // The remembered vendor conversation goes with the switch, and so does the process that was holding it.
+      if (result.changed) void hostedLinks?.close(sessionId, "handed to another agent");
+      return { session: result.session };
+    },
     /** @param {{ archived: boolean, sessionId: string, expectedRevision: number }} params */
     "session.archive": ({ archived, ...params }) => editSession({ ...params, state: archived ? "archived" : "open" }),
     "session.delete": (params) => editSession({ ...params, deleted: true }),
@@ -254,14 +269,17 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     "session.page": ({ sessionId, beforeOrdinal, limit }) => storage.transaction(() => {
       const session = storage.getSession(sessionId);
       if (!session) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
-      const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit });
+      // A turn Claude began by itself has no message from the user; earlier ones stored a stand-in, left out before the
+      // page is cut so that a page is never emptied by it.
+      const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit, hideUserMessagesOf: CONTINUATION_PREFIX });
+      const runsOf = storage.listRunsForSession(sessionId).map(run => isContinuation(run) ? { ...run, prompt: "" } : run);
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
-      return { session, messages, runs: storage.listRunsForSession(sessionId).map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
+      return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
     'delegation.call': (params, conn) => {
-      const runId = conn?.capability?.runId ?? params.runId;
+      const runId = conn?.capability ? liveRunFor(runs, storage, conn.capability) : params.runId;
       const run = runId && storage.getRun(runId);
       if (!run) throw new ProtocolError('permission_denied', 'Delegation needs an existing parent run');
       const session = storage.getSession(run.sessionId);
@@ -275,14 +293,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const selected = await delegations?.prepare(params.prompt) ?? [];
       const session = storage.getSession(params.sessionId);
       // A task's own choice of model and effort applies when its own agent answers, under anything named for this run.
-      const ownChoice = request => {
-        const choice = session?.agentId && session.agentModel && (request.execution?.agentId ?? session.agentId) === session.agentId && !request.execution?.preset && !request.execution?.pinned ? session.agentModel : null;
-        if (!choice) return request;
-        const execution = { ...(request.execution ?? {}) };
-        if (choice.model && !execution.model) execution.model = choice.model;
-        if (choice.effort && !execution.effort) execution.effort = choice.effort;
-        return { ...request, execution };
-      };
+      const ownChoice = request => ({ ...request, execution: withTaskChoice(session, request.execution) });
       const admit = request => storage.transaction(() => {
         delegations?.register(request.sessionId, selected);
         return runs.start(ownChoice(request));
@@ -343,6 +354,12 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const permission = permissions.resolve(params);
       const run = storage.getRun(permission.runId);
       if (run?.state === "paused" && run.pauseReason === "permission" && permission.state === "allowed") runs.resume({ runId: run.id });
+      // A standing answer also answered other questions: runs paused on them go on as well.
+      for (const other of permission.settled ?? []) {
+        const paused = storage.getRun(other.runId);
+        if (paused?.id === run?.id || paused?.state !== "paused" || paused.pauseReason !== "permission") continue;
+        try { runs.resume({ runId: paused.id }); } catch { /* it stays paused, to be resumed by hand */ }
+      }
       return { permissionId: permission.id, decision: permission.decision, revision: permission.revision, runId: permission.runId };
     },
     "run.resume": (params) => ({ run: runs.resume(params) }),

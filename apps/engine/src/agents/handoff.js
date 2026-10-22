@@ -57,8 +57,8 @@ export function goalOf(storage, sessionId) {
  * One line per run that has stopped, oldest first, from the note Jolo writes when a run ends and the files
  * that run changed. This is the layer that costs nothing and is always there.
  */
-export function workLogOf(storage, sessionId, { excludeRunId = null, afterOrdinal = -1 } = {}) {
-  const runs = storage.listRunsForSession(sessionId, WORK_LOG_MAX_RUNS + 1).filter((run) => run.id !== excludeRunId && run.note && (afterOrdinal < 0 || storage.lastMessageOrdinal(sessionId, run.id) > afterOrdinal));
+export function workLogOf(storage, sessionId, { excludeRunId = null, afterOrdinal = -1, skipRunIds = [] } = {}) {
+  const runs = storage.listRunsForSession(sessionId, WORK_LOG_MAX_RUNS + 1 + skipRunIds.length).filter((run) => run.id !== excludeRunId && !skipRunIds.includes(run.id) && run.note && (afterOrdinal < 0 || storage.lastMessageOrdinal(sessionId, run.id) > afterOrdinal));
   const omitted = Math.max(0, runs.length - WORK_LOG_MAX_RUNS);
   const shown = runs.slice(omitted);
   const lines = [];
@@ -80,8 +80,8 @@ export function workLogOf(storage, sessionId, { excludeRunId = null, afterOrdina
  * The messages the recent layer will NOT carry, oldest first, as plain lines a summariser can read. Bounded
  * by SUMMARY_SOURCE_MAX_BYTES from the end, so the newest of the omitted middle wins when even that overflows.
  */
-export function omittedTranscript(storage, sessionId, { keptIds, excludeRunId = null, afterOrdinal = -1 }) {
-  const { messages } = handoffMessages(storage, sessionId, { limit: 400, afterOrdinal, excludeRunId });
+export function omittedTranscript(storage, sessionId, { keptIds, excludeRunId = null, afterOrdinal = -1, skipRunIds = [] }) {
+  const { messages } = handoffMessages(storage, sessionId, { limit: 400, afterOrdinal, excludeRunId, skipRunIds });
   const kept = new Set(keptIds);
   const older = messages.filter(message => !kept.has(message.id)).sort((a, b) => a.ordinal - b.ordinal);
   const lines = [];
@@ -109,15 +109,15 @@ export const SUMMARY_INSTRUCTIONS =
  * The layers, without any model call: everything that can be known from records. Synchronous, so a caller
  * inside a transaction can use it; `renderHandoff` turns it into text, with or without a summary.
  */
-export function planHandoff(storage, { sessionId, excludeRunId = null, from = null, to = null, budgetBytes = HANDOFF_BUDGET_BYTES, afterOrdinal = -1 }) {
+export function planHandoff(storage, { sessionId, excludeRunId = null, from = null, to = null, budgetBytes = HANDOFF_BUDGET_BYTES, afterOrdinal = -1, skipRunIds = [] }) {
   const head = `Conversation handed from ${describeAnswerer(from)} to ${describeAnswerer(to)}.`;
-  const log = workLogOf(storage, sessionId, { excludeRunId, afterOrdinal });
+  const log = workLogOf(storage, sessionId, { excludeRunId, afterOrdinal, skipRunIds });
   const goal = goalOf(storage, sessionId);
   const fixed = Buffer.byteLength(head) + (log.text ? Buffer.byteLength(log.text) + 64 : 0);
   // The recent layer takes what the fixed layers leave; the goal and a summary have reserves of their own.
   const recentBudget = Math.max(4 * 1024, budgetBytes - fixed - GOAL_MAX_BYTES - SUMMARY_MAX_BYTES);
-  const recent = recentHistory(storage, sessionId, { excludeRunId, budgetBytes: recentBudget, afterOrdinal });
-  return { sessionId, excludeRunId, afterOrdinal, head, goal, log, recent, omitted: recent.omittedCount };
+  const recent = recentHistory(storage, sessionId, { excludeRunId, budgetBytes: recentBudget, afterOrdinal, skipRunIds });
+  return { sessionId, excludeRunId, afterOrdinal, skipRunIds, head, goal, log, recent, omitted: recent.omittedCount };
 }
 
 export function renderHandoff(plan, summary = null) {
@@ -142,13 +142,13 @@ export function renderHandoff(plan, summary = null) {
  */
 /**
  * @param {any} storage
- * @param {{ summarize?: ((text: string) => Promise<string | null>) | null, sessionId: string, excludeRunId?: string | null, from?: any, to?: any, budgetBytes?: number, afterOrdinal?: number }} options
+ * @param {{ summarize?: ((text: string) => Promise<string | null>) | null, sessionId: string, excludeRunId?: string | null, from?: any, to?: any, budgetBytes?: number, afterOrdinal?: number, skipRunIds?: string[] }} options
  */
 export async function buildHandoff(storage, { summarize = null, ...options }) {
   const plan = planHandoff(storage, options);
   let summary = null;
   if (plan.omitted > 0 && summarize) {
-    const middle = omittedTranscript(storage, plan.sessionId, { keptIds: plan.recent.keptIds, excludeRunId: plan.excludeRunId, afterOrdinal: plan.afterOrdinal });
+    const middle = omittedTranscript(storage, plan.sessionId, { keptIds: plan.recent.keptIds, excludeRunId: plan.excludeRunId, afterOrdinal: plan.afterOrdinal, skipRunIds: plan.skipRunIds });
     if (middle.text) { try { summary = await summarize(middle.text); } catch { summary = null; } }
   }
   return renderHandoff(plan, summary);
@@ -230,23 +230,41 @@ export async function handoffPrompt({ storage, run, session, resumed, from = nul
   const withDelegation = prompt => guidance ? `${guidance}\n\n${prompt.includes('\n\nCurrent request:\n') ? prompt : `Current request:\n${prompt}`}` : prompt;
   const seen = session?.agentState?._jolo?.seen?.[to?.id];
   const afterOrdinal = resumed && Number.isInteger(seen) ? seen : -1;
-  const recent = recentHistory(storage, run.sessionId, { excludeRunId: run.id, afterOrdinal });
+  // Already in the agent's own thread, when that thread goes on; a new thread is told them like anything else.
+  const skipRunIds = resumed ? session?.agentState?._jolo?.carriedOn?.[to?.id] ?? [] : [];
+  const recent = recentHistory(storage, run.sessionId, { excludeRunId: run.id, afterOrdinal, skipRunIds });
   if (resumed && !recent.keptCount && !recent.omittedCount) return withDelegation(asked);
-  const handoff = await buildHandoff(storage, { sessionId: run.sessionId, excludeRunId: run.id, from, to, summarize, afterOrdinal });
+  const handoff = await buildHandoff(storage, { sessionId: run.sessionId, excludeRunId: run.id, from, to, summarize, afterOrdinal, skipRunIds });
   const context = resumed ? `Shared conversation updates since your previous turn. These messages were produced outside your vendor thread. Use the recorded work and document paths when interpreting the current request.\n${handoff.text}` : handoff.text;
   return withDelegation(context.trim() ? `${context}\n\nCurrent request:\n${asked}` : asked);
 }
 
 /** Advance delivery only after a completed turn. A failed/cancelled attempt must not
- * make another agent's work disappear on retry. Metadata survives vendor ID resets. */
-export function rememberConversation(storage, run, answerer, completed) {
+ * make another agent's work disappear on retry. Metadata survives vendor ID resets.
+ * A turn that `carried` nothing of the conversation (an agent carrying on by itself) advances it only when there is
+ * nothing from others it should have carried. */
+export function rememberConversation(storage, run, answerer, completed, { carried = true, reached = false } = {}) {
   const session = storage.getSession(run.sessionId);
   const state = session.agentState ?? {};
   const handoff = state._jolo ?? {};
   const ordinal = storage.lastMessageOrdinal(session.id);
+  const seen = handoff.seen?.[answerer.id];
+  const own = handoff.carriedOn?.[answerer.id] ?? [];
+  const page = !carried && Number.isInteger(seen) ? handoffMessages(storage, session.id, { excludeRunId: run.id, afterOrdinal: seen, limit: 50, skipRunIds: own }) : null;
+  const owed = completed && !carried && (!page || page.messages.length > 0);
+  // While delivery stays behind for others' work, the agent's own runs since are remembered, so that what it said
+  // itself is not handed back to it as news: one that delivered nothing, or one stopped after the agent took it up.
+  // A turn that delivers the conversation clears them. Only runs that left messages need remembering.
+  const wrote = storage.lastMessageOrdinal(session.id, run.id) >= 0;
+  const carriedOn = { ...handoff.carriedOn };
+  if (wrote && (owed || (!completed && reached))) carriedOn[answerer.id] = [...own.filter((id) => id !== run.id), run.id];
+  else if (completed && !owed) delete carriedOn[answerer.id];
   storage.setSessionAgentState(session.id, { ...state, _jolo: {
-    ...handoff, lastAnswerer: answerer, lastRunId: run.id,
-    seen: { ...handoff.seen, ...(completed ? { [answerer.id]: ordinal } : {}) },
+    ...handoff,
+    // A turn that delivered nothing did not take the conversation over: who answered last is still who did.
+    ...(owed ? {} : { lastAnswerer: answerer, lastRunId: run.id }),
+    seen: { ...handoff.seen, ...(completed && !owed ? { [answerer.id]: ordinal } : {}) },
+    carriedOn,
   } });
 }
 
@@ -254,9 +272,10 @@ export function rememberConversation(storage, run, answerer, completed) {
  * What Jolo's own loop is asked when called into a conversation another agent has been holding. Built inside
  * the run's own turn, so it is synchronous and carries no model-written summary; the omission is declared.
  */
-export function joloHandoff(storage, run, session, { from = null } = {}) {
+export function joloHandoff(storage, run, session, { from = null, after = null } = {}) {
   const seen = session?.agentState?._jolo?.seen?.jolo;
-  const afterOrdinal = Number.isInteger(seen) ? seen : -1;
+  // `after`: a resumed run was told what came before it already, so only what others said since.
+  const afterOrdinal = Math.max(Number.isInteger(seen) ? seen : -1, after ?? -1);
   const recent = recentHistory(storage, run.sessionId, { excludeRunId: run.id, afterOrdinal });
   if (!recent.keptCount && !recent.omittedCount) return null;
   const rendered = renderHandoff(planHandoff(storage, { sessionId: run.sessionId, excludeRunId: run.id, afterOrdinal, from: session?.agentState?._jolo?.lastAnswerer ?? from, to: null }), null);

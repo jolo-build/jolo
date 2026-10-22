@@ -5,19 +5,17 @@ import { withoutMention } from "./mentions.js";
 const HISTORY_BYTES = 48 * 1024;
 const MESSAGE_BYTES = 8 * 1024;
 
-/** Separate pages keep command output and reasoning from crowding out agent findings. */
-export function handoffMessages(storage, sessionId, { excludeRunId = null, afterOrdinal = -1, limit = 100 } = {}) {
-  const pages = ['conversation', 'tool'].map(handoffKind => {
-    const page = storage.listMessagesForSession(sessionId, { limit, afterOrdinal, excludeRunId, handoffKind });
-    return { ...page, messages: page.messages.filter(message => message.runId !== excludeRunId && message.kind !== 'reasoning' && message.committedBytes > 0 && (message.role === 'tool') === (handoffKind === 'tool')) };
-  });
+/** Separate pages keep command output and reasoning from crowding out agent findings. `skipRunIds` are runs whose
+ * messages the receiving agent already holds in its own thread. */
+export function handoffMessages(storage, sessionId, { excludeRunId = null, afterOrdinal = -1, limit = 100, skipRunIds = [] } = {}) {
+  const pages = ['conversation', 'tool'].map(handoffKind => storage.listMessagesForSession(sessionId, { limit, afterOrdinal, excludeRunId, excludeRunIds: skipRunIds, handoffKind }));
   return { messages: pages.flatMap(page => page.messages), unpaged: pages.filter(page => page.hasOlder).length };
 }
 
 /** Fit questions and agent replies first, then tool evidence; render in conversation order.
  * @returns {{ text: string, keptCount: number, keptIds: string[], omittedCount: number, truncated: boolean }} */
-export function recentHistory(storage, sessionId, { excludeRunId = null, budgetBytes = HISTORY_BYTES, afterOrdinal = -1 } = {}) {
-  const { messages: eligible, unpaged } = handoffMessages(storage, sessionId, { excludeRunId, afterOrdinal });
+export function recentHistory(storage, sessionId, { excludeRunId = null, budgetBytes = HISTORY_BYTES, afterOrdinal = -1, skipRunIds = [] } = {}) {
+  const { messages: eligible, unpaged } = handoffMessages(storage, sessionId, { excludeRunId, afterOrdinal, skipRunIds });
   const lines = [];
   let bytes = 0;
   let truncated = unpaged > 0;

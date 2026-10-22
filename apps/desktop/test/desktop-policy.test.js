@@ -121,6 +121,16 @@ test('commands covered by a standing approval generate no approval notices', asy
   } finally { f.service.dispose(); }
 });
 
+test('a run that showed nothing is not announced', async () => {
+  const f = attentionFixture({ focused: false });
+  try {
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed', quiet: true } });
+    await Bun.sleep(1);
+    expect(f.notifications).toHaveLength(0);
+    expect(f.notices).toHaveLength(0);
+  } finally { f.service.dispose(); }
+});
+
 test('routine task notifications explicitly suppress the OS sound', async () => {
   const f = attentionFixture({ focused: false });
   try {

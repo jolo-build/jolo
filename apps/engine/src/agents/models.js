@@ -50,7 +50,8 @@ export const CODEX_COMMANDS = Object.freeze([
 
 /** The agent's own commands from its initialize reply: built-ins, plugins and skills alike, each as one line. */
 export function claudeCommands(listed) {
-  return (Array.isArray(listed) ? listed : []).filter((entry) => text(entry?.name)).map((entry) => command({ name: entry.name, description: entry.description, argumentHint: entry.argumentHint }));
+  // The model, effort and fast mode are chosen in Jolo's own menu, which a kept process would otherwise drift from.
+  return (Array.isArray(listed) ? listed : []).filter((entry) => text(entry?.name) && !["model", "effort", "fast"].includes(entry.name)).map((entry) => command({ name: entry.name, description: entry.description, argumentHint: entry.argumentHint }));
 }
 
 /** Codex's enabled skills as commands, after the fixed two; a skill that shares a name with one of them is not repeated. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildHandoff, createSummarizer, describeAnswerer, goalOf, handoffPrompt, joloPrompt, planHandoff, renderHandoff, workLogOf, GOAL_MAX_BYTES, SUMMARY_MAX_BYTES } from "../src/agents/handoff.js";
+import { buildHandoff, createSummarizer, describeAnswerer, goalOf, handoffPrompt, joloHandoff, joloPrompt, planHandoff, rememberConversation, renderHandoff, workLogOf, GOAL_MAX_BYTES, SUMMARY_MAX_BYTES } from "../src/agents/handoff.js";
 import { recentHistory } from "../src/agents/history.js";
 import { handoffParties } from '../src/agents/hosted.js';
 
@@ -18,8 +18,8 @@ function fixture({ messages = [], runs = [], changed = {} } = {}) {
   return {
     reads,
     storage: {
-      listMessagesForSession: (_id, { limit, afterOrdinal = -1, excludeRunId = null, handoffKind = null }) => {
-        const eligible = rows.filter(row => row.ordinal > afterOrdinal && row.runId !== excludeRunId && (!handoffKind || row.kind !== 'reasoning' && row.committedBytes > 0 && (row.role === 'tool') === (handoffKind === 'tool')));
+      listMessagesForSession: (_id, { limit, afterOrdinal = -1, excludeRunId = null, excludeRunIds = [], handoffKind = null }) => {
+        const eligible = rows.filter(row => row.ordinal > afterOrdinal && row.runId !== excludeRunId && !excludeRunIds.includes(row.runId) && (!handoffKind || row.kind !== 'reasoning' && row.committedBytes > 0 && (row.role === 'tool') === (handoffKind === 'tool')));
         return { messages: eligible.slice(-limit), hasOlder: eligible.length > limit };
       },
       lastMessageOrdinal: (_id, runId = null) => rows.filter(row => !runId || row.runId === runId).at(-1)?.ordinal ?? -1,
@@ -235,3 +235,90 @@ describe("what a new answerer is told about a conversation it did not hold", () 
     expect(summarized).not.toContain('OUTPUT_29:');
   });
 });
+
+test("a turn that carried nothing moves delivery on only when nothing from others is owed, and never hands an agent its own words", () => {
+  const { storage } = fixture({ messages: [
+    { role: "user", runId: "r1", text: "start" }, { runId: "r1", text: "started" },
+    { role: "user", runId: "r2", text: "@codex note this" }, { runId: "r2", text: "noted" },
+    { role: "user", runId: "c1", text: "carried on" }, { runId: "c1", text: "my own report" },
+  ] });
+  /** @type {any} */
+  let agentState = { _jolo: { seen: { claude: 1 } } };
+  Object.assign(storage, { getSession: () => ({ id: "s", agentState }), setSessionAgentState: (/** @type {any} */ _id, /** @type {any} */ next) => { agentState = next; } });
+  rememberConversation(storage, { id: "c1", sessionId: "s" }, claude, true, { carried: false });
+  expect(agentState._jolo.seen.claude).toBe(1); // the guest's note is still owed to Claude
+  expect(agentState._jolo.carriedOn.claude).toEqual(["c1"]);
+  const told = recentHistory(storage, "s", { excludeRunId: "r3", afterOrdinal: 1, skipRunIds: agentState._jolo.carriedOn.claude });
+  expect(told.text).toContain("noted");
+  expect(told.text).not.toContain("my own report");
+  // A turn that delivers the conversation moves on and forgets the list.
+  rememberConversation(storage, { id: "r3", sessionId: "s" }, claude, true);
+  expect(agentState._jolo.seen.claude).toBe(5);
+  expect(agentState._jolo.carriedOn.claude).toBeUndefined();
+  // Never told anything yet: carrying on by itself is not delivery either.
+  agentState = {};
+  rememberConversation(storage, { id: "c1", sessionId: "s" }, claude, true, { carried: false });
+  expect(agentState._jolo.seen?.claude).toBeUndefined();
+});
+
+describe('what an agent is owed after turns that carried nothing', () => {
+  /** A storage double whose agent state can be read back. @param {any} messages @param {any} [initial] */
+  const remembering = (messages, initial = {}) => {
+    const { storage } = fixture({ messages });
+    /** @type {any} */
+    let agentState = initial;
+    Object.assign(storage, { getSession: () => ({ id: 's', agentState }), setSessionAgentState: (/** @type {any} */ _id, /** @type {any} */ next) => { agentState = next; } });
+    return { storage, state: () => agentState };
+  };
+
+  test('a new thread is told the agent\'s own earlier carrying-on, which only the old thread held', async () => {
+    const { storage } = fixture({ messages: [{ role: 'user', runId: 'r1', text: 'start' }, { runId: 'c1', text: 'what the background build found' }] });
+    const session = { agentState: { _jolo: { seen: { claude: 0 }, carriedOn: { claude: ['c1'] } } } };
+    const fresh = await handoffPrompt({ storage, run: { id: 'r2', sessionId: 's', prompt: 'next' }, session, resumed: false, to: claude });
+    expect(fresh).toContain('what the background build found');
+    const resumed = await handoffPrompt({ storage, run: { id: 'r2', sessionId: 's', prompt: 'next' }, session, resumed: true, to: claude });
+    expect(resumed).not.toContain('what the background build found');
+  });
+
+  test('a turn stopped after the agent took it up is remembered as the agent\'s own', () => {
+    const { storage, state } = remembering([{ role: 'user', runId: 'r1', text: 'start' }, { runId: 'r1', text: 'done' }, { runId: 'k1', text: 'my interrupted reply' }], { _jolo: { seen: { claude: 1 } } });
+    rememberConversation(storage, { id: 'k1', sessionId: 's' }, claude, false, { reached: true });
+    expect(state()._jolo.carriedOn.claude).toEqual(['k1']);
+    expect(state()._jolo.seen.claude).toBe(1);
+  });
+
+  test('another agent\'s messages stay owed however many of the agent\'s own runs came after them', () => {
+    const own = Array.from({ length: 60 }, (_, i) => ({ runId: `k${i}`, text: `my report ${i}` }));
+    const { storage, state } = remembering([{ role: 'user', runId: 'r1', text: 'start' }, { runId: 'codex-run', text: 'Codex reviewed the plan' }, ...own],
+      { _jolo: { seen: { claude: 0 }, carriedOn: { claude: own.map((m) => m.runId) } } });
+    rememberConversation(storage, { id: 'k60', sessionId: 's' }, claude, true, { carried: false });
+    expect(state()._jolo.seen.claude).toBe(0); // Codex's review is still to be delivered
+  });
+
+  test('a turn that delivered nothing does not become the last answerer', () => {
+    const { storage, state } = remembering([{ role: 'user', runId: 'r1', text: 'start' }, { runId: 'b1', text: 'Codex answered' }, { runId: 'c1', text: 'my report' }],
+      { _jolo: { seen: { claude: 0 }, lastAnswerer: codex, lastRunId: 'b1' } });
+    rememberConversation(storage, { id: 'c1', sessionId: 's' }, claude, true, { carried: false });
+    expect(state()._jolo.lastAnswerer).toEqual(codex);
+    expect(state()._jolo.lastRunId).toBe('b1');
+  });
+
+  test('only runs that left messages are remembered, and none are forgotten to make room', () => {
+    const own = Array.from({ length: 60 }, (_, i) => `k${i}`);
+    const { storage, state } = remembering([{ role: 'user', runId: 'r1', text: 'start' }, { runId: 'codex-run', text: 'Codex answered' }, { runId: 'k59', text: 'my report' }],
+      { _jolo: { seen: { claude: 0 }, carriedOn: { claude: own.slice(0, 59) } } });
+    rememberConversation(storage, { id: 'q1', sessionId: 's' }, claude, true, { carried: false }); // answered a question, wrote nothing
+    expect(state()._jolo.carriedOn.claude).toHaveLength(59);
+    rememberConversation(storage, { id: 'k59', sessionId: 's' }, claude, true, { carried: false });
+    expect(state()._jolo.carriedOn.claude).toEqual(own);
+  });
+
+  test('a resumed native run is told only what others said since it last spoke', () => {
+    // What came before the run was told when it began; what others said while it was paused is what it is owed.
+    const { storage } = fixture({ messages: [{ runId: 'x', text: 'old news, told at the first attempt' }, { role: 'user', runId: 'j1', text: 'build it' }, { runId: 'j1', text: 'started building' }, { role: 'user', runId: 'c1', text: '@codex check' }, { runId: 'c1', text: 'Codex checked it' }] });
+    const note = joloHandoff(storage, { id: 'j1', sessionId: 's' }, { agentState: {} }, { after: 2 });
+    expect(note).toContain('Codex checked it');
+    expect(note).not.toContain('old news');
+  });
+});
+

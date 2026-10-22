@@ -25,6 +25,10 @@ import { createOrchestrator } from "./orchestrator/index.js";
 import { createDelegationService } from './delegation/index.js';
 import { createScheduler } from "./scheduler/index.js";
 import { createHostedMcpConfig } from "./hosted-mcp.js";
+import { createHostedLinks, HOSTED_LINK_IDLE_MS } from "./agents/claude-link.js";
+import { EMPTY_RESULT_GRACE_MS } from "./agents/claude-stream.js";
+import { CONTINUATION_PREFIX } from "./agents/claude-stream.js";
+import { withTaskChoice } from "./agents/hosted.js";
 import { SELF_MENTION } from "./agents/mentions.js";
 import { createCatalog } from "./agents/catalog.js";
 import { createModelDirectory } from "./agents/models.js";
@@ -79,7 +83,21 @@ export function createEngine(options) {
   let server = null;
   let endpoint = null;
   let runs = null;
+  let hostedLinks = null;
   let stopping = null;
+
+  /**
+   * A conversation's agent began a turn by itself (background work it started has finished): give it a run,
+   * unless one is already queued or in progress for that conversation, which then takes the turn as it starts.
+   */
+  function continueConversation(sessionId, agentId) {
+    if (!runs || runs.isStopping) return false;
+    const session = storage?.getSession(sessionId);
+    if (!session || session.state === "archived") return false;
+    if (runs.hasWorkFor(sessionId)) return false;
+    runs.start({ sessionId, requestId: `${CONTINUATION_PREFIX}${newId("turn")}`, prompt: "", execution: withTaskChoice(session, { agentId }) }); // Claude's own turn: nothing was asked
+    return true;
+  }
   let resolveStopped;
   const stopped = new Promise((resolve) => { resolveStopped = resolve; });
 
@@ -117,14 +135,19 @@ export function createEngine(options) {
     agents = new AgentService({ catalog, terminals, storage, log });
     const jolo = createAgentExecutor({ storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });
     const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
+    // One Claude process per conversation, kept between turns so the background work it started gets to finish.
+    const emptyResultGraceMs = Number((options.env ?? process.env).JOLO_EMPTY_RESULT_GRACE_MS ?? EMPTY_RESULT_GRACE_MS);
+    hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId) });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      mcpConfig,
+      mcpConfig, links: hostedLinks, emptyResultGraceMs,
       providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
     runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
       const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;
       return !answerer || answerer === SELF_MENTION ? providerFactory.capture(session, execution) : null;
-    }, workspaceBusy: id => worktrees.isBusy(id) });
+    }, workspaceBusy: id => worktrees.isBusy(id),
+    // A turn the agent began by itself while a run held its conversation waits; offer it again once the conversation is free.
+    sessionIdle: sessionId => hostedLinks?.reoffer(sessionId) });
     delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory });
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
@@ -134,7 +157,7 @@ export function createEngine(options) {
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
@@ -167,6 +190,7 @@ export function createEngine(options) {
         if (delegations) await step("delegations", () => delegations.close());
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
+        if (hostedLinks) await step("hosted agents", () => hostedLinks.closeAll());
         if (search) await step("search", () => search.close());
         if (agents) await step("agents", () => agents.dispose());
         if (terminals) await step("terminals", () => terminals.stopAll());

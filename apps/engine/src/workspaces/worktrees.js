@@ -171,8 +171,9 @@ export function createWorktreeService({ storage, permissions, paths, env, termin
     /**
      * Remove a Jolo-owned worktree. Refuses while a run uses it and, without `force`, while it holds
      * uncommitted changes; open terminals in it are closed. The branch stays; user-created worktrees are never touched (§9.1).
+     * `beforeRemove` runs once every check has passed, just before the folder goes.
      */
-    async remove({ workspaceId, force = false }) {
+    async remove({ workspaceId, force = false }, { beforeRemove = async () => {} } = {}) {
       if (busy.has(workspaceId)) throw new ProtocolError("conflict", "workspace removal is already in progress");
       busy.add(workspaceId);
       try {
@@ -189,9 +190,11 @@ export function createWorktreeService({ storage, permissions, paths, env, termin
           const status = await git(workspace.path, ["status", "--porcelain", "--untracked-files=normal"]);
           if (status.ok && status.stdout.length > 0) throw new ProtocolError("conflict", "the worktree has uncommitted changes; commit or export them, or remove with force", { dirty: status.stdout.split("\n").length });
         }
+        await beforeRemove();
         const removed = await git(root, ["worktree", "remove", ...(force ? ["--force"] : []), workspace.path]);
         if (!removed.ok) throw new ProtocolError("internal", `git worktree remove failed: ${removed.stderr.slice(0, 500)}`);
       } else {
+        await beforeRemove();
         await git(root, ["worktree", "prune"]);
       }
       const result = storage.transaction(() => {

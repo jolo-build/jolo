@@ -1,6 +1,9 @@
 import { GUARDIAN_SOURCE } from "./guardian.js";
 // Bounded NDJSON transport. Drain independently of slow consumers and kill the
 // process group on cancellation, malformed oversized output, or queue overflow.
+const QUEUE_LIMIT = 2048;
+/** How long a full queue waits for its reader before the reader is taken to be stuck. */
+const READER_GRACE_MS = 1000;
 /**
  * Spawn a child that speaks newline-delimited JSON on its stdio. Cancelling the run first gives the
  * adapter a chance to say so politely (`onCancel`, which returns true when it did), then the child
@@ -53,11 +56,14 @@ export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId,
       let message;
       try { message = JSON.parse(text); } catch { log.warn('hosted agent sent a line that is not JSON', { agentId, bytes: Buffer.byteLength(text) }); return; }
       const size = Buffer.byteLength(text);
-      if (queuedBytes + size > maxQueueBytes || queue.length >= 2048) throw new Error('hosted agent output queue exceeded limit');
+      if (queuedBytes + size > maxQueueBytes || queue.length >= QUEUE_LIMIT) throw new Error('hosted agent output queue exceeded limit');
       queuedBytes += size;
       queue.push({ message, size });
       notify();
     };
+    const full = () => queue.length >= QUEUE_LIMIT || queuedBytes + bytes > maxQueueBytes;
+    // A burst (thousands of lines buffered while the engine was busy) splits faster than the reader steps through it.
+    const room = async () => { const until = Date.now() + READER_GRACE_MS; while (full() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5)); };
     for await (const data of child.stdout) {
       const chunk = Buffer.from(data);
       let offset = 0;
@@ -68,7 +74,7 @@ export function spawnLineChild({ argv, cwd, env, signal, onCancel, log, agentId,
         bytes += piece.length;
         if (bytes > maxLineBytes) throw new Error('hosted agent output line exceeded limit');
         pieces.push(piece);
-        if (newline >= 0) line();
+        if (newline >= 0) { if (full()) await room(); line(); }
         offset = end + 1;
       }
     }

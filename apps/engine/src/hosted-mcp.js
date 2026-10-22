@@ -13,11 +13,13 @@ const BRIDGES = { search: searchBridge, browser: browserBridge, schedule: schedu
 const BRIDGE_METHODS = { search: ['workspace.search'], browser: ['browser.call'], schedule: SCHEDULE_METHODS, delegation: ['delegation.call'] };
 
 /**
- * The MCP server config for one hosted run: `jolo` serving every bridge this engine can offer.
- * @returns {(workspace: any, run: any) => { server: { command: string, args: string[] }, hasBrowser: boolean, hasSearch: boolean }}
+ * The MCP server config for one hosted run: `jolo` serving every bridge this engine can offer. A transport whose
+ * process outlives the run names that process as the credential's `owner`; the credential is then revoked when
+ * the process ends rather than when the run does.
+ * @returns {(workspace: any, run: any, owner?: string) => { server: { command: string, args: string[] }, hasBrowser: boolean, hasSearch: boolean }}
  */
 export function createHostedMcpConfig({ paths, capabilityTokens, browser, search, log }) {
-  return (workspace, run) => {
+  return (workspace, run, owner = run.id) => {
     const tools = ['schedule', 'delegation'];
     if (search) {
       tools.push('search');
@@ -28,7 +30,7 @@ export function createHostedMcpConfig({ paths, capabilityTokens, browser, search
     const hasBrowser = Boolean(browser);
     if (hasBrowser) tools.push('browser');
     const methods = tools.flatMap(name => BRIDGE_METHODS[name]);
-    const tokenPath = capabilityTokens.issue(run.id, workspace.id, methods).tokenPath;
+    const tokenPath = capabilityTokens.issue(owner, workspace.id, methods, { sessionId: run.sessionId ?? null }).tokenPath;
     return { server: hostedMcpConfig({ ...paths, tokenPath }, workspace.id, tools), hasBrowser, hasSearch: Boolean(search) };
   };
 }

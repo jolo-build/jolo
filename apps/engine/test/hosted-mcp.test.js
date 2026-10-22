@@ -29,7 +29,7 @@ test('browser tools stay configured while workspace hosts attach and disconnect'
   expect(first.hasBrowser).toBe(true);
   expect(first.hasSearch).toBe(false);
   expect(first.server.args.at(-1)).toBe('schedule,delegation,browser');
-  expect(issued).toEqual([['first', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call']]]);
+  expect(issued).toEqual([['first', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call'], { sessionId: null }]]);
   expect(browser.hasBrowser('one')).toBe(false);
   browser.setOpener(conn, ['two']);
   expect(config({ id: 'one' }, { id: 'second' }).hasBrowser).toBe(true);
@@ -38,7 +38,10 @@ test('browser tools stay configured while workspace hosts attach and disconnect'
   const third = config({ id: 'one' }, { id: 'third' });
   expect(third.hasBrowser).toBe(true);
   expect(third.server.args.at(-1)).toBe('schedule,delegation,browser');
-  expect(issued.at(-1)).toEqual(['third', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call']]);
+  expect(issued.at(-1)).toEqual(['third', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call'], { sessionId: null }]);
+  // A process that outlives its runs holds the credential under its own name; the task it serves is named beside it.
+  config({ id: 'one' }, { id: 'sixth', sessionId: 'task' }, 'link:task');
+  expect(issued.at(-1)).toEqual(['link:task', 'one', [...SCHEDULE_METHODS, 'delegation.call', 'browser.call'], { sessionId: 'task' }]);
   browser.setOpener(conn, []);
   expect(config({ id: 'one' }, { id: 'fourth' }).hasBrowser).toBe(true);
   expect(browser.hasBrowser('one')).toBe(false);

@@ -13,8 +13,8 @@ export class RunService {
   /**
    * `captureProvider` records which model a native run was dispatched against, and `workspaceBusy`
    * reports a worktree another operation already holds; an engine that has neither still schedules
-   * runs, so both are optional.
-   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, workspaceBusy?: (workspaceId: string) => boolean }} options
+   * runs, so both are optional. `sessionIdle` hears when a conversation has no run queued or in progress.
+   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean }} options
    */
   constructor(options) {
     this.storage = options.storage;
@@ -26,6 +26,8 @@ export class RunService {
     this.maxQueued = options.maxQueued ?? 100;
     this.shutdownMs = options.shutdownMs ?? 5000;
     this.workspaceBusy = options.workspaceBusy ?? (() => false);
+    /** Told when a conversation has no run queued or in progress any more. */
+    this.sessionIdle = options.sessionIdle ?? (() => {});
     this.previews = new EventEmitter();
     /** Runs that have just stopped, for services that started them: emits the durable run record. */
     this.settled = new EventEmitter();
@@ -198,6 +200,12 @@ export class RunService {
     return this.queue.length;
   }
 
+  /** Whether a conversation has a run queued or in progress. */
+  hasWorkFor(sessionId) {
+    const belongs = (runId) => this.storage.getRun(runId)?.sessionId === sessionId;
+    return this.queue.some(belongs) || [...this.active.keys()].some(belongs);
+  }
+
   pump() {
     while (!this.stopping && this.active.size < this.maxActive && this.queue.length > 0) {
       // Conversations own their turn queues. Sharing a folder or model does not
@@ -209,6 +217,7 @@ export class RunService {
       });
       if (index < 0) break;
       const [runId] = this.queue.splice(index, 1);
+      const sessionId = this.storage.getRun(runId)?.sessionId ?? null;
       const controller = new AbortController();
       const promise = Promise.resolve().then(() => this.execute(runId, controller.signal)).catch((error) => {
         this.log.error("run executor crashed", { runId, error: String(error?.message ?? error) });
@@ -218,6 +227,10 @@ export class RunService {
         this.active.delete(runId);
         this.lifetime.workFinished();
         this.pump();
+        if (sessionId && !this.stopping && !this.hasWorkFor(sessionId)) {
+          try { this.sessionIdle(sessionId); }
+          catch (error) { this.log.error("session idle listener failed", { sessionId, error: String(error) }); }
+        }
       });
       this.active.set(runId, { controller, promise });
     }
@@ -260,8 +273,19 @@ export class RunService {
         this.storage.expirePendingPermissions(runId);
         this.storage.expireRunGrants(runId);
       }
+      // Paused: every question it was asking was turned down when it stopped, except the one it pauses on, if any. The
+      // others must not stay up or stand in the way of resuming it.
+      if (state === "paused") {
+        for (const other of this.storage.pendingPermissionsForRun(runId)) {
+          if (other.id === permissionId) continue;
+          const withdrawn = this.storage.withdrawPermission(other.id);
+          if (withdrawn) this.storage.appendEvent({ sessionId: run.sessionId, runId, type: "permission.resolved", payload: { permissionId: other.id, decision: "deny", revision: withdrawn.revision, grantId: null } });
+        }
+      }
       this.writeNote(updated, state, { failure, pauseReason, permissionId });
-      this.storage.appendEvent({ sessionId: run.sessionId, runId, type: "run.state", payload: { state: updated.state, revision: updated.revision, pauseReason: updated.pauseReason, failure: updated.failure, permissionId } });
+      // A run that finished without showing anything (it only answered background work's question) is not news.
+      const quiet = state === "completed" && this.storage.lastMessageOrdinal(run.sessionId, runId) < 0;
+      this.storage.appendEvent({ sessionId: run.sessionId, runId, type: "run.state", payload: { state: updated.state, revision: updated.revision, pauseReason: updated.pauseReason, failure: updated.failure, permissionId, ...(quiet ? { quiet: true } : {}) } });
       return this.storage.getRun(runId); // read back, so a listener sees the note and usage written above
     });
     // Whoever started this run may have something to do now it has stopped. Told after the record is durable,

@@ -5,14 +5,14 @@ import path from 'node:path';
 import { Storage } from '../src/storage/index.js';
 import { RunService } from '../src/runs/service.js';
 
-function fixture() {
+function fixture({ sessionIdle = undefined } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'jolo-scheduler-'));
   const storage = new Storage({ databasePath: path.join(root, 'db'), artifactsDir: path.join(root, 'artifacts'), bootId: 'test' });
   const project = storage.upsertProject({ identity: root, rootPath: root });
   const workspace = storage.ensureDirectWorkspace(project.id, root);
   const gates = new Map(), started = [];
   let work = 0, sequence = 0;
-  const runs = new RunService({ storage, log: { error() {}, warn() {} },
+  const runs = new RunService({ storage, log: { error() {}, warn() {} }, sessionIdle,
     lifetime: { workStarted() { work++; }, workFinished() { work--; } },
     executor: { execute: ctx => new Promise(resolve => {
       started.push(ctx.run.id);
@@ -117,4 +117,23 @@ test('startup recovers old unnamed tasks from their first prompt without reorder
       expect(reopened.getSession(session.id).revision).toBe(revision);
     } finally { reopened.close(); }
   } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a chat is reported idle once its last queued or running turn has settled, and not before', async () => {
+  const idle = [];
+  const f = fixture({ sessionIdle: sessionId => idle.push(sessionId) });
+  try {
+    const chat = f.session(), other = f.session();
+    const first = f.start(chat), second = f.start(chat), elsewhere = f.start(other);
+    await Bun.sleep(10);
+    f.finish(first);
+    await Bun.sleep(10);
+    expect(idle).toEqual([]); // its follow-up started at once
+    f.finish(second);
+    await Bun.sleep(10);
+    expect(idle).toEqual([chat.id]);
+    f.finish(elsewhere);
+    await Bun.sleep(10);
+    expect(idle).toEqual([chat.id, other.id]);
+  } finally { await f.close(); }
 });
