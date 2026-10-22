@@ -60,6 +60,7 @@ const TerminalPane = lazy(() => import("./terminal-pane.jsx").then(module => ({ 
  *     settings: HTMLElement | null,
  *     sidebarCollapsed: boolean,
  *     toggleSidebar: () => void,
+ *     peekSidebar: (open: boolean) => void,
  *   },
  *   settingsOpen: boolean,
  *   onSettingsChange: (paneId: string | null) => void,
@@ -421,7 +422,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     <FilePreviewContext.Provider value={openFilePreview}>
     <div ref={root} className={`pane-workspace${context ? " with-context" : ""}${expanded ? " files-expanded" : ""}`}>
       {active && hosts.header && createPortal(<header className="header">
-        <div className="header-brand"><JoloLogo /><button className="sidebar-toggle" onClick={hosts.toggleSidebar} aria-label={hosts.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!hosts.sidebarCollapsed} aria-controls="workspace-sidebar" title={`${hosts.sidebarCollapsed ? 'Show' : 'Hide'} sidebar (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}B)`} disabled={showSettings}><Icon name="sidebar" /></button></div>
+        <div className="header-brand"><JoloLogo /><button className="sidebar-toggle" onClick={hosts.toggleSidebar} onPointerEnter={event => { if (hosts.sidebarCollapsed && event.pointerType !== 'touch') hosts.peekSidebar(true); }} onPointerLeave={() => { if (hosts.sidebarCollapsed) hosts.peekSidebar(false); }} aria-label={hosts.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} aria-expanded={!hosts.sidebarCollapsed} aria-controls="workspace-sidebar" title={`${hosts.sidebarCollapsed ? 'Show' : 'Hide'} sidebar (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}B)`} disabled={showSettings}><Icon name="sidebar" /></button></div>
         <div className="header-workspace">
           <div className="header-breadcrumb">
             {showSettings ? <span className="settings-window-title">Settings</span> : multi ? <span className="header-task-title">Workspace</span> : <>
@@ -433,7 +434,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           <div className="header-actions">
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
             <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
-              onToggle={togglePanel} extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
+              extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
             </>}
           </div>
         </div>

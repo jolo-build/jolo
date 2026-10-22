@@ -104,3 +104,24 @@ test('event-type negotiation filters replay and live; undeclared subscribers kee
     await legacy.close(); await typed.close(); await modern.close();
   } finally { await f.close(); }
 }, 15000);
+
+test('kept agent processes hold their own connections, without crowding out the credentials of runs', async () => {
+  const f = await fixture();
+  try {
+    const held = [];
+    // A conversation's process holds one bridge for as long as it lives; a dozen conversations is ordinary.
+    for (let i = 0; i < 12; i++) {
+      const { tokenPath } = f.capabilities.issue(`link:s${i}`, 'workspace', ['workspace.search'], { sessionId: `s${i}` });
+      held.push(await connect({ ...f.options, token: readFileSync(tokenPath, 'utf8').trim(), clientKind: 'headless' }));
+    }
+    // Runs' own credentials keep their bound.
+    for (let i = 0; i < 8; i++) {
+      const { tokenPath } = f.capabilities.issue(`run${i}`, 'workspace');
+      held.push(await connect({ ...f.options, token: readFileSync(tokenPath, 'utf8').trim(), clientKind: 'headless' }));
+    }
+    const { tokenPath } = f.capabilities.issue('run-over', 'workspace');
+    await expect(connect({ ...f.options, token: readFileSync(tokenPath, 'utf8').trim(), clientKind: 'headless' })).rejects.toMatchObject({ code: 'limit_exceeded' });
+    for (const client of held) await client.close();
+  } finally { await f.close(); }
+}, 15000);
+

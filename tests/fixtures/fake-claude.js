@@ -1,9 +1,22 @@
 #!/usr/bin/env bun
 // A stand-in for the Claude Code binary that speaks its stream-json host protocol, so the adapter is tested
 // end to end without the real CLI or its API. Shapes mirror what the real binary sent in a live session.
+// Like the real binary in streaming-input mode, one process answers as many turns as the host feeds it and
+// leaves when its stdin closes; it never exits on its own after a turn.
 // Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call, "write <file>" for a
 // Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model, effort and fast mode
-// it was started with, and anything else just answers in prose.
+// it was started with, "background <ms> <text>" answers at once and then, <ms> later, starts a turn of its own with
+// <text> (what a finished background task does), "zero-result <text>" sends an empty result before the real
+// answer (what a resumed binary did with an orphaned task notification), "slow <ms> <text>" answers after a
+// pause, "exit-after-turn" leaves once its answer is out, "background-permission <ms> <ms>" answers at once and then,
+// <ms> later, has a background subagent ask permission while the main thread is idle and report back <ms> after the
+// answer, "race-self <text>" begins a turn of its own just before taking up the message (a background task finishing
+// as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, and anything
+// else just answers in prose. The other scenarios are described where they are played.
+// Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
+// with system/init listing the messages it takes up, its result names the message it answers, and with
+// --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
+// binary keeps for itself (a task notification, command output). An interrupt with cancel_queued drops waiting messages.
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
@@ -13,6 +26,7 @@ if (!flags.has("--print") || !flags.has("--output-format") || !argv.includes("st
 }
 const offersBrowser = config => config?.args?.at(-1)?.split(',').includes('browser');
 const valueOf = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] ?? null : null);
+const replay = flags.has("--replay-user-messages");
 const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
 // Headless, Claude Code runs fast only when the launch's own --settings ask for it.
@@ -55,47 +69,158 @@ const COMMANDS = [
   { name: "deploy", description: "Ship the current branch to an environment", argumentHint: "<environment>" },
 ];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
-const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+/** The last local command's output, which the binary replays after a compaction. */
+let lastLocalOutput = null;
+/** Lines held back to go out in one write, as the real binary's output often arrives: several messages in one read. */
+let batch = null;
+const out = (message) => { const line = `${JSON.stringify(message)}\n`; if (batch) batch.push(line); else process.stdout.write(line); };
+const flush = () => { const lines = batch ?? []; batch = null; if (lines.length) process.stdout.write(lines.join("")); };
 const pending = new Map();
 let counter = 0;
+let turnsAnswered = 0;
+/** Background work the process runs beside its turns. Like the real binary, an interrupt kills it unless the host said
+ * at initialize that it stops such work on its own (perTaskStopAffordance). */
+let sparesBackground = false;
+/** Like the real binary, a subagent's own subagents' tool calls and results reach the host only when it asked for them. */
+let forwardsNested = false;
+const backgroundWork = new Set();
+const inBackground = (fn, ms) => { const timer = setTimeout(() => { backgroundWork.delete(timer); fn(); }, ms); backgroundWork.add(timer); };
+/** The turn in progress, so an interrupt from the host can end it the way the real binary does. */
+let current = null;
 const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
   const requestId = `req-${++counter}`;
   pending.set(requestId, resolve);
   out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, description: extra.description ?? toolName, permission_suggestions: [], tool_use_id: extra.toolUseId } });
 });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const result = (turns, uuid = null) => out({ type: "result", subtype: "success", is_error: false, result: "done", ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
+const say = (text) => {
+  out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+  // Keep large fixture replies bounded without flooding thousands of unpaced events.
+  for (const piece of text.match(text.length > 32768 ? /.{1,4096}/gsu : /.{1,12}/gsu) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
+  out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+  out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, session_id: sessionId });
+  // The final usage of the call arrives on message_delta, as Claude Code 2.1 sends it: this is how full the window is.
+  out({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 40000, output_tokens: 5 } }, session_id: sessionId });
+  out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+};
 
-async function turn(prompt, images = []) {
+/** What each turn's init says this binary does, as Claude Code 2.1.304 lists it. */
+const CAPABILITIES = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"];
+/** What became of a message the host sent, as Claude Code 2.1 reports it: queued, started, then one final state. */
+const lifecycle = (uuid, state) => { if (uuid) out({ type: "command_lifecycle", command_uuid: uuid, state, session_id: sessionId }); };
+/** Messages whose turn was stopped: their final state is 'cancelled'. */
+const stoppedMessages = new Set();
+
+/**
+ * The host asked for the turn to stop: answer with a receipt naming the messages that still wait, end the turn with a
+ * result, and let whatever it was waiting on go. A Stop that names messages acts only on a turn that carries one.
+ */
+const interrupt = (requestId, cancelQueued = false, names = null) => {
+  const named = Array.isArray(names) && names.length > 0 && !cancelQueued;
+  const spared = named && !(current && names.includes(current.uuid));
+  const cancelled = cancelQueued ? waiting.filter((entry) => !entry.cancelled && entry.uuid).map((entry) => entry.uuid) : [];
+  if (cancelQueued) for (const entry of waiting) entry.cancelled = true;
+  const stillQueued = waiting.filter((entry) => !entry.cancelled && entry.uuid).map((entry) => entry.uuid);
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { still_queued: stillQueued, ...(cancelQueued ? { cancelled } : {}), ...(named ? { turn: spared ? "spared" : current ? "stopped" : "idle" } : {}) } } });
+  for (const uuid of cancelled) lifecycle(uuid, "cancelled");
+  if (spared) return;
+  if (!sparesBackground) { for (const timer of backgroundWork) clearTimeout(timer); backgroundWork.clear(); }
+  if (!current) return;
+  const turn = current;
+  current = null;
+  turn.interrupted = true;
+  if (turn.uuid) stoppedMessages.add(turn.uuid);
+  // Still streaming when the interrupt lands: one more tool call goes out before the turn ends.
+  if (turn.lateTool) out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_${++counter}`, name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+  turn.child?.kill("SIGKILL");
+  for (const [id, resolve] of pending) { pending.delete(id); resolve({ behavior: "deny", message: "interrupted" }); }
+  // A background subagent happens to ask just as the turn is stopped, before its result.
+  if (turn.lateQuestion) void subagentAsks({ command: "echo late" }).then((answer) => setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer.behavior}: ${answer.message}`)), 100));
+  out({ type: "result", subtype: "success", is_error: false, result: "Request interrupted by user", ...(turn.uuid ? { user_message_uuid: turn.uuid } : {}), session_id: sessionId, num_turns: 1, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 0 } });
+};
+
+/** Turns run one at a time, in the order they come; a message that arrives during a turn waits for it. */
+/** @type {Promise<unknown>} */
+let queue = Promise.resolve();
+/** Messages waiting for their turn, so an interrupt with cancel_queued can drop them. */
+const waiting = [];
+const enqueue = (work) => { queue = queue.then(work).catch((error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); }); };
+/** A notice of finished background work, queued as the real binary queues it: uuid-less, so cancel_queued drops it too. */
+const enqueueNotice = (work) => { const entry = { cancelled: false, notice: true }; waiting.push(entry); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (!entry.cancelled) await work(); }); };
+
+/** A turn the binary starts by itself, as it does when a background task it launched finishes: a notice, then a turn. */
+const selfStartedTurn = async (text) => {
+  out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+  const state = { interrupted: false, child: null };
+  current = state;
+  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
+  say(text);
+  if (state.interrupted) return;
+  current = null;
+  result(1);
+};
+
+/** A subagent asking permission, as the real binary sends it: it names its agent, and its tool call comes first. By
+ * default a background agent's; `call` names the main thread's Agent call a foreground one runs under, and `forwarded`
+ * false is a nested agent, which asks before its call is forwarded. */
+let lastQuestion = null;
+const subagentAsks = (input, { call = "toolu_bg_agent", agent = "fake-agent", toolUseId = "toolu_bg_bash", forwarded = true } = {}) => new Promise((resolve) => {
+  const requestId = `req-${++counter}`;
+  lastQuestion = requestId;
+  pending.set(requestId, resolve);
+  const toolUse = { type: "assistant", parent_tool_use_id: call, agent_id: agent, message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Bash", input }] }, session_id: sessionId };
+  if (forwarded) out(toolUse);
+  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "Bash", display_name: "Bash", input, description: "background command", tool_use_id: toolUseId, agent_id: agent } });
+  if (!forwarded) out(toolUse);
+  out({ type: "system", subtype: "task_progress", task_id: "fake-task", description: "waiting for permission", session_id: sessionId }); // a notice, not a turn
+});
+
+/** A subagent starting and ending, as the binary reports foreground ones too: its task id is its agent id. */
+const taskStarted = (agent, call) => out({ type: "system", subtype: "task_started", task_id: agent, tool_use_id: call, description: "subagent", is_backgrounded: false, session_id: sessionId });
+const taskDone = (agent, call) => out({ type: "system", subtype: "task_notification", task_id: agent, tool_use_id: call, status: "completed", session_id: sessionId });
+
+async function turn(prompt, images = [], uuid = null) {
   const received = prompt;
   prompt = prompt.split("\n\nCurrent request:\n").at(-1);
-  out({ type: "system", subtype: "init", session_id: sessionId, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
-  const say = (text) => {
-    out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
-    // Keep large fixture replies bounded without flooding thousands of unpaced events.
-    for (const piece of text.match(text.length > 32768 ? /.{1,4096}/gsu : /.{1,12}/gsu) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
-    out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
-    out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, session_id: sessionId });
-    // The final usage of the call arrives on message_delta, as Claude Code 2.1 sends it: this is how full the window is.
-    out({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 40000, output_tokens: 5 } }, session_id: sessionId });
-    out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
-  };
+  if (prompt.startsWith("race-self ") || prompt === "race-self-blocked") await selfStartedTurn("A background task finished first.");
+  const state = { interrupted: false, child: null, lateTool: false, lateQuestion: false, uuid };
+  current = state;
+  turnsAnswered += 1;
+  const continuing = resumed || turnsAnswered > 1; // this process, or a resumed one, already holds the conversation
+  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: uuid ? [uuid] : [] });
+  const ownTags = /<(task-notification|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|tick)>/;
+  if (replay && uuid && !ownTags.test(received)) out({ type: "user", message: { role: "user", content: received }, uuid, isReplay: true, parent_tool_use_id: null, session_id: sessionId });
   const tool = async (name, input, produce) => {
     const toolUseId = `toolu_${++counter}`;
     out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name, input }] }, session_id: sessionId });
     const decision = await ask(name, input, { toolUseId });
+    if (state.interrupted) return { denied: true, message: "interrupted" };
     if (decision.behavior !== "allow") {
       out({ type: "system", subtype: "permission_denied", tool_name: name, tool_use_id: toolUseId, message: decision.message, session_id: sessionId });
       out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: decision.message, is_error: true }] }, session_id: sessionId });
       return { denied: true, message: decision.message };
     }
-    const result = await produce(decision.updatedInput ?? input);
-    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: result.content, is_error: Boolean(result.isError) }] }, session_id: sessionId });
-    return { denied: false, content: result.content };
+    const produced = await produce(decision.updatedInput ?? input);
+    if (state.interrupted) return { denied: true, message: "interrupted" };
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: produced.content, is_error: Boolean(produced.isError) }] }, session_id: sessionId });
+    return { denied: false, content: produced.content };
   };
   let turns = 1;
   let match;
   if (prompt === '/compact') {
     // Claude takes its own /compact only as the whole message; anything wrapped around it would be answered in prose.
+    // After the boundary the real binary replays what it kept: a summary, and the output of a local command just before.
     out({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 41000 }, session_id: sessionId });
+    out({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'This session is being continued from a previous conversation.' }, session_id: sessionId });
+    if (lastLocalOutput) out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: lastLocalOutput }] }, session_id: sessionId });
+  } else if (prompt === '/cost') {
+    // A command the binary answers itself, without the model: its output, unstreamed, then an empty result.
+    lastLocalOutput = "Total cost: $0.0042";
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: lastLocalOutput }] }, session_id: sessionId });
+    out({ type: "result", subtype: "success", is_error: false, result: lastLocalOutput, ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
+    current = null;
+    return;
   } else if (received.startsWith('/')) {
     // Any other slash command, likewise: the whole message is echoed, so a handoff wrapped around it would show.
     say(`Command received: ${received}`);
@@ -142,8 +267,8 @@ async function turn(prompt, images = []) {
     if (!offersBrowser(config)) say('Browser tools unavailable');
     else {
       const { browserMcpCheck } = await import('./browser-mcp-client.js');
-      const result = await tool('mcp__jolo__browser_screenshot', {}, async () => ({ content: await browserMcpCheck(config) }));
-      say(result.denied ? result.message : result.content);
+      const outcome = await tool('mcp__jolo__browser_screenshot', {}, async () => ({ content: await browserMcpCheck(config) }));
+      say(outcome.denied ? outcome.message : outcome.content);
     }
   } else if (prompt === 'schedule-check') {
     const config = JSON.parse(valueOf('--mcp-config') ?? '{}').mcpServers?.jolo;
@@ -160,29 +285,604 @@ async function turn(prompt, images = []) {
   } else if ((match = prompt.match(/^run (.+)$/s))) {
     turns = 2;
     const outcome = await tool("Bash", { command: match[1] }, async (input) => {
-      const proc = Bun.spawnSync(["/bin/sh", "-c", input.command], { cwd: process.cwd() });
-      return { content: proc.stdout.toString().trim() || proc.stderr.toString().trim(), isError: proc.exitCode !== 0 };
+      // Spawned, not run synchronously, so an interrupt from the host can still be read and acted on.
+      const proc = Bun.spawn(["/bin/sh", "-c", input.command], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+      state.child = proc;
+      const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+      await proc.exited;
+      state.child = null;
+      return { content: stdout.trim() || stderr.trim(), isError: proc.exitCode !== 0 };
     });
-    say(outcome.denied ? `I could not run it: ${outcome.message}` : `The command printed: ${outcome.content}`);
+    if (!state.interrupted) say(outcome.denied ? `I could not run it: ${outcome.message}` : `The command printed: ${outcome.content}`);
   } else if ((match = prompt.match(/^write (\S+) (.+)$/s))) {
     turns = 2;
     const outcome = await tool("Write", { file_path: match[1], content: match[2] }, async (input) => { await Bun.write(input.file_path, input.content); return { content: `Wrote ${input.file_path}` }; });
-    say(outcome.denied ? `I could not write it: ${outcome.message}` : "Written.");
+    if (!state.interrupted) say(outcome.denied ? `I could not write it: ${outcome.message}` : "Written.");
   } else if ((match = prompt.match(/^read (\S+)$/))) {
     turns = 2;
     const outcome = await tool("Read", { file_path: match[1] }, async (input) => ({ content: await Bun.file(input.file_path).text() }));
-    say(outcome.denied ? `I could not read it: ${outcome.message}` : `The file says: ${outcome.content.trim()}`);
+    if (!state.interrupted) say(outcome.denied ? `I could not read it: ${outcome.message}` : `The file says: ${outcome.content.trim()}`);
   } else if (prompt === "history") {
-    say(`${resumed ? "Resumed" : "Fresh agent"} context: ${received}`);
+    say(`${continuing ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
     say(`Running ${chosenModel ?? "the default model"} at ${chosenEffort ?? "the default effort"}${fastMode ? " in fast mode" : ""}.`);
+  } else if ((match = prompt.match(/^background (\d+) (.+)$/s))) {
+    say("Background work started.");
+    const [, delay, text] = match;
+    out({ type: "system", subtype: "task_started", task_id: "fake-task", description: "background work", is_backgrounded: true, session_id: sessionId });
+    inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
+  } else if ((match = prompt.match(/^background-slow (\d+) (\d+) (.+)$/s))) {
+    say("Background work started.");
+    const [, delay, ms, text] = match;
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+      await sleep(Number(ms));
+      if (self.interrupted) return;
+      current = null;
+      out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+      say(text);
+      result(1);
+    }), Number(delay));
+  } else if ((match = prompt.match(/^background-withdraw (\d+) (\d+)$/))) {
+    // The subagent asks, then takes the question back (it was stopped, or settled it another way) and reports later.
+    say("Background agent started.");
+    const [, delay, ms] = match;
+    setTimeout(() => {
+      void subagentAsks({ command: "echo background" });
+      const asked = lastQuestion;
+      setTimeout(() => {
+        out({ type: "control_cancel_request", request_id: asked });
+        const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+        setTimeout(() => enqueue(() => selfStartedTurn("Background agent finished: withdrawn")), 100);
+      }, Number(ms));
+    }, Number(delay));
+  } else if ((match = prompt.match(/^background-chatter (\d+) (\d+)$/))) {
+    // The subagent asks; while nobody answers, the main thread answers something else at length, by itself.
+    say("Background agent started.");
+    const [, delay, size] = match;
+    setTimeout(async () => {
+      const decision = subagentAsks({ command: "echo background" });
+      // Once a run is waiting on the question: what the main thread says now must still be read.
+      await sleep(500);
+      enqueue(() => selfStartedTurn("x".repeat(Number(size))));
+      const answered = await decision;
+      enqueue(() => selfStartedTurn(`Background agent finished: ${answered.behavior}`));
+    }, Number(delay));
+  } else if ((match = prompt.match(/^background-two (\d+)$/))) {
+    // Two subagents ask at once, and report back together once both have their answers.
+    say("Background agents started.");
+    setTimeout(async () => {
+      const answers = await Promise.all([subagentAsks({ command: "echo one" }), subagentAsks({ command: "echo two" })]);
+      setTimeout(() => enqueue(() => selfStartedTurn(`Background agents finished: ${answers.map((answer) => answer.behavior).join(", ")}`)), 100);
+    }, Number(match[1]));
+  } else if ((match = prompt.match(/^background-permission (\d+) (\d+)$/))) {
+    say("Background agent started.");
+    const [, delay, work] = match;
+    setTimeout(async () => {
+      const decision = await subagentAsks({ command: "echo background" });
+      setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${decision.behavior}`)), Number(work));
+    }, Number(delay));
+  } else if ((match = prompt.match(/^race-self (.+)$/s))) {
+    say(`You said: ${match[1]}`);
+  } else if ((match = prompt.match(/^zero-result (.+)$/s))) {
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    say(`You said: ${match[1]}`);
+  } else if ((match = prompt.match(/^zero-result-slow (\d+) (.+)$/s))) {
+    // An empty result, then an answer that starts at once and takes <ms> to finish.
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    const [, ms, text] = match;
+    out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Partly " } }, session_id: sessionId });
+    await sleep(Number(ms));
+    if (state.interrupted) return;
+    out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: `Partly ${text}` }] }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+  } else if ((match = prompt.match(/^zero-result-late (\d+) (.+)$/s))) {
+    // An empty result, then nothing for <ms>, then the answer.
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    await sleep(Number(match[1]));
+    if (!state.interrupted) say(`You said: ${match[2]}`);
+  } else if (prompt === "zero-result-only" || prompt === "zero-result-ask") {
+    // The empty result is the whole turn. A notice about the session follows it; or a background subagent asks.
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    if (prompt === "zero-result-only") out({ type: "rate_limit_event", rate_limit_info: { status: "allowed" }, session_id: sessionId });
+    else void subagentAsks({ command: "echo background" }).then((answer) => setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer.behavior}`)), 100));
+    current = null;
+    return;
+  } else if ((match = prompt.match(/^ask-then-turn (\d+)$/))) {
+    // A subagent asks during the turn and is still unanswered when the turn ends; then the process begins a turn of its
+    // own (another background task reporting back) that takes <ms> to finish.
+    void subagentAsks({ command: "echo background" });
+    say("Launched.");
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Report part one, " } }, session_id: sessionId });
+      await sleep(Number(match[1]));
+      if (self.interrupted) return;
+      out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "part two." } }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Report part one, part two." }] }, session_id: sessionId });
+      current = null;
+      result(1);
+    }), 100);
+  } else if (prompt === "nested-background-jolo") {
+    // A background agent runs one of its own, which uses one of Jolo's tools after the turn.
+    out({ type: "system", subtype: "task_started", task_id: "bg-outer", tool_use_id: "toolu_bg_agent", description: "background", is_backgrounded: true, session_id: sessionId });
+    say("Background agent started.");
+    setTimeout(() => {
+      out({ type: "assistant", parent_tool_use_id: "toolu_bg_agent", agent_id: "bg-outer", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bg_inner", name: "Agent", input: { description: "deeper" } }] }, session_id: sessionId });
+      out({ type: "system", subtype: "task_started", task_id: "bg-inner", tool_use_id: "toolu_bg_inner", description: "deeper", is_backgrounded: false, session_id: sessionId });
+      const requestId = `req-${++counter}`;
+      pending.set(requestId, (answer) => setTimeout(() => {
+        if (forwardsNested) out({ type: "user", parent_tool_use_id: "toolu_bg_inner", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_deep_jolo", content: answer.behavior }] }, session_id: sessionId });
+        out({ type: "system", subtype: "task_notification", task_id: "bg-inner", tool_use_id: "toolu_bg_inner", status: "completed", session_id: sessionId });
+        out({ type: "system", subtype: "task_notification", task_id: "bg-outer", tool_use_id: "toolu_bg_agent", status: "completed", session_id: sessionId });
+      }, 300));
+      out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "mcp__jolo__browser_open", display_name: "browser_open", input: {}, tool_use_id: "toolu_deep_jolo", agent_id: "bg-inner" } });
+      if (forwardsNested) out({ type: "assistant", parent_tool_use_id: "toolu_bg_inner", agent_id: "bg-inner", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_deep_jolo", name: "mcp__jolo__browser_open", input: {} }] }, session_id: sessionId });
+    }, 100);
+  } else if ((match = prompt.match(/^background-jolo (\d+)$/))) {
+    // A background subagent uses one of Jolo's own tools after the turn: it asks, then the call takes <ms> to report back.
+    say("Background agent started.");
+    setTimeout(() => {
+      const requestId = `req-${++counter}`;
+      out({ type: "assistant", parent_tool_use_id: "toolu_bg_agent", agent_id: "fake-agent", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bg_jolo", name: "mcp__jolo__browser_open", input: {} }] }, session_id: sessionId });
+      pending.set(requestId, (answer) => {
+        setTimeout(() => {
+          out({ type: "user", parent_tool_use_id: "toolu_bg_agent", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bg_jolo", content: answer.behavior }] }, session_id: sessionId });
+          setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer.behavior}`)), 100);
+        }, Number(match[1]));
+      });
+      out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "mcp__jolo__browser_open", display_name: "browser_open", input: {}, tool_use_id: "toolu_bg_jolo", agent_id: "fake-agent" } });
+    }, 100);
+  } else if (prompt === "two-background") {
+    // Two background tasks: A reports in a long turn of its own; B finishes while A's report still streams.
+    say("Background work started.");
+    out({ type: "system", subtype: "task_started", task_id: "task-a", description: "A", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "task-b", description: "B", is_backgrounded: true, session_id: sessionId });
+    inBackground(() => enqueueNotice(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "task-a", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+      for (let waited = 0; waited < 2000 && !self.interrupted; waited += 50) await sleep(50);
+      if (self.interrupted) return;
+      current = null;
+      out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+      say("report A");
+      result(1);
+    }), 100);
+    inBackground(() => enqueueNotice(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "task-b", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      say("report B");
+      current = null;
+      result(1);
+    }), 600);
+  } else if (prompt === "background-agent-turn") {
+    // Background work reports in a turn of its own that calls a subagent in the foreground before answering.
+    say("Background work started.");
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Agent"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Check it", subagent_type: "Explore", prompt: "Check it" } }] }, session_id: sessionId });
+      out({ type: "assistant", parent_tool_use_id: "toolu_fg", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "child-read", name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "checked" }] }, session_id: sessionId });
+      say("All checked.");
+      result(1);
+    }), 50);
+  } else if (prompt === "hook-blocked" || prompt === "race-self-blocked") {
+    // The user's own UserPromptSubmit hook blocks the message: no model call, and the reason is the result.
+    out({ type: "system", subtype: "informational", level: "warning", content: "UserPromptSubmit operation blocked by hook", session_id: sessionId });
+    out({ type: "result", subtype: "success", is_error: false, result: "Blocked by your hook: the message contains a secret.", ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    current = null;
+    return;
+  } else if (prompt === "background-read") {
+    // Background work reads a file in the workspace after the turn: Jolo's policy answers it, nobody is asked.
+    say("Background agent started.");
+    setTimeout(async () => {
+      const requestId = `req-${++counter}`;
+      const answer = new Promise((resolve) => pending.set(requestId, resolve));
+      out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "Read", display_name: "Read", input: { file_path: "notes.txt" }, tool_use_id: "toolu_bg_read", agent_id: "fake-agent" } });
+      await answer;
+    }, 100);
+  } else if (prompt === "background-net") {
+    // A command left running in the background reaches for the network: the sandbox asks, naming no agent.
+    say("Server started.");
+    setTimeout(() => {
+      const requestId = `req-${++counter}`;
+      pending.set(requestId, (answer) => setTimeout(() => enqueue(() => selfStartedTurn(`Network access: ${answer.behavior}`)), 100));
+      out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "SandboxNetworkAccess", display_name: "Network access", input: { host: "example.com" }, tool_use_id: `toolu_net_${counter}` } });
+    }, 100);
+  } else if ((match = prompt.match(/^background-chatty (\d+)$/))) {
+    // Background work reports in a turn of its own that streams <n> pieces before its answer.
+    say("Background work started.");
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+      for (let i = 0; i < Number(match[1]); i++) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: `${Number(match[1])} pieces` }] }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+      result(1);
+    }), 50);
+  } else if (prompt === "ask-then-quiet") {
+    // A subagent asks during the turn; the main thread answers and goes quiet with the question still open. All of it
+    // arrives together, so nothing can be judged between the question and the result.
+    batch = [];
+    void subagentAsks({ command: "echo background" }).then((answer) => setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer.behavior}`)), 100));
+    say("Launched.");
+    current = null;
+    result(turns, uuid);
+    flush();
+    return;
+  } else if (prompt === "foreground-agent-asks") {
+    // The turn runs a subagent in the foreground, which asks; the main thread waits for it.
+    batch = [];
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Check it" } }] }, session_id: sessionId });
+    taskStarted("fake-fg", "toolu_fg");
+    const answer = subagentAsks({ command: "echo foreground" }, { call: "toolu_fg", agent: "fake-fg", toolUseId: "toolu_fg_bash" });
+    flush();
+    const decision = await answer;
+    if (state.interrupted) return;
+    taskDone("fake-fg", "toolu_fg");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: decision.behavior }] }, session_id: sessionId });
+    say(`Subagent: ${decision.behavior}`);
+  } else if (prompt === "nested-agent-asks") {
+    // A foreground subagent runs one of its own, which asks before its call is forwarded; the main thread waits for it.
+    batch = [];
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Check it" } }] }, session_id: sessionId });
+    taskStarted("fake-outer", "toolu_fg");
+    out({ type: "assistant", parent_tool_use_id: "toolu_fg", agent_id: "fake-outer", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_inner", name: "Agent", input: { description: "Deeper" } }] }, session_id: sessionId });
+    taskStarted("fake-inner", "toolu_inner");
+    const answer = subagentAsks({ command: "echo nested" }, { call: "toolu_inner", agent: "fake-inner", toolUseId: "toolu_deep", forwarded: false });
+    flush();
+    const decision = await answer;
+    if (state.interrupted) return;
+    taskDone("fake-inner", "toolu_inner");
+    taskDone("fake-outer", "toolu_fg");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: decision.behavior }] }, session_id: sessionId });
+    say(`Nested: ${decision.behavior}`);
+  } else if (prompt === "fg-ask-twice") {
+    // A foreground subagent asks to run a command; then the main thread, beside it, asks to run the same one.
+    const n = turnsAnswered;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_fg_${n}`, name: "Agent", input: { description: "Check it" } }, { type: "tool_use", id: `toolu_main_${n}`, name: "Bash", input: { command: "echo again" } }] }, session_id: sessionId });
+    taskStarted(`fake-fg-${n}`, `toolu_fg_${n}`);
+    const first = await subagentAsks({ command: "echo again" }, { call: `toolu_fg_${n}`, agent: `fake-fg-${n}`, toolUseId: `toolu_fg_a_${n}` });
+    if (state.interrupted) return;
+    const second = await ask("Bash", { command: "echo again" }, { toolUseId: `toolu_main_${n}` });
+    if (state.interrupted) return;
+    taskDone(`fake-fg-${n}`, `toolu_fg_${n}`);
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_fg_${n}`, content: "done" }, { type: "tool_result", tool_use_id: `toolu_main_${n}`, content: "again" }] }, session_id: sessionId });
+    say(`Asked: ${first.behavior}, ${second.behavior}`);
+  } else if (prompt === "launch-bg-agent") {
+    // A background agent is launched and starts on its first command; it asks for its next one only later.
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bg_old", name: "Agent", input: { description: "Build", run_in_background: true } }] }, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "old-agent", tool_use_id: "toolu_bg_old", description: "Build", is_backgrounded: true, session_id: sessionId });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bg_old", content: "Async agent launched" }] }, session_id: sessionId });
+    out({ type: "assistant", parent_tool_use_id: "toolu_bg_old", agent_id: "old-agent", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_old_1", name: "Bash", input: { command: "echo build" } }, { type: "tool_use", id: "toolu_old_2", name: "Bash", input: { command: "echo publish" } }] }, session_id: sessionId });
+    say("Launched.");
+  } else if (prompt === "fg-work-then-old-bg-asks") {
+    // A foreground subagent works for a while; meanwhile the background agent launched in an earlier turn asks.
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Work" } }] }, session_id: sessionId });
+    taskStarted("fake-fg", "toolu_fg");
+    void subagentAsks({ command: "echo publish" }, { call: "toolu_bg_old", agent: "old-agent", toolUseId: "toolu_old_2", forwarded: false });
+    for (let waited = 0; waited < 4000 && !state.interrupted; waited += 50) await sleep(50);
+    if (state.interrupted) return;
+    taskDone("fake-fg", "toolu_fg");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "worked" }] }, session_id: sessionId });
+    say("Done.");
+  } else if ((match = prompt.match(/^bg-ask-beside-fg-work( nested)?$/))) {
+    // A foreground subagent works for a while without asking; meanwhile background work asks, or (nested) a subagent of
+    // background work asks before its call is forwarded.
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Work" } }] }, session_id: sessionId });
+    taskStarted("fake-fg", "toolu_fg");
+    if (match[1]) {
+      out({ type: "assistant", parent_tool_use_id: "toolu_bg_agent", agent_id: "fake-agent", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_bg_inner", name: "Agent", input: { description: "deeper" } }] }, session_id: sessionId });
+      taskStarted("bg-inner", "toolu_bg_inner");
+      void subagentAsks({ command: "echo background" }, { call: "toolu_bg_inner", agent: "bg-inner", toolUseId: "toolu_bg_deep", forwarded: false });
+    } else void subagentAsks({ command: "echo background" });
+    for (let waited = 0; waited < 4000 && !state.interrupted; waited += 50) await sleep(50);
+    if (state.interrupted) return;
+    taskDone("fake-fg", "toolu_fg");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "worked" }] }, session_id: sessionId });
+    say("Done.");
+  } else if (prompt === "fg-ask-beside-fg-work") {
+    // Two foreground subagents: one asks, the other works on for a while without asking.
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_agent_one", name: "Agent", input: { description: "one" } }, { type: "tool_use", id: "toolu_agent_two", name: "Agent", input: { description: "two" } }] }, session_id: sessionId });
+    taskStarted("fake-one", "toolu_agent_one");
+    taskStarted("fake-two", "toolu_agent_two");
+    const asked = subagentAsks({ command: "echo one" }, { call: "toolu_agent_one", agent: "fake-one", toolUseId: "toolu_one_bash" });
+    for (let waited = 0; waited < 4000 && !state.interrupted; waited += 50) await sleep(50);
+    if (state.interrupted) return;
+    taskDone("fake-two", "toolu_agent_two");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent_two", content: "worked" }] }, session_id: sessionId });
+    const decision = await asked;
+    if (state.interrupted) return;
+    taskDone("fake-one", "toolu_agent_one");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent_one", content: decision.behavior }] }, session_id: sessionId });
+    say(`One: ${decision.behavior}`);
+  } else if (prompt === "background-scopes") {
+    // Background agent A asks; then a helper A runs of its own asks the same; then another background agent B does.
+    say("Launched.");
+    setTimeout(async () => {
+      const first = await subagentAsks({ command: "echo same" }, { call: "toolu_bg_a", agent: "agent-a", toolUseId: "toolu_a_1" });
+      out({ type: "assistant", parent_tool_use_id: "toolu_bg_a", agent_id: "agent-a", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_helper", name: "Agent", input: { description: "Help" } }] }, session_id: sessionId });
+      out({ type: "system", subtype: "task_started", task_id: "helper-a", tool_use_id: "toolu_helper", description: "Help", is_backgrounded: false, session_id: sessionId });
+      const helped = await subagentAsks({ command: "echo same" }, { call: "toolu_helper", agent: "helper-a", toolUseId: "toolu_h_1", forwarded: false });
+      const other = await subagentAsks({ command: "echo same" }, { call: "toolu_bg_b", agent: "agent-b", toolUseId: "toolu_b_1" });
+      setTimeout(() => enqueue(() => selfStartedTurn(`Agents finished: ${first.behavior}, ${helped.behavior}, ${other.behavior}`)), 100);
+    }, 100);
+  } else if (prompt === "two-tools-one-asks") {
+    // Two commands in one step; the first asks and the second waits its turn behind it.
+    batch = [];
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_a", name: "Bash", input: { command: "echo a" } }, { type: "tool_use", id: "toolu_b", name: "Bash", input: { command: "echo b" } }] }, session_id: sessionId });
+    const first = ask("Bash", { command: "echo a" }, { toolUseId: "toolu_a" });
+    flush();
+    const decision = await first;
+    if (state.interrupted) return;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", content: decision.behavior }, { type: "tool_result", tool_use_id: "toolu_b", content: "skipped" }] }, session_id: sessionId });
+    say(`First: ${decision.behavior}`);
+  } else if (prompt === "ask-while-streaming") {
+    // A command asks as soon as its call is complete, while the model is still streaming the rest of the response.
+    out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_s", name: "Bash", input: { command: "echo s" } }] }, session_id: sessionId });
+    void ask("Bash", { command: "echo s" }, { toolUseId: "toolu_s" });
+    out({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }, session_id: sessionId });
+    for (let waited = 0; waited < 3000 && !state.interrupted; waited += 100) { out({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "." } }, session_id: sessionId }); await sleep(100); }
+    if (state.interrupted) return;
+  } else if (prompt === "tool-loop") {
+    // Three model calls that only use tools (reads Jolo allows), then an answer.
+    for (let call = 0; call < 3 && !state.interrupted; call++) {
+      out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_r${call}`, name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+      await ask("Read", { file_path: "notes.txt" }, { toolUseId: `toolu_r${call}` });
+      out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_r${call}`, content: "alpha" }] }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+    }
+    if (!state.interrupted) say("Read it three times.");
+  } else if (prompt === "ask-mid-call") {
+    // One model call: background work asks while it thinks, and once answered the call's text begins.
+    out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+    await subagentAsks({ command: "echo background" });
+    if (!state.interrupted) say("One call.");
+  } else if (prompt === "lost-tool") {
+    // A call the binary drops (a fallback after a failed stream) never reports; the next model call goes on for a while.
+    out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_lost", name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+    for (let waited = 0; waited < 2500 && !state.interrupted; waited += 100) { out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }, session_id: sessionId }); await sleep(100); }
+    if (state.interrupted) return;
+    out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+    out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+  } else if (prompt === "background-multicall") {
+    // Background work reports in a turn of its own that makes three model calls, all said at once.
+    say("Background work started.");
+    setTimeout(() => enqueue(async () => {
+      batch = [];
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Read"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      for (let call = 0; call < 3; call++) {
+        out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+        out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_m${call}`, name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+        out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_m${call}`, content: "alpha" }] }, session_id: sessionId });
+        out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+      }
+      out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Read it three times." }] }, session_id: sessionId });
+      out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+      result(4);
+      flush();
+    }), 50);
+  } else if (prompt === "background-asks-twice") {
+    // Background work asks for the same command twice, a while apart, each time with the main thread idle.
+    say("Background agent started.");
+    setTimeout(async () => {
+      const first = await subagentAsks({ command: "echo again" });
+      await sleep(400);
+      const second = await subagentAsks({ command: "echo again" });
+      setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${first.behavior}, ${second.behavior}`)), 100);
+    }, 100);
+  } else if (prompt === "ask-then-main-turn-asks") {
+    // Background work asks and the turn ends with that open; then the process begins a turn whose own command asks.
+    batch = [];
+    void subagentAsks({ command: "echo background" });
+    say("Launched.");
+    current = null;
+    result(turns, uuid);
+    flush();
+    setTimeout(() => enqueue(async () => {
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_own", name: "Bash", input: { command: "echo own" } }] }, session_id: sessionId });
+      const decision = await ask("Bash", { command: "echo own" }, { toolUseId: "toolu_own" });
+      if (self.interrupted) return;
+      current = null;
+      say(`Own: ${decision.behavior}`);
+      result(1);
+    }), 100);
+    return;
+  } else if (prompt === "main-then-background-asks") {
+    // The main thread's own command asks; then background work asks too, while the first is open.
+    // The model streams on until both are open, so nothing waits on the user before the background question is newest.
+    batch = [];
+    out({ type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 1, output_tokens: 0 } } }, session_id: sessionId });
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_main", name: "Bash", input: { command: "echo main" } }] }, session_id: sessionId });
+    const mine = ask("Bash", { command: "echo main" }, { toolUseId: "toolu_main" });
+    flush();
+    await sleep(100);
+    void subagentAsks({ command: "echo background" });
+    await sleep(50);
+    out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
+    const decision = await mine;
+    if (!state.interrupted) say(`Main: ${decision.behavior}`);
+  } else if (prompt === "two-main-asks") {
+    // The main thread calls two tools that may run side by side, each asking first; the first is done quickly once allowed.
+    batch = [];
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_one", name: "WebFetch", input: { url: "https://one.example" } }, { type: "tool_use", id: "toolu_two", name: "WebFetch", input: { url: "https://two.example" } }] }, session_id: sessionId });
+    const first = ask("WebFetch", { url: "https://one.example" }, { toolUseId: "toolu_one" });
+    const second = ask("WebFetch", { url: "https://two.example" }, { toolUseId: "toolu_two" });
+    flush();
+    const one = await first;
+    if (state.interrupted) return;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_one", content: "fetched one" }] }, session_id: sessionId });
+    const two = await second;
+    if (state.interrupted) return;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_two", content: "fetched two" }] }, session_id: sessionId });
+    say(`Fetched: ${one.behavior}, ${two.behavior}`);
+  } else if (prompt === "work-then-bg-ask") {
+    // The main thread runs a long command it may run without asking; meanwhile a background subagent asks.
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_long", name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
+    await ask("Read", { file_path: "notes.txt" }, { toolUseId: "toolu_long" });
+    void subagentAsks({ command: "echo background" });
+    for (let waited = 0; waited < 4000 && !state.interrupted; waited += 50) await sleep(50);
+    if (state.interrupted) return;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_long", content: "alpha" }] }, session_id: sessionId });
+    say("Done.");
+  } else if (prompt === "ask-then-slow-turn") {
+    // A subagent asks and the turn ends with the question open; then the process begins a turn of its own that thinks
+    // for a long while before it says anything.
+    batch = [];
+    void subagentAsks({ command: "echo background" });
+    say("Launched.");
+    current = null;
+    result(turns, uuid);
+    flush();
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }, session_id: sessionId });
+      for (let waited = 0; waited < 4000 && !self.interrupted; waited += 50) await sleep(50);
+      if (self.interrupted) return;
+      current = null;
+      say("Thought it over.");
+      result(1);
+    }), 100);
+    return;
+  } else if (prompt === "ask-and-work") {
+    // A subagent asks during the turn while the main thread goes on working for a long while.
+    void subagentAsks({ command: "echo background" });
+    out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
+    for (let waited = 0; waited < 5000 && !state.interrupted; waited += 100) {
+      out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }, session_id: sessionId });
+      await sleep(100);
+    }
+    if (state.interrupted) return;
+    out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
+  } else if (prompt === "ask-then-main-asks") {
+    // A subagent asks and waits; then the main thread asks too, and once allowed runs its command for a long while.
+    void subagentAsks({ command: "echo background" });
+    const decision = await ask("Bash", { command: "sleep 5" }, { toolUseId: "toolu_main" });
+    for (let waited = 0; waited < 5000 && !state.interrupted && decision.behavior === "allow"; waited += 50) await sleep(50);
+    if (!state.interrupted) say(`Main command: ${decision.behavior}`);
+  } else if ((match = prompt.match(/^background-ask (\d+)$/))) {
+    // Background work finishes and the process begins a turn of its own, in which the main thread asks permission.
+    say("Background work started.");
+    setTimeout(() => enqueue(async () => {
+      out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+      const self = { interrupted: false, child: null };
+      current = self;
+      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      const decision = await ask("Bash", { command: "echo later" });
+      if (self.interrupted) return;
+      say(`Background step: ${decision.behavior}`);
+      current = null;
+      result(1);
+    }), Number(match[1]));
+  } else if (prompt === "zero-result-then-self") {
+    // The empty result is the whole turn, and background work reports back in a turn of its own a moment later.
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    setTimeout(() => enqueue(() => selfStartedTurn("Background report.")), 100);
+    current = null;
+    return;
+  } else if (prompt === "two-in-turn") {
+    // The turn runs two subagents in the foreground; both ask together, and the turn waits for both.
+    batch = [];
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_agent_one", name: "Agent", input: { description: "one" } }, { type: "tool_use", id: "toolu_agent_two", name: "Agent", input: { description: "two" } }] }, session_id: sessionId });
+    taskStarted("fake-one", "toolu_agent_one");
+    taskStarted("fake-two", "toolu_agent_two");
+    const both = Promise.all([subagentAsks({ command: "echo one" }, { call: "toolu_agent_one", agent: "fake-one", toolUseId: "toolu_one_bash" }), subagentAsks({ command: "echo two" }, { call: "toolu_agent_two", agent: "fake-two", toolUseId: "toolu_two_bash" })]);
+    flush();
+    const answers = await both;
+    if (state.interrupted) return;
+    taskDone("fake-one", "toolu_agent_one");
+    taskDone("fake-two", "toolu_agent_two");
+    say(`Both answered: ${answers.map((answer) => answer.behavior).join(", ")}`);
+  } else if (prompt === "ask-withdraw-in-turn") {
+    // A subagent asks during the turn; the main thread goes on talking, then the subagent takes the question back.
+    void subagentAsks({ command: "echo background" });
+    const asked = lastQuestion;
+    await sleep(300);
+    say("Still working. ");
+    await sleep(300);
+    out({ type: "control_cancel_request", request_id: asked });
+    const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+    await sleep(200);
+    say("Done.");
+  } else if ((match = prompt.match(/^zero-result-compact (\d+) (.+)$/s))) {
+    // An empty result, then a compaction that takes <ms> and says so only when it starts and ends, then the answer.
+    out({ type: "result", subtype: "success", is_error: false, result: "", session_id: sessionId, num_turns: 0, duration_ms: 1, stop_reason: null, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    out({ type: "system", subtype: "status", status: "compacting", session_id: sessionId });
+    for (let waited = 0; waited < Number(match[1]) && !state.interrupted; waited += 50) await sleep(50);
+    if (state.interrupted) return;
+    out({ type: "system", subtype: "status", status: null, session_id: sessionId });
+    out({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" }, session_id: sessionId });
+    say(`You said: ${match[2]}`);
+  } else if (prompt === "compact-then-answer") {
+    // Compacting before the model call, as the real binary does: a boundary, then what it kept replayed as plain
+    // messages (a summary, an earlier answer), then the model streams the answer.
+    out({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 160000 }, session_id: sessionId });
+    out({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." }, session_id: sessionId });
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "An earlier answer, kept through compaction." }] }, session_id: sessionId });
+    say("The fresh answer.");
+  } else if (prompt === "ask-on-stop") {
+    state.lateQuestion = true;
+    say("Working on it.");
+    for (let waited = 0; waited < 10_000 && !state.interrupted; waited += 50) await sleep(50); // an interrupt ends it at once
+    if (!state.interrupted) say("not stopped");
+  } else if (prompt === "stop-race") {
+    state.lateTool = true;
+    say("Working on it.");
+    for (let waited = 0; waited < 10_000 && !state.interrupted; waited += 50) await sleep(50); // an interrupt ends it at once
+    if (!state.interrupted) say("not stopped");
+  } else if ((match = prompt.match(/^slow (\d+) (.+)$/s))) {
+    await sleep(Number(match[1]));
+    if (!state.interrupted) say(match[2]);
+  } else if (prompt === "exit-after-turn") {
+    say("Leaving now.");
+    result(turns);
+    current = null;
+    process.stdout.write('', () => process.exit(0));
+    return;
   } else if (prompt.startsWith("fail")) {
-    out({ type: "result", subtype: "error_during_execution", is_error: true, result: "scripted failure", session_id: sessionId, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } });
+    out({ type: "result", subtype: "error_during_execution", is_error: true, result: "scripted failure", ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } });
+    current = null;
     return;
   } else {
-    say(resumed ? `Continuing session ${sessionId}: ${prompt}` : `You said: ${prompt}`);
+    say(continuing ? `Continuing session ${sessionId}: ${prompt}` : `You said: ${prompt}`);
   }
-  out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
+  if (state.interrupted) return; // the interrupt already ended this turn with a result
+  current = null;
+  result(turns, uuid);
 }
 
 let buffered = "";
@@ -194,13 +894,21 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);
     if (!line.trim()) continue;
     const message = JSON.parse(line);
+    if (message.type === "control_request" && message.request?.subtype === "initialize") { sparesBackground = message.request.perTaskStopAffordance === true; forwardsNested = message.request.forwardNestedSubagentToolCalls === true; }
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: COMMANDS, models: MODELS } } });
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
+    else if (message.type === "control_request" && message.request?.subtype === "interrupt") interrupt(message.request_id, message.request.cancel_queued === true, message.request.for_user_message_uuids ?? null);
+    else if (message.type === "control_request" && message.request?.subtype === "cancel_async_message") {
+      // Withdraw one queued message by its id; one already taken up is not withdrawn.
+      const entry = waiting.find((candidate) => candidate.uuid === message.request.message_uuid && !candidate.cancelled);
+      if (entry) entry.cancelled = true;
+      if (entry) lifecycle(entry.uuid, "cancelled");
+      out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { cancelled: Boolean(entry) } } });
+    }
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
-    else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image")).then(() => {
-      // Large echoed attachments can fill the pipe; flush the result before exiting.
-      process.stdout.write('', () => process.exit(0));
-    }, (error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); });
+    else if (message.type === "user") { const entry = { cancelled: false, uuid: message.uuid ?? null }; waiting.push(entry); lifecycle(entry.uuid, "queued"); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (entry.cancelled) return; lifecycle(entry.uuid, "started"); await turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image"), message.uuid ?? null).catch((error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); }); lifecycle(entry.uuid, stoppedMessages.delete(entry.uuid) ? "cancelled" : "completed"); }); }
   }
 }
+// stdin closed: the host is done with this process. Large echoed attachments can fill the pipe; flush first.
+process.stdout.write('', () => process.exit(0));

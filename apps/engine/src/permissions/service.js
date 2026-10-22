@@ -76,10 +76,10 @@ export class PermissionService {
     throw new ProtocolError("permission_denied", `unknown tool class ${toolClass}`);
   }
 
-  request({ run, workspaceId, tool, argumentDigest, summary, cwd }) {
+  request({ run, workspaceId, tool, argumentDigest, summary, cwd, grantRunId = null }) {
     cwd = permissionCwd(this.storage.getWorkspace(workspaceId).path, cwd);
     const permission = this.storage.transaction(() => {
-      const created = this.storage.insertPermission({ runId: run.id, sessionId: run.sessionId, workspaceId, tool: tool.name, request: { argumentDigest, ...summary, cwd, isolation: "none" } });
+      const created = this.storage.insertPermission({ runId: run.id, sessionId: run.sessionId, workspaceId, tool: tool.name, request: { argumentDigest, ...summary, cwd, isolation: "none", ...(grantRunId ? { grantRunId } : {}) } });
       this.storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "permission.requested", payload: { permissionId: created.id, runId: run.id, workspaceId, tool: tool.name, summary: summary.summary, ...(summary.argv ? { argv: summary.argv } : {}), ...(summary.script ? { script: summary.script } : {}), cwd, isolation: "none", revision: created.revision } });
       return created;
     });
@@ -88,22 +88,44 @@ export class PermissionService {
 
   /** An interactive client submits the user's decision; the first valid resolution wins (§10.1). */
   resolve({ permissionId, decision, expectedRevision }) {
+    const settled = [];
     const resolved = this.storage.transaction(() => {
       const permission = this.storage.getPermission(permissionId);
       if (!permission) throw new ProtocolError("not_found", "unknown permission request");
       if (permission.state !== "pending") throw new ProtocolError("conflict", `permission already ${permission.state}`, { state: permission.state });
       if (expectedRevision !== undefined && expectedRevision !== permission.revision) throw new ProtocolError("conflict", "permission revision moved", { revision: permission.revision });
       let grantId = null;
-      if (decision === "allow_once") grantId = this.storage.insertGrant({ scope: SCOPES.execute, constraints: { workspaceId: permission.workspaceId, runId: permission.runId, argumentDigest: permission.request.argumentDigest, toolName: permission.tool, once: true } }).id;
-      if (decision === "allow_run") grantId = this.grantScope(SCOPES.execute, { workspaceId: permission.workspaceId, runId: permission.runId }).grant.id;
+      // What "this run" means for the asker: background work's questions are scoped to the work, not the run they came by.
+      const scopeRun = permission.request.grantRunId ?? permission.runId;
+      if (decision === "allow_once") grantId = this.storage.insertGrant({ scope: SCOPES.execute, constraints: { workspaceId: permission.workspaceId, runId: scopeRun, argumentDigest: permission.request.argumentDigest, toolName: permission.tool, once: true } }).id;
+      if (decision === "allow_run") grantId = this.grantScope(SCOPES.execute, { workspaceId: permission.workspaceId, runId: scopeRun }).grant.id;
       if (decision === "allow_project") grantId = this.grantScope(SCOPES.execute, { workspaceId: permission.workspaceId }).grant.id;
       if (grantId) this.storage.appendEvent({ type: "grant.created", payload: { grantId, scope: SCOPES.execute, workspaceId: permission.workspaceId } });
       const updated = this.storage.resolvePermission(permissionId, { state: decision === "deny" ? "denied" : "allowed", decision, grantId });
       this.storage.appendEvent({ sessionId: permission.sessionId, runId: permission.runId, type: "permission.resolved", payload: { permissionId, decision, revision: updated.revision, grantId } });
+      // A standing answer also answers the other questions open now that it covers: none of them should still be asked.
+      if (decision === "allow_run" || decision === "allow_project") {
+        for (const other of this.storage.pendingPermissionsForWorkspace(permission.workspaceId)) {
+          if (other.id === permissionId) continue;
+          if (decision === "allow_run" && (other.request.grantRunId ?? other.runId) !== scopeRun) continue;
+          const answered = this.storage.resolvePermission(other.id, { state: "allowed", decision, grantId });
+          this.storage.appendEvent({ sessionId: other.sessionId, runId: other.runId, type: "permission.resolved", payload: { permissionId: other.id, decision, revision: answered.revision, grantId } });
+          settled.push(answered);
+        }
+      }
       return updated;
     });
     this.events.emit("resolved", resolved);
-    return resolved;
+    for (const other of settled) this.events.emit("resolved", other);
+    return { ...resolved, settled };
+  }
+
+  /** The agent took back a question still waiting on the user: it is closed without a grant, and clients drop it. */
+  withdraw(permissionId) {
+    this.storage.transaction(() => {
+      const withdrawn = this.storage.withdrawPermission(permissionId);
+      if (withdrawn) this.storage.appendEvent({ sessionId: withdrawn.sessionId, runId: withdrawn.runId, type: "permission.resolved", payload: { permissionId, decision: "deny", revision: withdrawn.revision, grantId: null } });
+    });
   }
 
   /** Wait for a pending permission to be resolved, or for the run to be cancelled. */

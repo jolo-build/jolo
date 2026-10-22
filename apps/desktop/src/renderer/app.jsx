@@ -5,7 +5,7 @@ import { WorkspacePane } from "./components/workspace-pane.jsx";
 import { initialLayout, MAX_PANES, paneRects, paneReducer } from "./pane-layout.js";
 import { browserTarget } from './browser-target.js';
 import { TaskDragContext, TASK_DRAG_TYPE, taskDropSide } from './task-drag.jsx';
-import { readSidebar, sidebarWidth, sidebarLimit, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_KEY } from './sidebar-layout.js';
+import { readSidebar, sidebarFits, sidebarWidth, sidebarLimit, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_KEY } from './sidebar-layout.js';
 import { useDragCleanup } from './use-drag-cleanup.js';
 
 function SidebarDivider({ width, maximum, onResize, onDragging }) {
@@ -65,29 +65,54 @@ function DesktopWorkspace() {
       window.removeEventListener('blur', clearTaskDrag);
     };
   }, [clearTaskDrag]);
+  const [viewport, setViewport] = useState(window.innerWidth);
   const [sidebarState, setSidebarState] = useState(() => readSidebar(window.localStorage));
-  const sidebarHidden = sidebarState.collapsed;
+  // Too narrow to pin beside the chat, the sidebar peeks as if collapsed; its button pins it until the window widens, and the saved choice is kept.
+  const cramped = !sidebarFits(viewport);
+  const [crampedPinned, setCrampedPinned] = useState(false);
+  const sidebarHidden = cramped ? !crampedPinned : sidebarState.collapsed;
   const [sidebarHovered, setSidebarHovered] = useState(false);
-  const canPeekSidebar = sidebarState.collapsed && !settingsOwner;
+  const canPeekSidebar = sidebarHidden && !settingsOwner;
   const sidebarPeeking = canPeekSidebar && sidebarHovered;
-  useEffect(() => { setSidebarHovered(false); }, [sidebarState.collapsed, settingsOwner]);
+  const peekClose = useRef(0);
+  useEffect(() => { clearTimeout(peekClose.current); setSidebarHovered(false); }, [sidebarHidden, settingsOwner]);
+  // The header's sidebar button peeks too. Leaving it waits a moment so the pointer can cross the header into the sidebar.
+  const peekSidebar = useCallback(open => {
+    clearTimeout(peekClose.current);
+    if (open) setSidebarHovered(true);
+    else peekClose.current = window.setTimeout(() => { if (!sidebar?.matches(':hover') && !sidebar?.querySelector(':focus-visible')) setSidebarHovered(false); }, 300);
+  }, [sidebar]);
+  useEffect(() => () => clearTimeout(peekClose.current), []);
   useEffect(() => {
     if (!sidebar) return;
     // The sidebar content is portaled from WorkspacePane; listen on its DOM host.
-    const leave = () => { if (!sidebar.contains(document.activeElement)) setSidebarHovered(false); };
+    // Heading up into the header, toward its sidebar button, gets the same grace as the way down; the macOS drag area reports no target.
+    // Only keyboard focus holds the peek open: a clicked chat row keeps focus too, and the peek should still close behind the pointer.
+    const leave = event => {
+      if (sidebar.querySelector(':focus-visible')) return;
+      if (!(event.relatedTarget instanceof Element) || event.relatedTarget.closest('.header')) peekSidebar(false); else setSidebarHovered(false);
+    };
     const blur = event => { if (!sidebar.contains(event.relatedTarget) && !sidebar.matches(':hover')) setSidebarHovered(false); };
     sidebar.addEventListener('pointerleave', leave);
     sidebar.addEventListener('focusout', blur);
     return () => { sidebar.removeEventListener('pointerleave', leave); sidebar.removeEventListener('focusout', blur); };
-  }, [sidebar]);
-  const [viewport, setViewport] = useState(window.innerWidth);
+  }, [sidebar, peekSidebar]);
   const [sidebarDragging, setSidebarDragging] = useState(false);
   const width = sidebarWidth(sidebarState.width, viewport);
   const [finding, setFinding] = useState(false);
   const closeFind = useCallback(() => setFinding(false), []);
-  const toggleSidebar = useCallback(() => setSidebarState(value => ({ ...value, collapsed: !value.collapsed })), []);
+  // Pinning or collapsing snaps; only a peek slides.
+  const [sidebarSnap, setSidebarSnap] = useState(false);
+  useEffect(() => { if (!sidebarSnap) return; const timer = setTimeout(() => setSidebarSnap(false), 200); return () => clearTimeout(timer); }, [sidebarSnap]);
+  const toggleSidebar = useCallback(() => {
+    setSidebarSnap(true);
+    if (cramped) setCrampedPinned(value => !value);
+    else setSidebarState(value => ({ ...value, collapsed: !value.collapsed }));
+  }, [cramped]);
+  // Crossing the narrow edge snaps like a pin or collapse, and forgets a pin made only for the narrow window.
+  useEffect(() => { setSidebarSnap(true); setCrampedPinned(false); }, [cramped]);
   const resizeSidebar = value => setSidebarState(state => ({ ...state, width: sidebarWidth(value, viewport) }));
-  const hosts = useMemo(() => ({ header, sidebar, settings, sidebarCollapsed: sidebarHidden, toggleSidebar }), [header, sidebar, settings, sidebarHidden, toggleSidebar]);
+  const hosts = useMemo(() => ({ header, sidebar, settings, sidebarCollapsed: sidebarHidden, toggleSidebar, peekSidebar }), [header, sidebar, settings, sidebarHidden, toggleSidebar, peekSidebar]);
   useEffect(() => { try { window.localStorage.setItem(SIDEBAR_KEY, JSON.stringify(sidebarState)); } catch { /* unavailable storage */ } }, [sidebarState]);
   useEffect(() => {
     const resized = () => setViewport(window.innerWidth);
@@ -177,8 +202,8 @@ function DesktopWorkspace() {
   const geometry = paneRects(layout.tree);
   const acceptsTaskDrop = event => draggedTask && !settingsOwner && layout.panes.length < MAX_PANES &&
     !document.querySelector('dialog[open]') && Array.from(event.dataTransfer.types).includes(TASK_DRAG_TYPE);
-  return <TaskDragContext.Provider value={setDraggedTask}><div className={`app split-app${sidebarHidden ? ' sidebar-collapsed' : ''}${sidebarPeeking ? ' sidebar-peeking' : ''}${sidebarDragging ? ' sidebar-resizing' : ''}`} data-platform={window.jolo.platform}
-    style={/** @type {import('react').CSSProperties} */ ({ '--sidebar-width': `${sidebarHidden ? 0 : width}px`, '--sidebar-expanded-width': `${width}px`, '--header-sidebar-width': sidebarHidden ? 'max-content' : `${width}px` })}>
+  return <TaskDragContext.Provider value={setDraggedTask}><div className={`app split-app${sidebarHidden ? ' sidebar-collapsed' : ''}${sidebarPeeking ? ' sidebar-peeking' : ''}${sidebarSnap ? ' sidebar-snap' : ''}${sidebarDragging ? ' sidebar-resizing' : ''}`} data-platform={window.jolo.platform}
+    style={/** @type {import('react').CSSProperties} */ ({ '--sidebar-width': `${sidebarHidden ? 0 : width}px`, '--sidebar-expanded-width': `${width}px`, '--header-sidebar-width': sidebarHidden && !settingsOwner ? 'max-content' : `${width}px` })}>
     <div className="shell-slot" ref={setHeader} />
     <div className={`workspace-body${settingsOwner ? ' settings-open' : ''}`}>
       {canPeekSidebar && <div className="sidebar-hover-edge" aria-hidden="true" onPointerEnter={event => { if (event.pointerType !== 'touch') setSidebarHovered(true); }} />}

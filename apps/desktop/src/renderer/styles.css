@@ -103,15 +103,18 @@ strong { font-weight: 550; }
 @keyframes deferred-in { from { visibility: hidden; } }
 .good { color: var(--green); }
 [hidden] { display: none !important; }
-.app { --sidebar-width: 194px; height: 100%; display: grid; grid-template-rows: 49px minmax(0, 1fr); overflow: hidden; background: var(--shell-gradient); }
+.app { --sidebar-width: 256px; height: 100%; display: grid; grid-template-rows: 49px minmax(0, 1fr); overflow: hidden; background: var(--shell-gradient); }
 .shell-slot { display: contents; }
 .workspace-body { position: relative; display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 0; }
 .workspace-sidebar { min-width: 0; min-height: 0; }
 .workspace-sidebar .sidebar { height: 100%; }
-.sidebar-collapsed .workspace-sidebar { visibility: hidden; overflow: hidden; }
+/* Collapsed, the sidebar waits just off to the left at its full width, then slides in over the workspace while it peeks.
+   The sidebar inside draws the right edge, as it does when pinned, so the line meets the header's. */
+.sidebar-collapsed .workspace-sidebar { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-expanded-width); z-index: 8; overflow: hidden; background: var(--side); box-shadow: 8px 0 24px #0002;
+  visibility: hidden; opacity: 0; transform: translateX(-16px); transition: opacity 120ms ease-in, transform 120ms ease-in, visibility 0s 120ms; }
 .sidebar-hover-edge { position: absolute; inset: 0 auto 0 0; width: 8px; z-index: 7; }
-.sidebar-peeking .workspace-sidebar { position: absolute; inset: 0 auto 0 0; width: var(--sidebar-expanded-width); visibility: visible; z-index: 8; background: var(--side); border-right: 1px solid var(--border); box-shadow: 8px 0 24px #0002; }
-.sidebar-peeking .pane-canvas { grid-column: 2; }
+.sidebar-peeking .workspace-sidebar { visibility: visible; opacity: 1; transform: none; transition: opacity 160ms ease-out, transform 160ms ease-out; }
+.sidebar-collapsed .pane-canvas { grid-column: 2; }
 .sidebar-divider { position: absolute; left: calc(var(--sidebar-width) - 4px); top: 0; bottom: 0; width: 8px; z-index: 6; cursor: col-resize; touch-action: none; }
 .sidebar-divider::after { content: ''; position: absolute; inset: 0 3px; background: transparent; }
 .sidebar-divider:hover::after, .sidebar-divider:focus-visible::after, .sidebar-resizing .sidebar-divider::after { background: var(--muted); }
@@ -218,10 +221,23 @@ strong { font-weight: 550; }
 .header-brand { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid var(--border); background: var(--side); }
 .header .sidebar-toggle { flex: none; width: 28px; height: 28px; padding: 0; margin-left: auto; color: var(--muted); }
 .app[data-platform="darwin"] .header-brand { padding-left: 96px; }
+/* A peeked sidebar is wider than the collapsed brand column; its edge slides up through the header with it, without moving the header's columns.
+   `*` does not reach pseudo-elements, so the strip names its own box-sizing to keep its border inside the sidebar's width.
+   It inherits the header's drag region, and on macOS a drag region over the sidebar button swallows its hover and flickers the peek;
+   so it starts at the brand's edge, slides under the logo and button, and is never a drag region itself.
+   It overlaps the brand by a pixel so no seam shows where a narrow window drops the brand's border, and it takes no clicks: the header under it stays usable. */
+.sidebar-collapsed .header-brand { position: relative; z-index: 9; transition: border-right-color 0s 120ms; }
+.sidebar-collapsed .header-brand::after { content: ''; box-sizing: border-box; position: absolute; z-index: -1; top: 0; bottom: 0; left: calc(100% - 1px); width: calc(var(--sidebar-expanded-width) - 100% + 1px); -webkit-app-region: no-drag; pointer-events: none; background: var(--side); border-right: 1px solid var(--border); box-shadow: 8px 0 24px #0002; clip-path: inset(0 -32px 0 0);
+  visibility: hidden; opacity: 0; transform: translateX(-16px); transition: opacity 120ms ease-in, transform 120ms ease-in, visibility 0s 120ms; }
+.sidebar-peeking .header-brand { border-right-color: transparent; transition: none; }
+.sidebar-peeking .header-brand::after { visibility: visible; opacity: 1; transform: none; transition: opacity 160ms ease-out, transform 160ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .sidebar-collapsed .workspace-sidebar, .sidebar-collapsed .header-brand, .sidebar-collapsed .header-brand::after { transition: none; } }
+.sidebar-snap .workspace-sidebar, .sidebar-snap .header-brand, .sidebar-snap .header-brand::after { transition: none; }
 .header-workspace { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-width: 0; padding: 0 18px; }
 .header-breadcrumb { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; }
 .header-task-title { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; letter-spacing: normal; }
-.header .workspace-title { max-width: min(200px, 40%); }
+/* The project name keeps its width; the long chat title, which the sidebar also shows, gives way first. */
+.header .workspace-title { flex: none; max-width: min(200px, 40%); }
 .header-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .panel-menu { position: fixed; inset: auto; margin: 0; width: 244px; max-height: calc(100vh - 70px); overflow-y: auto; padding: 6px; color: var(--text); background: var(--panel); border: 0; border-radius: 10px; box-shadow: 0 6px 28px #0003, 0 0 0 1px var(--border); -webkit-app-region: no-drag; }
 .panel-menu:popover-open { display: flex; flex-direction: column; gap: 2px; }
@@ -232,9 +248,8 @@ strong { font-weight: 550; }
 .panel-menu button[aria-checked=true] { color: var(--text); }
 .panel-menu small { color: var(--muted); font-size: 10px; }
 .panel-menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--border); }
-.header .panel-toggle { width: 28px; height: 28px; padding: 0; color: var(--muted); }
-.header .panel-menu-trigger { width: 20px; height: 28px; padding: 0; margin-left: -5px; color: var(--muted); }
-.header :is(.panel-toggle, .panel-menu-trigger):is(:hover, .active, [aria-expanded=true]) { color: var(--text); }
+.header .panel-menu-trigger { height: 28px; padding: 0 3px 0 6px; gap: 1px; color: var(--muted); }
+.header .panel-menu-trigger:is(:hover, .active, [aria-expanded=true]) { color: var(--text); }
 .header button { font-size: 12px; }
 .jolo-wordmark { flex: none; font-size: 18px; font-weight: 550; letter-spacing: -1.1px; }
 /* Each header action carries one glyph of one or two strokes beside its word. The glyphs are drawn plainly on
@@ -475,6 +490,14 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .composer textarea { display: block; width: 100%; min-height: 64px; max-height: min(240px, 32vh); border: 0; background: transparent; resize: none; field-sizing: content; overflow-y: auto; padding: 2px 0; font-size: 14px; line-height: 22px; }
 .composer textarea::placeholder { color: var(--muted); }
 .composer-controls { display: flex; align-items: center; gap: 6px; padding-top: 7px; }
+.compose-column { container: compose / inline-size; }
+.composer-meta { display: contents; }
+/* A narrow chat (a wide panel beside it) keeps attach and send in the box and moves usage, model and effort to a line below it, as Claude does. */
+@container compose (max-width: 460px) {
+  .composer { margin-bottom: 30px; }
+  .composer-meta { position: absolute; top: calc(100% + 4px); left: 4px; right: 4px; display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
+  .composer-meta .model-select { max-width: none; }
+}
 .message-queue { margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); font-size: 12px; }
 .message-queue-heading { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
 .message-queue ul { list-style: none; padding: 0; margin: 0; max-height: 140px; overflow-y: auto; }
@@ -567,6 +590,7 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .panel-item-tab:not([data-active="true"]):hover .panel-item-close { display: flex; }
 .panel-item-tab button:hover, .panel-item-new:hover { background: var(--hover); }
 .panel-item-new { flex: 0 0 34px; justify-content: center; border-left: 1px solid var(--border); }
+.panel-item-tab:last-child { border-right: 0; }
 .changes { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .changes > .hint { margin: 0; padding: 0 15px 10px; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 16px 15px 10px; font-size: 12px; }
@@ -759,7 +783,8 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .check-row > span { flex: none; font-size: 11px; }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
 .terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal .xterm-host { flex: 1; min-height: 0; padding: 10px 16px 8px; }
+/* xterm's fit reads the host's computed width, so its padding must sit outside it or the last columns are cut off. */
+.terminal .xterm-host { flex: 1; min-height: 0; padding: 10px 16px 8px; box-sizing: content-box; }
 .terminal .xterm { height: 100%; }
 @container inspector (max-width: 620px) {
   .plan-card > header { flex-wrap: wrap; gap: 8px; }
@@ -850,7 +875,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .agent-model-note { grid-column: 2; font-size: 10px; margin: 0; color: var(--muted); }
 .agent-default-hint { padding-top: 14px; border-top: 1px solid var(--border); font-size: 11px; }
 .settings-content { container-type: inline-size; }
-@container (max-width: 540px) {
+@container (max-width: 620px) {
   .agent-model-row { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px 0; }
   .agent-model-note { grid-column: 1; }
 }
@@ -873,7 +898,9 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .combobox-empty { font-size: 11px; padding: 8px 10px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .settings-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .settings-nav { flex-direction: row; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .settings-nav { flex-direction: row; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  /* The settings nav is a row here, so the header's brand column no longer lines up with a side column. */
+  .app:has(> .workspace-body.settings-open) .header { grid-template-columns: max-content minmax(0, 1fr); }
   .settings-nav button { white-space: nowrap; flex: none; padding: 7px 9px; }
   .settings-scroll { padding: 24px 20px; }
 }
@@ -882,6 +909,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
   .settings-card { padding: 16px; }
   .settings-nav button { gap: 6px; font-size: 11px; }
 }
+@media (max-width: 540px) { .settings-nav button > .icon { display: none; } }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
 .md p { margin: 8px 0; white-space: pre-wrap; }
 .md h3, .md h4, .md h5, .md h6 { margin: 16px 0 7px; font-size: 15px; font-weight: 600; }
@@ -965,6 +993,13 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .file-badge.markup, .file-badge.shell { color: var(--muted); background: var(--hover); }
 .file-badge-plain { flex: none; color: var(--muted); }
 @media (max-width: 1050px) { .files-layout { grid-template-columns: minmax(0, 1fr) minmax(170px, 200px); } }
+/* With no project folder there is no tree, so the file view takes the whole panel. */
+.files-main:last-child { grid-column: 1 / -1; grid-row: 1 / -1; }
+/* A narrow panel stacks the tree under the file instead of squeezing the file beside it. */
+@container inspector (max-width: 480px) {
+  .files-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(120px, 40%); }
+  .explorer-tree { border-left: 0; border-top: 1px solid var(--border); }
+}
 /* Source, read or edited, is one CodeMirror editor (code-editor.jsx) that fills the area and scrolls itself; its own look is its theme. */
 .file-preview-content.code { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .file-save { font-size: 11px; padding: 4px 9px; }
@@ -1109,7 +1144,7 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 @media (max-width: 550px) {
   .body, .with-context .body { grid-template-columns: minmax(0, 1fr); }
   .main, .inspector { grid-column: 1; }
-  .header-brand { padding-inline: 10px; border-right: 0; }
+  .header-brand { padding-inline: 10px; }
   .header-workspace { padding-inline: 6px; gap: 8px; }
   .header .workspace-title { gap: 4px; }
   .header button { font-size: 11px; padding: 5px; }

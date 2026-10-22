@@ -7,7 +7,8 @@ import { ROOT, startEngine, tempHome, removeHome, waitFor, TERMINAL } from './he
 const engines = [], homes = [];
 afterEach(async () => { for (const engine of engines.splice(0)) await engine.stop(); for (const home of homes.splice(0)) removeHome(home); });
 
-async function boot() {
+/** @param {{ env?: Record<string, string>, clientKind?: string }} [options] */
+async function boot({ env = {}, clientKind } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, 'repo');
   mkdirSync(path.join(repo, 'docs'), { recursive: true });
@@ -18,8 +19,8 @@ async function boot() {
     chmodSync(binary, 0o755);
     writeFileSync(path.join(agents, `${id}.json`), JSON.stringify({ id, displayName: id === 'claude' ? 'Claude Code' : id === 'codex' ? 'Codex' : 'ACP Agent', binary, transport, ...(id === 'claude' ? { modelArgs: ['--model', '{model}'] } : {}), ...(id === 'acp' ? { args: ['--acp'] } : {}) }));
   }
-  let engine = await startEngine({ home, idleMs: 30000 }); engines.push(engine);
-  let client = await engine.connect();
+  let engine = await startEngine({ home, idleMs: 30000, env }); engines.push(engine);
+  let client = await engine.connect(clientKind ? { clientKind } : {});
   const project = await client.call('project.open', { path: repo });
   const create = async agentId => (await client.call('session.create', { projectId: project.projectId, workspaceId: project.workspaceId, ...(agentId ? { agentId } : {}) })).session;
   let counter = 0;
@@ -39,7 +40,7 @@ async function boot() {
   };
   const restart = async () => {
     await client.close(); await engine.stop();
-    engine = await startEngine({ home, idleMs: 30000 }); engines.push(engine);
+    engine = await startEngine({ home, idleMs: 30000, env }); engines.push(engine);
     client = await engine.connect();
   };
   // The engine deliberately owns SQLite exclusively. Inspect only after it stops.
@@ -113,3 +114,95 @@ test('Claude and ACP also catch up after a guest turn, without replaying it on e
     expect(await app.send(session.id, 'history')).toBe('Resumed context: history');
   }
 }, 30000);
+
+test('what another agent said is still delivered to Claude after Claude carried on by itself', async () => {
+  const app = await boot();
+  const session = await app.create('claude');
+  await app.send(session.id, 'Start the work.');
+  await app.send(session.id, 'background 1500 Background work is done.');
+  await app.send(session.id, '@codex The design is in docs/queue.md; use a single worker.');
+  // Claude reports its background work in a run of its own, after the guest's turn.
+  await waitFor(async () => (await app.client.call('session.page', { sessionId: session.id })).runs.some((run) => run.requestId.startsWith('continue:') && run.state === 'completed'), { label: 'Claude carried on', timeoutMs: 10000 });
+  const context = await app.send(session.id, 'history');
+  expect(context).toContain('single worker');
+  expect(context).not.toContain('Background work is done.'); // what Claude said itself is in its own thread already
+}, 30000);
+
+test('a slash command sent to Claude alone does not mark what another agent said as delivered', async () => {
+  const app = await boot();
+  const session = await app.create('claude');
+  await app.send(session.id, 'Start the work.');
+  await app.send(session.id, '@codex The design is in docs/queue.md; use a single worker.');
+  await app.send(session.id, '/deploy staging'); // Claude's own command: it goes alone, without the shared updates
+  const context = await app.send(session.id, 'history');
+  expect(context).toContain('single worker');
+}, 30000);
+
+
+test('a native run resumed after a pause is told what another agent said meanwhile, though a command of its own runs first', async () => {
+  const scratch = tempHome(); homes.push(scratch);
+  const script = path.join(scratch, 'script.json');
+  writeFileSync(script, JSON.stringify([{ toolCalls: [{ name: 'run_command', arguments: { argv: ['echo', 'checked'] } }] }, { text: ['after\n'] }]));
+  // Nobody can answer at first: the run pauses with its command admitted but not run.
+  const app = await boot({ env: { JOLO_FAKE_SCRIPT: script }, clientKind: 'headless' });
+  const events = [];
+  const { cursor } = await app.client.call('engine.status', {});
+  await app.client.subscribe({ after: cursor }, { onEvent: (event) => events.push(event) });
+  const session = await app.create(null);
+  const { run } = await app.client.call('run.start', { sessionId: session.id, requestId: 'native', prompt: 'Run the check.' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the run paused', timeoutMs: 20000 });
+  const { permissionId } = events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload;
+  await app.send(session.id, '@claude Keep the cache warm between checks.');
+  const human = await app.engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId, decision: 'allow_once' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'the resumed run completed', timeoutMs: 20000 });
+  await human.close();
+  const notes = await app.notes(session.id);
+  expect(notes.some((note) => note.startsWith('Shared conversation updates while this task was paused') && note.includes('Keep the cache warm'))).toBe(true);
+}, 60000);
+
+test('a native run paused again while finishing its commands is still told, when it goes on, what another agent said', async () => {
+  const scratch = tempHome(); homes.push(scratch);
+  const script = path.join(scratch, 'script.json');
+  writeFileSync(script, JSON.stringify([{ toolCalls: [{ name: 'run_command', arguments: { argv: ['echo', 'one'] } }, { name: 'run_command', arguments: { argv: ['echo', 'two'] } }] }, { text: ['after\n'] }]));
+  const app = await boot({ env: { JOLO_FAKE_SCRIPT: script }, clientKind: 'headless' });
+  const events = [];
+  const { cursor } = await app.client.call('engine.status', {});
+  await app.client.subscribe({ after: cursor }, { onEvent: (event) => events.push(event) });
+  const session = await app.create(null);
+  const { run } = await app.client.call('run.start', { sessionId: session.id, requestId: 'native', prompt: 'Run both checks.' });
+  const pauses = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused');
+  await waitFor(() => pauses().length === 1, { label: 'the run paused on its first command', timeoutMs: 20000 });
+  await app.send(session.id, '@claude Keep the cache warm between checks.');
+  // The first command is allowed and nobody stays to answer the second: the resumed run pauses again.
+  let human = await app.engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId: pauses()[0].payload.permissionId, decision: 'allow_once' });
+  await human.close();
+  await waitFor(() => pauses().length === 2, { label: 'the run paused again on its second command', timeoutMs: 20000 });
+  human = await app.engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId: pauses()[1].payload.permissionId, decision: 'allow_once' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'the run completed', timeoutMs: 20000 });
+  await human.close();
+  const notes = await app.notes(session.id);
+  expect(notes.some((note) => note.startsWith('Shared conversation updates while this task was paused') && note.includes('Keep the cache warm'))).toBe(true);
+}, 90000);
+
+test('a new model for Claude does not lose the turn Claude began by itself while another agent answered', async () => {
+  const app = await boot();
+  const session = await app.create('claude');
+  await app.send(session.id, 'background 1200 Background work is done.');
+  // While a guest answers, Claude reports its background work by itself: that turn waits for a run.
+  await app.client.call('run.start', { sessionId: session.id, requestId: 'guest', prompt: '@codex activity-groups' });
+  await Bun.sleep(1800);
+  const { session: current } = await app.client.call('session.page', { sessionId: session.id });
+  await app.client.call('session.setAgentModel', { sessionId: session.id, model: 'haiku', effort: null, expectedRevision: current.revision });
+  // The user's next message waits behind the guest, then runs on the new model.
+  const { run } = await app.client.call('run.start', { sessionId: session.id, requestId: 'after-switch', prompt: 'model' });
+  /** @type {any} */ let snapshot;
+  await waitFor(async () => { snapshot = await app.client.call('run.snapshot', { runId: run.id }); return TERMINAL.includes(snapshot.run.state); }, { timeoutMs: 20000 });
+  expect(snapshot.run.state).toBe('completed');
+  const texts = [];
+  for (const message of snapshot.messages.filter((m) => m.role === 'assistant' && m.kind === 'text')) texts.push((await app.client.call('artifact.read', { artifactId: message.artifactId })).text);
+  expect(texts.join(' | ')).toContain('Background work is done.'); // the waiting turn was shown, not lost
+  expect(await app.send(session.id, 'model')).toMatch(/^Running haiku/); // the next turn runs on the new model
+}, 60000);

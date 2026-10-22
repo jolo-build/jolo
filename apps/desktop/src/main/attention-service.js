@@ -164,6 +164,7 @@ export function createAttentionService({ bridge, window, log, app, Notification,
       schedule();
       if (event.type === "permission.requested") void announce(event, "approval");
       else if (event.type === "run.state" && event.payload.state === "paused" && event.payload.pauseReason === "permission") void announce(event, "approval");
+      else if (event.type === "run.state" && event.payload.quiet) return; // it showed nothing: nothing to announce
       else if (event.type === "run.state" && ["completed", "failed", "paused", "interrupted"].includes(event.payload.state)) void announce(event, "run");
     },
   };

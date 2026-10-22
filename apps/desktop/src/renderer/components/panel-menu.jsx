@@ -6,8 +6,8 @@ export const CONTEXT_PANELS = [
   ['terminal', 'Terminal', 'terminal'], ['plans', 'Plans', 'plan'], ['schedules', 'Schedules', 'clock'], ['checks', 'Checks', 'circleCheck'],
 ];
 
-export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, onToggle = null, extra = [], onExtra = null, compact = false }) {
-  const trigger = useRef(null), menu = useRef(null), wasOpen = useRef(false);
+export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, extra = [], onExtra = null, compact = false }) {
+  const trigger = useRef(null), menu = useRef(null);
   const menuId = useId();
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -29,12 +29,8 @@ export function PanelMenu({ selected, panels, disabled, details, onSelect, onHid
     menu.current.style.left = `${Math.max(8, Math.min(innerWidth - 252, rect.right - 244))}px`;
   };
   return <>
-    {/* A press while the menu is open closes it by light dismiss, so the click that follows must not open it again. */}
-    {!compact && <button className={`panel-toggle${selected ? ' active' : ''}`} aria-label="Panel" aria-pressed={Boolean(selected)} title={`${selected ? 'Hide' : 'Show'} panel (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}J)`} disabled={disabled}
-      onPointerDown={() => { wasOpen.current = menu.current.matches(':popover-open'); }}
-      onClick={() => { if (!onToggle?.() && !wasOpen.current) { place(); menu.current.showPopover(); } wasOpen.current = false; }}><Icon name="sidebarRight" /></button>}
-    {/* The native invoker toggles without light-dismiss reopening the menu on a second click. */}
-    <button ref={trigger} className={compact ? 'panel-item-new' : 'panel-menu-trigger'} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : 'Panels'} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={place}>{compact ? <Icon name="plus" size={15} /> : <Icon name="down" size={12} />}</button>
+    {/* One button, panel glyph and chevron together; Cmd/Ctrl+J still hides or restores the panel. The native invoker toggles without light-dismiss reopening the menu on a second click. */}
+    <button ref={trigger} className={compact ? 'panel-item-new' : `panel-menu-trigger${selected ? ' active' : ''}`} aria-label={compact ? 'New panel tab' : 'Panels'} title={compact ? 'New panel tab' : `Panels (${window.jolo.platform === 'darwin' ? '⌘' : 'Ctrl+'}J shows or hides)`} aria-haspopup="menu" aria-expanded={open} popoverTarget={menuId} disabled={disabled} onClick={place}>{compact ? <Icon name="plus" size={15} /> : <><Icon name="sidebarRight" /><Icon name="down" size={12} /></>}</button>
     <div ref={menu} id={menuId} className="panel-menu" popover="auto" role="menu" aria-label={compact ? 'New panel tab' : 'Panels'} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(); return; }
       if (event.key === 'Tab') { menu.current.hidePopover(); return; }

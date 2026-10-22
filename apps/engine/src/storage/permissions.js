@@ -27,8 +27,9 @@ export class PermissionRepository {
     return mapGrant(this.db.query("SELECT * FROM grants WHERE scope=?1 AND json_extract(constraints,'$.workspaceId')=?2 AND (expires_at IS NULL OR expires_at>?3) AND (json_extract(constraints,'$.runId') IS NULL OR json_extract(constraints,'$.runId')=?4) ORDER BY created_at DESC LIMIT 1").get(scope, workspaceId, now(), runId ?? null));
   }
 
+  /** The grants of a finished run, and of what ran under it (`<runId>:<asker>`, a process's background agents). */
   expireRunGrants(runId) {
-    this.db.query("UPDATE grants SET expires_at=?1 WHERE json_extract(constraints,'$.runId')=?2 AND (expires_at IS NULL OR expires_at>?1)").run(now(), runId);
+    this.db.query("UPDATE grants SET expires_at=?1 WHERE (json_extract(constraints,'$.runId')=?2 OR substr(json_extract(constraints,'$.runId'), 1, length(?2) + 1) = ?2 || ':') AND (expires_at IS NULL OR expires_at>?1)").run(now(), runId);
   }
 
   expireGrant(id) {
@@ -48,6 +49,20 @@ export class PermissionRepository {
   resolvePermission(id, { state, decision, grantId = null }) {
     this.db.query("UPDATE permissions SET state = ?1, decision = ?2, grant_id = ?3, revision = revision + 1, resolved_at = ?4 WHERE id = ?5").run(state, decision, grantId, now(), id);
     return this.getPermission(id);
+  }
+
+  /** Close a request that is still pending without a decision from the user; null when it was already settled. */
+  withdrawPermission(id) {
+    const changed = this.db.query("UPDATE permissions SET state = 'expired', decision = 'deny', revision = revision + 1, resolved_at = ?1 WHERE id = ?2 AND state = 'pending'").run(now(), id).changes;
+    return changed ? this.getPermission(id) : null;
+  }
+
+  pendingPermissionsForWorkspace(workspaceId) {
+    return this.db.query("SELECT * FROM permissions WHERE workspace_id = ?1 AND state = 'pending' ORDER BY created_at, id").all(workspaceId).map(mapPermission);
+  }
+
+  pendingPermissionsForRun(runId) {
+    return this.db.query("SELECT * FROM permissions WHERE run_id = ?1 AND state = 'pending' ORDER BY created_at, id").all(runId).map(mapPermission);
   }
 
   pendingPermissionForRun(runId) {

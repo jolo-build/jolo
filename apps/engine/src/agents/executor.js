@@ -34,7 +34,7 @@ export function createExecutorRouter(deps) {
       const configured = catalog.config(manifest, { ...(ctx.run.execution?.model ? { model: ctx.run.execution.model } : {}) });
       const answerer = { id: manifest.id, displayName: manifest.displayName, model: configured.model ?? null };
       const result = await executeHosted({ ctx, manifest, adapter, storage, budget: settings.get().budgets, interactiveClients, revoke });
-      rememberConversation(storage, ctx.run, answerer, result.outcome === 'completed');
+      rememberConversation(storage, ctx.run, answerer, result.outcome === 'completed', { carried: result.carried !== false, reached: result.reached === true });
       return result;
     },
   };
@@ -51,39 +51,62 @@ export async function executeHosted({ ctx, manifest, adapter, storage, budget, i
   const abort = () => controller.abort(ctx.signal.reason);
   ctx.signal.addEventListener('abort', abort, { once: true });
   if (ctx.signal.aborted) abort();
-  let activeMs = 0, previous = Date.now(), pause = null, phase = null, iterations = 0;
+  let activeMs = 0, previous = Date.now(), phase = null, iterations = 0, holdPermission = false;
+  /** @type {Record<string, unknown> | null} */
+  let pause = null;
+  // Whether the run only waits on the user, from an adapter that can tell (null: the run's shown state says).
+  let waitingOnUser = null;
+  // Protocols expose different message types; count observable model phases,
+  // never token deltas. Hidden vendor-internal calls remain vendor-owned.
+  // A phase replayed from work the vendor already did by itself is shown but not counted again.
+  const count = (state, { counted = true } = {}) => {
+    if (!counted) { phase = 'replayed'; return; }
+    if (state === 'model' && phase !== 'model' && ++iterations > budget.maxIterations) {
+      exhausted('iteration budget reached'); controller.signal.throwIfAborted();
+    }
+    phase = state;
+  };
+  /** The question to pause on: the main thread's own, which it is blocked on, before one background work asked. */
+  const pauseOn = runId => {
+    const pending = storage.pendingPermissionsForRun(runId);
+    return (pending.filter(permission => !permission.request?.grantRunId).at(-1) ?? pending.at(-1))?.id;
+  };
   const tools = new Map();
   const stop = result => { if (!pause) { pause = result; controller.abort(); } };
   const exhausted = detail => stop({ outcome: 'paused', pauseReason: 'budget', detail });
   const monitor = setInterval(() => {
     const now = Date.now(), run = storage.getRun(ctx.run.id);
-    if (run?.state !== 'awaiting_permission') activeMs += now - previous;
+    const waiting = waitingOnUser ?? run?.state === 'awaiting_permission';
+    if (!waiting) activeMs += now - previous;
     previous = now;
-    if (run?.state === 'awaiting_permission' && interactiveClients() === 0) {
-      stop({ outcome: 'paused', pauseReason: 'permission', permissionId: storage.pendingPermissionForRun(run.id)?.id });
+    // With nobody to ask, a run only waiting on the user pauses, unless what it waits on is background work's question
+    // with the main thread idle (then it waits for a window, as the asker does). Work going on is never paused for it.
+    if (run?.state === 'awaiting_permission' && waiting && interactiveClients() === 0 && !holdPermission) {
+      stop({ outcome: 'paused', pauseReason: 'permission', permissionId: pauseOn(run.id) });
     } else if (activeMs >= budget.maxActiveMs) exhausted('active time budget reached');
     else if (budget.hostedToolDeadlineMs != null && [...tools.values()].some(start => activeMs - start >= budget.hostedToolDeadlineMs)) exhausted('hosted tool deadline reached');
   }, tickMs);
   try {
     const result = await adapter.execute({
       ...ctx, signal: controller.signal,
-      transition(state) {
-        // Protocols expose different message types; count observable model phases,
-        // never token deltas. Hidden vendor-internal calls remain vendor-owned.
-        if (state === 'model' && phase !== 'model' && ++iterations > budget.maxIterations) {
-          exhausted('iteration budget reached'); controller.signal.throwIfAborted();
-        }
-        phase = state;
-        return ctx.transition(state);
-      },
+      transition(state, options) { count(state, options); return ctx.transition(state); },
+      // A model phase while the run shows a question waiting on the user still counts against the iteration budget.
+      countPhase(state, options) { count(state, options); },
+      // Background work can ask while the main thread works on: only the adapter knows when nothing but the user is
+      // awaited, which is when active time stops counting.
+      waitingOnUser(flag) { waitingOnUser = flag; },
       toolStarted(id) { controller.signal.throwIfAborted(); tools.set(String(id), activeMs); },
       // A vendor can return to the model while a command (for example a dev server)
       // keeps running. It no longer blocks a tool response; the turn's active-time
       // budget and cancellation still apply to it.
       toolBackgrounded(id) { tools.delete(String(id)); },
+      // A run that only answers a question background work is waiting on keeps waiting for a window instead of pausing.
+      keepWaitingForPermission(hold = true) { holdPermission = hold; },
       toolFinished(id) { tools.delete(String(id)); },
     }, manifest);
-    return ctx.signal.aborted ? { outcome: 'cancelled' } : pause ?? result;
+    // Whether the turn reached the vendor's own thread holds whatever stopped it.
+    const reached = result?.reached === true ? { reached: true } : {};
+    return ctx.signal.aborted ? { outcome: 'cancelled', ...reached } : pause ? { ...pause, ...reached } : result;
   } catch (error) {
     if (ctx.signal.aborted) return { outcome: 'cancelled' };
     if (pause) return pause;

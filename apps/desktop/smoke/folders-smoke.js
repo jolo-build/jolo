@@ -38,10 +38,10 @@ export async function runFoldersSmoke({ window, bridge, project, results, evalua
   ipcMain.handle('jolo:projectMenu', () => 'remove');
   const betaGroup = JSON.stringify(`.sidebar-workspace[data-workspace-id="${beta.workspaceId}"]`);
   await evaluate(`document.querySelector(${betaGroup}).querySelector('.sidebar-workspace-more').click()`);
-  await waitFor("document.querySelector('dialog[open] .remove-project h2')?.textContent.includes('second-folder')", 'remove-from-sidebar confirm names the folder');
+  await waitFor("document.querySelector('dialog[open] .remove-project h2')?.textContent.includes('second-folder')", 'remove-folder confirm names the folder');
   await evaluate("document.querySelector('dialog[open] .remove-project button[type=submit]').click()");
   await waitFor(`!document.querySelector(${betaGroup}) && !document.querySelector('dialog[open]') && window.__joloSmoke.state().projectId === ${JSON.stringify(alpha.projectId)}`, 'removed folder leaves the sidebar and the next folder is shown');
   if ((await bridge.rawCall('session.page', { sessionId: other.id })).session.state !== 'archived') throw new Error('the removed folder’s chat was not archived');
   if ((await bridge.rawCall('board.list', {})).projects.some(row => row.projectId === beta.projectId)) throw new Error('the removed folder is still on the board');
-  report.checks.push('Remove from sidebar, from the folder heading menu, hides the folder, shows the next one, and archives its chats');
+  report.checks.push('Remove folder, from the folder heading menu, hides the folder, shows the next one, and archives its chats');
 }

@@ -18,19 +18,25 @@ test('Claude controls the inline browser on first and resumed turns with Jolo gu
   await checkHostedBrowser(await boot());
 }, 30_000);
 
+/** Whether a process is still there; a pid the kernel has recycled would read as alive, which these short tests accept. */
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
 /** A profile whose "claude" is the protocol fixture, so nothing here reaches the real CLI or its API. */
-async function boot({ clientKind = "test" } = {}) {
+/** @param {{ clientKind?: string, env?: Record<string, string>, idleMs?: number, manifest?: Record<string, unknown> }} [options] */
+async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, "repo");
   mkdirSync(repo, { recursive: true });
   writeFileSync(path.join(repo, "notes.txt"), "alpha\n");
   const launcher = path.join(home, "fake-claude");
-  writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${FAKE}" "$@"\n`);
+  const startsLog = path.join(home, "starts.log");
+  // The shell's pid survives exec, so each line is the pid of one fixture process Jolo started.
+  writeFileSync(launcher, `#!/bin/sh\necho $$ >> "${startsLog}"\nexec "${process.execPath}" "${FAKE}" "$@"\n`);
   chmodSync(launcher, 0o755);
   const agentsDir = path.join(home, "data", "t", "agents");
   mkdirSync(agentsDir, { recursive: true });
-  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher, transport: "claude-stream" }));
-  const engine = await startEngine({ home });
+  writeFileSync(path.join(agentsDir, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher, transport: "claude-stream", ...manifest }));
+  const engine = await startEngine({ home, env, ...(idleMs ? { idleMs } : {}) });
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
@@ -45,7 +51,8 @@ async function boot({ clientKind = "test" } = {}) {
   };
   const text = async (message) => (await client.call("artifact.read", { artifactId: message.artifactId })).text;
   const messagesOf = async (runId) => (await client.call("run.snapshot", { runId })).messages;
-  return { home, repo, engine, client, events, project, session, runTo, text, messagesOf };
+  const starts = () => (existsSync(startsLog) ? readFileSync(startsLog, "utf8").split("\n").filter(Boolean).map(Number) : []);
+  return { home, repo, engine, client, events, project, session, runTo, text, messagesOf, starts };
 }
 
 describe("Claude Code through its structured stream", () => {
@@ -297,3 +304,988 @@ describe("Claude Code through its structured stream", () => {
     await expect(client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, agentId: "no-such-agent" })).rejects.toMatchObject({ code: "not_found" });
   }, 20_000);
 });
+
+describe("one Claude process per conversation", () => {
+  test("a conversation keeps one Claude process across its turns", async () => {
+    const { runTo, text, messagesOf, starts } = await boot();
+    const first = await runTo("turn-1", "hello there");
+    expect(first.state).toBe("completed");
+    const second = await runTo("turn-2", "and again");
+    expect(second.state).toBe("completed");
+    expect(await text((await messagesOf(second.id)).at(-1))).toMatch(/^Continuing session fake-\w+: and again$/);
+    expect(starts()).toHaveLength(1); // the same process answered both turns
+    expect(alive(starts()[0])).toBe(true); // and is still there for the next one
+  }, 30_000);
+
+  test("background work Claude started outlives the turn and its follow-up becomes a run of its own", async () => {
+    const { client, session, runTo, text, messagesOf, starts } = await boot();
+    const run = await runTo("bg", "background 400 Background work finished: all good");
+    expect(run.state).toBe("completed");
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe("Background work started.");
+    // The process was not killed when the turn ended, so the turn it starts by itself reaches the conversation.
+    const followUp = await waitFor(async () => {
+      const { runs } = await client.call("session.page", { sessionId: session.id });
+      return runs.find((candidate) => candidate.id !== run.id && candidate.state === "completed");
+    }, { label: "the self-started turn recorded as a run", timeoutMs: 10_000 });
+    expect(await text((await messagesOf(followUp.id)).at(-1))).toBe("Background work finished: all good");
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test("an empty result ahead of the answer does not end the turn", async () => {
+    const { runTo, text, messagesOf } = await boot();
+    const run = await runTo("zero", "zero-result hello");
+    expect(run.state).toBe("completed");
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe("You said: hello");
+    expect(run.usage.iterations).toBe(1); // the real answer's usage, not the empty result's
+  }, 30_000);
+
+  test("cancelling a turn interrupts Claude and keeps its process for the next turn", async () => {
+    const { client, events, session, runTo, text, messagesOf, starts } = await boot();
+    const { run } = await client.call("run.start", { sessionId: session.id, requestId: "cancel-me", prompt: "run sleep 30" });
+    await waitFor(() => events.some((e) => e.type === "permission.requested" && e.runId === run.id), { label: "asked" });
+    await client.call("run.cancel", { runId: run.id });
+    await waitFor(() => events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "cancelled"), { label: "cancelled" });
+    const next = await runTo("after-cancel", "still here?");
+    expect(next.state).toBe("completed");
+    expect(await text((await messagesOf(next.id)).at(-1))).toMatch(/^Continuing session fake-\w+: still here\?$/);
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test("the Claude process is closed when the conversation is archived", async () => {
+    const { client, session, runTo, starts } = await boot();
+    await runTo("before-archive", "hello");
+    const [pid] = starts();
+    expect(alive(pid)).toBe(true);
+    const page = await client.call("session.page", { sessionId: session.id });
+    await client.call("session.archive", { sessionId: session.id, expectedRevision: page.session.revision, archived: true });
+    await waitFor(() => !alive(pid), { label: "process gone after archive", timeoutMs: 5_000 });
+  }, 30_000);
+
+  test("an idle Claude process is closed after the idle timeout and the next turn resumes the conversation", async () => {
+    const { runTo, text, messagesOf, starts } = await boot({ env: { JOLO_HOSTED_IDLE_MS: "500" } });
+    await runTo("idle-1", "hello");
+    const [pid] = starts();
+    await waitFor(() => !alive(pid), { label: "idle process closed", timeoutMs: 5_000 });
+    const again = await runTo("idle-2", "back again");
+    expect(again.state).toBe("completed");
+    expect(await text((await messagesOf(again.id)).at(-1))).toMatch(/^Continuing session fake-\w+: back again$/); // --resume carried the id
+    expect(starts()).toHaveLength(2);
+  }, 30_000);
+
+  test("handing the conversation to another agent and back starts Claude afresh from the shared chat", async () => {
+    const { client, session, runTo, text, messagesOf, starts } = await boot();
+    await runTo("with-claude", "hello");
+    const [first] = starts();
+    // Jolo answers for a while; Claude's remembered thread is dropped with the switch, as it would miss these turns.
+    let page = await client.call("session.page", { sessionId: session.id });
+    await client.call("session.setAgent", { sessionId: session.id, agentId: null, expectedRevision: page.session.revision });
+    await waitFor(() => !alive(first), { label: "process gone after the switch", timeoutMs: 5_000 });
+    page = await client.call("session.page", { sessionId: session.id });
+    await client.call("session.setAgent", { sessionId: session.id, agentId: "claude", expectedRevision: page.session.revision });
+    const back = await runTo("back-with-claude", "history");
+    expect(back.state).toBe("completed");
+    expect(await text((await messagesOf(back.id)).at(-1))).toStartWith("Fresh agent context:"); // a new process, no --resume
+    expect(starts()).toHaveLength(2);
+  }, 30_000);
+
+  test("a Claude process that leaves on its own is replaced on the next turn", async () => {
+    const { runTo, text, messagesOf, starts } = await boot();
+    const gone = await runTo("leaves", "exit-after-turn");
+    expect(gone.state).toBe("completed");
+    const again = await runTo("replaced", "anyone there?");
+    expect(again.state).toBe("completed");
+    expect(await text((await messagesOf(again.id)).at(-1))).toMatch(/^Continuing session fake-\w+: anyone there\?$/);
+    expect(starts()).toHaveLength(2);
+  }, 30_000);
+});
+
+describe('background work after the turn, against a binary that queues turns like the real one', () => {
+  /** The runs that appeared after `known`, with their state and what they said. */
+  const later = async ({ client, events, messagesOf, text }, known) => {
+    const ids = [...new Set(events.filter((e) => e.type === 'run.state' && !known.includes(e.runId)).map((e) => e.runId))];
+    return Promise.all(ids.map(async (id) => ({ id, state: (await client.call('run.snapshot', { runId: id })).run.state, said: (await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('') })));
+  };
+
+  test('a background subagent asking permission gets a short run of its own and leaves the conversation free', async () => {
+    const booted = await boot();
+    const { client, events, runTo, messagesOf, text, starts } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') { asked.push(event.runId); void client.call('permission.resolve', { permissionId: event.payload.permissionId, decision: 'allow_once' }); } });
+    const launch = await runTo('launch', 'background-permission 100 1500');
+    expect(launch.state).toBe('completed');
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    const question = asked[0];
+    expect(question).not.toBe(launch.id);
+    // The question's run ends as soon as it is answered, long before the subagent reports back.
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === question && e.payload.state === 'completed'), { label: 'the question run ended', timeoutMs: 1000 });
+    // So a message now is answered at once instead of waiting behind the background work.
+    const sent = Date.now();
+    const hello = await runTo('hello', 'hello');
+    expect(Date.now() - sent).toBeLessThan(1200);
+    expect(hello.state).toBe('completed');
+    expect((await Promise.all((await messagesOf(hello.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/: hello$/);
+    // Nothing else is started while the subagent works: what followed its question was a notice, not a turn.
+    expect(await later(booted, [launch.id, question, hello.id])).toEqual([]);
+    // When the subagent finishes, the same process says so in a run of its own.
+    await waitFor(async () => (await later(booted, [launch.id, question, hello.id])).some((run) => run.state === 'completed' && run.said === 'Background agent finished: allow'), { label: 'the report', timeoutMs: 5000 });
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('stopping a background subagent’s question denies it and keeps the process and its work', async () => {
+    const booted = await boot();
+    const { client, events, runTo, starts } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.runId); });
+    const launch = await runTo('launch', 'background-permission 100 200');
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    await client.call('run.cancel', { runId: asked[0] });
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === asked[0] && TERMINAL.includes(e.payload.state)), { label: 'the question run ended', timeoutMs: 3000 });
+    expect((await client.call('run.snapshot', { runId: asked[0] })).run.state).toBe('cancelled');
+    // The subagent was told no rather than killed: it finishes, and the same process reports it.
+    await waitFor(async () => (await later(booted, [launch.id, asked[0]])).some((run) => run.state === 'completed' && run.said === 'Background agent finished: deny'), { label: 'the report', timeoutMs: 5000 });
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('a message taken up just after a turn the process began by itself still gets its own answer', async () => {
+    const booted = await boot();
+    const { runTo, messagesOf, text, starts } = booted;
+    await runTo('hello', 'hello');
+    // The binary starts a turn of its own a moment before it takes the message up; that turn's result is not the answer.
+    const raced = await runTo('raced', 'race-self what about mine');
+    expect(raced.state).toBe('completed');
+    const said = (await Promise.all((await messagesOf(raced.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ');
+    expect(said).toContain('A background task finished first.');
+    expect(said).toMatch(/You said: what about mine$/);
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('while one of two background questions is still open, the run keeps waiting on the user', async () => {
+    const booted = await boot();
+    const { client, events, runTo } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const launch = await runTo('launch', 'background-two 100');
+    await waitFor(() => asked.length === 2, { label: 'both subagents asked', timeoutMs: 5000 });
+    const run = asked[0].runId;
+    expect(asked[1].runId).toBe(run);
+    const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run).at(-1)?.payload.state;
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await Bun.sleep(200);
+    expect(stateOf()).toBe('awaiting_permission');
+    await client.call('permission.resolve', { permissionId: asked[1].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => stateOf() === 'completed', { label: 'the question run ended', timeoutMs: 3000 });
+    await waitFor(async () => (await later(booted, [launch.id, run])).some((entry) => entry.said === 'Background agents finished: allow, allow'), { label: 'the report', timeoutMs: 5000 });
+  }, 30_000);
+
+  test('a background question asked just as a run is stopped is told no at once, without asking the user', async () => {
+    const booted = await boot();
+    const { client, events, session, runTo, messagesOf, text, starts } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const hello = await runTo('hello', 'hello');
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-on-stop', prompt: 'ask-on-stop' });
+    await waitFor(async () => (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'Working on it.', { label: 'the binary took the message up', timeoutMs: 10_000 });
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the stopped run ended', timeoutMs: 5000 });
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('cancelled');
+    await waitFor(async () => (await later(booted, [hello.id, run.id])).some((entry) => entry.state === 'completed' && entry.said === 'Background agent finished: deny: The run was stopped in Jolo.'), { label: 'the report', timeoutMs: 5000 });
+    expect(asked).toEqual([]);
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('a background question open when the empty-result grace passes keeps the run until it is answered', async () => {
+    const booted = await boot({ env: { JOLO_EMPTY_RESULT_GRACE_MS: '300' } });
+    const { client, events, session } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'empty-ask', prompt: 'zero-result-ask' });
+    const ended = () => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state));
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    expect(asked[0].runId).toBe(run.id);
+    await Bun.sleep(800); // well past the grace
+    expect(ended()).toBe(false);
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(ended, { label: 'the run ended', timeoutMs: 3000 });
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('completed');
+    await waitFor(async () => (await later(booted, [run.id])).some((entry) => entry.said === 'Background agent finished: allow'), { label: 'the report', timeoutMs: 5000 });
+  }, 30_000);
+
+  test('a turn the process begins while the run waits only on a question is not cut off when the question is answered', async () => {
+    const booted = await boot();
+    const { client, events, session, messagesOf, text } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-then-turn', prompt: 'ask-then-turn 1500' });
+    const said = async () => (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ');
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    // The run's own answer is out; the process has begun a report of its own, which arrives in this run.
+    await waitFor(async () => (await said()).includes('Report part one'), { label: 'the report began', timeoutMs: 5000 });
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await Bun.sleep(300);
+    expect(events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state))).toBe(false);
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run ended', timeoutMs: 5000 });
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('completed');
+    expect(await said()).toBe('Launched. | Report part one, part two.');
+    expect(await later(booted, [run.id])).toEqual([]); // nothing of the report was split off into a run of its own
+  }, 30_000);
+
+  test('a turn the process begins after Stop on an empty result gets a run of its own, and the process lives', async () => {
+    const booted = await boot();
+    const { client, events, session, messagesOf, text, starts } = booted;
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    // The empty result is the whole turn; a subagent asks during the grace that follows it.
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'empty-ask', prompt: 'zero-result-ask' });
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    await client.call('run.cancel', { runId: run.id });
+    // Told no, the subagent reports back at once: in a run of its own, not the stopped one.
+    await waitFor(async () => (await later(booted, [run.id])).some((entry) => entry.state === 'completed' && entry.said === 'Background agent finished: deny'), { label: 'the report', timeoutMs: 5000 });
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('cancelled');
+    expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toBe('');
+    await Bun.sleep(5500); // past the interrupt grace: nothing closes the process for an interrupt it never had to answer
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('a question taken back while the turn goes on closes its prompt; the run shows the wait only while it lasts', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const asked = [];
+    client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'withdraw-in-turn', prompt: 'ask-withdraw-in-turn' });
+    const states = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).map((e) => e.payload.state);
+    const said = async () => (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('');
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    // The main thread talks while the question is open: the run still shows it waiting on the user.
+    await waitFor(async () => (await said()).includes('Still working.'), { label: 'the main thread talked', timeoutMs: 5000 });
+    expect(states().at(-1)).toBe('awaiting_permission');
+    const { permissionId } = asked[0].payload;
+    await waitFor(() => events.some((e) => e.type === 'permission.resolved' && e.payload.permissionId === permissionId), { label: 'the withdrawn prompt closed', timeoutMs: 3000 });
+    await expect(client.call('permission.resolve', { permissionId, decision: 'allow_project' })).rejects.toMatchObject({ code: 'conflict' });
+    await waitFor(() => states().includes('completed'), { label: 'the run ended', timeoutMs: 5000 });
+    expect(states().slice(states().lastIndexOf('awaiting_permission') + 1)).toContain('model'); // back at work once nobody was asked
+    expect(await said()).toBe('Still working. Done.');
+  }, 30_000);
+});
+
+test('a worktree removal that is refused leaves the conversation’s process and its work running', async () => {
+  const { client, project, repo, events, starts } = await boot();
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  const git = (...args) => Bun.spawnSync(['git', ...args], { cwd: repo, env });
+  git('init', '-q', '-b', 'main'); git('add', '.'); git('commit', '-q', '-m', 'init');
+  const { workspace } = await client.call('workspace.create', { projectId: project.projectId, title: 'side work' });
+  const { session } = await client.call('session.create', { projectId: project.projectId, workspaceId: workspace.id, title: 'in the worktree', agentId: 'claude' });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'worktree-hello', prompt: 'hello' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the worktree turn', timeoutMs: 20_000 });
+  const pid = starts().at(-1);
+  expect(alive(pid)).toBe(true);
+  writeFileSync(path.join(workspace.path, 'draft.txt'), 'unsaved\n');
+  await expect(client.call('workspace.remove', { workspaceId: workspace.id })).rejects.toMatchObject({ code: 'conflict' });
+  expect(alive(pid)).toBe(true); // the refusal did not stop the agent working there
+  await client.call('workspace.remove', { workspaceId: workspace.id, force: true });
+  await waitFor(() => !alive(pid), { label: 'the process closed with its worktree', timeoutMs: 5000 });
+}, 30_000);
+
+test('an answer that starts after an empty result is not cut off by the empty-result grace', async () => {
+  const { runTo, messagesOf, text } = await boot({ env: { JOLO_EMPTY_RESULT_GRACE_MS: '300' } });
+  const run = await runTo('slow-answer', 'zero-result-slow 900 and then the rest');
+  expect(run.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toBe('Partly and then the rest');
+}, 30_000);
+
+test('a tool call that arrives just after Stop does not kill the process', async () => {
+  const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+  await runTo('hello', 'hello');
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'stop-race', prompt: 'stop-race' });
+  await waitFor(async () => (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'Working on it.', { label: 'the turn is under way', timeoutMs: 10_000 });
+  await client.call('run.cancel', { runId: run.id });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the stopped run ended', timeoutMs: 10_000 });
+  expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('cancelled');
+  const after = await runTo('after', 'after');
+  expect(after.state).toBe('completed');
+  expect(starts()).toHaveLength(1); // the same process answered: Stop interrupted it, nothing killed it
+  expect(alive(starts()[0])).toBe(true);
+}, 30_000);
+
+test('a turn the process begins by itself while another run is finishing still arrives as a run of its own', async () => {
+  const { client, events, runTo, messagesOf, text } = await boot();
+  const launch = await runTo('launch', 'background 150 finished in the background');
+  const busy = await runTo('busy', 'slow 400 still busy'); // the background task reports during this turn, so its turn queues behind it
+  const reported = async () => {
+    const ids = [...new Set(events.filter((e) => e.type === 'run.state' && ![launch.id, busy.id].includes(e.runId)).map((e) => e.runId))];
+    for (const id of ids) {
+      const run = (await client.call('run.snapshot', { runId: id })).run;
+      const said = (await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('');
+      if (run.state === 'completed' && said === 'finished in the background') return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'the background report as its own run', timeoutMs: 5000 });
+}, 30_000);
+
+test('a message the binary does not echo back still gets its own answer', async () => {
+  const { runTo, messagesOf, text } = await boot();
+  await runTo('hello', 'hello');
+  // Claude keeps <task-notification> and command output tags for itself and does not echo a message carrying them;
+  // the turn's init and result still name the message.
+  const quoted = await runTo('quoted', 'about <task-notification>done</task-notification> in my notes');
+  expect(quoted.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(quoted.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/about <task-notification>done<\/task-notification> in my notes$/);
+}, 30_000);
+
+test('a run queued behind a turn the process began by itself can be stopped before its message is ever sent', async () => {
+  const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+  const launch = await runTo('launch', 'background-slow 100 1500 the background report');
+  // The process begins its own long turn; a message sent now waits behind it.
+  await Bun.sleep(300);
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'behind', prompt: 'never answer this' });
+  await Bun.sleep(200);
+  await client.call('run.cancel', { runId: run.id });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the stopped run ended', timeoutMs: 10_000 });
+  expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('cancelled');
+  // The stopped message is not answered later in some other run.
+  await Bun.sleep(2500);
+  const runIds = [...new Set(events.filter((e) => e.type === 'run.state' && ![launch.id, run.id].includes(e.runId)).map((e) => e.runId))];
+  const said = (await Promise.all(runIds.map(async (id) => (await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('')))).join(' | ');
+  expect(said).not.toContain('never answer this');
+  expect(starts()).toHaveLength(1);
+  expect(alive(starts()[0])).toBe(true);
+}, 30_000);
+
+test('stopping an answer that follows an empty result interrupts it, and it does not go on in another run', async () => {
+  const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+  await runTo('hello', 'hello');
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'stopped-answer', prompt: 'zero-result-slow 1500 the rest of the stopped answer' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'model'), { label: 'the answer is streaming', timeoutMs: 10_000 });
+  await Bun.sleep(200);
+  await client.call('run.cancel', { runId: run.id });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the stopped run ended', timeoutMs: 10_000 });
+  await Bun.sleep(2000);
+  const others = [...new Set(events.filter((e) => e.type === 'run.state' && e.runId !== run.id).map((e) => e.runId))];
+  const said = (await Promise.all(others.map(async (id) => (await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('')))).join(' | ');
+  expect(said).not.toContain('the rest of the stopped answer');
+  expect(starts()).toHaveLength(1);
+  expect(alive(starts()[0])).toBe(true);
+}, 30_000);
+
+test('while a background question waits for an answer the process is still read, however much it says meanwhile', async () => {
+  const { client, events, runTo, messagesOf, text, starts } = await boot();
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload.permissionId); });
+  const launch = await runTo('launch', 'background-chatter 100 30000');
+  await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+  await Bun.sleep(1500); // the main thread answers at length by itself while the question is open
+  expect(alive(starts()[0])).toBe(true); // a reader stuck on the question would have let its queue overflow and the process die
+  await client.call('permission.resolve', { permissionId: asked[0], decision: 'allow_once' });
+  const reported = async () => {
+    for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && e.runId !== launch.id).map((e) => e.runId))]) {
+      const said = (await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('');
+      if (said.includes('Background agent finished: allow')) return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'the report after the answer', timeoutMs: 10_000 });
+  expect(starts()).toHaveLength(1);
+}, 30_000);
+
+test('a background question the process takes back ends its run without an answer and leaves the process be', async () => {
+  const { client, events, runTo, messagesOf, text, starts } = await boot();
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.runId); });
+  const launch = await runTo('launch', 'background-withdraw 100 300');
+  await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === asked[0] && TERMINAL.includes(e.payload.state)), { label: 'the withdrawn question ended its run', timeoutMs: 5000 });
+  const reported = async () => {
+    for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && ![launch.id, asked[0]].includes(e.runId)).map((e) => e.runId))]) {
+      if ((await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'Background agent finished: withdrawn') return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'the report', timeoutMs: 5000 });
+  expect(starts()).toHaveLength(1);
+  expect(alive(starts()[0])).toBe(true);
+}, 30_000);
+
+test('a notice after an empty result that was the whole turn does not keep the run open', async () => {
+  const { client, events, session } = await boot({ env: { JOLO_EMPTY_RESULT_GRACE_MS: '300' } });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'empty-only', prompt: 'zero-result-only' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run ended', timeoutMs: 3000 });
+  expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('completed');
+}, 30_000);
+
+test('an answer that comes after a long compaction behind an empty result still belongs to the run', async () => {
+  const { runTo, messagesOf, text } = await boot({ env: { JOLO_EMPTY_RESULT_GRACE_MS: '300' } });
+  await runTo('hello', 'hello');
+  const run = await runTo('compacted', 'zero-result-compact 900 after compacting');
+  expect(run.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/after compacting$/);
+}, 30_000);
+
+test('a run paused on one of two questions asked together resumes once that one is allowed', async () => {
+  const { engine, client, events, session } = await boot({ clientKind: 'headless' });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload.permissionId); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'two-in-turn', prompt: 'two-in-turn' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the run paused with nobody to ask', timeoutMs: 10_000 });
+  const paused = events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload;
+  expect(paused.pauseReason).toBe('permission');
+  expect(asked).toHaveLength(2);
+  // The question it did not pause on was turned down when it stopped: its prompt is closed, not left in the way.
+  const other = asked.find((id) => id !== paused.permissionId);
+  expect(events.some((e) => e.type === 'permission.resolved' && e.payload.permissionId === other)).toBe(true);
+  const human = await engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId: paused.permissionId, decision: 'allow_once' });
+  await waitFor(() => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state !== 'paused', { label: 'the run resumed', timeoutMs: 5000 });
+  await human.close();
+}, 30_000);
+
+test('a run held only by a question after its answer spends no active time while it waits', async () => {
+  const booted = await boot();
+  const { client, events, session } = booted;
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-then-quiet', prompt: 'ask-then-quiet' });
+  const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state;
+  await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+  await Bun.sleep(2500); // well past the active-time budget, all of it spent waiting on the user
+  expect(stateOf()).toBe('awaiting_permission');
+  await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+  await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+}, 30_000);
+
+test('with nobody to ask, a run held only by a background question after its answer waits for a window', async () => {
+  const { engine, client, events, session } = await boot({ clientKind: 'headless' });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-then-quiet', prompt: 'ask-then-quiet' });
+  const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state;
+  await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+  await Bun.sleep(1000);
+  expect(stateOf()).toBe('awaiting_permission'); // not paused, and the subagent not denied
+  const human = await engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+  await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+  await human.close();
+}, 30_000);
+
+test('a run paused for its budget while a question is open closes that question and can be resumed', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload.permissionId); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-and-work', prompt: 'ask-and-work' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the run paused', timeoutMs: 10_000 });
+  expect(events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload.pauseReason).toBe('budget');
+  expect(asked).toHaveLength(1);
+  expect(events.some((e) => e.type === 'permission.resolved' && e.payload.permissionId === asked[0])).toBe(true);
+  await expect(client.call('run.resume', { runId: run.id })).resolves.toBeTruthy();
+}, 30_000);
+
+test('a command the main thread was allowed to run while another question is open counts against the budget', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'main-asks', prompt: 'ask-then-main-asks' });
+  await waitFor(() => asked.length === 2, { label: 'both asked', timeoutMs: 5000 });
+  const main = asked.find((request) => request.summary?.includes('sleep 5') || JSON.stringify(request).includes('sleep 5'));
+  expect(main).toBeTruthy();
+  await client.call('permission.resolve', { permissionId: main.permissionId, decision: 'allow_once' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the budget ran out during the command', timeoutMs: 4000 });
+  expect(events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload.pauseReason).toBe('budget');
+}, 30_000);
+
+test('a run Claude began by itself that was paused for permission carries on once allowed', async () => {
+  const { engine, client, events, runTo, messagesOf, text } = await boot({ clientKind: 'headless' });
+  const launch = await runTo('launch', 'background-ask 100');
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId !== launch.id && e.payload.state === 'paused'), { label: 'the continuation paused with nobody to ask', timeoutMs: 10_000 });
+  const paused = events.find((e) => e.type === 'run.state' && e.runId !== launch.id && e.payload.state === 'paused');
+  const human = await engine.connect({ clientKind: 'tui' });
+  await human.call('permission.resolve', { permissionId: paused.payload.permissionId, decision: 'allow_once' });
+  await waitFor(() => events.filter((e) => e.type === 'run.state' && e.runId === paused.runId).at(-1)?.payload.state === 'completed', { label: 'the resumed run ended', timeoutMs: 10_000 });
+  const said = (await Promise.all((await messagesOf(paused.runId)).filter((m) => m.role === 'assistant').map(text))).join(' | ');
+  expect(said).toContain('Carry on where you left off.'); // Claude was asked to go on, not left where the pause stopped it
+  await human.close();
+}, 30_000);
+
+test('a turn the process begins during the grace after a run that was only an empty result gets a run of its own', async () => {
+  const booted = await boot();
+  const { client, events, session, messagesOf, text } = booted;
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'empty-then-self', prompt: 'zero-result-then-self' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run ended well inside the grace', timeoutMs: 5000 });
+  expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toBe('');
+  const reported = async () => {
+    for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && e.runId !== run.id).map((e) => e.runId))]) {
+      if ((await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'Background report.') return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'the report as a run of its own', timeoutMs: 5000 });
+}, 30_000);
+
+test('a run waiting on one of two questions of the main thread spends no active time once the other one\'s tool is done', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'two-main-asks', prompt: 'two-main-asks' });
+  const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state;
+  await waitFor(() => asked.length === 2, { label: 'both asked', timeoutMs: 5000 });
+  const first = asked.find((request) => JSON.stringify(request).includes('one.example'));
+  const second = asked.find((request) => JSON.stringify(request).includes('two.example'));
+  await client.call('permission.resolve', { permissionId: first.permissionId, decision: 'allow_once' });
+  await Bun.sleep(2500); // the first fetch is long done; the main thread only waits on the second question
+  expect(stateOf()).toBe('awaiting_permission');
+  await client.call('permission.resolve', { permissionId: second.permissionId, decision: 'allow_once' });
+  await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+}, 30_000);
+
+test('a turn the process begins while a run waits on a question counts against that run\'s budget', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'slow-turn', prompt: 'ask-then-slow-turn' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the budget ran out while the new turn thought', timeoutMs: 5000 });
+  expect(events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload.pauseReason).toBe('budget');
+}, 30_000);
+
+test('refusing one of two questions of the main thread leaves it waiting on the other, at no cost', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'two-main-asks', prompt: 'two-main-asks' });
+  const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state;
+  await waitFor(() => asked.length === 2, { label: 'both asked', timeoutMs: 5000 });
+  const first = asked.find((request) => JSON.stringify(request).includes('one.example'));
+  const second = asked.find((request) => JSON.stringify(request).includes('two.example'));
+  await client.call('permission.resolve', { permissionId: first.permissionId, decision: 'deny' });
+  await Bun.sleep(2500); // the main thread does not go back to the model: it waits on the second question
+  expect(stateOf()).toBe('awaiting_permission');
+  await client.call('permission.resolve', { permissionId: second.permissionId, decision: 'allow_once' });
+  await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+}, 30_000);
+
+test('a command the main thread runs without asking still counts while a background question is open', async () => {
+  const { client, events, session } = await boot();
+  await client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'work-bg-ask', prompt: 'work-then-bg-ask' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused'), { label: 'the budget ran out during the command', timeoutMs: 4000 });
+  expect(events.find((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'paused').payload.pauseReason).toBe('budget');
+}, 30_000);
+
+test('a turn the process begins beside an open question is not counted as a model call before it makes one', async () => {
+  const { client, events, session } = await boot();
+  // Two model calls are the run's own (before and after the subagent asked) and one is the turn the process begins.
+  // That turn's call counts once, when it is made, not also when the turn begins.
+  await client.call('settings.update', { budgets: { maxIterations: 3 } });
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event.payload); });
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'slow-turn-iterations', prompt: 'ask-then-slow-turn' });
+  const stateOf = () => events.filter((e) => e.type === 'run.state' && e.runId === run.id).at(-1)?.payload.state;
+  await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+  await Bun.sleep(1000); // the process's own turn has begun and is thinking
+  expect(stateOf()).toBe('awaiting_permission');
+  await client.call('permission.resolve', { permissionId: asked[0].permissionId, decision: 'allow_once' });
+  await waitFor(() => TERMINAL.includes(stateOf()), { label: 'the run ended', timeoutMs: 10_000 });
+  expect(stateOf()).toBe('completed');
+}, 30_000);
+
+test('a slash command Claude answers without the model ends with its empty result, without waiting for more', async () => {
+  const { runTo } = await boot();
+  await runTo('hello', 'hello');
+  const started = Date.now();
+  const run = await runTo('cost', '/cost');
+  expect(run.state).toBe('completed');
+  expect(Date.now() - started).toBeLessThan(5000); // not the empty-result grace that waits for an answer after it
+}, 30_000);
+
+test('what Claude replays after compacting is not shown again as the run\'s answer', async () => {
+  const { runTo, messagesOf, text } = await boot();
+  await runTo('hello', 'hello');
+  const run = await runTo('compacted', 'compact-then-answer');
+  expect(run.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ')).toBe('The fresh answer.');
+}, 30_000);
+
+test('a turn Claude begins by itself shows no message from the user, only its answer', async () => {
+  const { client, events, session, runTo, messagesOf, text } = await boot();
+  const launch = await runTo('launch', 'background 150 finished in the background');
+  const own = async () => {
+    for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && e.runId !== launch.id).map((e) => e.runId))]) {
+      if ((await client.call('run.snapshot', { runId: id })).run.state === 'completed') return id;
+    }
+    return null;
+  };
+  await waitFor(own, { label: 'Claude carried on', timeoutMs: 5000 });
+  const id = await own();
+  const messages = await messagesOf(id);
+  expect(messages.filter((m) => m.role === 'user')).toEqual([]);
+  expect((await Promise.all(messages.filter((m) => m.role === 'assistant').map(text))).join('')).toBe('finished in the background');
+  const page = await client.call('session.page', { sessionId: session.id });
+  expect(page.runs.find((run) => run.id === id).prompt).toBe('');
+  expect(page.messages.filter((m) => m.runId === id && m.role === 'user')).toEqual([]);
+  expect((await client.call('session.get', { sessionId: session.id }).catch(() => ({ session: page.session }))).session.title).not.toMatch(/carried on/);
+}, 30_000);
+
+test('stopping a turn stops the background work the process is running too, and the next message is answered', async () => {
+  const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+  const launch = await runTo('launch', 'background 1500 finished in the background');
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'stopped', prompt: 'slow 5000 never shown' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'model'), { label: 'the turn is under way', timeoutMs: 5000 });
+  await Bun.sleep(300);
+  await client.call('run.cancel', { runId: run.id });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'stopped', timeoutMs: 5000 });
+  await Bun.sleep(2500); // past when the background work would have reported
+  expect(new Set(events.filter((e) => e.type === 'run.state').map((e) => e.runId)).size).toBe(2); // no report: the work ended with the stop
+  const next = await runTo('next', 'hello');
+  expect((await Promise.all((await messagesOf(next.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/: hello$/);
+  expect(starts()).toHaveLength(1); // the same process answers on
+}, 30_000);
+
+test('a Jolo call made by a background agent\'s own subagent reports back and releases its run', async () => {
+  const { events, runTo } = await boot();
+  const launch = await runTo('launch', 'nested-background-jolo');
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId !== launch.id), { label: 'a run for the nested agent', timeoutMs: 5000 });
+  const holder = events.find((e) => e.type === 'run.state' && e.runId !== launch.id).runId;
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === holder && e.payload.state === 'completed'), { label: 'the run ended once the nested call reported', timeoutMs: 5000 });
+}, 30_000);
+
+test('a run that allowed one of Jolo\'s own tools stays live until the call reports back', async () => {
+  const booted = await boot();
+  const { client, events, runTo } = booted;
+  const launch = await runTo('launch', 'background-jolo 800');
+  // The subagent's question is allowed at once (Jolo's own tools never ask the user); the call then runs for a while.
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId !== launch.id), { label: 'a run for the subagent', timeoutMs: 5000 });
+  const holder = events.find((e) => e.type === 'run.state' && e.runId !== launch.id).runId;
+  await Bun.sleep(400);
+  expect(TERMINAL.includes(events.filter((e) => e.type === 'run.state' && e.runId === holder).at(-1)?.payload.state)).toBe(false); // the call can still find its run
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === holder && e.payload.state === 'completed'), { label: 'the run ended once the call reported', timeoutMs: 5000 });
+  void client;
+}, 30_000);
+
+test('with no window open, the engine stays up while an agent\'s background work runs, and stops once it is done', async () => {
+  const { engine, client, runTo } = await boot({ idleMs: 500 });
+  await runTo('launch', 'background 2500 finished in the background');
+  await client.close(); // the window closes; nothing else holds the engine
+  await Bun.sleep(1500);
+  expect(engine.child.exitCode).toBeNull(); // still up: the background work would die with it
+  await waitFor(() => engine.child.exitCode !== null, { label: 'the engine stopped after the work ended', timeoutMs: 10_000 });
+}, 30_000);
+
+test('a question from background work while Claude is idle gets a short run, whoever asks', async () => {
+  const booted = await boot();
+  const { client, events, runTo, messagesOf, text } = booted;
+  const asked = [];
+  client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+  const launch = await runTo('launch', 'background-net');
+  await waitFor(() => asked.length === 1, { label: 'the sandbox asked', timeoutMs: 5000 });
+  const holder = asked[0].runId;
+  await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === holder && e.payload.state === 'completed'), { label: 'the question run ended once answered', timeoutMs: 3000 });
+  const reported = async () => {
+    for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && ![launch.id, holder].includes(e.runId)).map((e) => e.runId))]) {
+      if ((await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'Network access: allow') return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'the server reported back', timeoutMs: 5000 });
+}, 30_000);
+
+describe('budgets and pauses count work, not waiting on the user', () => {
+  /** @param {string} prompt @param {any} budgets @param {{ clientKind?: string }} [options] */
+  const budgetRun = async (prompt, budgets, { clientKind } = {}) => {
+    const booted = await boot(clientKind ? { clientKind } : {});
+    await booted.client.call('settings.update', { budgets });
+    const asked = [];
+    booted.client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const { run } = await booted.client.call('run.start', { sessionId: booted.session.id, requestId: prompt, prompt });
+    const states = () => booted.events.filter((e) => e.type === 'run.state' && e.runId === run.id).map((e) => e.payload);
+    return { ...booted, run, asked, states, stateOf: () => states().at(-1)?.state };
+  };
+
+  test('a foreground subagent waiting on the user costs no active time', async () => {
+    const { client, asked, stateOf } = await budgetRun('foreground-agent-asks', { maxActiveMs: 1000 });
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    await Bun.sleep(2500);
+    expect(stateOf()).toBe('awaiting_permission');
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+  }, 30_000);
+
+  test('a command waiting behind one that asks is waiting on the user too', async () => {
+    const { client, asked, stateOf } = await budgetRun('two-tools-one-asks', { maxActiveMs: 1000 });
+    await waitFor(() => asked.length === 1, { label: 'the first command asked', timeoutMs: 5000 });
+    await Bun.sleep(2500);
+    expect(stateOf()).toBe('awaiting_permission');
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+  }, 30_000);
+
+  test('a model still streaming after one of its commands asked is still working', async () => {
+    const { asked, states } = await budgetRun('ask-while-streaming', { maxActiveMs: 1000 });
+    await waitFor(() => asked.length === 1, { label: 'the command asked', timeoutMs: 5000 });
+    await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the budget ran out while the model streamed', timeoutMs: 4000 });
+    expect(states().find((s) => s.state === 'paused').pauseReason).toBe('budget');
+  }, 30_000);
+
+  test('with nobody to ask, background work\'s question does not pause a main thread that is working', async () => {
+    const { engine, asked, stateOf } = await budgetRun('ask-and-work', { maxActiveMs: 60_000 }, { clientKind: 'headless' });
+    await waitFor(() => asked.length === 1, { label: 'the subagent asked', timeoutMs: 5000 });
+    await Bun.sleep(1500);
+    expect(stateOf()).toBe('awaiting_permission'); // still working, not paused
+    const human = await engine.connect({ clientKind: 'tui' });
+    await human.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 10_000 });
+    await human.close();
+  }, 30_000);
+
+  test('model calls that only use tools count against the iteration budget', async () => {
+    const { states } = await budgetRun('tool-loop', { maxIterations: 2 });
+    await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the iteration budget ran out', timeoutMs: 5000 });
+    expect(states().find((s) => s.state === 'paused').failure ?? '').toMatch(/iteration/);
+  }, 30_000);
+
+  test('each model call counts once: as many calls as the budget allows still finish', async () => {
+    const { stateOf } = await budgetRun('tool-loop', { maxIterations: 4 }); // three calls that read, then the answer
+    await waitFor(() => ['completed', 'paused'].includes(stateOf()), { label: 'the run ended', timeoutMs: 8000 });
+    expect(stateOf()).toBe('completed');
+  }, 30_000);
+
+  test('a question opened and answered partway through a model call does not count that call again', async () => {
+    const { client, asked, stateOf } = await budgetRun('ask-mid-call', { maxIterations: 1 });
+    await waitFor(() => asked.length === 1, { label: 'background work asked', timeoutMs: 5000 });
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => ['completed', 'paused'].includes(stateOf()), { label: 'the run ended', timeoutMs: 8000 });
+    expect(stateOf()).toBe('completed');
+  }, 30_000);
+
+  test('a call the binary dropped does not hold a tool deadline over the rest of the turn', async () => {
+    const { stateOf } = await budgetRun('lost-tool', { hostedToolDeadlineMs: 1000 });
+    await waitFor(() => ['completed', 'paused'].includes(stateOf()), { label: 'the run ended', timeoutMs: 8000 });
+    expect(stateOf()).toBe('completed');
+  }, 30_000);
+
+  test('allowing one question for the project answers the others it covers', async () => {
+    const { client, events, asked, stateOf } = await budgetRun('two-main-asks', {});
+    await waitFor(() => asked.length === 2, { label: 'both asked', timeoutMs: 5000 });
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_project' });
+    await waitFor(() => events.some((e) => e.type === 'permission.resolved' && e.payload.permissionId === asked[1].payload.permissionId), { label: 'the other question was answered too', timeoutMs: 3000 });
+    await waitFor(() => stateOf() === 'completed', { label: 'the run ended without asking again', timeoutMs: 5000 });
+  }, 30_000);
+
+  test('allowing background work for this run covers that work\'s next identical request', async () => {
+    const booted = await boot();
+    const asked = [];
+    booted.client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+    const launch = await booted.runTo('launch', 'background-asks-twice');
+    await waitFor(() => asked.length === 1, { label: 'the background work asked', timeoutMs: 5000 });
+    await booted.client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_run' });
+    const reported = async () => {
+      for (const id of [...new Set(booted.events.filter((e) => e.type === 'run.state' && e.runId !== launch.id).map((e) => e.runId))]) {
+        if ((await Promise.all((await booted.messagesOf(id)).filter((m) => m.role === 'assistant').map(booted.text))).join('') === 'Background agent finished: allow, allow') return true;
+      }
+      return false;
+    };
+    await waitFor(reported, { label: 'both requests allowed', timeoutMs: 5000 });
+    expect(asked).toHaveLength(1); // the second was not asked again
+  }, 30_000);
+
+  test('with nobody to ask, a turn the process begins inside a run held for a question pauses on its own question', async () => {
+    const { states } = await budgetRun('ask-then-main-turn-asks', {}, { clientKind: 'headless' });
+    await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the run paused on the new turn\'s question', timeoutMs: 5000 });
+    expect(states().find((s) => s.state === 'paused').pauseReason).toBe('permission');
+  }, 30_000);
+
+  test('a subagent\'s own subagent waiting on the user costs no active time', async () => {
+    const { client, asked, stateOf } = await budgetRun('nested-agent-asks', { maxActiveMs: 1000 });
+    await waitFor(() => asked.length === 1, { label: 'the nested subagent asked', timeoutMs: 5000 });
+    await Bun.sleep(2500);
+    expect(stateOf()).toBe('awaiting_permission');
+    await client.call('permission.resolve', { permissionId: asked[0].payload.permissionId, decision: 'allow_once' });
+    await waitFor(() => stateOf() === 'completed', { label: 'the run ended', timeoutMs: 5000 });
+  }, 30_000);
+
+  for (const nested of [false, true]) {
+    test(`background work asking${nested ? ' through a subagent of its own' : ''} while a foreground subagent works on does not stop the clock`, async () => {
+      const { asked, states } = await budgetRun(`bg-ask-beside-fg-work${nested ? ' nested' : ''}`, { maxActiveMs: 1000 });
+      await waitFor(() => asked.length === 1, { label: 'the background work asked', timeoutMs: 5000 });
+      await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the budget ran out while the subagent worked', timeoutMs: 4000 });
+      expect(states().find((s) => s.state === 'paused').pauseReason).toBe('budget');
+    }, 30_000);
+  }
+
+  test('one foreground subagent asking while another works on is still work', async () => {
+    const { asked, states } = await budgetRun('fg-ask-beside-fg-work', { maxActiveMs: 1000 });
+    await waitFor(() => asked.length === 1, { label: 'the first subagent asked', timeoutMs: 5000 });
+    await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the budget ran out while the second worked', timeoutMs: 4000 });
+    expect(states().find((s) => s.state === 'paused').pauseReason).toBe('budget');
+  }, 30_000);
+
+  test('with nobody to ask, a run pauses on the main thread\'s own question, not a background one', async () => {
+    const { states, asked } = await budgetRun('main-then-background-asks', {}, { clientKind: 'headless' });
+    await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the run paused', timeoutMs: 5000 });
+    const paused = states().find((s) => s.state === 'paused');
+    const main = asked.find((event) => JSON.stringify(event.payload).includes('echo main'));
+    expect(paused.permissionId).toBe(main.payload.permissionId);
+  }, 30_000);
+});
+
+test('allowing a foreground subagent for this run covers the run, and only this run', async () => {
+  const { client, runTo, messagesOf, text } = await boot();
+  const asked = [];
+  client.onEvent((event) => {
+    if (event.type !== 'permission.requested') return;
+    asked.push(event);
+    void client.call('permission.resolve', { permissionId: event.payload.permissionId, decision: 'allow_run' });
+  });
+  const first = await runTo('first', 'fg-ask-twice');
+  expect(asked).toHaveLength(1); // the main thread's identical request beside it was covered within the run
+  const said = async (run) => (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('');
+  expect(await said(first)).toBe('Asked: allow, allow');
+  const second = await runTo('second', 'fg-ask-twice');
+  expect(asked).toHaveLength(2); // the next run asks again
+  expect(await said(second)).toBe('Asked: allow, allow');
+}, 30_000);
+
+test('allowing background work for this run covers the helpers it runs, but not another background agent', async () => {
+  const booted = await boot();
+  const asked = [];
+  booted.client.onEvent((event) => {
+    if (event.type !== 'permission.requested') return;
+    asked.push(event);
+    void booted.client.call('permission.resolve', { permissionId: event.payload.permissionId, decision: asked.length === 1 ? 'allow_run' : 'allow_once' });
+  });
+  const launch = await booted.runTo('launch', 'background-scopes');
+  const reported = async () => {
+    for (const id of [...new Set(booted.events.filter((e) => e.type === 'run.state' && e.runId !== launch.id).map((e) => e.runId))]) {
+      if ((await Promise.all((await booted.messagesOf(id)).filter((m) => m.role === 'assistant').map(booted.text))).join('') === 'Agents finished: allow, allow, allow') return true;
+    }
+    return false;
+  };
+  await waitFor(reported, { label: 'every agent was answered', timeoutMs: 8000 });
+  expect(asked).toHaveLength(2); // the helper was covered; the other agent was asked itself
+}, 30_000);
+
+test('a background agent launched in an earlier turn, asking beside a working foreground subagent, does not stop the clock', async () => {
+  const booted = await boot();
+  const asked = [];
+  booted.client.onEvent((event) => { if (event.type === 'permission.requested') asked.push(event); });
+  await booted.runTo('launch', 'launch-bg-agent');
+  await booted.client.call('settings.update', { budgets: { maxActiveMs: 1000 } });
+  const { run } = await booted.client.call('run.start', { sessionId: booted.session.id, requestId: 'work', prompt: 'fg-work-then-old-bg-asks' });
+  const states = () => booted.events.filter((e) => e.type === 'run.state' && e.runId === run.id).map((e) => e.payload);
+  await waitFor(() => asked.length === 1, { label: 'the earlier background agent asked', timeoutMs: 5000 });
+  await waitFor(() => states().some((s) => s.state === 'paused'), { label: 'the budget ran out while the subagent worked', timeoutMs: 4000 });
+  expect(states().find((s) => s.state === 'paused').pauseReason).toBe('budget');
+}, 30_000);
+
+test('a standing answer resumes the other runs paused on the question it answered', async () => {
+  const booted = await boot({ clientKind: 'headless' });
+  const { client, events, project } = booted;
+  const other = (await client.call('session.create', { projectId: project.projectId, workspaceId: project.workspaceId, title: 'other', agentId: 'claude' })).session;
+  const paused = (runId) => events.some((e) => e.type === 'run.state' && e.runId === runId && e.payload.state === 'paused');
+  const one = (await client.call('run.start', { sessionId: booted.session.id, requestId: 'one', prompt: 'run echo shared' })).run;
+  await waitFor(() => paused(one.id), { label: 'the first run paused', timeoutMs: 8000 });
+  const two = (await client.call('run.start', { sessionId: other.id, requestId: 'two', prompt: 'run echo shared' })).run;
+  await waitFor(() => paused(two.id), { label: 'the second run paused', timeoutMs: 8000 });
+  const human = await booted.engine.connect({ clientKind: 'tui' });
+  const first = events.find((e) => e.type === 'run.state' && e.runId === one.id && e.payload.state === 'paused').payload.permissionId;
+  await human.call('permission.resolve', { permissionId: first, decision: 'allow_project' });
+  const completed = (runId) => events.some((e) => e.type === 'run.state' && e.runId === runId && e.payload.state === 'completed');
+  await waitFor(() => completed(one.id) && completed(two.id), { label: 'both runs went on', timeoutMs: 10_000 });
+  await human.close();
+}, 30_000);
+
+test('a message the user\'s own hook blocks right after a turn the process began by itself still shows the reason', async () => {
+  const { runTo, messagesOf, text } = await boot();
+  await runTo('hello', 'hello');
+  const run = await runTo('blocked', 'race-self-blocked');
+  expect(run.state).toBe('completed');
+  const said = (await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ');
+  expect(said).toContain('A background task finished first.');
+  expect(said).toContain('Blocked by your hook: the message contains a secret.');
+}, 30_000);
+
+test('a message the user\'s own hook blocks ends at once, with the reason', async () => {
+  const { runTo, messagesOf, text } = await boot();
+  await runTo('hello', 'hello');
+  const started = Date.now();
+  const run = await runTo('blocked', 'hook-blocked');
+  expect(Date.now() - started).toBeLessThan(5000); // not the grace kept for an answer that follows an empty result
+  expect(run.state).toBe('completed');
+  expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toBe('Blocked by your hook: the message contains a secret.');
+}, 30_000);
+
+test('a run that only answered background work\'s question, by policy, finishes quietly', async () => {
+  const { events, runTo } = await boot();
+  const launch = await runTo('launch', 'background-read');
+  await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId !== launch.id && e.payload.state === 'completed'), { label: 'the question run ended', timeoutMs: 5000 });
+  const ended = events.find((e) => e.type === 'run.state' && e.runId !== launch.id && e.payload.state === 'completed');
+  expect(ended.payload.quiet).toBe(true);
+  expect(events.find((e) => e.type === 'run.state' && e.runId === launch.id && e.payload.state === 'completed').payload.quiet).toBeUndefined();
+}, 30_000);
+
+describe('slash commands and the task\'s own choices inside a kept process', () => {
+  test('a local command\'s output is shown once, and not again by the compaction after it', async () => {
+    const { runTo, messagesOf, text } = await boot();
+    await runTo('hello', 'hello');
+    const cost = await runTo('cost', '/cost');
+    expect((await Promise.all((await messagesOf(cost.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ')).toBe('Total cost: $0.0042');
+    const compacted = await runTo('compact', '/compact');
+    expect((await Promise.all((await messagesOf(compacted.id)).filter((m) => m.role === 'assistant').map(text))).join(' | ')).toBe('Context compacted.');
+  }, 30_000);
+
+  test('a run that made no model call reports no context size of its own', async () => {
+    const { client, runTo } = await boot();
+    await runTo('hello', 'hello');
+    const cost = await runTo('cost', '/cost');
+    expect((await client.call('run.snapshot', { runId: cost.id })).run.usage.contextWindow ?? null).toBeNull();
+  }, 30_000);
+
+  test('Claude\'s own /model is answered by Jolo, pointing to its model menu, and never reaches the process', async () => {
+    const { runTo, messagesOf, text, starts } = await boot();
+    const run = await runTo('model', '/model sonnet');
+    expect(run.state).toBe('completed');
+    expect((await Promise.all((await messagesOf(run.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/model menu in Jolo/);
+    expect(starts()).toHaveLength(0);
+  }, 30_000);
+
+  test('asking Claude for /model after picking another model leaves the work its process runs alone', async () => {
+    // The model is passed on the command line, so another model means another process.
+    const { client, events, session, runTo, messagesOf, text, starts } = await boot({ manifest: { modelArgs: ['--model', '{model}'] } });
+    const launch = await runTo('launch', 'background 1500 finished in the background');
+    const { session: current } = await client.call('session.page', { sessionId: session.id });
+    await client.call('session.setAgentModel', { sessionId: session.id, model: 'fable', effort: null, expectedRevision: current.revision });
+    const asked = await runTo('model', '/model');
+    expect(asked.state).toBe('completed');
+    expect(alive(starts()[0])).toBe(true); // the background work is still running
+    const reported = async () => {
+      for (const id of [...new Set(events.filter((e) => e.type === 'run.state' && ![launch.id, asked.id].includes(e.runId)).map((e) => e.runId))]) {
+        if ((await Promise.all((await messagesOf(id)).filter((m) => m.role === 'assistant').map(text))).join('') === 'finished in the background') return true;
+      }
+      return false;
+    };
+    await waitFor(reported, { label: 'the background work reported back', timeoutMs: 8000 });
+  }, 30_000);
+
+  test('a turn Claude begins by itself runs on the model the user picked for the task', async () => {
+    const { client, events, session, runTo } = await boot();
+    await client.call('session.setAgentModel', { sessionId: session.id, model: 'fable', effort: null, expectedRevision: session.revision });
+    const launch = await runTo('launch', 'background 150 finished in the background');
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId !== launch.id && e.payload.state === 'completed'), { label: 'Claude carried on', timeoutMs: 5000 });
+    const own = events.find((e) => e.type === 'run.state' && e.runId !== launch.id).runId;
+    expect((await client.call('run.snapshot', { runId: own })).run.execution?.model).toBe('fable');
+  }, 30_000);
+
+  test('removing a folder closes the agent processes of the tasks it archives', async () => {
+    const { client, project, runTo, starts } = await boot();
+    await runTo('hello', 'hello');
+    expect(alive(starts()[0])).toBe(true);
+    await client.call('project.remove', { projectId: project.projectId });
+    await waitFor(() => !alive(starts()[0]), { label: 'the process closed with its task', timeoutMs: 5000 });
+  }, 30_000);
+});
+
