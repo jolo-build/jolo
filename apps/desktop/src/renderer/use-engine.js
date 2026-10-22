@@ -487,7 +487,8 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     projection: projection.current,
     history: history.current,
     activeRun: activeRun(),
-    queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued') : [],
+    // A turn Claude began by itself is not a message the user queued.
+    queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued' && (run.prompt || run.promptPreview)) : [],
     usageFor: usageSummary, taskAgents,
     pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
     board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,

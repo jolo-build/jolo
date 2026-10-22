@@ -1,11 +1,12 @@
 import { ProtocolError } from '@jolo/protocol';
 import { newId } from '../storage/index.js';
+import { liveRunFor } from '../rpc/capabilities.js';
 
 /** Browser access uses the run in the credential, never a model-supplied run id. */
 export function browserCallHandler({ storage, runs, dispatcher, settingsService }) {
   const pending = new Map();
   return async ({ workspaceId, name, arguments: args }, conn) => {
-    const runId = conn.capability?.runId;
+    const runId = liveRunFor(runs, storage, conn.capability);
     const active = runs.active.get(runId);
     const run = runId && storage.getRun(runId);
     const session = run && storage.getSession(run.sessionId);

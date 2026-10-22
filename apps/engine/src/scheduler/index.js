@@ -14,6 +14,7 @@
 // permission-waiting run is not a turn in progress, so it never holds a beat back.
 import { ProtocolError, SCHEDULE_LIMITS } from "@jolo/protocol";
 import { newId } from "../storage/records.js";
+import { withTaskChoice } from "../agents/hosted.js";
 
 const MAX_REARM_MS = 60_000; // self-heal bound; normally the timer lands exactly on the next slot
 const ERROR_REARM_MS = 5_000; // a failed fire leaves its slot in the past; without a floor the pump tight-loops
@@ -100,7 +101,7 @@ export function createScheduler({ storage, runs, lifetime, log, nowMs = () => Da
           return;
         }
         try {
-          const { run } = runs.start({ sessionId: current.sessionId, requestId: newId("sch"), prompt: `${HEARTBEAT_PREFIX}\n\n${current.prompt}` });
+          const { run } = runs.start({ sessionId: current.sessionId, requestId: newId("sch"), prompt: `${HEARTBEAT_PREFIX}\n\n${current.prompt}`, execution: withTaskChoice(session) });
           const updated = storage.advanceSchedule(current.id, { nextFireAt, runId: run.id });
           storage.appendEvent({ sessionId: current.sessionId, runId: run.id, type: "schedule.fired", payload: { scheduleId: current.id, runId: run.id, fireCount: updated.fireCount } });
           publish(updated);

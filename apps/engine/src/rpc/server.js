@@ -10,6 +10,8 @@ import {
 const HANDSHAKE_DEADLINE_MS = 5_000;
 const OUTBOUND_MAX_BYTES = 512 * 1024;
 const MAX_SCOPED_CLIENTS = 8;
+/** A conversation's kept agent process holds one bridge for as long as it lives; those are counted on their own. */
+const MAX_CONVERSATION_CLIENTS = 64;
 const CONTROL_KINDS = new Set(["control"]);
 
 function tokenMatches(expected, supplied) {
@@ -62,7 +64,9 @@ export function createRpcServer(options) {
     return send(conn, { jsonrpc: "2.0", id, error: toRpcError(error) });
   };
 
-  const authenticatedCount = (control, scoped = false) => [...connections].filter((c) => c.authenticated && Boolean(c.capability) === scoped && CONTROL_KINDS.has(c.kind) === control).length;
+  /** owner: a client with the endpoint token; scoped: a run's credential; conversation: a kept process's credential. */
+  const classOf = (capability) => (!capability ? "owner" : capability.sessionId ? "conversation" : "scoped");
+  const authenticatedCount = (control, kind = "owner") => [...connections].filter((c) => c.authenticated && classOf(c.capability) === kind && CONTROL_KINDS.has(c.kind) === control).length;
 
   const handleHello = (conn, params) => {
     if (conn.authenticated) throw new ProtocolError("conflict", "already authenticated");
@@ -76,8 +80,9 @@ export function createRpcServer(options) {
       throw new ProtocolError("version_mismatch", `engine protocol ${PROTOCOL_VERSION.major}.${PROTOCOL_VERSION.minor}, client ${params.protocol.major}.${params.protocol.minor}`, { engine: PROTOCOL_VERSION });
     }
     const control = !capability && CONTROL_KINDS.has(params.clientKind);
-    const limit = capability ? MAX_SCOPED_CLIENTS : control ? LIMITS.maxControlClients : LIMITS.maxClients;
-    if (authenticatedCount(control, Boolean(capability)) >= limit) {
+    const kind = classOf(capability);
+    const limit = kind === "conversation" ? MAX_CONVERSATION_CLIENTS : kind === "scoped" ? MAX_SCOPED_CLIENTS : control ? LIMITS.maxControlClients : LIMITS.maxClients;
+    if (authenticatedCount(control, kind) >= limit) {
       throw new ProtocolError("limit_exceeded", "client limit reached; accepted work continues", { limit });
     }
     conn.authenticated = true;
@@ -207,7 +212,7 @@ export function createRpcServer(options) {
   previews.on("preview", onPreview);
 
   const server = net.createServer((socket) => {
-    if (closing || connections.size >= LIMITS.maxClients + LIMITS.maxControlClients + MAX_SCOPED_CLIENTS + 8) { socket.destroy(); return; }
+    if (closing || connections.size >= LIMITS.maxClients + LIMITS.maxControlClients + MAX_SCOPED_CLIENTS + MAX_CONVERSATION_CLIENTS + 8) { socket.destroy(); return; }
     const conn = { socket, authenticated: false, kind: null, build: null, subscription: null, pendingBytes: 0, closed: false, handshakeTimer: null, closeHooks: new Set(), notify: (method, params) => send(conn, { jsonrpc: "2.0", method, params }) };
     connections.add(conn);
     conn.inFlight = 0;

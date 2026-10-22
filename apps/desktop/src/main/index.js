@@ -169,6 +169,8 @@ function createWindow() {
   const window = new BrowserWindow({
     width: 1280,
     height: 860,
+    minWidth: 460,
+    minHeight: 400,
     show: false,
     backgroundColor: backgroundColor(),
     title: "Jolo",
@@ -250,7 +252,7 @@ function registerIpc(window, bridge, visualizations, releases, filePreviews) {
     if (!trusted(event)) throw new Error("untrusted project menu request");
     return new Promise((resolve) => {
       let action = null;
-      Menu.buildFromTemplate([{ label: "Remove from sidebar…", click: () => { action = "remove"; } }]).popup({ window, callback: () => resolve(action) });
+      Menu.buildFromTemplate([{ label: "Remove folder…", click: () => { action = "remove"; } }]).popup({ window, callback: () => resolve(action) });
     });
   });
   // The composer's "who answers" picker: Jolo with its model, or a hosted agent that speaks a structured protocol.
@@ -374,7 +376,7 @@ app.whenReady().then(async () => {
       beforeInstall: async () => {
         try { await bridge.rawCall('engine.reload', {}); }
         catch (error) {
-          if (error.code === 'conflict') throw new Error('Finish active tasks and close terminal panels before restarting to update.');
+          if (error.code === 'conflict') throw new Error("Wait for active tasks and agents' background work to finish, and close terminal panels, before restarting to update.");
           throw error;
         }
         await bridge.close();

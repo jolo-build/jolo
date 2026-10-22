@@ -33,3 +33,21 @@ test('vendor grandchildren are terminated even when the engine is killed abruptl
     for (const pid of pids) if (alive(pid)) try { process.kill(pid, 'SIGKILL'); } catch {}
   }
 }, 10000);
+
+test('a burst of output faster than the reader steps is read in full, while a reader that stops reading still fails', async () => {
+  // Thousands of lines at once, as a streamed answer arrives after a busy moment: everything is buffered before the reader runs.
+  const burst = `for (let i = 0; i < 6000; i++) console.log(JSON.stringify({ type: 'stream_event', i })); setInterval(() => {}, 1000);`;
+  const spawn = () => spawnLineChild({ argv: [process.execPath, '--eval', burst], cwd: process.cwd(), env: { PATH: process.env.PATH }, signal: new AbortController().signal, log: { warn() {} }, agentId: 'test' });
+  const live = spawn();
+  let read = 0;
+  for await (const message of live.messages()) {
+    for (let hop = 0; hop < 8; hop++) await null; // a reader handing each message on through a few async steps
+    if (++read === 6000) { expect(message.i).toBe(5999); break; }
+  }
+  await live.settle();
+
+  // A reader that stops for longer than a moment (waiting on something else) is not waited for.
+  const stuck = spawn();
+  await expect((async () => { for await (const _ of stuck.messages()) await Bun.sleep(1500); })()).rejects.toThrow('queue exceeded limit');
+  await stuck.settle();
+}, 10_000);

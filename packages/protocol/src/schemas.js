@@ -550,7 +550,7 @@ export const EventPayloadSchemas = Object.freeze({
   "session.created": z.object({ session: SessionSchema }),
   "session.updated": z.object({ session: SessionSchema }),
   "session.deleted": z.object({ sessionId: Id, projectId: Id }),
-  "run.state": z.object({ state: RunStateSchema, revision: Revision, pauseReason: PauseReasonSchema.nullable().optional(), failure: z.string().nullable().optional(), permissionId: Id.nullable().optional(), attempt: z.number().int().positive().optional(), agentId: Id.nullable().optional(), promptPreview: z.string().max(500).optional(), attachments: ImageAttachmentsSchema.optional(), taskReferences: z.array(TaskReferenceSummarySchema).max(4).optional() }),
+  "run.state": z.object({ state: RunStateSchema, revision: Revision, quiet: z.boolean().optional(), pauseReason: PauseReasonSchema.nullable().optional(), failure: z.string().nullable().optional(), permissionId: Id.nullable().optional(), attempt: z.number().int().positive().optional(), agentId: Id.nullable().optional(), promptPreview: z.string().max(500).optional(), attachments: ImageAttachmentsSchema.optional(), taskReferences: z.array(TaskReferenceSummarySchema).max(4).optional() }),
   "terminal.opened": z.object({ terminalId: Id, workspaceId: Id, keepAlive: z.boolean() }),
   "context.compacted": z.object({ checkpointId: Id, throughOrdinal: z.number().int().nonnegative(), summarizedItems: z.number().int().nonnegative(), summaryBytes: z.number().int().nonnegative(), estimatedTokensBefore: z.number().int().nonnegative(), estimatedTokensAfter: z.number().int().nonnegative(), reason: z.string().max(200) }),
   "terminal.closed": z.object({ terminalId: Id, workspaceId: Id, reason: z.string() }),

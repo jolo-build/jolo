@@ -418,10 +418,13 @@ export function Composer({ onCompact = null, usageTabs = [], standalone = false,
     <input ref={fileInput} type="file" multiple hidden aria-label="Choose attachments" onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
     <div className="composer-controls">
       <button type="button" disabled={disabled || sending} aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Icon name="plus" size={15} /></button>
-      {/* The project is in the window's title; the bar names only changes waiting for review. */}
-      {changesCount ? <div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div> : null}
-      <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} onCompact={onCompact} />
-      {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}<span className="grow" />
+      {/* The project is in the window's title; the bar names only changes waiting for review. A narrow chat moves this group below the box. */}
+      <div className="composer-meta">
+        {changesCount ? <div className="composer-context"><button type="button" onClick={onReview} title="Review current changes"><Icon name="changes" size={13} /><span>{changesCount} {changesCount === 1 ? 'file' : 'files'}</span></button></div> : null}
+        <UsageButton tabs={usageTabs} currentId={answererId ?? 'jolo'} running={Boolean(running)} onCompact={onCompact} />
+        {modelControl ?? <button type="button" className="model-select" onClick={onPickAnswerer ?? onSettings} aria-label="Choose agent" title={answerer ? `Answering: ${answerer}. Click to choose an agent.` : "Choose an agent"}><span>{answerer ?? model}</span><Icon name="down" size={12} /></button>}
+      </div>
+      <span className="grow" />
       {running ? <button type="button" className="stop-button composer-submit" onClick={onStop} aria-label="Stop task" title="Working · Stop task">
         <StopIndicator />
       </button> : null}

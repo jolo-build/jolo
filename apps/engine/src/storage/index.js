@@ -309,7 +309,10 @@ export class Storage {
   setSessionAgent(id, agentId) {
     // Native continuation IDs belong to one agent. A switch starts that agent
     // with the shared transcript, while retaining the Jolo session itself.
-    const handoff = this.getSession(id)?.agentState?._jolo;
+    // What each dropped thread was told goes with it: a new thread starts from the whole shared transcript. Jolo's own
+    // transcript stays, and so does what it was told.
+    const kept = this.getSession(id)?.agentState?._jolo;
+    const handoff = kept && { ...kept, seen: kept.seen?.jolo !== undefined ? { jolo: kept.seen.jolo } : {}, carriedOn: {} };
     // A model chosen for the last agent means nothing to the next.
     this.db.query("UPDATE sessions SET agent_id = ?1, agent_state = ?2, agent_model = NULL, updated_at = ?3, revision = revision + 1 WHERE id = ?4").run(agentId, JSON.stringify(handoff ? { _jolo: handoff } : {}), now(), id);
     return this.getSession(id);
@@ -533,6 +536,10 @@ export class Storage {
     this.db.query("INSERT INTO preferences (key, version, value) VALUES (?1, 1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = preferences.version + 1").run(key, JSON.stringify(value));
   }
 
+  deletePreference(key) {
+    this.db.query("DELETE FROM preferences WHERE key = ?1").run(key);
+  }
+
   // ---- conversation items (provider-facing transcript) ------------------------------------
 
   insertItem({ sessionId, runId = null, kind, groupId, payload, messageId = null, invocationId = null, payloadArtifactId = null }) {
@@ -678,6 +685,9 @@ export class Storage {
   resolvePermission(...args) { return this.permissionRepository.resolvePermission(...args); }
 
   pendingPermissionForRun(...args) { return this.permissionRepository.pendingPermissionForRun(...args); }
+  pendingPermissionsForRun(...args) { return this.permissionRepository.pendingPermissionsForRun(...args); }
+  pendingPermissionsForWorkspace(...args) { return this.permissionRepository.pendingPermissionsForWorkspace(...args); }
+  withdrawPermission(...args) { return this.permissionRepository.withdrawPermission(...args); }
 
   pendingPermissionsForSession(...args) { return this.permissionRepository.pendingPermissionsForSession(...args); }
 
@@ -734,11 +744,13 @@ export class Storage {
     return this.getMessage(id);
   }
 
-  listMessagesForSession(sessionId, { beforeOrdinal = Number.MAX_SAFE_INTEGER, afterOrdinal = -1, limit, handoffKind = null, excludeRunId = null }) {
+  /** `hideUserMessagesOf`: a request id prefix whose runs' user messages are left out, as stand-ins nobody wrote. */
+  listMessagesForSession(sessionId, { beforeOrdinal = Number.MAX_SAFE_INTEGER, afterOrdinal = -1, limit, handoffKind = null, excludeRunId = null, excludeRunIds = [], hideUserMessagesOf = null }) {
     // Filter before pagination: a long tool run must not hide the preceding review.
     const handoffFilter = handoffKind === 'conversation' ? " AND kind != 'reasoning' AND role != 'tool' AND committed_bytes > 0"
       : handoffKind === 'tool' ? " AND kind != 'reasoning' AND role = 'tool' AND committed_bytes > 0" : '';
-    const rows = this.db.query(`SELECT * FROM messages WHERE session_id = ?1 AND ordinal < ?2 AND ordinal > ?3 AND (?5 IS NULL OR run_id IS NULL OR run_id != ?5)${handoffFilter} ORDER BY ordinal DESC LIMIT ?4`).all(sessionId, beforeOrdinal, afterOrdinal, limit + 1, excludeRunId);
+    // Runs left out are left out before the page is cut, so they cannot push what is kept off it.
+    const rows = this.db.query(`SELECT * FROM messages WHERE session_id = ?1 AND ordinal < ?2 AND ordinal > ?3 AND (?5 IS NULL OR run_id IS NULL OR run_id != ?5) AND (run_id IS NULL OR run_id NOT IN (SELECT value FROM json_each(?6))) AND (?7 IS NULL OR role != 'user' OR run_id IS NULL OR run_id NOT IN (SELECT id FROM runs WHERE session_id = ?1 AND substr(request_id, 1, length(?7)) = ?7))${handoffFilter} ORDER BY ordinal DESC LIMIT ?4`).all(sessionId, beforeOrdinal, afterOrdinal, limit + 1, excludeRunId, JSON.stringify(excludeRunIds), hideUserMessagesOf);
     const hasOlder = rows.length > limit;
     return { messages: rows.slice(0, limit).reverse().map(mapMessage), hasOlder };
   }

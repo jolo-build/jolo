@@ -18,6 +18,7 @@ import { currentModelLabel, parseModelCommand } from "./model-config.js";
 import { SessionMenu } from "./sessions.jsx";
 import { parseSessionCommand } from "../sessions.js";
 import { sessionLoader } from "./session-loader.js";
+import { applyPermissionEvent, finished, seedPermissions, touchesPermissions } from "./permission-queue.js";
 import { ThemeMenu } from "./themes.jsx";
 import { parseThemeCommand, executeThemeCommand } from "../themes/commands.js";
 import { createThemeStore } from "../themes/store.js";
@@ -51,7 +52,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const sessionRef = useRef(initialSession);
   const [promptState, dispatchPrompt] = useReducer(promptReducer, undefined, createPromptState);
   const input = promptState.value;
-  const [permission, setPermission] = useState(null);
+  // Every request of this chat still waiting on the user; the oldest is the one shown.
+  const [permissions, setPermissions] = useState([]);
+  const permission = permissions[0] ?? null;
   const [status, setStatus] = useState(initialStatus);
   const [showTools, setShowTools] = useState(false);
   const [changes, setChanges] = useState([]);
@@ -89,21 +92,17 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
 
   useEffect(() => {
     let disposed = false;
-    let permissionChanges = 0;
+    const settled = new Set(); // requests settled while the snapshot loads, which it may still list
     const loader = initialSession ? sessionLoader({
       client, sessionId: initialSession.id, projection,
       onPage(page) {
-        dispatchPrompt({ type: "seed", prompts: page.runs.map((run) => run.prompt) });
+        dispatchPrompt({ type: "seed", prompts: page.runs.map((run) => run.prompt).filter(Boolean) });
         setLoadingSession(false);
         if (page.hasOlder) setStatus("Showing the most recent messages in this session.");
         for (const m of page.messages) if (m.committedBytes > 0) void projection.fill(m.id);
-        if ([...projection.runs.values()].some((run) => run.state === "awaiting_permission")) {
-          const before = permissionChanges;
-          void client.call("board.list", {}).then(({ projects }) => {
-            if (disposed || permissionChanges !== before) return;
-            const pending = projects.find((row) => row.run?.sessionId === initialSession.id)?.pendingPermission;
-            if (pending) { setPermission(pending); setWelcomeOpen(false); }
-          }).catch((error) => { if (!disposed) setStatus(error.message); });
+        if (page.pendingPermissions?.length) {
+          setPermissions((queue) => seedPermissions(queue, page.pendingPermissions, settled, (runId) => finished(projection.runs.get(runId)?.state)));
+          setWelcomeOpen(false);
         }
       },
       onError(error) { setStatus(error.message); },
@@ -116,8 +115,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         onChooseAgent(event.payload.session.agentId ?? null);
       }
       if (loader) loader.event(event); else projection.applyEvent(event);
-      if (event.type === "permission.requested") { permissionChanges++; setPermission(event.payload); setWelcomeOpen(false); }
-      if (event.type === "permission.resolved") { permissionChanges++; setPermission((p) => (p && p.permissionId === event.payload.permissionId ? null : p)); }
+      if (event.type === "permission.resolved") settled.add(event.payload.permissionId);
+      if (event.type === "permission.requested") setWelcomeOpen(false);
+      if (touchesPermissions(event)) setPermissions((queue) => applyPermissionEvent(queue, event));
       if (event.type === "files.changed") setChanges((list) => [...list, ...event.payload.changes].slice(-50));
       if (event.type === "run.verification") setStatus(`verification: ${event.payload.status}`);
     });
@@ -224,7 +224,12 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     if (/^\[\?\d+u$/.test(chunk)) return;
     if (permission) {
       const decision = { 1: "deny", 2: "allow_once", 3: "allow_run", 4: "allow_project" }[chunk];
-      if (decision) client.call("permission.resolve", { permissionId: permission.permissionId, decision }).then(() => setPermission(null)).catch((error) => setStatus(error.message));
+      if (decision) {
+        const { permissionId } = permission;
+        const drop = () => setPermissions((queue) => queue.filter((request) => request.permissionId !== permissionId));
+        // Already settled elsewhere, or lapsed with its run: it is not waiting on anyone, so it must not hold the prompt.
+        client.call("permission.resolve", { permissionId, decision }).then(drop).catch((error) => { setStatus(error.message); if (error.code === "conflict" || error.code === "not_found") drop(); });
+      }
       return;
     }
     if (themeBusy) return;
@@ -291,7 +296,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const width = Math.max(8, columns - 2);
   const run = activeRun() ?? lastRun();
   const { batch, live } = useNativeTranscript({ projection, revision, opened: !welcomeOpen, width, showTools, permission });
-  const queuedRuns = [...projection.runs.values()].filter(run => run.state === "queued");
+  const queuedRuns = [...projection.runs.values()].filter(run => run.state === "queued" && (run.prompt || run.promptPreview)); // not Claude's own turns
   const queueRows = rows >= 16 ? Math.min(3, queuedRuns.length) : 0;
   const commandRows = commands.length ? Math.min(5, commands.length, Math.max(1, rows - 9)) : 0;
   const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows));
