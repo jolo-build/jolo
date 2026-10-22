@@ -66,21 +66,27 @@ export function migrate(db, source, { now = () => new Date().toISOString(), befo
       .map((name) => ({ version: Number.parseInt(name.slice(0, 4), 10), name, sql: readFileSync(path.join(/** @type {string} */ (source), name), "utf8") }));
   const applied = db.query("SELECT version, name, checksum FROM schema_migrations ORDER BY version").all();
   const maxKnown = known.at(-1)?.version ?? 0;
+  const appliedSql = new Map();
+  const alreadyApplied = (migration) => applied.some(row => row.version === migration.alreadyAppliedAs && row.checksum === checksum(migration.sql));
   let verifyCompatibility = false;
   for (const row of applied) {
     if (row.version > maxKnown) throw new SchemaError(`database schema version ${row.version} is newer than the supported ${maxKnown}`);
     const match = known.find((m) => m.version === row.version);
     if (!match || checksum(match.sql) !== row.checksum) {
-      if (!match?.compatibleChecksums?.includes(row.checksum)) throw new SchemaError(`applied migration ${row.version} does not match this build`);
+      const variant = match?.historicalVariants?.find(entry => entry.name === row.name && checksum(entry.sql) === row.checksum);
+      if (!variant && !match?.compatibleChecksums?.includes(row.checksum)) throw new SchemaError(`applied migration ${row.version} does not match this build`);
+      if (variant) appliedSql.set(row.version, variant.sql);
       verifyCompatibility = true;
     }
   }
   if (verifyCompatibility) {
-    // Only explicitly recognized historical text can reach this path. Verify its actual tables and
-    // indexes against a fresh schema before accepting it, without rewriting the migration ledger.
+    // Reconstruct the exact recognized history, including versions reused by a development branch.
+    // Verify tables and indexes without rewriting the original migration ledger.
     const expected = new Database(':memory:');
     try {
-      for (const migration of known) if (applied.some(row => row.version === migration.version)) expected.exec(migration.sql);
+      for (const migration of known) {
+        if (applied.some(row => row.version === migration.version) && !alreadyApplied(migration)) expected.exec(appliedSql.get(migration.version) ?? migration.sql);
+      }
       const actual = new Map(db.query('SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL').all().map(row => [row.name, row.sql]));
       for (const row of expected.query('SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL').all()) {
         if (actual.get(row.name) !== row.sql) throw new SchemaError(`historical migration schema differs at ${row.name}`);
@@ -90,7 +96,7 @@ export function migrate(db, source, { now = () => new Date().toISOString(), befo
   const pending = known.filter(migration => !applied.some(row => row.version === migration.version));
   if (applied.length && pending.length) beforeMigrate({ from: applied.at(-1).version, to: maxKnown });
   const apply = db.transaction((migration) => {
-    db.exec(migration.sql);
+    if (!alreadyApplied(migration)) db.exec(migration.sql);
     db.query("INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?1, ?2, ?3, ?4)").run(migration.version, migration.name, checksum(migration.sql), now());
   });
   let appliedNow = 0;
