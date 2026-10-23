@@ -149,9 +149,9 @@ const enqueue = (work) => { queue = queue.then(work).catch((error) => { process.
 /** A notice of finished background work, queued as the real binary queues it: uuid-less, so cancel_queued drops it too. */
 const enqueueNotice = (work) => { const entry = { cancelled: false, notice: true }; waiting.push(entry); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (!entry.cancelled) await work(); }); };
 
-/** A turn the binary starts by itself, as it does when a background task it launched finishes: a notice, then a turn. */
-const selfStartedTurn = async (text) => {
-  out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+/** A turn the binary starts by itself, as it does when background tasks it launched finish: their notices, then a turn. */
+const selfStartedTurn = async (text, taskIds = ["fake-task"]) => {
+  for (const taskId of taskIds) out({ type: "system", subtype: "task_notification", task_id: taskId, status: "completed", session_id: sessionId });
   const state = { interrupted: false, child: null };
   current = state;
   out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
@@ -310,7 +310,25 @@ async function turn(prompt, images = [], uuid = null) {
     say("Background work started.");
     const [, delay, text] = match;
     out({ type: "system", subtype: "task_started", task_id: "fake-task", description: "background work", is_backgrounded: true, session_id: sessionId });
+    inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
+  } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
+    // <n> background tasks that report their usage halfway through <ms>, end together after it, and are reported in a
+    // turn of their own, as "background" is.
+    const [count, ms] = [Number(match[1]), Number(match[2])];
+    say(`Started ${count} tasks.`);
+    const taskIds = [];
+    for (let i = 1; i <= count; i++) {
+      const taskId = `task-${i}`;
+      taskIds.push(taskId);
+      out({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `toolu_task_${i}`, description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
+      inBackground(() => out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId }), ms / 2);
+    }
+    inBackground(() => enqueue(() => selfStartedTurn(`All ${count} tasks done.`, taskIds)), ms);
+  } else if (prompt === "notify-unknown") {
+    // A task ends that was never seen to start, then the turn answers.
+    out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
+    say("A task nobody saw start has ended.");
   } else if ((match = prompt.match(/^background-slow (\d+) (\d+) (.+)$/s))) {
     say("Background work started.");
     const [, delay, ms, text] = match;

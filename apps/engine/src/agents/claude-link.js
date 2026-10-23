@@ -37,6 +37,23 @@ const BUFFER_LIMIT = 20_000;
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task', 'Skill']);
 /** How long the turn reporting finished background work may take to begin, while it still counts as work. */
 export const REPORT_GRACE_MS = 3_000;
+/** How often a link reports its activity at most while its tasks progress; a change of its state is reported at once. */
+export const ACTIVITY_COALESCE_MS = 250;
+/** The finished tasks a link remembers, oldest forgotten first; those still running are never forgotten. */
+export const TASK_HISTORY_LIMIT = 200;
+/** @type {Map<string, TaskRecord['status']>} how a task's end is recorded, by the status Claude names; any other is completed */
+const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
+
+/**
+ * A background task of the process (an agent, a workflow, a command), as its notices describe it.
+ * @typedef {{ taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
+ *   phase: string | null, backgrounded: boolean, status: 'running' | 'completed' | 'stopped' | 'failed', startedAt: string,
+ *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null } }} TaskRecord
+ */
+/**
+ * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing.
+ * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], updatedAt: string }} Activity
+ */
 
 /**
  * Whether a message from a process no run is listening to is the start of a turn it began by itself. Subagents
@@ -83,11 +100,12 @@ export function removeScratch(dir, log, context = {}) {
 /**
  * The links of this engine, one per conversation at most.
  * `lifetime` is told while a process has background work running, which keeps the engine up for it with no client.
+ * `onActivity` is told what a process is doing as that changes (see `link.activity`).
  * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, scratchRoot?: string, lifetime?: any,
- *   onUnsolicited?: (link: any) => boolean | Promise<boolean> }} options `onUnsolicited` is told when a process
- * starts a turn by itself and answers true when a run will take it
+ *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity) => void }} options
+ * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
-export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null }) {
+export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {} }) {
   /** @type {Map<string, any>} sessionId -> link */
   const links = new Map();
   return {
@@ -106,6 +124,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
       const link = createLink({
         sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, scratchRoot, onUnsolicited,
         onBackground: (running) => { if (running) lifetime?.workStarted(); else lifetime?.workFinished(); },
+        onActivity: (activity) => onActivity(sessionId, activity),
         // Forgotten the moment the process is gone, before anything waiting on the link is told.
         onEnded: () => { if (links.get(sessionId) === link) links.delete(sessionId); try { onClosed?.(); } catch (error) { log.warn('hosted link cleanup failed', { sessionId, error: String(error) }); } },
       });
@@ -127,7 +146,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
   };
 }
 
-function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onEnded }) {
+function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity) => {}, onEnded }) {
   // One private scratch directory per process. Never grant access to all of /tmp.
   const scratchDir = realpathSync(mkdtempSync(path.join(scratchRoot, 'jolo-agent-')));
   const { argv, env } = prepare(scratchDir);
@@ -191,28 +210,99 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     agentCalls.set(message.agent_id, message.parent_tool_use_id);
     if (message.type === 'assistant') for (const block of message.message?.content ?? []) if (block?.type === 'tool_use' && SUBAGENT_TOOLS.has(block.name)) callParents.set(block.id, message.parent_tool_use_id);
   };
-  // Background tasks the process is running (agents, workflows, commands), from the notices it sends as they start
-  // and end: while any runs, the process has work the engine must keep alive even with no turn and no client.
-  const tasks = new Set();
-  const backgrounded = new Set();
+  // Background tasks the process runs and has run (agents, workflows, commands), from the notices it sends as they
+  // start, progress and end: while any runs, the process has work the engine must keep alive even with no turn and no
+  // client. The finished ones are kept as its recent history.
+  /** @type {Map<string, TaskRecord>} taskId -> its record, in the order they started */
+  const tasks = new Map();
+  const running = () => { let count = 0; for (const task of tasks.values()) if (task.status === 'running') count += 1; return count; };
+  // What the process is doing, told to `onActivity` at most every ACTIVITY_COALESCE_MS while its tasks change, and at
+  // once whenever its state does.
+  let activityAt = new Date().toISOString();
+  let reportedState = 'idle';
+  let activityTimer = null;
+  const activityState = () => (current ? 'working' : running() ? 'background' : 'idle');
+  /** @returns {Activity} */
+  const snapshotActivity = () => ({ state: activityState(), tasks: [...tasks.values()].map((task) => ({ ...task, usage: { ...task.usage } })), updatedAt: activityAt });
+  const reportActivity = () => {
+    if (activityTimer) { clearTimeout(activityTimer); activityTimer = null; }
+    const activity = snapshotActivity();
+    reportedState = activity.state;
+    try { onActivity(activity); } catch (error) { log.warn('could not report what the agent process is doing', { sessionId, agentId, error: String(error?.message ?? error) }); }
+  };
+  /** Its tasks changed (`tasksChanged`), or a turn began or ended: report it, at once when its state is a new one. */
+  const activityChanged = (tasksChanged = false) => {
+    const stateChanged = activityState() !== reportedState;
+    if (!tasksChanged && !stateChanged) return;
+    activityAt = new Date().toISOString();
+    if (stateChanged) reportActivity();
+    else if (!activityTimer) { activityTimer = setTimeout(reportActivity, ACTIVITY_COALESCE_MS); activityTimer.unref?.(); }
+  };
   // Background work that has just finished is reported in a turn the process begins a moment later: until that turn
   // begins, the work is not over, and a stop or a reload must not cut the report off.
   let reportDue = null;
   const settleReport = () => { if (reportDue) { clearTimeout(reportDue); reportDue = null; } };
+  /** @param {any} message @param {string} at @returns {TaskRecord} */
+  const newTask = (message, at) => ({
+    taskId: message.task_id, runId: message.run_id ?? null, toolUseId: message.tool_use_id ?? null, description: message.description ?? '',
+    subagentType: message.subagent_type ?? null, phase: null, backgrounded: message.is_backgrounded === true, status: 'running',
+    startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null },
+  });
+  /** @param {TaskRecord} task @param {any} usage */
+  const takeUsage = (task, usage) => {
+    if (Number.isFinite(usage?.total_tokens)) task.usage.totalTokens = usage.total_tokens;
+    if (Number.isFinite(usage?.tool_uses)) task.usage.toolUses = usage.tool_uses;
+    if (Number.isFinite(usage?.duration_ms)) task.usage.durationMs = usage.duration_ms;
+  };
+  /** @param {TaskRecord} task @param {TaskRecord['status']} status @param {string} at */
+  const finish = (task, status, at) => {
+    const was = task.status;
+    task.status = status;
+    task.endedAt ??= at;
+    if (was !== 'running') return;
+    if (task.backgrounded) {
+      settleReport();
+      reportDue = setTimeout(() => { reportDue = null; }, REPORT_GRACE_MS);
+      reportDue.unref?.();
+    }
+    if (!running()) onBackground(false);
+  };
+  /** Forget the oldest finished tasks past the history limit. */
+  const trimTasks = () => {
+    let excess = tasks.size - running() - TASK_HISTORY_LIMIT;
+    for (const [taskId, task] of tasks) {
+      if (excess <= 0) break;
+      if (task.status !== 'running') { tasks.delete(taskId); excess -= 1; }
+    }
+  };
   const trackTasks = (message) => {
     if (message.type !== 'system' || !message.task_id) return;
+    const at = new Date().toISOString();
+    let task = tasks.get(message.task_id);
     if (message.subtype === 'task_started') {
-      if (!tasks.size) onBackground(true);
-      tasks.add(message.task_id);
-      if (message.is_backgrounded === true) backgrounded.add(message.task_id);
-    } else if (message.subtype === 'task_notification' && tasks.delete(message.task_id)) {
-      if (backgrounded.delete(message.task_id)) {
-        settleReport();
-        reportDue = setTimeout(() => { reportDue = null; }, REPORT_GRACE_MS);
-        reportDue.unref?.();
+      if (!running()) onBackground(true);
+      tasks.delete(message.task_id); // one started again is listed anew, as the newest
+      tasks.set(message.task_id, newTask(message, at));
+    } else if (message.subtype === 'task_progress' && task) {
+      takeUsage(task, message.usage);
+    } else if (message.subtype === 'task_updated' && task) {
+      const patch = message.patch ?? {};
+      const phase = patch.workflow_phase ?? patch.phase;
+      if (typeof phase === 'string') task.phase = phase;
+      if (typeof patch.description === 'string') task.description = patch.description;
+      const ending = TASK_ENDINGS.get(patch.status);
+      if (ending) finish(task, ending, at);
+    } else if (message.subtype === 'task_notification') {
+      const ending = TASK_ENDINGS.get(message.status) ?? 'completed';
+      if (task) finish(task, ending, at);
+      else { // one never seen to start is recorded all the same; it never kept the process
+        task = { ...newTask(message, at), status: ending, endedAt: at };
+        tasks.set(message.task_id, task);
       }
-      if (!tasks.size) onBackground(false);
-    }
+      takeUsage(task, message.usage);
+    } else return;
+    trimTasks();
+    activityChanged(true);
   };
   const follow = (message) => {
     trackTasks(message);
@@ -251,7 +341,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     idleTimer = setTimeout(() => {
       idleTimer = null;
       // Background work still running keeps it, however quiet; a turn no run could be started for does not.
-      if (alive && !current && (!buffer || offerFailed) && !tasks.size) void close({ reason: 'idle', graceful: true });
+      if (alive && !current && (!buffer || offerFailed) && !running()) void close({ reason: 'idle', graceful: true });
     }, idleMs);
     idleTimer.unref?.();
   };
@@ -261,6 +351,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     turn.finished = true;
     if (turn.interruptTimer) clearTimeout(turn.interruptTimer);
     if (current === turn) current = null;
+    activityChanged();
     turn.resolve(outcome);
     settleEmpty(); // an answer that comes now has no run waiting for it
     touch();
@@ -368,8 +459,12 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       alive = false;
       clearIdle();
       settleEmpty();
-      if (tasks.size) { tasks.clear(); onBackground(false); }
-      backgrounded.clear();
+      if (running()) { // what still ran ends with the process
+        const at = new Date().toISOString();
+        for (const task of tasks.values()) if (task.status === 'running') { task.status = 'failed'; task.endedAt = at; }
+        onBackground(false);
+        activityChanged(true);
+      }
       settleReport();
       try { settled = await child.settle(); } catch { /* the reader already reported */ }
       removeScratch(scratchDir, log, { sessionId, agentId });
@@ -426,7 +521,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     /** Whether the process has begun a turn by itself that no run has taken yet. */
     get pending() { return buffer !== null; },
     /** Whether a turn is under way, waits for a run, or background work runs or is about to report: work not to be dropped. */
-    get working() { return alive && (current !== null || buffer !== null || tasks.size > 0 || reportDue !== null); },
+    get working() { return alive && (current !== null || buffer !== null || running() > 0 || reportDue !== null); },
+    /** What the process is doing, with the tasks it runs and its recently finished ones; told to `onActivity` as it changes. */
+    get activity() { return snapshotActivity(); },
     /** Whether what waits for a run is only a background subagent's question, with the main thread idle. */
     get pendingQuestionOnly() {
       return buffer !== null && buffer.length > 0 && buffer[0].type === 'control_request' && mainIdle()
@@ -459,6 +556,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       turn.resolve = (outcome) => resolve(outcome);
       const done = new Promise((r) => { resolve = r; });
       current = turn;
+      activityChanged();
       clearIdle();
       const replay = buffer ?? [];
       buffer = null;

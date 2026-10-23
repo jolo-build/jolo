@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { TASK_HISTORY_LIMIT, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -488,4 +488,53 @@ test('background work that has just finished counts as work until the turn repor
   await waitFor(() => link.pending, 3000); // the report is a turn waiting for a run
   expect(link.working).toBe(true);
   await registry.closeAll();
+});
+
+test('the link keeps a record of each background task with its usage and reports activity as it changes', async () => {
+  const seen = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity) => seen.push({ sessionId, ...activity }) });
+  const link = open(registry);
+  await turn(link, 'tasks 2 300', { init: true });
+  await waitFor(() => link.activity.state === 'background');
+  expect(link.activity.tasks.map(t => [t.taskId, t.status, t.backgrounded])).toEqual([['task-1', 'running', true], ['task-2', 'running', true]]);
+  await waitFor(() => link.activity.tasks.every(t => t.usage.totalTokens !== null));
+  expect(link.activity.tasks[1].usage).toEqual({ totalTokens: 2000, toolUses: 2, durationMs: 150 });
+  await waitFor(() => link.activity.state === 'idle', 5000);
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['completed', 'completed']);
+  expect(link.activity.tasks[0].endedAt).not.toBeNull();
+  expect(seen.map(a => a.state)).toContain('background');
+  expect(seen.at(-1)).toMatchObject({ sessionId: 'session', state: 'idle' });
+  await registry.closeAll();
+});
+
+test('a task that ends without ever having been seen to start is still recorded', async () => {
+  // The fixture's `notify-unknown` ends a task "ghost" it never started, then answers.
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'notify-unknown', { init: true });
+  expect(link.activity.tasks.find(t => t.taskId === 'ghost')).toMatchObject({ status: 'failed', startedAt: expect.any(String), description: '' });
+  await registry.closeAll();
+});
+
+test('finished tasks past the history limit are forgotten oldest first, running ones never, and reports are coalesced', async () => {
+  const seen = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity) => seen.push(activity) });
+  const link = open(registry);
+  await turn(link, `tasks ${TASK_HISTORY_LIMIT + 2} 400`, { init: true });
+  expect(link.activity.tasks.filter(t => t.status === 'running')).toHaveLength(TASK_HISTORY_LIMIT + 2);
+  await waitFor(() => link.activity.state === 'idle', 5000);
+  expect(link.activity.tasks).toHaveLength(TASK_HISTORY_LIMIT);
+  expect([link.activity.tasks[0].taskId, link.activity.tasks.at(-1).taskId]).toEqual(['task-3', `task-${TASK_HISTORY_LIMIT + 2}`]);
+  expect(seen.length).toBeLessThan(10); // hundreds of starts, progress notes and ends, but not one report each
+  await registry.closeAll();
+});
+
+test('tasks still running when the process ends are recorded as failed', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks 2 5000', { init: true });
+  expect(link.working).toBe(true);
+  await registry.closeAll();
+  expect(link.activity.state).toBe('idle');
+  expect(link.activity.tasks.map(t => [t.status, t.endedAt !== null])).toEqual([['failed', true], ['failed', true]]);
 });
