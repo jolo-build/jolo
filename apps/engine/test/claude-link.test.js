@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { TASK_HISTORY_LIMIT, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -12,10 +12,10 @@ const log = { info() {}, warn() {}, error() {} };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const waitFor = async (predicate, ms = 3000) => { const until = Date.now() + ms; while (!predicate()) { if (Date.now() > until) throw new Error('timed out'); await sleep(10); } };
 
-/** A link to the protocol fixture, with the registry's knobs shortened for a test. */
-const open = (registry, sessionId = 'session') => registry.open({
+/** A link to the protocol fixture, with the registry's knobs shortened for a test; `env` scripts the fixture. */
+const open = (registry, sessionId = 'session', env = {}) => registry.open({
   sessionId, workspaceId: 'workspace', agentId: 'claude', identity: 'fixture', cwd: process.cwd(),
-  prepare: (scratchDir) => ({ argv: [process.execPath, FAKE, ...PROTOCOL], env: { PATH: process.env.PATH, TMPDIR: scratchDir } }),
+  prepare: (scratchDir) => ({ argv: [process.execPath, FAKE, ...PROTOCOL], env: { PATH: process.env.PATH, TMPDIR: scratchDir, ...env } }),
 });
 
 /** One turn of the fixture: say `prompt`, collect what comes back until the result. */
@@ -26,7 +26,8 @@ async function turn(link, prompt, { signal = new AbortController().signal, init 
     if (message.type === 'control_response' && message.response?.request_id === 'jolo-init') link.write(said(prompt));
     return message.type === 'result';
   } });
-  if (init) link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  // As Jolo declares it: Jolo stops background work itself, so Claude's interrupt spares it.
+  if (init) link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize', perTaskStopAffordance: true } });
   else link.write(said(prompt));
   const ended = await handle.done;
   return { ended, seen, text: seen.filter((m) => m.type === 'assistant').flatMap((m) => m.message.content).filter((b) => b.type === 'text').map((b) => b.text).join('') };
@@ -330,20 +331,25 @@ test('a message echoed back with its images, far past the usual line bound, does
   await registry.closeAll();
 }, 30_000);
 
-test('stopping a run drops its waiting message and ends the background work, whose notices are dropped with it', async () => {
+test('stopping a run drops its waiting message and spares the background work, which stopping background work then ends', async () => {
   const asked = [];
   const registry = createHostedLinks({ log, interruptMs: 2000, onUnsolicited: (link) => { asked.push(link.sessionId); return true; } });
   const link = open(registry);
-  await turn(link, 'two-background', { init: true });
-  await waitFor(() => link.pending); // A's report: a turn of the process's own
+  await turn(link, 'tasks 1 1500', { init: true });
   const aborter = new AbortController();
   const handle = link.beginTurn({ signal: aborter.signal, handle: (message) => message.type === 'result' });
-  link.write(said('never answer this')); // it waits behind A's report
-  await sleep(700); // B has finished too: its notice waits in the same queue
+  link.write(said('slow 5000 never shown'));
+  const waiting = said('never answer this');
+  link.write(waiting); // it waits behind the slow turn
+  await sleep(200);
   aborter.abort();
   await handle.done;
-  await sleep(1500); // long after B's report would have come
-  expect(asked).toEqual(['session']); // nothing more began: Stop ended it all
+  expect(link.queues(waiting.uuid)).toBe(false); // dropped with the stop
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['running']); // the background work goes on
+  expect(link.activity.state).toBe('background');
+  expect(await link.stopBackground()).toEqual({ requested: 1, stopped: 1, escalated: false });
+  await sleep(1700); // long after the work would have finished and been reported
+  expect(asked).toEqual([]); // nothing more began: the message was dropped, and stopped work reports nothing
   expect(link.pending).toBe(false);
   expect(link.alive).toBe(true);
   await registry.closeAll();
@@ -549,3 +555,86 @@ test('tasks still running when the process ends are recorded as failed', async (
   expect(link.activity.state).toBe('idle');
   expect(link.activity.tasks.map(t => [t.status, t.endedAt !== null])).toEqual([['failed', true], ['failed', true]]);
 });
+
+test('stopping one background task ends it and leaves the others and the process', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks 2 5000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  expect(await link.stopTask('task-1')).toEqual({ ok: true, error: null });
+  await waitFor(() => link.activity.tasks.find(t => t.taskId === 'task-1').status === 'stopped');
+  expect(link.activity.tasks.find(t => t.taskId === 'task-2').status).toBe('running');
+  expect(link.alive).toBe(true);
+  expect(await link.stopTask('nope')).toMatchObject({ ok: false, error: expect.stringContaining('unknown task') });
+  await registry.closeAll();
+  expect(await link.stopTask('task-2')).toEqual({ ok: false, error: 'process ended' });
+});
+
+test('stopping all background work ends every task without escalating when they comply', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks 3 5000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 3);
+  expect(await link.stopBackground()).toEqual({ requested: 3, stopped: 3, escalated: false });
+  expect(link.activity.state).toBe('idle');
+  const next = await turn(link, 'still here?');
+  expect(next.text).toMatch(/still here\?$/); // the process stayed
+  await registry.closeAll();
+});
+
+test('background work that ignores stop_task is stopped with an interrupt once the grace is over', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks-stubborn 2', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  const asked = Date.now();
+  expect(await link.stopBackground()).toEqual({ requested: 2, stopped: 0, escalated: true });
+  const took = Date.now() - asked;
+  expect(took).toBeGreaterThanOrEqual(STOP_TASK_GRACE_MS - 20); // the tasks were given the grace
+  expect(took).toBeLessThan(STOP_TASK_GRACE_MS + 500);
+  await waitFor(() => link.activity.tasks.every(t => t.status === 'stopped')); // the interrupt that followed ended them
+  expect(link.alive).toBe(true);
+  await registry.closeAll();
+}, 10_000);
+
+test('stopping background work on a Claude Code that cannot stop tasks interrupts it at once', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry, 'session', { FAKE_CLAUDE_NO_STOP_TASK: '1' });
+  await turn(link, 'tasks 2 5000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  const asked = Date.now();
+  expect(await link.stopBackground()).toEqual({ requested: 2, stopped: 0, escalated: true });
+  expect(Date.now() - asked).toBeLessThan(STOP_TASK_GRACE_MS); // no grace waited out for tasks it cannot stop
+  await waitFor(() => link.activity.tasks.every(t => t.status === 'stopped')); // the interrupt ended them
+  expect(link.alive).toBe(true);
+  await registry.closeAll();
+});
+
+test('stopping background work Claude says is already over reports it not stopped and never interrupts', async () => {
+  // Claude no longer knows the task (it finished a moment ago, its notice still on the way); an interrupt would end the process.
+  const script = `
+    const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+    let buffered = '';
+    process.stdin.on('data', (chunk) => {
+      buffered += chunk;
+      for (let i; (i = buffered.indexOf('\\n')) >= 0;) {
+        const m = JSON.parse(buffered.slice(0, i)); buffered = buffered.slice(i + 1);
+        if (m.request?.subtype === 'initialize') { out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } }); out({ type: 'system', subtype: 'task_started', task_id: 'over', is_backgrounded: true }); }
+        else if (m.request?.subtype === 'stop_task') out({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'stop_task: unknown task' } });
+        else if (m.request?.subtype === 'interrupt') process.exit(9);
+      }
+    });
+    setInterval(() => {}, 1000);
+  `;
+  const registry = createHostedLinks({ log });
+  const link = registry.open({ sessionId: 'over', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', script], env: { PATH: process.env.PATH } }) });
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.state === 'background');
+  const asked = Date.now();
+  expect(await link.stopBackground()).toEqual({ requested: 1, stopped: 0, escalated: false });
+  expect(Date.now() - asked).toBeLessThan(STOP_TASK_GRACE_MS); // nothing to wait for once Claude has answered
+  await sleep(STOP_TASK_GRACE_MS + 200); // and nothing sent once the grace would have passed
+  expect(link.alive).toBe(true);
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['running']); // listed as Claude last told it, until its notice comes
+  await registry.closeAll();
+}, 10_000);

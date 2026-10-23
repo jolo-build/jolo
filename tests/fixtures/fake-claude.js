@@ -81,10 +81,37 @@ let turnsAnswered = 0;
 /** Background work the process runs beside its turns. Like the real binary, an interrupt kills it unless the host said
  * at initialize that it stops such work on its own (perTaskStopAffordance). */
 let sparesBackground = false;
+/** FAKE_CLAUDE_NO_STOP_TASK=1 is a Claude Code that cannot stop tasks: it refuses every stop_task, and knowing nothing of
+ * perTaskStopAffordance, its interrupt ends background work whatever the host declared. */
+const NO_STOP_TASK = process.env.FAKE_CLAUDE_NO_STOP_TASK === "1";
 /** Like the real binary, a subagent's own subagents' tool calls and results reach the host only when it asked for them. */
 let forwardsNested = false;
 const backgroundWork = new Set();
-const inBackground = (fn, ms) => { const timer = setTimeout(() => { backgroundWork.delete(timer); fn(); }, ms); backgroundWork.add(timer); };
+/** Background tasks still running, by id: the timers carrying each one's work, and whether it ignores stop_task. */
+const runningTasks = new Map();
+const startTask = (taskId, { stubborn = false } = {}) => runningTasks.set(taskId, { timers: new Set(), stubborn });
+/** A task ends: its work is cancelled and its end is told, as the real binary tells it. */
+const endTask = (taskId, status) => {
+  const task = runningTasks.get(taskId);
+  if (!task) return;
+  runningTasks.delete(taskId);
+  for (const timer of task.timers) { clearTimeout(timer); backgroundWork.delete(timer); }
+  out({ type: "system", subtype: "task_notification", task_id: taskId, status, session_id: sessionId });
+};
+/** Work done later beside the turns; with `taskId`, part of that running task's work, cancelled when it ends. */
+const inBackground = (fn, ms, taskId = null) => {
+  const timer = setTimeout(() => { backgroundWork.delete(timer); runningTasks.get(taskId)?.timers.delete(timer); fn(); }, ms);
+  backgroundWork.add(timer);
+  runningTasks.get(taskId)?.timers.add(timer);
+};
+/** stop_task: a running task is stopped once the request is answered, as Claude Code 2.1 does; one that ignores it is only answered. */
+const stopTask = (requestId, taskId) => {
+  if (NO_STOP_TASK) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task is not supported in this context" } });
+  const task = runningTasks.get(taskId);
+  if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task: unknown task" } });
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: {} } });
+  if (!task.stubborn) endTask(taskId, "stopped");
+};
 /** The turn in progress, so an interrupt from the host can end it the way the real binary does. */
 let current = null;
 const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
@@ -125,6 +152,8 @@ const interrupt = (requestId, cancelQueued = false, names = null) => {
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { still_queued: stillQueued, ...(cancelQueued ? { cancelled } : {}), ...(named ? { turn: spared ? "spared" : current ? "stopped" : "idle" } : {}) } } });
   for (const uuid of cancelled) lifecycle(uuid, "cancelled");
   if (spared) return;
+  // A task that ignored stop_task is ended by the interrupt even when background work is spared.
+  for (const [taskId, task] of runningTasks) if (!sparesBackground || task.stubborn) endTask(taskId, "stopped");
   if (!sparesBackground) { for (const timer of backgroundWork) clearTimeout(timer); backgroundWork.clear(); }
   if (!current) return;
   const turn = current;
@@ -313,21 +342,32 @@ async function turn(prompt, images = [], uuid = null) {
     inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
   } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
-    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, end together after
-    // it, and are reported in a turn of their own, as "background" is.
+    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, and end together
+    // after it, each on timers of its own so that stop_task ends one alone. Those that completed are reported in a turn
+    // of their own, as "background" is; when none did, there is nothing to report.
     const [count, ms] = [Number(match[1]), Number(match[2])];
     say(`Started ${count} tasks.`);
-    const taskIds = [];
+    let completed = 0;
     for (let i = 1; i <= count; i++) {
       const taskId = `task-${i}`;
-      taskIds.push(taskId);
+      startTask(taskId);
       out({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `toolu_task_${i}`, description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
       inBackground(() => {
         out({ type: "system", subtype: "task_updated", task_id: taskId, patch: { workflow_phase: "review", description: `task ${i}, reviewing` }, session_id: sessionId });
         out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
-      }, ms / 2);
+      }, ms / 2, taskId);
+      inBackground(() => { completed += 1; endTask(taskId, "completed"); }, ms, taskId);
     }
-    inBackground(() => enqueue(() => selfStartedTurn(`All ${count} tasks done.`, taskIds)), ms);
+    inBackground(() => { if (completed) enqueue(() => selfStartedTurn(`${completed} of ${count} tasks done.`, [])); }, ms);
+  } else if ((match = prompt.match(/^tasks-stubborn (\d+)$/))) {
+    // <n> background tasks that never end by themselves and ignore stop_task: it is answered, and they go on. Only an
+    // interrupt ends them.
+    const count = Number(match[1]);
+    say(`Started ${count} stubborn tasks.`);
+    for (let i = 1; i <= count; i++) {
+      startTask(`task-${i}`, { stubborn: true });
+      out({ type: "system", subtype: "task_started", task_id: `task-${i}`, tool_use_id: `toolu_task_${i}`, description: `stubborn task ${i}`, is_backgrounded: true, session_id: sessionId });
+    }
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
@@ -920,10 +960,11 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);
     if (!line.trim()) continue;
     const message = JSON.parse(line);
-    if (message.type === "control_request" && message.request?.subtype === "initialize") { sparesBackground = message.request.perTaskStopAffordance === true; forwardsNested = message.request.forwardNestedSubagentToolCalls === true; }
+    if (message.type === "control_request" && message.request?.subtype === "initialize") { sparesBackground = message.request.perTaskStopAffordance === true && !NO_STOP_TASK; forwardsNested = message.request.forwardNestedSubagentToolCalls === true; }
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: COMMANDS, models: MODELS } } });
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_request" && message.request?.subtype === "interrupt") interrupt(message.request_id, message.request.cancel_queued === true, message.request.for_user_message_uuids ?? null);
+    else if (message.type === "control_request" && message.request?.subtype === "stop_task") stopTask(message.request_id, message.request.task_id);
     else if (message.type === "control_request" && message.request?.subtype === "cancel_async_message") {
       // Withdraw one queued message by its id; one already taken up is not withdrawn.
       const entry = waiting.find((candidate) => candidate.uuid === message.request.message_uuid && !candidate.cancelled);

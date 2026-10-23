@@ -557,8 +557,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         return { outcome: "failed", failure: `could not start a turn with ${manifest.displayName}: ${error?.message ?? error}` };
       }
       if (!continuation) {
-        // Stop ends everything the process does, background agents and workflows included: that is the interrupt's default.
-        if (fresh) link.write({ type: "control_request", request_id: "jolo-init", request: { subtype: "initialize", forwardNestedSubagentToolCalls: true } });
+        // Stop ends the turn and what waits behind it. Background agents and workflows go on, listed: Jolo stops them on
+        // their own (the link's stopBackground and stopTask), which perTaskStopAffordance tells Claude, so its interrupt spares them.
+        if (fresh) link.write({ type: "control_request", request_id: "jolo-init", request: { subtype: "initialize", forwardNestedSubagentToolCalls: true, perTaskStopAffordance: true } });
         else {
           const content = await contentPromise;
           if (!signal.aborted) link.write({ type: "user", uuid: state.ownMessage, message: { role: "user", content } }); // stopped meanwhile: never asked

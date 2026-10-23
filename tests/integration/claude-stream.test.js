@@ -349,6 +349,34 @@ describe("one Claude process per conversation", () => {
     await expect(client.call('session.activity', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
   }, 30_000);
 
+  test('Stop background work ends a conversation\'s background tasks and keeps its process', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('bg', 'tasks 2 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 2, stopped: 2, escalated: false });
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle'));
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('stopping one background task ends only that task, and Claude\'s reason comes back when it will not', async () => {
+    const { client, events, session, runTo } = await boot();
+    await runTo('bg', 'tasks 2 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'task-1' })).toEqual({ ok: true, error: null });
+    await waitFor(async () => (await client.call('session.activity', { sessionId: session.id })).activity.tasks.find(t => t.taskId === 'task-1').status === 'stopped');
+    expect((await client.call('session.activity', { sessionId: session.id })).activity.tasks.map(t => [t.taskId, t.status])).toEqual([['task-1', 'stopped'], ['task-2', 'running']]);
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'nope' })).toEqual({ ok: false, error: 'stop_task: unknown task' });
+  }, 30_000);
+
+  test('stopping background work or a task of a conversation with no process stops nothing; an unknown one is not_found', async () => {
+    const { client, session } = await boot();
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 0, stopped: 0, escalated: false });
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'task-1' })).toEqual({ ok: false, error: 'no process' });
+    await expect(client.call('session.stopBackground', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(client.call('session.stopTask', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
+  }, 30_000);
+
   test("an empty result ahead of the answer does not end the turn", async () => {
     const { runTo, text, messagesOf } = await boot();
     const run = await runTo("zero", "zero-result hello");
@@ -948,16 +976,18 @@ test('a turn Claude begins by itself shows no message from the user, only its an
   expect((await client.call('session.get', { sessionId: session.id }).catch(() => ({ session: page.session }))).session.title).not.toMatch(/carried on/);
 }, 30_000);
 
-test('stopping a turn stops the background work the process is running too, and the next message is answered', async () => {
+test('stopping a turn leaves the background work running until it is stopped itself, and the next message is answered', async () => {
   const { client, events, session, runTo, messagesOf, text, starts } = await boot();
-  const launch = await runTo('launch', 'background 1500 finished in the background');
+  await runTo('launch', 'tasks 1 2500');
   const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'stopped', prompt: 'slow 5000 never shown' });
   await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'model'), { label: 'the turn is under way', timeoutMs: 5000 });
   await Bun.sleep(300);
   await client.call('run.cancel', { runId: run.id });
   await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'stopped', timeoutMs: 5000 });
+  expect((await client.call('session.activity', { sessionId: session.id })).activity.tasks.map((t) => t.status)).toEqual(['running']); // Stop spared it
+  expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 1, stopped: 1, escalated: false });
   await Bun.sleep(2500); // past when the background work would have reported
-  expect(new Set(events.filter((e) => e.type === 'run.state').map((e) => e.runId)).size).toBe(2); // no report: the work ended with the stop
+  expect(new Set(events.filter((e) => e.type === 'run.state').map((e) => e.runId)).size).toBe(2); // no report: the work was stopped
   const next = await runTo('next', 'hello');
   expect((await Promise.all((await messagesOf(next.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/: hello$/);
   expect(starts()).toHaveLength(1); // the same process answers on

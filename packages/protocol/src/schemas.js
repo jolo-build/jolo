@@ -782,6 +782,16 @@ export const MethodSchemas = {
   },
   /** What the conversation's agent process is doing now; null when it has none. */
   "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },
+  /**
+   * Stop the background work of the conversation's agent process, leaving its turn alone: every running task, then one
+   * Stop if any outlives the grace (`escalated`). `stopped` is how many ended; all zero when it has no process.
+   */
+  "session.stopBackground": {
+    params: z.object({ sessionId: Id }),
+    result: z.object({ requested: z.number().int().nonnegative(), stopped: z.number().int().nonnegative(), escalated: z.boolean() }),
+  },
+  /** Stop one background task of the conversation's agent process; `error` says why not ('no process' when it has none). */
+  "session.stopTask": { params: z.object({ sessionId: Id, taskId: Id }), result: z.object({ ok: z.boolean(), error: z.string().nullable() }) },
   "run.start": {
     params: z.object({
       sessionId: Id,

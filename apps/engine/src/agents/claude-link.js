@@ -30,6 +30,8 @@ const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_QUEUE_BYTES = 128 * 1024 * 1024;
 /** How long a turn is given to end after an interrupt before the process is closed instead. */
 export const INTERRUPT_GRACE_MS = 5_000;
+/** How long stopping background work waits for its tasks to end before it asks the process to stop instead. */
+export const STOP_TASK_GRACE_MS = 3_000;
 /** How long an empty result is taken as possibly ahead of an answer in the same turn (see claude-stream). */
 export const EMPTY_RESULT_GRACE_MS = 20_000;
 /** Messages kept from a turn the process started by itself, while no run is listening. */
@@ -189,7 +191,10 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   const mainIdle = () => !mainTurn && queued.size === 0;
   /** The Stops sent, by request id: a receipt lists the messages each one dropped. */
   const stops = new Set();
-  /** Stop ends everything the process is doing: the turn under way, what waits behind it, and its background work. */
+  /**
+   * Stop ends the turn under way and what waits behind it. Background work is spared (Jolo declares perTaskStopAffordance
+   * at initialize): it is listed, and stopped on its own with `stopBackground` or `stopTask`.
+   */
   const sendStop = () => {
     const requestId = `jolo-interrupt-${++sequence}`;
     stops.add(requestId);
@@ -201,6 +206,21 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     for (const uuid of response.response?.cancelled ?? []) queued.delete(uuid);
     for (const uuid of current?.withdrawing ?? []) queued.delete(uuid);
     if (current?.signal.aborted && mainIdle() && !afterEmpty) finishTurn(current, { exited: false });
+  };
+  /** @type {Map<string, (answer: { ok: boolean, error: string | null }) => void>} the stop_task requests sent, by request id, with who waits on Claude's answer */
+  const taskStops = new Map();
+  /** @param {string} taskId */
+  const stopTask = (taskId) => new Promise((resolve) => {
+    if (!alive) { resolve({ ok: false, error: 'process ended' }); return; }
+    const requestId = `jolo-stop-task-${++sequence}`;
+    taskStops.set(requestId, resolve);
+    write({ type: 'control_request', request_id: requestId, request: { subtype: 'stop_task', task_id: taskId } });
+  });
+  /** Claude answered a stop_task: the task is on its way out, or Claude says why it is not. */
+  const taskStopAnswered = (response) => {
+    const resolve = taskStops.get(response.request_id);
+    taskStops.delete(response.request_id);
+    resolve(response.subtype === 'success' ? { ok: true, error: null } : { ok: false, error: String(response.error ?? 'stop_task failed') });
   };
   // Where each subagent runs, from what every message says whoever holds the conversation: a subagent's messages and
   // its task_started name the Agent/Task call it runs under, and a subagent's own Agent/Task call names the call above.
@@ -218,6 +238,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   /** @type {Map<string, TaskRecord>} taskId -> its record, in the order they started */
   const tasks = new Map();
   const running = () => { let count = 0; for (const task of tasks.values()) if (task.status === 'running') count += 1; return count; };
+  /** Told whenever a running task ends, with the process's end too: what stopping background work waits on. */
+  const endWatchers = new Set();
+  const tasksEnded = () => { for (const watcher of [...endWatchers]) watcher(); };
   // What the process is doing, told to `onActivity` at most every ACTIVITY_COALESCE_MS while its tasks change, and at
   // once whenever its state does.
   let activityAt = new Date().toISOString();
@@ -268,6 +291,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       reportDue.unref?.();
     }
     if (!running()) onBackground(false);
+    tasksEnded();
   };
   /** Forget the oldest finished tasks past the history limit. */
   const trimTasks = () => {
@@ -325,6 +349,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     } else if (afterEmpty && turnNotice(message)) {
       compacting = compactingAfter(message, compacting);
       awaitAnswer(retryDelay(message)); // compacting or retrying before the answer: the grace starts over
+    } else if (message.type === 'control_response' && taskStops.has(message.response?.request_id)) {
+      taskStopAnswered(message.response);
     } else if (message.type === 'control_response' && stops.delete(message.response?.request_id)) {
       stopped(message.response);
     } else if (['assistant', 'stream_event', 'user'].includes(message.type)) {
@@ -467,6 +493,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
         onBackground(false);
         activityChanged(true);
       }
+      for (const resolve of taskStops.values()) resolve({ ok: false, error: 'process ended' }); // no answer comes now
+      taskStops.clear();
+      tasksEnded();
       settleReport();
       try { settled = await child.settle(); } catch { /* the reader already reported */ }
       removeScratch(scratchDir, log, { sessionId, agentId });
@@ -489,7 +518,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
 
   const interrupt = (turn) => {
     if (turn.finished || !alive) return;
-    // Stop stops everything: the turn, the message waiting behind it, and the background work the process runs.
+    // Stop ends the turn and the message waiting behind it; the background work the process runs goes on (see sendStop).
     turn.withdrawing = new Set(queued);
     sendStop();
     // Only a subagent's question was open: no turn of the main thread to wait for.
@@ -500,6 +529,39 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       if (mainIdle()) finishTurn(turn, { exited: false }); // the turn ended without a result: nothing left to kill
       else void close({ reason: 'interrupt timed out', graceful: false });
     }, interruptMs);
+  };
+
+  /**
+   * Stop every running task with stop_task, and give them STOP_TASK_GRACE_MS to end; if any still runs after that, send
+   * one Stop, as also at once when this Claude Code cannot stop tasks. A task Claude will not stop for another reason (it
+   * does not know it: it has just ended) is not stopped, and no reason to interrupt. `stopped` is how many of the tasks
+   * ended in that time.
+   * @returns {Promise<{ requested: number, stopped: number, escalated: boolean }>}
+   */
+  const stopBackground = () => {
+    const ids = [...tasks.values()].filter((task) => task.status === 'running').map((task) => task.taskId);
+    if (!alive || !ids.length) return Promise.resolve({ requested: 0, stopped: 0, escalated: false });
+    const refused = new Set();
+    const runs = (taskId) => tasks.get(taskId)?.status === 'running';
+    const waitedOn = () => ids.filter((taskId) => !refused.has(taskId) && runs(taskId));
+    return new Promise((resolve) => {
+      let graceTimer = null;
+      const end = (escalate) => {
+        if (!endWatchers.delete(check)) return; // already over
+        clearTimeout(graceTimer);
+        const escalated = escalate && alive && waitedOn().length > 0;
+        if (escalated) sendStop();
+        resolve({ requested: ids.length, stopped: ids.filter((taskId) => !refused.has(taskId) && !runs(taskId)).length, escalated });
+      };
+      const check = () => { if (!waitedOn().length) end(false); };
+      endWatchers.add(check);
+      graceTimer = setTimeout(() => end(true), STOP_TASK_GRACE_MS);
+      for (const taskId of ids) void stopTask(taskId).then(({ ok, error }) => {
+        if (ok) return; // its notice ends it
+        if (error?.includes('not supported')) end(true); // this Claude Code cannot stop tasks: only a Stop ends them
+        else { refused.add(taskId); check(); }
+      });
+    });
   };
 
   const close = ({ reason = 'closed', graceful = true } = {}) => {
@@ -580,6 +642,13 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       done.finally(() => signal.removeEventListener('abort', onAbort));
       return { done, end: () => finishTurn(turn, { exited: false }) };
     },
+    /**
+     * Ask the process to stop one background task (an agent, a workflow, a command); its end arrives as a task notice.
+     * `error` is Claude's reason when it will not, or 'process ended'.
+     * @returns {Promise<{ ok: boolean, error: string | null }>}
+     */
+    stopTask,
+    stopBackground,
     close,
   };
   touch();

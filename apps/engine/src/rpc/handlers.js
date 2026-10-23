@@ -282,6 +282,17 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const activity = hostedLinks?.get(sessionId)?.activity;
       return { activity: activity ? activityPayload(activity) : null };
     },
+    // Stop the background work of the conversation's agent process, or one task of it; the turn under way goes on.
+    "session.stopBackground": async ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      return link?.alive ? link.stopBackground() : { requested: 0, stopped: 0, escalated: false };
+    },
+    "session.stopTask": async ({ sessionId, taskId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      return link?.alive ? link.stopTask(taskId) : { ok: false, error: "no process" };
+    },
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
     'delegation.call': (params, conn) => {
