@@ -411,6 +411,35 @@ git commit -m "Finish a plan task only when its process has no background work l
 
 ---
 
+### Task 8: Progress ticks travel on a transient channel; only state and task changes are durable
+
+Added by controller ruling after Task 2's review: durable `session.activity` events at up to 4 per second per busy process would churn the bounded reconnect feed that run and message events share. Replay only needs the coarse picture; the live UI needs the ticks.
+
+**Files:**
+- Modify: `apps/engine/src/agents/claude-link.js` (coalescer carries a `reason`), `apps/engine/src/engine.js` (`onActivity` routes by reason), `apps/engine/src/runs/service.js:31` (or a new emitter passed to the server) and `apps/engine/src/rpc/server.js:203-212` (forward `activity` notifications like `preview`), `packages/protocol/src/schemas.js:206` (`NotificationSchema.method` gains `"activity"`; `ActivityNotificationSchema`; `parseActivity`), `packages/client/src/index.js:55-58,145` (`onActivity` handler)
+- Test: `apps/engine/test/claude-link.test.js`, `tests/integration/claude-stream.test.js`, `packages/protocol/test/protocol.test.js`
+
+**Interfaces:**
+- Consumes `link.activity`, `onActivity`, `activityPayload` from Tasks 1–2.
+- Produces `onActivity(sessionId, activity, reason)` with `reason: 'state' | 'tasks' | 'progress'`: `state` when `activity.state` changed, `tasks` when a task started or ended (status changed) since the last report, `progress` when only usage/phase/description changed. A coalesced flush carries the strongest reason seen in its window (`state` > `tasks` > `progress`).
+- Engine: `state` and `tasks` → `storage.appendEvent({ sessionId, type: 'session.activity', payload })` as today; `progress` → transient notification `{ method: 'activity', params: { sessionId, activity: activityPayload(...) } }` to subscribers of that session (same filter as `preview`), never stored.
+- Produces client `subscribe({...}, { onActivity })` delivering parsed `{ sessionId, activity }`.
+- `session.activity` RPC (Task 2) is unchanged and remains the way a late client gets the current ticks.
+
+- [ ] **Step 1: Write the failing unit test** in `claude-link.test.js`: with `tasks 2 400`, collect `onActivity` calls with their reason; assert the sequence contains `state` (idle→background), `progress` (usage arrived) and `tasks`/`state` at the end, and that no `progress` report coincides with a state change.
+- [ ] **Step 2: Write the failing integration test** in `claude-stream.test.js`: subscribe with `onActivity`; run `tasks 2 400`; assert at least one transient activity notification with task usage arrived, and that the durable `session.activity` events for the run number at most `2 + 2 × tasks` (one per state change and per task start/end), with none carrying a usage-only change.
+- [ ] **Step 3: Run both; expected FAIL** (`reason` undefined; no `activity` notification method).
+- [ ] **Step 4: Implement** per Interfaces; the protocol test asserts `NotificationSchema` accepts `method: "activity"` and `parseActivity` validates `{ sessionId, activity }`.
+- [ ] **Step 5: Run** the three files, `bun test packages apps/engine/test`, and `TMPDIR=/tmp/jt bun test tests/integration/claude-stream.test.js`. Expected PASS (Task 2's "fewer than 12 events" test still holds and may be tightened to the new bound).
+- [ ] **Step 6: Commit.**
+
+```bash
+git add apps/engine/src/agents/claude-link.js apps/engine/src/engine.js apps/engine/src/runs/service.js apps/engine/src/rpc/server.js packages/protocol/src/schemas.js packages/client/src/index.js apps/engine/test/claude-link.test.js tests/integration/claude-stream.test.js packages/protocol/test/protocol.test.js CHANGELOG.md
+git commit -m "Send activity progress ticks as transient notifications; keep only state and task changes durable"
+```
+
+---
+
 ### Final: whole-branch checks
 
 - [ ] Run the full suite: `TMPDIR=/private/var/folders/<short>/T/ bun test tests packages apps`. Expected: the only failures are the six that fail on `upstream/main` without this branch (packaging needs Bun 1.3.12; tgrep MCP; two TUI signal tests; guest credential; run dedup). Anything else is this branch's.
