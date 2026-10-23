@@ -7,6 +7,7 @@ import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo } from "./brand.jsx";
 import { basename, runLabel, screenshotArtifactId } from "../presentation.js";
 import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
+import { delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -148,6 +149,29 @@ const SubagentBlock = memo(function SubagentBlock(/** @type {SubagentBlockProps}
   </div>;
 });
 
+/**
+ * One of Jolo's delegation calls, on its own line where the call is: the child it is about and what that child is doing,
+ * with a way into the child's conversation, and a spinner while the call itself is still going (a wait, say). The live
+ * `delegation.list` row wins over the result, which the engine cuts short; opening it shows the raw call.
+ * @typedef {{ text: string, status: string, delegations: Map<string, any>, onOpenSession?: (sessionId: string) => void }} DelegationBlockProps
+ */
+const DelegationBlock = memo(function DelegationBlock(/** @type {DelegationBlockProps} */ { text, status, delegations, onOpenSession }) {
+  const call = useMemo(() => parseDelegationCall(text), [text]);
+  const [expanded, setExpanded] = useState(false);
+  if (!call) return null;
+  const child = liveDelegation(call, delegations);
+  const title = child.title || call.args.title;
+  const words = delegationWords(child) || call.error || '';
+  const working = status === "streaming";
+  return <div className="delegation-block">
+    <details className="block delegation-details" onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary><ActivityIcon name={working ? "spinner" : "agents"} active={working} /><span className="delegation-title">{title ? `Child ${title}` : 'Child task'}</span>{words && <span className="delegation-words" title={words}>{words}</span>}<Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      {expanded && <pre>{text}</pre>}
+    </details>
+    {child.sessionId && <button type="button" className="delegation-open" onClick={() => onOpenSession?.(child.sessionId)}>Open</button>}
+  </div>;
+});
+
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
   const working = status === "streaming";
   if (!text.trim()) return <div className={`reasoning-pending${working ? '' : ' deferred'}`} role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
@@ -200,7 +224,9 @@ function ActivityGroup({ messages, identity, guest, runState, hasRunStatus = fal
     : <ReasoningBlock key={message.id} text={message.text} status={message.status} />)}</div></details>;
 }
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [] }) {
+const NO_DELEGATIONS = new Map();
+
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [], delegations = NO_DELEGATIONS, onOpenSession = undefined }) {
   const container = useRef(null);
   const follow = useRef(true);
   const lastScrollTop = useRef(0);
@@ -302,6 +328,8 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
     // The agent's own subagents stand on their own line, so their work shows without opening the activity.
     if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
+    // So do Jolo's delegation calls: one line for the child they are about, instead of a raw JSON tool block.
+    else if (message.kind === "tool" && !message.evicted && !message.loadError && parseDelegationCall(message.text)) groups.push({ type: "delegation", id: message.id, runId: message.runId, message });
     else if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
       if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
@@ -350,6 +378,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
+        if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} onOpenSession={onOpenSession} />;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} guest={guestFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;

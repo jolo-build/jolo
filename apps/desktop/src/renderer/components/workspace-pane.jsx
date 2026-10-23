@@ -31,6 +31,8 @@ import { RemoveProjectDialog } from "./remove-project-dialog.jsx";
 import { TaskHeader } from "./task-header.jsx";
 import { useWorkspaceTasks } from "../use-workspace-tasks.js";
 import { taskFamily } from "../workspace-tasks.js";
+import { refreshOnChildEvents } from "../delegation.js";
+import { subscribePaneEvents } from "../engine-events.js";
 import { WorktreeDialog } from "./worktree-dialog.jsx";
 import { Onboarding } from './onboarding.jsx';
 import { initialOnboardingState, readOnboardingState, saveOnboardingState, onboardingAgentAvailable } from '../onboarding.js';
@@ -46,6 +48,7 @@ import { CONTEXT_PANELS, PanelMenu } from './panel-menu.jsx';
 // script the window parses before it can show a conversation, so each loads the first time it is opened.
 const SettingsPage = lazy(() => import("./settings.jsx").then(module => ({ default: module.SettingsPage })));
 const TerminalPane = lazy(() => import("./terminal-pane.jsx").then(module => ({ default: module.TerminalPane })));
+const NO_DELEGATIONS = [];
 
 /**
  * One split of the window: its own engine state, its own task, and the slots it portals its chrome into.
@@ -388,6 +391,28 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   // Child tasks live in the same folder (or among the chats) as the conversation that started them.
   const familyList = useWorkspaceTasks({ call: state.call, revision: state.board?.generatedAt, ...(project?.standalone ? { standalone: true } : { workspaceId: session?.workspaceId ?? project?.workspaceId }) });
   const family = taskFamily(familyList.result?.tasks ?? [], sessionId);
+  // The children's delegation rows, for the transcript's delegation lines and the child-tasks list. They load when the
+  // conversation and its children are shown, when the list opens, and 400 ms after a burst of changes to a child's run or
+  // process; a reply for a conversation no longer shown, or for an older request, is dropped.
+  const [delegationRows, setDelegationRows] = useState(/** @type {{ sessionId: string | null, rows: any[] }} */ ({ sessionId: null, rows: NO_DELEGATIONS }));
+  const delegationRequest = useRef(0);
+  const loadDelegations = () => {
+    const id = latest.current.sessionId, request = ++delegationRequest.current;
+    if (!id) return;
+    latest.current.delegationList().then(rows => { if (delegationRequest.current === request && latest.current.sessionId === id) setDelegationRows({ sessionId: id, rows }); }).catch(() => {});
+  };
+  const childIds = family.children.map(task => task.sessionId).join(' ');
+  useEffect(() => {
+    if (!sessionId || !childIds) return;
+    const refresh = refreshOnChildEvents(new Set(childIds.split(' ')), loadDelegations);
+    loadDelegations();
+    // Only broadcast events are needed here, so this listener asks for no conversation's previews or ticks.
+    const off = subscribePaneEvents(() => null, refresh.receive);
+    return () => { off(); refresh.cancel(); };
+  }, [sessionId, childIds]);
+  const shownDelegations = delegationRows.sessionId === sessionId ? delegationRows.rows : NO_DELEGATIONS;
+  const delegations = useMemo(() => new Map(shownDelegations.map(row => [row.id, row])), [shownDelegations]);
+  const delegationsBySession = useMemo(() => new Map(shownDelegations.map(row => [row.sessionId, row])), [shownDelegations]);
   const branch = session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null;
   const chosenAgentId = answerer === null ? (session ? sessionAgentId : newSessionModelChoice(hostedAgents, settings?.model).agentId ?? null) : answerer === "jolo" ? null : answerer;
   // Claude Code and Codex compact their own context when asked; the usage panel offers it for the agent answering here.
@@ -486,9 +511,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {pane.id === 'pane-1' && onboarding === 'active' && !sessionId ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : <>
           {(branch || family.children.length > 0 || family.parent) && <TaskHeader branch={branch} branchPath={workspace?.path}
-            childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} />}
+            childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} delegations={delegationsBySession} onShowChildTasks={loadDelegations} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
-          <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={path => { if (typeof path === 'string') setChangesFocus({ path, at: Date.now() }); selectContext("changes"); }} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />
+          <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={path => { if (typeof path === 'string') setChangesFocus({ path, at: Date.now() }); selectContext("changes"); }} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} delegations={delegations} onOpenSession={id => reportError(() => state.selectSession(id))} />
           <ActivityLine activity={state.activity} workflowNames={runNames} stopping={stopping} onStop={stopBackground} onOpenPanel={() => selectContext('activity')} />
           <PermissionNotice request={pendingPermission} active={active} onReview={() => onFocus(pane.id)} />
           {!pendingPermission && <PermissionNotice request={pendingDialog && { summary: dialogSummary(pendingDialog) }} title="Claude has a question" icon="chat" active={active} onReview={() => onFocus(pane.id)} />}

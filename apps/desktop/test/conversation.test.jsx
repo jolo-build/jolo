@@ -209,3 +209,32 @@ test("the agent's own subagents stand on their own line with their model, and sa
   const plain = render(tool({ text: 'Agent {"subagent_type":"general-purpose","description":"Fix round 6","prompt":"x"}\n↳ model: claude-opus-5-5\n', status: 'streaming' }));
   expect(plain).toContain('<span class="subagent-title">Fix round 6</span><span class="subagent-meta">Opus 5.5</span>');
 });
+
+test('a delegation call stands on its own line naming the child and what it is doing, with the raw call behind a disclosure', () => {
+  const call = 'mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":600000}\n{"delegation":{"id":"del_1","parentRunId":"run_p","runId":"run_c","sessionId":"ses_c","title":"bg child","modelAlias":"m1","state":"completed","wakeReason":"timeout","failure":null,"execution":{"agentId":"claude","preset":null,"model":"opus","effort":null,"pinned":true},"createdAt":"2026-10-24T00:00:00.000Z","activity":"background","done":false,"partial":true,"output":"started and then a very long answer that the engine cu…\n';
+  const tool = { id: 'delegation', role: 'tool', kind: 'tool', runId: 'run', text: call, status: 'complete', renderedBytes: 0, committedBytes: 0 };
+  const html = render(tool, { id: 'bash', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 });
+  expect(html).toContain('class="delegation-block"');
+  expect(html).toContain('Child bg child');
+  expect(html).toContain('Answered · background work · partial answer · woke: wait timed out');
+  expect(html).toMatch(/<button type="button"[^>]*>Open<\/button>/);
+  // Its ordinary neighbour stays in the activity group, which counts only that one.
+  expect(html).toContain('1 action');
+  const line = render(tool);
+  expect(line).toContain('<details class="block delegation-details">'); // the raw call opens with it, as a tool block's does
+  expect(line.replace(/<details[\s\S]*?<\/details>/g, '')).not.toContain('{&quot;');
+  // The live row from delegation.list wins for state and activity; the wake reason stays the result's.
+  const live = renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [tool], runs: new Map() }, hasProject: true, delegations: new Map([['del_1', { id: 'del_1', state: 'completed', activity: 'idle', done: true, partial: false }]]) }))} />);
+  expect(live).toContain('Answered · done · woke: wait timed out');
+});
+
+test('a delegation call still waiting for its result spins, names the child from its arguments, and has nothing to open yet', () => {
+  const html = render({ id: 'delegation', role: 'tool', kind: 'tool', runId: 'run', text: 'mcp__jolo__delegate_task {"modelAlias":"m1","title":"Write tests","prompt":"x"}\n', status: 'streaming', renderedBytes: 0, committedBytes: 0 });
+  expect(html).toContain('Child Write tests');
+  expect(html.match(/activity-spin/g)).toHaveLength(1);
+  expect(html).not.toContain('>Open<');
+  // A newer child with the same title lends its state while the result is missing, but no conversation to open.
+  const guessed = renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => [{ id: 'delegation', role: 'tool', kind: 'tool', runId: 'run', text: 'mcp__jolo__delegate_task {"modelAlias":"m1","title":"Write tests","prompt":"x"}\n', status: 'streaming', renderedBytes: 0, committedBytes: 0 }], runs: new Map() }, hasProject: true, delegations: new Map([['del_1', { id: 'del_1', sessionId: 'ses_1', title: 'Write tests', state: 'model', activity: 'working', done: false, partial: false }]]) }))} />);
+  expect(guessed).toContain('>Working<');
+  expect(guessed).not.toContain('>Open<');
+});

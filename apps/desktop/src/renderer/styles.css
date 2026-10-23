@@ -345,7 +345,7 @@ strong { font-weight: 550; }
 .child-tasks-menu { width: 292px; max-height: min(420px, calc(100vh - 120px)); }
 .child-tasks-menu button { min-height: 40px; }
 .child-task-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.child-task-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.child-task-text > :is(span, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .child-tasks-menu .icon.needs { color: var(--red); }
 .task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; color: var(--muted); font-size: 11px; line-height: 18px; }
 .task-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
@@ -412,6 +412,13 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .subagent-steps { margin: 0; padding: 0; list-style: none; max-height: 168px; overflow: auto; font: 11px/1.65 var(--mono); color: var(--muted); }
 .subagent-steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-report { min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+/* A delegation call stands on its own line too: the child it is about, what that child is doing, and a quiet way into it. */
+.delegation-block { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.delegation-block > details { flex: 1; }
+details.block.delegation-details summary .delegation-title { flex: 0 1 auto; color: var(--text); }
+details.block.delegation-details summary .delegation-words { flex: 0 3 auto; }
+.delegation-open { flex: none; padding: 0 6px; margin-right: -6px; font-size: 12px; color: var(--muted); }
+.delegation-open:hover, .delegation-open:focus-visible { color: var(--text); }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 /* Find in page: a small bar under the header, gone the moment it closes; the matches are highlights, not markup. */
 .find-bar { position: absolute; top: 10px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }

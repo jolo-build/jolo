@@ -1,13 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { RUNNING } from '@jolo/client/board';
 import { modelLabel } from '../model-options.js';
+import { delegationWords } from '../delegation.js';
 import { Icon } from './icon.jsx';
 
 /**
  * The child tasks a conversation started, as one quiet line at the top right of its header that opens a small list.
- * A mark shows only while one of them is working or needs the user; picking one opens its conversation.
+ * A mark shows only while one of them is working or needs the user; picking one opens its conversation. Each row says
+ * what that child is doing when `delegations` (by session) has its row; `onShow` runs each time the list opens.
  */
-export function ChildTasksMenu({ tasks, onOpen }) {
+export function ChildTasksMenu({ tasks, delegations = new Map(), onOpen, onShow = undefined }) {
   const trigger = useRef(null), menu = useRef(null);
   const menuId = useId();
   const [open, setOpen] = useState(false);
@@ -20,6 +22,7 @@ export function ChildTasksMenu({ tasks, onOpen }) {
     window.addEventListener('resize', close);
     return () => { element.removeEventListener('toggle', changed); window.removeEventListener('resize', close); };
   }, []);
+  useEffect(() => { if (open) onShow?.(); }, [open]);
   const working = tasks.some(task => RUNNING.has(task.run?.state));
   const needs = tasks.some(task => task.attention === 'needs_you');
   const label = `${tasks.length} child ${tasks.length === 1 ? 'task' : 'tasks'}`;
@@ -36,8 +39,10 @@ export function ChildTasksMenu({ tasks, onOpen }) {
       {tasks.map(task => {
         const identity = [task.answerer?.displayName, modelLabel(task.answerer?.model ?? task.run?.execution?.model)].filter(Boolean).join(' · ');
         const needsYou = task.attention === 'needs_you';
+        const delegation = delegations.get(task.sessionId);
+        const words = delegation ? delegationWords(delegation) : '';
         return <button key={task.sessionId} type="button" data-session-id={task.sessionId} onClick={() => { menu.current.hidePopover(); onOpen(task.sessionId); }}>
-          <span className="child-task-text"><span>{task.title || 'Child task'}</span>{identity && <small>{identity}</small>}</span>
+          <span className="child-task-text"><span>{task.title || 'Child task'}</span>{identity && <small>{identity}</small>}{words && <small>{words}</small>}</span>
           {needsYou ? <Icon name="alert" size={14} className="needs" /> : RUNNING.has(task.run?.state) ? <Icon name="spinner" size={14} className="activity-spin" /> : null}
         </button>;
       })}
