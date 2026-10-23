@@ -7,7 +7,7 @@ import { liveRunFor } from './capabilities.js';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from 'node:path';
 import { resolveWorkspacePath, WorkspacePathError } from "../tools/paths.js";
-import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
+import { ProtocolError, PROTOCOL_VERSION, activityPayload } from "@jolo/protocol";
 import { revertPatchPath } from "../workspaces/revert.js";
 import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
@@ -276,6 +276,12 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
       return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
     }),
+    // What the conversation's agent process is doing now, for a client that joins while its work runs.
+    "session.activity": ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const activity = hostedLinks?.get(sessionId)?.activity;
+      return { activity: activity ? activityPayload(activity) : null };
+    },
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
     'delegation.call': (params, conn) => {

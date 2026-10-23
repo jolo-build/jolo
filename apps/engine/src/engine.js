@@ -3,7 +3,7 @@ import { createExecutorRouter } from "./agents/executor.js";
 import { createRpcHandlers } from "./rpc/handlers.js";
 // Engine composition: ownership, storage, run service, endpoint, RPC server, lifetime.
 import path from 'node:path';
-import { PROTOCOL_VERSION, SCHEMA_VERSION } from "@jolo/protocol";
+import { PROTOCOL_VERSION, SCHEMA_VERSION, activityPayload } from "@jolo/protocol";
 import { Storage, newId } from "./storage/index.js";
 import { RunService } from "./runs/service.js";
 import { createAgentExecutor } from "./agent/loop.js";
@@ -137,7 +137,9 @@ export function createEngine(options) {
     const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
     // One Claude process per conversation, kept between turns so the background work it started gets to finish.
     const emptyResultGraceMs = Number((options.env ?? process.env).JOLO_EMPTY_RESULT_GRACE_MS ?? EMPTY_RESULT_GRACE_MS);
-    hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId) });
+    hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId),
+      // What a conversation's process is doing goes to clients as it changes; a conversation deleted meanwhile has no one to tell.
+      onActivity: (sessionId, activity) => { if (storage.getSession(sessionId)) storage.appendEvent({ sessionId, type: 'session.activity', payload: activityPayload(activity) }); } });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
       mcpConfig, links: hostedLinks, emptyResultGraceMs,
       providerFactory, settings: settingsService, native: jolo,

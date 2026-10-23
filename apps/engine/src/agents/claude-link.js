@@ -17,6 +17,7 @@
 import path from 'node:path';
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { TASK_HISTORY_LIMIT } from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
 
 /** How long an idle process is kept. Long on purpose: the point is that background work gets to finish. */
@@ -39,8 +40,9 @@ const SUBAGENT_TOOLS = new Set(['Agent', 'Task', 'Skill']);
 export const REPORT_GRACE_MS = 3_000;
 /** How often a link reports its activity at most while its tasks progress; a change of its state is reported at once. */
 export const ACTIVITY_COALESCE_MS = 250;
-/** The finished tasks a link remembers, oldest forgotten first; those still running are never forgotten. */
-export const TASK_HISTORY_LIMIT = 200;
+// A link remembers TASK_HISTORY_LIMIT finished tasks, the most an activity names, forgetting the oldest first; those
+// still running are never forgotten.
+export { TASK_HISTORY_LIMIT };
 /** @type {Map<string, TaskRecord['status']>} how a task's end is recorded, by the status Claude names; any other is completed */
 const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
 

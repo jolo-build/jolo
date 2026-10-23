@@ -245,6 +245,7 @@ export const EVENT_TYPES = Object.freeze([
   "account.changed",
   "schedule.fired",
   "schedule.updated",
+  "session.activity",
 ]);
 
 /**
@@ -536,6 +537,38 @@ export const ScheduleSchema = z.object({
   updatedAt: IsoTimestamp,
 });
 
+// ---- hosted process activity ----------------------------------------------------------------
+// What a conversation's agent process is doing between and during turns: the background tasks it runs (agents,
+// workflows, commands) and those it finished lately.
+
+/** The most tasks an activity names; a process that has more is cut to its newest. */
+export const TASK_HISTORY_LIMIT = 200;
+
+export const TaskRecordSchema = z.object({
+  taskId: z.string(),
+  runId: z.string().nullable(),
+  toolUseId: z.string().nullable(),
+  description: z.string(),
+  subagentType: z.string().nullable(),
+  phase: z.string().nullable(),
+  backgrounded: z.boolean(),
+  status: z.enum(["running", "completed", "stopped", "failed"]),
+  startedAt: IsoTimestamp,
+  endedAt: IsoTimestamp.nullable(),
+  usage: z.object({ totalTokens: z.number().nullable(), toolUses: z.number().nullable(), durationMs: z.number().nullable() }),
+});
+
+/** `truncated` says the process had more tasks than these, the newest TASK_HISTORY_LIMIT (it never forgets running ones). */
+export const ActivitySchema = z.object({
+  state: z.enum(["idle", "working", "background"]),
+  tasks: z.array(TaskRecordSchema).max(TASK_HISTORY_LIMIT),
+  truncated: z.boolean(),
+  updatedAt: IsoTimestamp,
+});
+
+/** A process's activity as it goes on the wire: its newest TASK_HISTORY_LIMIT tasks, and whether any were left out. */
+export const activityPayload = ({ state, tasks, updatedAt }) => ({ state, tasks: tasks.slice(-TASK_HISTORY_LIMIT), truncated: tasks.length > TASK_HISTORY_LIMIT, updatedAt });
+
 /** A task as it is written down, before it has an identity. */
 export const PlanTaskDraftSchema = z.object({
   title: z.string().min(1).max(200),
@@ -571,6 +604,7 @@ export const EventPayloadSchemas = Object.freeze({
   "plan.task.updated": z.object({ planId: Id, task: PlanTaskSchema }),
   "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
   "schedule.updated": z.object({ schedule: ScheduleSchema }),
+  "session.activity": ActivitySchema,
   "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
   "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
@@ -728,6 +762,8 @@ export const MethodSchemas = {
     params: z.object({ sessionId: Id, beforeOrdinal: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).default(100) }),
     result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
   },
+  /** What the conversation's agent process is doing now; null when it has none. */
+  "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },
   "run.start": {
     params: z.object({
       sessionId: Id,

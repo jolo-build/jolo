@@ -331,6 +331,24 @@ describe("one Claude process per conversation", () => {
     expect(starts()).toHaveLength(1);
   }, 30_000);
 
+  test('background work is reported as session activity while it runs and when it ends', async () => {
+    const { client, events, session, runTo } = await boot();
+    const run = await runTo('bg-activity', 'tasks 2 400');
+    expect(run.state).toBe('completed');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === session.id && e.payload.state === 'background'));
+    const live = await client.call('session.activity', { sessionId: session.id });
+    expect(live.activity.tasks).toHaveLength(2);
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle' && e.payload.tasks.every(t => t.status === 'completed')), { timeoutMs: 5000 });
+    const bursts = events.filter(e => e.type === 'session.activity');
+    expect(bursts.length).toBeLessThan(12); // coalesced: not one event per progress message
+  }, 30_000);
+
+  test('session activity is null for a conversation with no process and not_found for an unknown one', async () => {
+    const { client, session } = await boot();
+    expect(await client.call('session.activity', { sessionId: session.id })).toEqual({ activity: null });
+    await expect(client.call('session.activity', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+  }, 30_000);
+
   test("an empty result ahead of the answer does not end the turn", async () => {
     const { runTo, text, messagesOf } = await boot();
     const run = await runTo("zero", "zero-result hello");

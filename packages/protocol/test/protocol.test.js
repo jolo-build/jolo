@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, activityPayload } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -64,6 +64,24 @@ describe("schemas", () => {
   });
   test("sequence comparison avoids precision loss", () => {
     expect(compareSeq("9007199254740993", "9007199254740992")).toBe(1);
+  });
+  test("session.activity carries a process's state and tasks, and only to subscribers that declare it", () => {
+    const task = { taskId: 't1', runId: null, toolUseId: null, description: 'x', subagentType: null, phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null } };
+    const activity = { state: 'background', tasks: [task], truncated: false, updatedAt: new Date().toISOString() };
+    expect(EventPayloadSchemas["session.activity"].safeParse(activity).success).toBe(true);
+    expect(EventPayloadSchemas["session.activity"].safeParse({ ...activity, state: 'busy' }).success).toBe(false);
+    expect(ActivitySchema.safeParse(activity).success).toBe(true);
+    expect(TaskRecordSchema.safeParse({ ...task, status: 'paused' }).success).toBe(false);
+    expect(GATED_EVENT_TYPES).toContain("session.activity");
+  });
+  test("an activity with more tasks than a payload carries keeps the newest and says some were left out", () => {
+    const updatedAt = new Date().toISOString();
+    const task = (i) => ({ taskId: `t${i}`, runId: null, toolUseId: null, description: '', subagentType: null, phase: null, backgrounded: true, status: 'running', startedAt: updatedAt, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null } });
+    const many = activityPayload({ state: 'background', tasks: Array.from({ length: TASK_HISTORY_LIMIT + 2 }, (_, i) => task(i)), updatedAt });
+    expect(many.truncated).toBe(true);
+    expect(many.tasks.map(t => t.taskId)).toEqual(Array.from({ length: TASK_HISTORY_LIMIT }, (_, i) => `t${i + 2}`));
+    expect(ActivitySchema.safeParse(many).success).toBe(true);
+    expect(activityPayload({ state: 'idle', tasks: [task(0)], updatedAt })).toEqual({ state: 'idle', tasks: [task(0)], truncated: false, updatedAt });
   });
   test("rpc errors never leak internal messages", () => {
     const e = toRpcError(new Error("stack trace with secrets"));
