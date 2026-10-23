@@ -17,7 +17,8 @@ import { usePanelTabs } from '../use-panel-tabs.js';
 import { PermissionDialog } from "./permission-dialog.jsx";
 import { PermissionNotice } from "./permission-notice.jsx";
 import { ActivityLine } from "./activity-line.jsx";
-import { groupActivity, stopFor, workflowNames } from "../activity.js";
+import { ActivityPanel, ForceStopDialog } from "./activity-panel.jsx";
+import { forceStopOffered, groupActivity, plural, runningTasks, stopFor, workflowNames } from "../activity.js";
 import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
@@ -114,6 +115,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [filesExpanded, setFilesExpanded] = useState(false); // the Files panel over the whole pane, the conversation set aside
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const [stop, setStop] = useState(/** @type {import('../activity.js').StopState | null} */ (null)); // the last Stop background work, for the conversation that sent it
+  const [forceStop, setForceStop] = useState(/** @type {import('../activity.js').StopResult | null} */ (null)); // the stop whose force-stop the person is confirming
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
   const panelTabs = usePanelTabs(panelScope, (file, remaining) => {
@@ -122,6 +124,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const { context, setContext } = panelTabs;
   const plansOpen = panelTabs.items.some(tab => tab.id === 'plans');
   const schedulesOpen = panelTabs.items.some(tab => tab.id === 'schedules');
+  const activityOpen = panelTabs.items.some(tab => tab.id === 'activity');
   useLayoutEffect(() => { setWatchChanges(context === 'changes' || context === 'files'); }, [context]);
   const contextFor = tab => tab?.panelType === 'file' ? 'files' : tab?.panelType ?? null;
   const selectTab = id => { panelTabs.select(id); setContext(contextFor(panelTabs.items.find(tab => tab.id === id))); };
@@ -200,7 +203,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const agentName = (id) => agentCatalog.find((entry) => entry.id === id)?.displayName ?? id;
   const lastRun = projection ? [...projection.runs.values()].at(-1) : null;
   const session = sessions.find((item) => item.id === sessionId);
-  useEffect(() => { setAnswerer(null); }, [sessionId, project?.projectId]);
+  useEffect(() => { setAnswerer(null); setForceStop(null); }, [sessionId, project?.projectId]);
   const needsFolder = workspace?.needsFolder ?? project?.needsFolder ?? false;
   const linkFolder = () => reportError(async () => {
     const folder = await window.jolo.openFolder();
@@ -216,13 +219,19 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const runNames = useMemo(() => workflowNames(projection?.ordered() ?? [], projection ? [...projection.tools.values()] : [], groupActivity(state.activity).runs), [projection, state.activity]);
   // `stopResult` is the shown conversation's last stop reply, or null; the Activity panel reads it for its force-stop.
   const { stopping, stopResult } = stopFor(stop, sessionId);
+  const running = runningTasks(state.activity);
+  // The force-stop confirmation stays only while the stop it was opened for still offers it: it goes when that stop's
+  // tasks end on their own, and a later stop never reopens it.
+  const confirmingForceStop = forceStop !== null && forceStop === stopResult && forceStopOffered(state.activity, stopResult);
   const stopBackground = () => {
     const id = sessionId;
+    // The tasks running now are the ones this stop is about; work that starts later never makes it offer a force-stop.
+    const taskIds = running.map(task => task.taskId);
     // A reply lands on the stop it answers; a newer stop sent from another conversation has taken the slot by then.
     const settle = fields => setStop(current => current?.sessionId === id ? { ...current, ...fields } : current);
     return reportError(async () => {
       setStop({ sessionId: id, pending: true, result: null });
-      try { settle({ result: await state.stopBackground() }); } finally { settle({ pending: false }); }
+      try { settle({ result: { ...await state.stopBackground(), taskIds } }); } finally { settle({ pending: false }); }
     });
   };
   const verification = lastRun?.verification;
@@ -248,9 +257,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   }, [pane.id]);
 
   useEffect(() => {
-    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen));
+    setOverlay(pane.id, active && Boolean(showSettings || pendingPermission || taskDialog || worktreeDialog || pickerOpen || confirmingForceStop));
     return () => setOverlay(pane.id, false);
-  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen]);
+  }, [active, pane.id, setOverlay, showSettings, pendingPermission, taskDialog, worktreeDialog, pickerOpen, confirmingForceStop]);
   useEffect(() => { void state.refreshAgents(); }, [workspaceId]);
   // Coming back to a task's window means its latest outcome was seen; a notification click lands on its task.
   // The listeners read the pane's state through a ref, so a board refresh does not take these
@@ -449,7 +458,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div className="header-actions">
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
-            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
+            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules', 'activity'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null, activity: running.length ? plural(running.length, 'task') : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
               extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
             </>}
           </div>
@@ -515,6 +524,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             </div>
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
             <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
+            <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} workflowNames={runNames} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
+              onStopTask={taskId => reportError(() => state.stopTask(taskId))} onStopRun={run => reportError(() => Promise.all(run.tasks.filter(task => task.status === 'running').map(task => state.stopTask(task.taskId))))} onForceStop={() => setForceStop(stopResult)} />}</div>
           </div>
         </aside>
       </ContextSplit>
@@ -524,6 +535,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       {active && taskDialog?.action === "remove-project" && !pendingPermission && <RemoveProjectDialog key={`${taskDialog.row.projectId}:remove`} name={basename(taskDialog.row.rootPath)} onSubmit={() => state.removeProject(taskDialog.row.projectId)} onClose={() => setTaskDialog(null)} />}
       {active && taskDialog && taskDialog.action !== "remove-project" && !pendingPermission && <TaskDialog key={`${taskDialog.session.id}:${taskDialog.action}`} {...taskDialog} onSubmit={(value) => taskDialog.action === "remove-worktree" ? state.removeWorktree(taskDialog.workspace.id, value.force) : state.manageSession(sessions.find((item) => item.id === taskDialog.session.id) ?? taskDialog.session, taskDialog.action, value)} onClose={() => setTaskDialog(null)} />}
       {active && worktreeDialog && !pendingPermission && project && <WorktreeDialog projectName={basename(project.rootPath)} onSubmit={startWorktree} onClose={() => setWorktreeDialog(false)} />}
+      {active && confirmingForceStop && !pendingPermission && <ForceStopDialog onClose={() => setForceStop(null)} onConfirm={() => { setForceStop(null); void reportError(() => state.closeProcess()); }} />}
     </div>
     </FilePreviewContext.Provider>
   );

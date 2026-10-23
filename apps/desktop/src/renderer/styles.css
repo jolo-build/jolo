@@ -788,6 +788,34 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .check-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
 .check-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 11px var(--mono); }
 .check-row > span { flex: none; font-size: 11px; }
+/* Activity: the conversation's background work, workflow runs as cards and the other tasks as rows (D2, D3). */
+.activity-panel { display: flex; flex: 1; flex-direction: column; gap: 12px; padding: 16px; min-height: 0; overflow: auto; overscroll-behavior: contain; font-size: 12px; }
+.activity-panel > * { flex: none; }
+.activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.activity-heading strong { font-weight: 600; }
+.activity-heading > span { font-size: 11px; }
+.activity-panel .panel-note { display: flex; align-items: center; gap: 8px; padding: 0; }
+.activity-heading button, .activity-panel .panel-note button { font-size: 11px; padding: 3px 9px; }
+.workflow-card { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; }
+.workflow-card > header { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; }
+.workflow-head, .workflow-line { display: flex; align-items: center; gap: 6px 10px; min-width: 0; }
+.workflow-line { flex-wrap: wrap; }
+.workflow-head button { font-size: 11px; padding: 3px 9px; }
+.workflow-title { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-meta { min-width: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-card > details > summary { padding: 6px 10px; border-top: 1px solid var(--border); font-size: 11px; }
+.status-dots { display: flex; flex-wrap: wrap; gap: 3px; }
+.status-dots span { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--muted); }
+.status-dots span[data-status="running"] { background: var(--highlight); border-color: var(--highlight); }
+.status-dots span[data-status="done"] { background: var(--green); border-color: var(--green); }
+.status-dots span[data-status="failed"] { background: var(--red); border-color: var(--red); }
+.activity-tasks { list-style: none; margin: 0; padding: 0; }
+.activity-panel > .activity-tasks { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; }
+.activity-panel .task-row { display: grid; grid-template-columns: minmax(10ch, 1fr) minmax(0, max-content) auto; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid var(--border); }
+.activity-panel > .activity-tasks > .task-row:first-child { border-top: 0; }
+.activity-panel .task-row button { font-size: 11px; padding: 2px 7px; }
+.activity-task-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-task-meta { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
 .terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* xterm's fit reads the host's computed width, so its padding must sit outside it or the last columns are cut off. */

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, formatElapsed, formatTokens, groupActivity, newerActivity, parseWorkflowName, runningTasks, stopFor, workflowNames } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, parseWorkflowName, plural, runningTasks, stopFor, workflowNames } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
@@ -130,12 +130,30 @@ test('a read that finds no process keeps a snapshot that arrived meanwhile: the 
 });
 
 test('a stop belongs to the conversation that sent it: another one shows neither its wait nor its reply', () => {
-  const result = { requested: 2, stopped: 0, escalated: true };
+  const result = { requested: 2, stopped: 0, escalated: true, taskIds: ['t1', 't2'] };
   expect(stopFor({ sessionId: 'a', pending: true, result: null }, 'a')).toEqual({ stopping: true, stopResult: null });
   expect(stopFor({ sessionId: 'a', pending: true, result: null }, 'b')).toEqual({ stopping: false, stopResult: null });
   expect(stopFor({ sessionId: 'a', pending: false, result }, 'a')).toEqual({ stopping: false, stopResult: result });
   expect(stopFor({ sessionId: 'a', pending: false, result }, 'b')).toEqual({ stopping: false, stopResult: null });
   expect(stopFor(null, 'a')).toEqual({ stopping: false, stopResult: null });
+});
+
+test('Review Focus 4: a force-stop is offered only while a stop with leftovers still has its own tasks running', () => {
+  const stuck = [task(), task()];
+  const taskIds = stuck.map(item => item.taskId);
+  expect(forceStopOffered(activity(stuck), { requested: 2, stopped: 0, escalated: true, taskIds })).toBe(true);
+  expect(forceStopOffered(activity(stuck), { requested: 2, stopped: 0, escalated: false, taskIds })).toBe(true);
+  expect(forceStopOffered(activity(stuck), null)).toBe(false);
+  expect(forceStopOffered(activity(stuck), { requested: 2, stopped: 2, escalated: false, taskIds })).toBe(false);
+  expect(forceStopOffered(null, { requested: 2, stopped: 0, escalated: true, taskIds })).toBe(false);
+  const ended = stuck.map(item => ({ ...item, status: /** @type {const} */ ('failed'), endedAt: at(9) }));
+  expect(forceStopOffered(activity([...ended, task()]), { requested: 2, stopped: 0, escalated: true, taskIds })).toBe(false);
+});
+
+test('a count reads in the singular for one', () => {
+  expect(plural(1, 'task')).toBe('1 task');
+  expect(plural(3, 'task')).toBe('3 tasks');
+  expect(plural(0, 'agent')).toBe('0 agents');
 });
 
 test('tokens and elapsed time read compactly', () => {

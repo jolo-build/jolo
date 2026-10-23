@@ -20,7 +20,8 @@
 export const LARGE_RUN_AGENTS = 25;
 
 const started = (/** @type {TaskRecord} */ task) => Date.parse(task.startedAt);
-const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+/** `1 task`, `3 tasks`. @param {number} count @param {string} word */
+export const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 /** @param {Activity | null} activity @returns {TaskRecord[]} */
 export function runningTasks(activity) {
@@ -40,8 +41,9 @@ export function newerActivity(current, read) {
 }
 
 /**
- * The last `Stop background work` a pane sent: the conversation it was for, whether its reply is still due, and the reply.
- * @typedef {{ requested: number, stopped: number, escalated: boolean }} StopResult
+ * The last `Stop background work` a pane sent: the conversation it was for, whether its reply is still due, and the reply
+ * with the ids of the tasks that ran when it was sent, which are the ones a force-stop would be about.
+ * @typedef {{ requested: number, stopped: number, escalated: boolean, taskIds: string[] }} StopResult
  * @typedef {{ sessionId: string, pending: boolean, result: StopResult | null }} StopState
  */
 
@@ -54,6 +56,17 @@ export function newerActivity(current, read) {
  */
 export function stopFor(stop, sessionId) {
   return stop?.sessionId === sessionId ? { stopping: stop.pending, stopResult: stop.result } : { stopping: false, stopResult: null };
+}
+
+/**
+ * Whether to offer the force-stop (D11, Review Focus 4): the stop's reply left work (`escalated` or fewer stopped than
+ * requested) and a task that ran when it was sent runs still. Work that started after it is not what it was about.
+ * @param {Activity | null} activity
+ * @param {StopResult | null} stopResult
+ */
+export function forceStopOffered(activity, stopResult) {
+  return Boolean(stopResult) && (stopResult.escalated || stopResult.stopped < stopResult.requested)
+    && runningTasks(activity).some(task => stopResult.taskIds.includes(task.taskId));
 }
 
 /** The tokens the tasks reported, or null when none did: unknown usage is never a 0 (spec §2). */

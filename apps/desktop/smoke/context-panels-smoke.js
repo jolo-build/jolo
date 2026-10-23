@@ -141,7 +141,7 @@ export async function runContextPanelsSmoke({ window, bridge, fixtureUrl, evalua
       }
       await evaluate("document.querySelector('.header [aria-label=\"Panels\"]').click()");
       await waitFor("Boolean(document.querySelector('.panel-menu:popover-open'))", 'panel menu visible');
-      assert(await evaluate("document.querySelectorAll('.panel-menu:popover-open [role=menuitemradio]').length === 7 && document.querySelector('.panel-menu:popover-open [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
+      assert(await evaluate("document.querySelectorAll('.panel-menu:popover-open [role=menuitemradio]').length === 8 && document.querySelector('.panel-menu:popover-open [aria-checked=true]').getAttribute('aria-label') === 'Plans'"), 'panel menu entries or selected marker are incorrect');
       await frame();
       writeFileSync(path.join(results, `panel-menu-${color}.png`), (await window.webContents.capturePage()).toPNG());
       await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}))");
