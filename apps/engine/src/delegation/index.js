@@ -216,9 +216,11 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
         const check = () => {
           clearTimeout(recheck);
           const link = links.get(child.sessionId), run = storage.getRun(child.id);
-          // Read the run again: one that ended without a word (cancelled, failed) is done all the same, and one that waits
-          // on the person (asked before the wait began, or paused for them) needs its parent to say so.
-          if (isDone(run, link) || ASKING_STATES.includes(run?.state) || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
+          // Read the runs again: one that ended without a word (cancelled, failed) is done all the same, and any run of
+          // the child's conversation that waits on the person (asked before the wait began, or paused for them, a later
+          // continuation included) needs its parent to say so.
+          if (isDone(run, link) || storage.listRunsForSession(child.sessionId).some(r => ASKING_STATES.includes(r.state))
+            || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
           if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
         };
         const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: final => { if (waiters.has(waiter)) final ? finish() : check(); } };

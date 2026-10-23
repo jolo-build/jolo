@@ -28,6 +28,12 @@ function fixture({ holdChild = false, childOutcome = 'completed', settings: patc
         const message = ctx.startMessage('assistant', 'text'); ctx.appendText(message, 'Half an answer'); ctx.finishMessage(message, 'complete');
         return { outcome: 'failed', failure: 'it broke' };
       }
+      if (ctx.run.prompt === 'pause') return { outcome: 'paused' }; // a later run that paused for the person
+      if (ctx.run.prompt === 'ask') { // a later run that asks the person and waits
+        ctx.transition('awaiting_permission');
+        await new Promise(resolve => { if (ctx.signal.aborted) resolve(null); else ctx.signal.addEventListener('abort', resolve, { once: true }); });
+        return { outcome: 'cancelled' };
+      }
       if (!ctx.run.execution?.pinned || holdChild) {
         ctx.transition(ctx.run.execution?.pinned && typeof holdChild === 'string' ? holdChild : 'model');
         await new Promise(resolve => { if (ctx.signal.aborted) resolve(null); else ctx.signal.addEventListener('abort', resolve, { once: true }); });
@@ -187,6 +193,36 @@ test('a paused child is not done, and a wait on it returns at once', async () =>
     const { delegation: paused } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(paused).toMatchObject({ state: 'paused', done: false });
+  } finally { await f.close(); }
+});
+
+test('a later run of the child that paused for the person ends a wait on the delegation at once', async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r9' });
+    await f.settled(delegation.runId);
+    const { run: later } = f.runs.start({ sessionId: delegation.sessionId, requestId: 'again', prompt: 'pause' });
+    expect((await f.settled(later.id)).state).toBe('paused');
+    const started = Date.now();
+    const { delegation: seen } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(seen).toMatchObject({ state: 'completed', done: false });
+  } finally { await f.close(); }
+});
+
+test('a wait begun while a later run of the child waits on permission returns at once', async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r10' });
+    await f.settled(delegation.runId);
+    const { run: later } = f.runs.start({ sessionId: delegation.sessionId, requestId: 'again', prompt: 'ask' });
+    while (f.storage.getRun(later.id).state !== 'awaiting_permission') await Bun.sleep(10);
+    const started = Date.now();
+    const { delegation: seen } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(seen).toMatchObject({ state: 'completed', done: false });
   } finally { await f.close(); }
 });
 

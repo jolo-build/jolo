@@ -10,8 +10,8 @@ Branch `feat/native-claude-host` in /Users/ejabbarli/Desktop/jolo, based on upst
 ## Release gate
 This engine work is not to be merged or released on its own (CHANGELOG, Unreleased, first line). Alone it removes the only Stop for background work the current clients have and strands Claude's questions (`dialog.requested`) without a card. It ships together with Plan 2 (Desktop UI).
 
-## Fix before merge (open, small)
-1. `apps/engine/src/delegation/index.js` `check()`: a paused or asking **later** run of the child conversation (a continuation that paused on budget, a background question's short run) does not end a `delegation_status` wait; the wait holds until `maxWaitMs`. Test `ASKING_STATES` against `storage.listRunsForSession(child.sessionId)`, not only the delegated run; add a unit test with a paused later run. Regression against pre-branch behaviour, where `ended` included `paused`.
+## Fix before merge (done 2026-10-24)
+1. `apps/engine/src/delegation/index.js` `check()`: a paused or asking **later** run of the child conversation (a continuation that paused on budget, a background question's short run) did not end a `delegation_status` wait; the wait held until `maxWaitMs`. Fixed: `ASKING_STATES` is tested against `storage.listRunsForSession(child.sessionId)`, not only the delegated run; unit tests cover a paused later run and an asking later run.
 
 ## Owner decisions to confirm
 - A paused or failed parent also stops its completed children's background work (`STOPPED_STATES` includes `paused`/`failed`). This mirrors the existing cancelling of child runs on a parent pause; confirm or narrow to cancelled/failed/interrupted.
