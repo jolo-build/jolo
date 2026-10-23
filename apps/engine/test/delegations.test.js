@@ -150,6 +150,21 @@ test('a wait ends when the child asks for permission, when the waiting tool call
   } finally { await f.close(); }
 });
 
+test('a wait begun while the child runs ends when the child is cancelled or fails without text', async () => {
+  const f = fixture({ holdChild: true });
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r4' });
+    const started = Date.now();
+    const waiting = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 4000 });
+    await Bun.sleep(100);
+    f.service.cancel(f.parent.id, delegation.id);
+    const { delegation: ended } = await waiting;
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(ended).toMatchObject({ state: 'cancelled', done: true, output: '' });
+  } finally { await f.close(); }
+});
+
 test('the hosted bridge waits for delegation_status as long as the tool may take', async () => {
   const calls = [];
   const client = { call: async (...args) => { calls.push(args); return { delegation: {} }; } };

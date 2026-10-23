@@ -197,7 +197,8 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
         const check = () => {
           clearTimeout(recheck);
           const link = links.get(child.sessionId);
-          if (isDone(child, link) || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
+          // Read the run again: one that ended without a word (cancelled, failed) is done all the same.
+          if (isDone(storage.getRun(child.id), link) || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
           if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
         };
         const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: final => { if (waiters.has(waiter)) final ? finish() : check(); } };
