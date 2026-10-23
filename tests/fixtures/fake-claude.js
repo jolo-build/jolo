@@ -84,6 +84,8 @@ let sparesBackground = false;
 /** FAKE_CLAUDE_NO_STOP_TASK=1 is a Claude Code that cannot stop tasks: it refuses every stop_task, and knowing nothing of
  * perTaskStopAffordance, its interrupt ends background work whatever the host declared. */
 const NO_STOP_TASK = process.env.FAKE_CLAUDE_NO_STOP_TASK === "1";
+/** FAKE_CLAUDE_SILENT_STOP_TASK=1 never answers a stop_task, and the task goes on. */
+const SILENT_STOP_TASK = process.env.FAKE_CLAUDE_SILENT_STOP_TASK === "1";
 /** Like the real binary, a subagent's own subagents' tool calls and results reach the host only when it asked for them. */
 let forwardsNested = false;
 const backgroundWork = new Set();
@@ -106,6 +108,7 @@ const inBackground = (fn, ms, taskId = null) => {
 };
 /** stop_task: a running task is stopped once the request is answered, as Claude Code 2.1 does; one that ignores it is only answered. */
 const stopTask = (requestId, taskId) => {
+  if (SILENT_STOP_TASK) return;
   if (NO_STOP_TASK) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task is not supported in this context" } });
   const task = runningTasks.get(taskId);
   if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task: unknown task" } });
@@ -152,9 +155,11 @@ const interrupt = (requestId, cancelQueued = false, names = null) => {
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { still_queued: stillQueued, ...(cancelQueued ? { cancelled } : {}), ...(named ? { turn: spared ? "spared" : current ? "stopped" : "idle" } : {}) } } });
   for (const uuid of cancelled) lifecycle(uuid, "cancelled");
   if (spared) return;
-  // A task that ignored stop_task is ended by the interrupt even when background work is spared.
-  for (const [taskId, task] of runningTasks) if (!sparesBackground || task.stubborn) endTask(taskId, "stopped");
-  if (!sparesBackground) { for (const timer of backgroundWork) clearTimeout(timer); backgroundWork.clear(); }
+  if (!sparesBackground) {
+    for (const taskId of [...runningTasks.keys()]) endTask(taskId, "stopped");
+    for (const timer of backgroundWork) clearTimeout(timer);
+    backgroundWork.clear();
+  }
   if (!current) return;
   const turn = current;
   current = null;
@@ -361,7 +366,7 @@ async function turn(prompt, images = [], uuid = null) {
     inBackground(() => { if (completed) enqueue(() => selfStartedTurn(`${completed} of ${count} tasks done.`, [])); }, ms);
   } else if ((match = prompt.match(/^tasks-stubborn (\d+)$/))) {
     // <n> background tasks that never end by themselves and ignore stop_task: it is answered, and they go on. Only an
-    // interrupt ends them.
+    // interrupt that does not spare background work, or the process's end, ends them.
     const count = Number(match[1]);
     say(`Started ${count} stubborn tasks.`);
     for (let i = 1; i <= count; i++) {

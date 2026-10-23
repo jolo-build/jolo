@@ -582,20 +582,41 @@ test('stopping all background work ends every task without escalating when they 
   await registry.closeAll();
 });
 
-test('background work that ignores stop_task is stopped with an interrupt once the grace is over', async () => {
-  const registry = createHostedLinks({ log });
+test('background work that ignores stop_task is reported not stopped and left running, and the turn under way goes on', async () => {
+  const stopGraceMs = 300;
+  const registry = createHostedLinks({ log, stopGraceMs });
   const link = open(registry);
   await turn(link, 'tasks-stubborn 2', { init: true });
   await waitFor(() => link.activity.tasks.length === 2);
+  const live = turn(link, 'slow 1000 still answered'); // the person's own turn, under way meanwhile
+  await sleep(100);
   const asked = Date.now();
-  expect(await link.stopBackground()).toEqual({ requested: 2, stopped: 0, escalated: true });
+  expect(await link.stopBackground()).toEqual({ requested: 2, stopped: 0, escalated: false });
   const took = Date.now() - asked;
-  expect(took).toBeGreaterThanOrEqual(STOP_TASK_GRACE_MS - 20); // the tasks were given the grace
-  expect(took).toBeLessThan(STOP_TASK_GRACE_MS + 500);
-  await waitFor(() => link.activity.tasks.every(t => t.status === 'stopped')); // the interrupt that followed ended them
+  expect(took).toBeGreaterThanOrEqual(stopGraceMs - 20); // the tasks were given the grace
+  expect(took).toBeLessThan(stopGraceMs + 500);
+  expect((await live).text).toBe('still answered'); // no Stop reached it
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['running', 'running']);
   expect(link.alive).toBe(true);
   await registry.closeAll();
-}, 10_000);
+});
+
+test('a stop_task Claude never answers gives up after the grace, and the process stays', async () => {
+  const stopGraceMs = 300;
+  const registry = createHostedLinks({ log, stopGraceMs });
+  const link = open(registry, 'session', { FAKE_CLAUDE_SILENT_STOP_TASK: '1' });
+  await turn(link, 'tasks 2 5000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  const asked = Date.now();
+  expect(await link.stopTask('task-1')).toEqual({ ok: false, error: 'no answer' });
+  const took = Date.now() - asked;
+  expect(took).toBeGreaterThanOrEqual(stopGraceMs - 20);
+  expect(took).toBeLessThan(stopGraceMs + 500);
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['running', 'running']);
+  expect(link.alive).toBe(true);
+  expect((await turn(link, 'still here?')).text).toMatch(/still here\?$/);
+  await registry.closeAll();
+});
 
 test('stopping background work on a Claude Code that cannot stop tasks interrupts it at once', async () => {
   const registry = createHostedLinks({ log });
@@ -626,15 +647,16 @@ test('stopping background work Claude says is already over reports it not stoppe
     });
     setInterval(() => {}, 1000);
   `;
-  const registry = createHostedLinks({ log });
+  const stopGraceMs = 300;
+  const registry = createHostedLinks({ log, stopGraceMs });
   const link = registry.open({ sessionId: 'over', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', script], env: { PATH: process.env.PATH } }) });
   link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
   await waitFor(() => link.activity.state === 'background');
   const asked = Date.now();
   expect(await link.stopBackground()).toEqual({ requested: 1, stopped: 0, escalated: false });
-  expect(Date.now() - asked).toBeLessThan(STOP_TASK_GRACE_MS); // nothing to wait for once Claude has answered
-  await sleep(STOP_TASK_GRACE_MS + 200); // and nothing sent once the grace would have passed
+  expect(Date.now() - asked).toBeLessThan(stopGraceMs); // nothing to wait for once Claude has answered
+  await sleep(stopGraceMs + 200); // and nothing sent once the grace would have passed
   expect(link.alive).toBe(true);
   expect(link.activity.tasks.map(t => t.status)).toEqual(['running']); // listed as Claude last told it, until its notice comes
   await registry.closeAll();
-}, 10_000);
+});

@@ -30,7 +30,7 @@ const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_QUEUE_BYTES = 128 * 1024 * 1024;
 /** How long a turn is given to end after an interrupt before the process is closed instead. */
 export const INTERRUPT_GRACE_MS = 5_000;
-/** How long stopping background work waits for its tasks to end before it asks the process to stop instead. */
+/** How long stopping a task waits for Claude's answer, and stopping background work for its tasks to end. */
 export const STOP_TASK_GRACE_MS = 3_000;
 /** How long an empty result is taken as possibly ahead of an answer in the same turn (see claude-stream). */
 export const EMPTY_RESULT_GRACE_MS = 20_000;
@@ -105,11 +105,11 @@ export function removeScratch(dir, log, context = {}) {
  * The links of this engine, one per conversation at most.
  * `lifetime` is told while a process has background work running, which keeps the engine up for it with no client.
  * `onActivity` is told what a process is doing as that changes (see `link.activity`).
- * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, scratchRoot?: string, lifetime?: any,
+ * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, scratchRoot?: string, lifetime?: any,
  *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity) => void }} options
  * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
-export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {} }) {
+export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {} }) {
   /** @type {Map<string, any>} sessionId -> link */
   const links = new Map();
   return {
@@ -126,7 +126,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
     open({ sessionId, workspaceId, agentId, identity, cwd, prepare, onClosed = null }) {
       if (links.get(sessionId)?.alive) throw new Error('this conversation already has an agent process');
       const link = createLink({
-        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, scratchRoot, onUnsolicited,
+        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited,
         onBackground: (running) => { if (running) lifetime?.workStarted(); else lifetime?.workFinished(); },
         onActivity: (activity) => onActivity(sessionId, activity),
         // Forgotten the moment the process is gone, before anything waiting on the link is told.
@@ -150,7 +150,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
   };
 }
 
-function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity) => {}, onEnded }) {
+function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity) => {}, onEnded }) {
   // One private scratch directory per process. Never grant access to all of /tmp.
   const scratchDir = realpathSync(mkdtempSync(path.join(scratchRoot, 'jolo-agent-')));
   const { argv, env } = prepare(scratchDir);
@@ -207,20 +207,21 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     for (const uuid of current?.withdrawing ?? []) queued.delete(uuid);
     if (current?.signal.aborted && mainIdle() && !afterEmpty) finishTurn(current, { exited: false });
   };
-  /** @type {Map<string, (answer: { ok: boolean, error: string | null }) => void>} the stop_task requests sent, by request id, with who waits on Claude's answer */
+  /** @type {Map<string, (answer: { ok: boolean, error: string | null }) => void>} the stop_task requests still unanswered, by request id, with who waits on Claude's answer */
   const taskStops = new Map();
   /** @param {string} taskId */
   const stopTask = (taskId) => new Promise((resolve) => {
     if (!alive) { resolve({ ok: false, error: 'process ended' }); return; }
     const requestId = `jolo-stop-task-${++sequence}`;
-    taskStops.set(requestId, resolve);
+    // An answer that has not come within the grace is given up on; one that comes later is ignored.
+    const timer = setTimeout(() => answered({ ok: false, error: 'no answer' }), stopGraceMs);
+    const answered = (answer) => { clearTimeout(timer); taskStops.delete(requestId); resolve(answer); };
+    taskStops.set(requestId, answered);
     write({ type: 'control_request', request_id: requestId, request: { subtype: 'stop_task', task_id: taskId } });
   });
   /** Claude answered a stop_task: the task is on its way out, or Claude says why it is not. */
   const taskStopAnswered = (response) => {
-    const resolve = taskStops.get(response.request_id);
-    taskStops.delete(response.request_id);
-    resolve(response.subtype === 'success' ? { ok: true, error: null } : { ok: false, error: String(response.error ?? 'stop_task failed') });
+    taskStops.get(response.request_id)(response.subtype === 'success' ? { ok: true, error: null } : { ok: false, error: String(response.error ?? 'stop_task failed') });
   };
   // Where each subagent runs, from what every message says whoever holds the conversation: a subagent's messages and
   // its task_started name the Agent/Task call it runs under, and a subagent's own Agent/Task call names the call above.
@@ -493,8 +494,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
         onBackground(false);
         activityChanged(true);
       }
-      for (const resolve of taskStops.values()) resolve({ ok: false, error: 'process ended' }); // no answer comes now
-      taskStops.clear();
+      for (const answered of [...taskStops.values()]) answered({ ok: false, error: 'process ended' }); // no answer comes now
       tasksEnded();
       settleReport();
       try { settled = await child.settle(); } catch { /* the reader already reported */ }
@@ -532,10 +532,11 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   };
 
   /**
-   * Stop every running task with stop_task, and give them STOP_TASK_GRACE_MS to end; if any still runs after that, send
-   * one Stop, as also at once when this Claude Code cannot stop tasks. A task Claude will not stop for another reason (it
-   * does not know it: it has just ended) is not stopped, and no reason to interrupt. `stopped` is how many of the tasks
-   * ended in that time.
+   * Stop every running task with stop_task, and give them the grace (STOP_TASK_GRACE_MS) to end. Only a Claude Code that
+   * cannot stop tasks (it answers `not supported`; its interrupt still ends background work) is sent one Stop instead, at
+   * once. A task still running after the grace, or one Claude will not stop for another reason (it does not know it: it
+   * has just ended), is reported not stopped and left running: a Stop would spare it anyway, and end the person's turn.
+   * `stopped` is how many of the tasks ended in that time.
    * @returns {Promise<{ requested: number, stopped: number, escalated: boolean }>}
    */
   const stopBackground = () => {
@@ -555,7 +556,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       };
       const check = () => { if (!waitedOn().length) end(false); };
       endWatchers.add(check);
-      graceTimer = setTimeout(() => end(true), STOP_TASK_GRACE_MS);
+      graceTimer = setTimeout(() => end(false), stopGraceMs);
       for (const taskId of ids) void stopTask(taskId).then(({ ok, error }) => {
         if (ok) return; // its notice ends it
         if (error?.includes('not supported')) end(true); // this Claude Code cannot stop tasks: only a Stop ends them
@@ -644,7 +645,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     },
     /**
      * Ask the process to stop one background task (an agent, a workflow, a command); its end arrives as a task notice.
-     * `error` is Claude's reason when it will not, or 'process ended'.
+     * `error` is Claude's reason when it will not, 'no answer' when none came within the grace, or 'process ended'.
      * @returns {Promise<{ ok: boolean, error: string | null }>}
      */
     stopTask,

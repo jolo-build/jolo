@@ -783,8 +783,9 @@ export const MethodSchemas = {
   /** What the conversation's agent process is doing now; null when it has none. */
   "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },
   /**
-   * Stop the background work of the conversation's agent process, leaving its turn alone: every running task, then one
-   * Stop if any outlives the grace (`escalated`). `stopped` is how many ended; all zero when it has no process.
+   * Stop the background work of the conversation's agent process, leaving its turn alone: every running task. `stopped`
+   * is how many ended within the grace; `escalated` when Claude cannot stop tasks and was sent a Stop instead. All zero
+   * when it has no process.
    */
   "session.stopBackground": {
     params: z.object({ sessionId: Id }),
