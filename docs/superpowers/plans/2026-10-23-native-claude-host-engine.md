@@ -218,41 +218,53 @@ git commit -m "Let the person stop one background task or all of them; Stop itse
 
 ---
 
-### Task 4: Claude's user dialogs reach Jolo
+### Task 4: Claude's questions to the person reach Jolo as dialogs
+
+Facts (probe 2026-10-23 against Claude Code 2.1.304, recorded in `docs/superpowers/specs/claude-dialogs.md`): in host mode AskUserQuestion and ExitPlanMode arrive as ordinary `can_use_tool` control requests with `requires_user_interaction: true`; `initialize.supportedDialogKinds` changes nothing and no `request_user_dialog` is sent for them. The host answers `{ behavior: 'allow', updatedInput }` — for AskUserQuestion `updatedInput = { ...input, answers: { "<question text>": "<chosen option label>" } }` — or `{ behavior: 'deny', message }`; `{ behavior: 'cancelled' }` is rejected as invalid. Today Jolo treats these as permission requests and, once allowed, sends the input unchanged, so Claude is told "The user did not answer the questions."
 
 **Files:**
-- Create: `apps/engine/src/agents/claude-dialogs.js` (`DIALOG_KINDS`, payload/response helpers), `apps/engine/src/dialogs/service.js` (`createDialogService`), `apps/engine/src/storage/dialogs.js` (`DialogRepository`), migration in `apps/engine/src/storage/schema/` following the latest migration's pattern (`dialogs` table: `id, session_id, run_id, request_id, kind, payload, response, state, created_at, resolved_at`)
-- Modify: `apps/engine/src/agents/claude-stream.js:285-300` (`onControlRequest` branch for `request_user_dialog`), `:561` (`initialize.supportedDialogKinds`), `packages/protocol/src/schemas.js` (events `dialog.requested`, `dialog.resolved`; RPC `dialog.resolve`), `apps/engine/src/rpc/handlers.js`, `apps/engine/src/engine.js` (wire the service), `apps/engine/src/storage/index.js` (repository, `appendEvent` on changes)
+- Create: `apps/engine/src/agents/claude-dialogs.js` (`DIALOG_TOOLS = ['AskUserQuestion', 'ExitPlanMode']`, `isDialogRequest(request)`, `dialogControlResponse(dialog)`), `apps/engine/src/dialogs/service.js` (`createDialogService`), `apps/engine/src/storage/dialogs.js` (`DialogRepository`), `apps/engine/migrations/0019_dialogs.ts` registered in `apps/engine/migrations/index.ts` (table `dialogs`: `id, session_id, run_id, request_id, tool, tool_use_id, input, response, state, created_at, resolved_at`)
+- Modify: `apps/engine/src/agents/claude-stream.js` (`onControlRequest`: dialog branch before the permission path), `packages/protocol/src/schemas.js` (events `dialog.requested`, `dialog.resolved`; RPC `dialog.resolve`, `dialog.dismiss`; `DialogSchema`), `apps/engine/src/rpc/handlers.js`, `apps/engine/src/engine.js` (wire the service), `apps/engine/src/storage/index.js`, `apps/engine/src/storage/records.js` (`mapDialog`)
 - Modify: `tests/fixtures/fake-claude.js` (scenario `ask-user <question>`)
 - Test: `apps/engine/test/dialogs.test.js` (new), `tests/integration/claude-stream.test.js`, `CHANGELOG.md`
-- Record: `docs/superpowers/specs/claude-dialogs.md` (probe results)
 
 **Interfaces:**
-- Produces `DIALOG_KINDS = ['ask_user_question']` (grow per probe; each kind listed only once its request and response shapes are recorded in `claude-dialogs.md`).
-- Produces storage rows `Dialog = { id, sessionId, runId, requestId, kind, payload: object, response: object | null, state: 'requested' | 'answered' | 'cancelled', createdAt, resolvedAt }`.
-- Produces events `dialog.requested { dialogId, runId, kind, payload, toolUseId: string | null }` (sessionId set) and `dialog.resolved { dialogId, state }`.
-- Produces RPC `dialog.resolve { dialogId, response: object }` → `{ dialogId, state: 'answered' }`; a second resolve answers `conflict`.
-- Produces `dialogs.request({ run, requestId, kind, payload, toolUseId })` → `Dialog`, `dialogs.waitForResolution(dialogId, signal)` → `Dialog` (rejects when the signal aborts), `dialogs.cancel(dialogId)`.
-- Run state while a dialog is open: `awaiting_permission` (my call: reuse the existing waiting state; the UI tells dialogs from permissions by the event type).
+- `isDialogRequest(request)` = `request.requires_user_interaction === true || DIALOG_TOOLS.includes(request.tool_name)`.
+- `Dialog = { id, sessionId, runId, requestId, tool, toolUseId: string | null, input: object, response: object | null, state: 'requested' | 'answered' | 'dismissed' | 'cancelled', createdAt, resolvedAt: string | null }`.
+- Events: `dialog.requested { dialogId, runId, tool, input, toolUseId }` (sessionId set); `dialog.resolved { dialogId, state }`.
+- RPC `dialog.resolve { dialogId, response: object }` → `{ dialogId, state: 'answered' }`: the engine writes `{ behavior: 'allow', updatedInput: { ...input, ...response } }` (AskUserQuestion: `response = { answers: {...} }`; ExitPlanMode approval: `response = {}`). RPC `dialog.dismiss { dialogId, message }` → `{ dialogId, state: 'dismissed' }`: the engine writes `{ behavior: 'deny', message }`. A second resolve/dismiss answers `conflict`.
+- Stop while a dialog is open: state `cancelled`, control response `{ behavior: 'deny', message: 'The run was stopped in Jolo.' }`. Claude's `control_cancel_request` for the request: state `cancelled`, nothing written. Exactly one control response per request, guarded per request id.
+- Service: `request({ run, requestId, tool, toolUseId, input })` → Dialog; `waitForResolution(dialogId, signal)` → Dialog (rejects when the signal aborts, after marking the dialog cancelled); `resolve(id, response)`; `dismiss(id, message)`; `cancel(id)`.
+- No permission record and no `permission.requested` event for a dialog request. Nothing is added to `initialize`.
+- Run state while a dialog is open: `awaiting_permission` (my call: reuse the waiting state; the UI tells dialogs from permissions by the event type).
 
-- [ ] **Step 1: Probe the real shapes once** (budget cap 1 USD). Script after `jolo-delegated-child-guard.e2e/claude-host-controls-probe.py` in the owner's workspace: start `claude --print --input-format stream-json --output-format stream-json --max-budget-usd 1`, send `initialize` with `supportedDialogKinds: ["ask_user_question"]`, then the prompt `Use the AskUserQuestion tool to ask me whether I prefer tea or coffee, then reply with my answer.`; capture the `request_user_dialog` message (kind, payload), answer it with the response shape the payload implies, record what Claude accepted, and also record what a declined/cancelled answer looks like (send a second dialog and answer with `{ behavior: "cancelled" }`; note whether Claude accepts it). Write both shapes into `docs/superpowers/specs/claude-dialogs.md`. If the probe shows a different kind name for AskUserQuestion, use that name in `DIALOG_KINDS`.
+- [ ] **Step 1: Teach the fixture.** Scenario `ask-user <question>`: emit `can_use_tool` for tool `AskUserQuestion` with `requires_user_interaction: true` and `input: { questions: [{ question: <question>, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] }` (the probe's shape), wait for its control response: allow with `updatedInput.answers[<question>]` → `say("You answered: <label>")`; deny → `say("No answer: <message>")`. Count control responses per request id and exit with code 70 on a second one, so a duplicate answer fails the test.
 
-- [ ] **Step 2: Teach the fixture.** Scenario `ask-user <question>`: emits `control_request` `{ subtype: "request_user_dialog", dialog_kind: "ask_user_question", payload: <recorded shape with the question> }`, waits for its `control_response`, then says `You answered: <answer text from the recorded response shape>`; a cancelled response makes it say `No answer.`.
+- [ ] **Step 2: Write the failing unit test** `apps/engine/test/dialogs.test.js` (a `Storage` on a temp dir as in `delegations.test.js`): `request(...)` emits `dialog.requested` with the input; `waitForResolution` resolves after `resolve(id, { answers: { q: 'coffee' } })` with `state: 'answered'` and emits `dialog.resolved`; a second `resolve` throws `ProtocolError` `conflict`; `dismiss` yields `dismissed`; `waitForResolution` with a signal that aborts rejects and leaves the dialog `cancelled`.
 
-- [ ] **Step 3: Write the failing unit test** `apps/engine/test/dialogs.test.js`: `createDialogService({ storage })` → `request(...)` emits `dialog.requested`, `waitForResolution` resolves after `resolve(id, response)` with `state: 'answered'` and emits `dialog.resolved`; a second `resolve` throws `ProtocolError` `conflict`; `waitForResolution` with an aborted signal rejects and marks the dialog `cancelled`.
-
-- [ ] **Step 4: Write the failing integration tests** in `claude-stream.test.js`:
+- [ ] **Step 3: Write the failing integration tests** in `claude-stream.test.js`:
 
 ```js
 test('a question Claude asks the person reaches Jolo as a dialog and the answer goes back', async () => {
   const { client, events, session, messagesOf, text } = await boot();
   const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask', prompt: 'ask-user tea or coffee?' });
   const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id));
-  expect(asked.payload.kind).toBe('ask_user_question');
+  expect(asked.payload.tool).toBe('AskUserQuestion');
+  expect(asked.payload.input.questions[0].question).toBe('tea or coffee?');
+  expect(events.some(e => e.type === 'permission.requested' && e.runId === run.id)).toBe(false);
   expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('awaiting_permission');
-  await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: <recorded answer shape for 'coffee'> });
+  await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
   await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'));
   expect(await text((await messagesOf(run.id)).at(-1))).toBe('You answered: coffee');
+});
+
+test('dismissing a dialog tells Claude the person did not answer', async () => {
+  const { client, events, session, messagesOf, text } = await boot();
+  const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-dismiss', prompt: 'ask-user tea or coffee?' });
+  const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id));
+  await client.call('dialog.dismiss', { dialogId: asked.payload.dialogId, message: 'Not now.' });
+  await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'));
+  expect(await text((await messagesOf(run.id)).at(-1))).toBe('No answer: Not now.');
 });
 
 test('stopping a run with a dialog open cancels the dialog and answers Claude exactly once', async () => {
@@ -261,20 +273,21 @@ test('stopping a run with a dialog open cancels the dialog and answers Claude ex
   const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id));
   await client.call('run.cancel', { runId: run.id });
   await waitFor(() => events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled'));
+  await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'));
   await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
 });
 ```
 
-- [ ] **Step 5: Run to verify they fail.** Run: `bun test apps/engine/test/dialogs.test.js tests/integration/claude-stream.test.js -t "dialog"`. Expected: FAIL (module missing; Claude's request answered with "Jolo does not handle").
+- [ ] **Step 4: Run to verify they fail.** `bun test apps/engine/test/dialogs.test.js`; `mkdir -p /tmp/jt; TMPDIR=/tmp/jt bun test tests/integration/claude-stream.test.js -t "dialog"`. Expected: FAIL (module missing; today the request becomes a `permission.requested` event).
 
-- [ ] **Step 6: Implement.** Repository + migration (bump the schema version as the last migration did; `storage/db.js` compares the expected schema). Service with an in-memory waiter map keyed by dialog id, resolved by `resolve`/`cancel`. In `onControlRequest`: when `request.subtype === 'request_user_dialog'`, create the dialog, `ctx.transition('awaiting_permission')`, `await dialogs.waitForResolution(id, withdrawn.signal)`; on answer write `control_response` success with the recorded response shape; on cancel write the recorded cancelled shape; one write per request, guarded by a `answered` flag per request id. `initialize` adds `supportedDialogKinds: DIALOG_KINDS`. Unknown kinds (not in `DIALOG_KINDS`) are answered cancelled at once and logged at `warn`.
+- [ ] **Step 5: Implement** per Interfaces. Repository + migration `0019_dialogs.ts` (follow 0017/0018 for the export shape; register in `index.ts`). Service with an in-memory waiter map keyed by dialog id. In `onControlRequest`, before the permission path: `if (isDialogRequest(request))` → create the dialog, `ctx.transition("awaiting_permission")`, `await dialogs.waitForResolution(id, withdrawn.signal)`; write the allow/deny response from `dialogControlResponse(dialog)`; on Stop write the stop deny; on withdrawal (`control_cancel_request`) write nothing; one write per request id. Remove nothing from the permission path for other tools.
 
-- [ ] **Step 7: Run to verify it passes.** Run the two test files and `bun test apps/engine/test`. Expected: PASS.
+- [ ] **Step 6: Run to verify it passes.** The two test files, then `bun test apps/engine/test`, `bun test packages`, and the whole `claude-stream.test.js`. Expected: PASS (two pre-existing engine failures aside).
 
-- [ ] **Step 8: Commit.**
+- [ ] **Step 7: Commit.**
 
 ```bash
-git add apps/engine/src/agents/claude-dialogs.js apps/engine/src/dialogs apps/engine/src/storage apps/engine/src/agents/claude-stream.js apps/engine/src/engine.js apps/engine/src/rpc/handlers.js packages/protocol/src/schemas.js tests/fixtures/fake-claude.js apps/engine/test/dialogs.test.js tests/integration/claude-stream.test.js docs/superpowers/specs/claude-dialogs.md CHANGELOG.md
+git add apps/engine/src/agents/claude-dialogs.js apps/engine/src/dialogs apps/engine/src/storage apps/engine/migrations apps/engine/src/agents/claude-stream.js apps/engine/src/engine.js apps/engine/src/rpc/handlers.js packages/protocol/src/schemas.js tests/fixtures/fake-claude.js apps/engine/test/dialogs.test.js tests/integration/claude-stream.test.js docs/superpowers/specs/claude-dialogs.md CHANGELOG.md
 git commit -m "Show Claude's questions to the person as dialogs and send their answers back"
 ```
 

@@ -57,7 +57,7 @@ Controls a host may send (`control_request`)
 - `stop_task` {task_id}: stops one background task or one workflow. Verified live: success response, then `task_notification status: stopped`, within 0.2 s.
 - `background_tasks` {tool_use_id?}: move a foreground task to the background (Ctrl+B semantics).
 - `get_task_output`, `send_task_message`, `get_usage`, `get_session_cost`, `get_context_usage`, `set_permission_mode`, `set_model`.
-- `request_user_dialog` {dialog_kind, payload, tool_use_id} comes FROM Claude Code, but only for kinds the host declared in `initialize.supportedDialogKinds`. Kinds present in the binary: `ask_user_question`, `plan_approval` / `exit_plan_mode`, `elicitation` (MCP), `model_consent_fallback`, `elicitation_url_dialog`. Jolo currently declares none and answers every non-permission control request with "Jolo does not handle this request" (claude-stream.js, onControlRequest).
+- Claude's questions to the person (AskUserQuestion, ExitPlanMode / plan approval) arrive in host mode as ordinary `can_use_tool` control requests carrying `requires_user_interaction: true` (probe 2026-10-23 against 2.1.304, `claude-dialogs.md`). The host answers `{ behavior: 'allow', updatedInput }` — for AskUserQuestion with `answers: { "<question>": "<option label>" }` merged into the input — or `{ behavior: 'deny', message }`; `cancelled` is rejected. `request_user_dialog` / `initialize.supportedDialogKinds` exist in the binary for other dialog kinds but are not what these tools use, so Jolo does not declare any. Jolo today treats these requests as permissions and, once allowed, sends the input back unchanged, so Claude is told the person did not answer.
 
 Lifecycle facts
 - In print mode, after the turn and after stdin closes, the process stays open and waits for background work: subagents and workflows until they finish, other work up to `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (default 10 min). Verified: with a background command running it did not exit within 60 s of stdin close.
@@ -117,7 +117,7 @@ The card appears the moment the first `task_started` of a run arrives, before an
 
 ### 5.4 Dialogs: Claude's questions reach the person
 
-- `initialize` declares `supportedDialogKinds` for every kind Jolo renders. First set: `ask_user_question`, `plan_approval` (ExitPlanMode), `elicitation`, `model_consent_fallback`. Unknown kinds are answered as cancelled, and logged, so a new Claude Code never hangs on Jolo.
+- A `can_use_tool` request with `requires_user_interaction: true` (or for a tool in `DIALOG_TOOLS = ['AskUserQuestion', 'ExitPlanMode']`) is a dialog, not a permission: no permission record, a dialog record instead, published as `dialog.requested`, answered by `dialog.resolve { response }` (merged into `updatedInput`, allow) or `dialog.dismiss { message }` (deny). Stop denies with "The run was stopped in Jolo."; a withdrawal by Claude cancels it silently.
 - Each kind renders as a Jolo dialog card next to permission cards, with the same board/notification plumbing. The run shows `awaiting_user` while a dialog is open. Answer, decline, and cancel map to the request's response shape.
 - Background subagents' questions behave as permission requests do today (a short run holds the question).
 
@@ -177,7 +177,7 @@ Phase 3, polish: accounting from `modelUsage` deltas and `get_session_cost` (5.7
 - Where the activity ledger lives (storage events vs in-memory on the link) and how the UI subscribes.
 - Dialog payload and response shapes per kind; read them from the binary schemas (`describe(...)` strings) and confirm with one probe each.
 - Settings schema entries and their migration for existing profiles, following the `budgets.hostedToolDeadlineMs` precedent.
-- Fake Claude fixture extensions: task events, `stop_task`, `request_user_dialog`, `session_state_changed`, delayed exit while tasks are open.
+- Fake Claude fixture extensions: task events, `stop_task`, dialog-style `can_use_tool` with `requires_user_interaction`, `session_state_changed`, delayed exit while tasks are open.
 
 ## 10. Verification
 
