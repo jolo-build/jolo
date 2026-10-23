@@ -2,7 +2,9 @@ import { ProtocolError, TERMINAL_RUN_STATES } from '@jolo/protocol';
 import { modelMentions, modelMentionSelector } from '@jolo/protocol/model-mentions';
 import { newId, now } from '../storage/records.js';
 
-const MAX_MODELS = 16, MAX_CHILDREN = 16, MAX_ACTIVE = 4;
+const MAX_MODELS = 16, MAX_CHILDREN = 16;
+/** The most children of one parent turn that may be working at once. */
+export const MAX_ACTIVE = 4;
 /**
  * How soon a wait looks again at a child process that is idle but not yet through: a finished task's report is due, or
  * a turn it began waits for its run. Nothing is announced when either ends.
