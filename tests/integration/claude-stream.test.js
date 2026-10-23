@@ -1423,6 +1423,17 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
     expect(await text((await messagesOf(run.id)).at(-1))).toBe('You answered: coffee');
   }, 30_000);
 
+  test('a plan approval Claude asks for reaches Jolo as a dialog and approving it lets Claude go on', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'plan', prompt: 'exit-plan Ship it' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect(asked.payload.tool).toBe('ExitPlanMode');
+    expect(asked.payload.input.plan.startsWith('# Ship it')).toBe(true);
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('Plan approved: Ship it');
+  }, 30_000);
+
   test('a client that opens the conversation while a question is still waiting finds it in pendingDialogs until it is answered', async () => {
     const { client, events, session } = await boot();
     const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-page', prompt: 'ask-user tea or coffee?' });

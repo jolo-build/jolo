@@ -31,6 +31,7 @@ const folders = process.argv.includes('--folders');
 if (folders) process.env.JOLO_FOLDERS_SMOKE = '1';
 if (process.argv.includes('--model-controls')) process.env.JOLO_MODEL_CONTROLS_SMOKE = '1';
 if (process.argv.includes('--delegation')) process.env.JOLO_DELEGATION_SMOKE = '1';
+if (process.argv.includes('--background-work')) process.env.JOLO_BACKGROUND_WORK_SMOKE = '1';
 if (process.argv.includes('--models')) process.env.JOLO_MODELS_SMOKE = '1';
 if (process.argv.includes('--history')) process.env.JOLO_HISTORY_SMOKE = '1';
 const browserChat = process.argv.includes('--browser-chat');

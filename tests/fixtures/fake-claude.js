@@ -13,8 +13,10 @@
 // answer, "race-self <text>" begins a turn of its own just before taking up the message (a background task finishing
 // as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, "ask-user
 // <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
-// that question back <ms> later, and anything else just answers in prose. A second control response to one request, or
-// one to a request it took back, makes the fixture exit 70. The other scenarios are described where they are played.
+// that question back <ms> later, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
+// and says whether it was approved or sent back, and anything else just answers in prose. A second control response to
+// one request, or one to a request it took back, makes the fixture exit 70. The other scenarios are described where they
+// are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
 // --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
@@ -379,6 +381,19 @@ async function turn(prompt, images = [], uuid = null) {
     const unanswered = answer === undefined ? (decision.behavior === "allow" ? "The user did not answer the questions." : decision.message) : null;
     out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: unanswered ?? `Your questions have been answered: "${question}"="${answer}". You can now continue with these answers in mind.`, ...(decision.behavior === "allow" ? {} : { is_error: true }) }] }, session_id: sessionId });
     say(unanswered === null ? `You answered: ${answer}` : `No answer: ${unanswered}`);
+  } else if ((match = prompt.match(/^exit-plan (.+)$/s))) {
+    // Claude asks the person to approve its plan (ExitPlanMode). An allow approves it; a deny sends it back with the
+    // person's feedback as its message.
+    turns = 2;
+    const title = match[1];
+    const input = { plan: `# ${title}\n\n1. Do the thing.`, planFilePath: "/tmp/plan.md" };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "ExitPlanMode", input }] }, session_id: sessionId });
+    const decision = await askPerson("ExitPlanMode", input, toolUseId);
+    if (state.interrupted) return;
+    const approved = decision.behavior === "allow";
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: approved ? "User has approved your plan." : decision.message, ...(approved ? {} : { is_error: true }) }] }, session_id: sessionId });
+    say(approved ? `Plan approved: ${title}` : `Plan sent back: ${decision.message}`);
   } else if ((match = prompt.match(/^ask-user-withdraw (\d+)$/))) {
     // Claude asks the person, then takes the question back <ms> later and answers without it.
     const input = { questions: [{ question: "tea or coffee?", header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };

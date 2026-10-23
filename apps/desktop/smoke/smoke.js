@@ -66,6 +66,14 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     } finally { fixture.close(); }
     return;
   }
+  if (process.env.JOLO_BACKGROUND_WORK_SMOKE === '1') {
+    const { runBackgroundWorkSmoke } = await import('./background-work-smoke.js');
+    try {
+      await runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor, report, results });
+      writeFileSync(path.join(results, 'smoke.json'), JSON.stringify(report, null, 2));
+    } finally { fixture.close(); }
+    return;
+  }
   if (process.env.JOLO_CHAT_LAYOUT_SMOKE === '1') {
     const { runChatLayoutSmoke } = await import('./chat-layout-smoke.js');
     try {
