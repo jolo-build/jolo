@@ -6,7 +6,7 @@ import { Storage } from '../src/storage/index.js';
 import { RunService } from '../src/runs/service.js';
 import { SettingsService } from '../src/settings.js';
 import { createDelegationService, delegationInstructions } from '../src/delegation/index.js';
-import { delegationBridge } from '../src/delegation/mcp.js';
+import { REPLY_MARGIN_MS, delegationBridge } from '../src/delegation/mcp.js';
 import { delegationTools } from '../src/tools/delegation.js';
 
 /**
@@ -23,6 +23,10 @@ function fixture({ holdChild = false, childOutcome = 'completed', settings: patc
   const executions = [];
   const runs = new RunService({ storage, log: { error() {}, warn() {} }, lifetime: { workStarted() {}, workFinished() {} },
     executor: { async execute(ctx) {
+      if (ctx.run.prompt === 'fail with text') { // a later run of a child's conversation that says something, then fails
+        const message = ctx.startMessage('assistant', 'text'); ctx.appendText(message, 'Half an answer'); ctx.finishMessage(message, 'complete');
+        return { outcome: 'failed', failure: 'it broke' };
+      }
       if (!ctx.run.execution?.pinned || holdChild) {
         ctx.transition(ctx.run.execution?.pinned && typeof holdChild === 'string' ? holdChild : 'model');
         await new Promise(resolve => { if (ctx.signal.aborted) resolve(null); else ctx.signal.addEventListener('abort', resolve, { once: true }); });
@@ -185,6 +189,18 @@ test('a paused child is not done, and a wait on it returns at once', async () =>
   } finally { await f.close(); }
 });
 
+test("a child's answer is the last text of its newest completed run, not of a later run that failed", async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r8' });
+    await f.settled(delegation.runId);
+    const { run: failed } = f.runs.start({ sessionId: delegation.sessionId, requestId: 'again', prompt: 'fail with text' });
+    expect((await f.settled(failed.id)).state).toBe('failed');
+    expect((await f.service.status(f.parent.id, { delegationId: delegation.id })).delegation.output).toBe('Reviewed by the selected model.');
+  } finally { await f.close(); }
+});
+
 test('the delegation_status tool tells a parent to open a child that waits on the person', () => {
   const status = delegationTools.find(tool => tool.name === 'delegation_status');
   expect(status.description).toContain('If `activity` is working or background, the child is still working; if the child is awaiting_permission or paused, open the child task for user action; do not report `output` as final while `partial` is true.');
@@ -209,7 +225,9 @@ test('the hosted bridge waits for delegation_status as long as the tool may take
   const calls = [];
   const client = { call: async (...args) => { calls.push(args); return { delegation: {} }; } };
   await delegationBridge.call(client, 'ws', { name: 'delegation_status', arguments: { delegationId: 'del-1', waitMs: 600_000 } });
-  expect(calls[0][2].timeoutMs).toBeGreaterThan(3_600_000);
+  const status = delegationTools.find(tool => tool.name === 'delegation_status');
+  expect(calls[0][2].timeoutMs).toBe(status.deadlineMs + REPLY_MARGIN_MS);
+  expect(REPLY_MARGIN_MS).toBeGreaterThan(0);
 });
 
 test('concurrent retries admit one child and active child count is bounded', async () => {

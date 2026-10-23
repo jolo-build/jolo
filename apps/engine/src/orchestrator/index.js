@@ -12,7 +12,7 @@
 // whose run stops for a permission nobody answered is blocked, and the plan waits for the user, exactly as a
 // single task does today.
 import { ProtocolError, PlanPolicySchema, PLAN_TASK_DRAFT_LIMIT } from "@jolo/protocol";
-import { stopBackgroundWork } from "../delegation/index.js";
+import { SETTLE_RECHECK_MS, stopBackgroundWork } from "../delegation/index.js";
 
 /** How a run's ending translates into the state of the task it was carrying out. */
 const OUTCOME = Object.freeze({
@@ -27,8 +27,6 @@ const PAUSE_BLOCKED = Object.freeze({ permission: "permission", user: "declined"
 
 /** What a task whose run completed says while its process finishes the background work it started. */
 const FINISHING_SUMMARY = "finishing background work";
-/** How soon to look again at a process that is idle but has finished background work still to report. */
-const SETTLE_RECHECK_MS = 1_000;
 
 /**
  * @param {{ storage: any, runs: any, catalog: any, log: any, links?: any }} deps

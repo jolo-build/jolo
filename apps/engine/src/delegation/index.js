@@ -6,10 +6,10 @@ const MAX_MODELS = 16, MAX_CHILDREN = 16;
 /** The most children of one parent turn that may be working at once. */
 export const MAX_ACTIVE = 4;
 /**
- * How soon a wait looks again at a child process that is idle but not yet through: a finished task's report is due, or
- * a turn it began waits for its run. Nothing is announced when either ends.
+ * How soon a wait (here, and a plan task's in the orchestrator) looks again at a process that is idle but not yet
+ * through: a finished task's report is due, or a turn it began waits for its run. Nothing is announced when either ends.
  */
-const SETTLE_RECHECK_MS = 1_000;
+export const SETTLE_RECHECK_MS = 1_000;
 const ended = run => !run || TERMINAL_RUN_STATES.includes(run.state) || run.state === 'paused';
 /** A child run in one of these waits on the person: its parent has to say so, and send them to it. */
 const ASKING_STATES = ['awaiting_permission', 'paused'];
@@ -74,12 +74,13 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     return run;
   }
   /**
-   * The child conversation's latest answer: the last text of its newest ended run that has one. A child that carries on
-   * after background work answers again in a run of its own, and that answer replaces the first.
+   * The child conversation's latest answer: the last text of its newest completed run that has one. A child that carries
+   * on after background work answers again in a run of its own, and that answer replaces the first; what a run that
+   * failed or was stopped said is not an answer.
    */
   function latestAnswer(sessionId) {
     for (const run of storage.listRunsForSession(sessionId).toReversed()) {
-      if (!ended(run)) continue;
+      if (run.state !== 'completed') continue;
       const message = storage.listMessagesForRun(run.id).filter(m => m.role === 'assistant' && m.kind === 'text' && m.committedBytes > 0).at(-1);
       if (message) return { runId: run.id, message };
     }

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { delegationTools } from '../tools/delegation.js';
 
 /** How much longer than a tool's deadline the bridge waits for it, so the engine's answer at that deadline still arrives. */
-const REPLY_MARGIN_MS = 5_000;
+export const REPLY_MARGIN_MS = 5_000;
 
 export const delegationBridge = {
   tools: delegationTools.map(tool => {
