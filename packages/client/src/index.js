@@ -1,6 +1,6 @@
 // Node/Bun-compatible socket client. No Bun-only APIs.
 import net from "node:net";
-import { encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, parsePreview, parseBrowserExecute, TerminalOutputSchema, TerminalStateSchema, compareSeq, PROTOCOL_VERSION, ProtocolError, EVENT_TYPES } from "@jolo/protocol";
+import { encodeFrame, createFrameDecoder, parseEnvelope, parseParams, parseResult, parseEvent, parsePreview, parseActivity, parseBrowserExecute, TerminalOutputSchema, TerminalStateSchema, compareSeq, PROTOCOL_VERSION, ProtocolError, EVENT_TYPES } from "@jolo/protocol";
 
 /**
  * @param {{ socketPath: string, token: string, clientKind?: string, build?: string, requestTimeoutMs?: number, idPrefix?: string }} options
@@ -13,6 +13,7 @@ export async function connect(options) {
   const pending = new Map();
   const eventHandlers = new Set();
   const previewHandlers = new Set();
+  const activityHandlers = new Set();
   const closeHandlers = new Set();
   const notificationHandlers = new Map(); // method -> Set<handler>
   let sequence = 0;
@@ -56,6 +57,10 @@ export async function connect(options) {
           const preview = parsePreview(message.params);
           if (!preview.ok) return socket.destroy(preview.error);
           for (const handler of previewHandlers) handler(preview.value);
+        } else if (message.method === "activity") {
+          const activity = parseActivity(message.params);
+          if (!activity.ok) return socket.destroy(activity.error);
+          for (const handler of activityHandlers) handler(activity.value);
         } else {
           const valid = message.method === "terminal.output" ? TerminalOutputSchema.safeParse(message.params).success
             : message.method === "terminal.state" ? TerminalStateSchema.safeParse(message.params).success
@@ -144,6 +149,7 @@ export async function connect(options) {
       subscribing = true;
       if (handlers.onEvent) eventHandlers.add(handlers.onEvent);
       if (handlers.onPreview) previewHandlers.add(handlers.onPreview);
+      if (handlers.onActivity) activityHandlers.add(handlers.onActivity);
       lastSeq = params?.after ?? "0";
       try {
         // An engine that predates event-type negotiation rejects the unknown field — only
@@ -158,6 +164,8 @@ export async function connect(options) {
     },
     onEvent(handler) { eventHandlers.add(handler); return () => eventHandlers.delete(handler); },
     onPreview(handler) { previewHandlers.add(handler); return () => previewHandlers.delete(handler); },
+    /** A process's progress between changes of its state or tasks, while subscribed with `session.activity`. */
+    onActivity(handler) { activityHandlers.add(handler); return () => activityHandlers.delete(handler); },
     onClose(handler) { closeHandlers.add(handler); return () => closeHandlers.delete(handler); },
     /** Engine-initiated notifications other than events/previews (for example browser.execute to a host). */
     onNotification(method, handler) {

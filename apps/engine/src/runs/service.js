@@ -28,6 +28,7 @@ export class RunService {
     this.workspaceBusy = options.workspaceBusy ?? (() => false);
     /** Told when a conversation has no run queued or in progress any more. */
     this.sessionIdle = options.sessionIdle ?? (() => {});
+    /** Transient notifications, never stored: a message's text as it streams ("preview"), a process's progress ("activity"). */
     this.previews = new EventEmitter();
     /** Runs that have just stopped, for services that started them: emits the durable run record. */
     this.settled = new EventEmitter();

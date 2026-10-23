@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DEFAULT_EVENT_TYPES } from "@jolo/protocol";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
 
@@ -40,8 +41,9 @@ async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
+  const activities = [];
   const status = await client.call("engine.status", {});
-  await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event) });
+  await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event), onActivity: (activity) => activities.push(activity) });
   const project = await client.call("project.open", { path: repo });
   const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "hosted", agentId: "claude" });
   const runTo = async (requestId, prompt) => {
@@ -52,7 +54,7 @@ async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {
   const text = async (message) => (await client.call("artifact.read", { artifactId: message.artifactId })).text;
   const messagesOf = async (runId) => (await client.call("run.snapshot", { runId })).messages;
   const starts = () => (existsSync(startsLog) ? readFileSync(startsLog, "utf8").split("\n").filter(Boolean).map(Number) : []);
-  return { home, repo, engine, client, events, project, session, runTo, text, messagesOf, starts };
+  return { home, repo, engine, client, events, activities, project, session, runTo, text, messagesOf, starts };
 }
 
 /**
@@ -352,7 +354,26 @@ describe("one Claude process per conversation", () => {
     expect(live.activity.tasks).toHaveLength(2);
     await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle' && e.payload.tasks.every(t => t.status === 'completed')), { timeoutMs: 5000 });
     const bursts = events.filter(e => e.type === 'session.activity');
-    expect(bursts.length).toBeLessThan(12); // coalesced: not one event per progress message
+    expect(bursts.length).toBeLessThanOrEqual(2 + 2 * 2); // one per state change and per task start or end, none per progress message
+  }, 30_000);
+
+  test('progress of background work reaches clients as it happens, and only state and task changes are kept', async () => {
+    const { engine, client, events, activities, session, runTo } = await boot();
+    // A subscriber that declares only the event types every client knew is never sent an activity notification.
+    const older = await engine.connect();
+    const toOlder = [];
+    await older.subscribe({ eventTypes: [...DEFAULT_EVENT_TYPES] }, { onActivity: (activity) => toOlder.push(activity) });
+    const run = await runTo('bg-progress', 'tasks 2 1000');
+    expect(run.state).toBe('completed');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle' && e.payload.tasks.every(t => t.status === 'completed')), { timeoutMs: 5000 });
+    await waitFor(async () => (await client.call('session.page', { sessionId: session.id })).runs.some(r => r.id !== run.id && r.state === 'completed'), { label: 'the turn reporting the tasks done', timeoutMs: 10_000 });
+    expect(activities.some(a => a.sessionId === session.id && a.activity.state === 'background' && a.activity.tasks.every(t => t.usage.totalTokens !== null))).toBe(true);
+    const durable = events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).map(e => e.payload);
+    expect(durable.length).toBeLessThanOrEqual(2 + 2 * 2); // one per state change and per task start or end
+    const shape = (activity) => JSON.stringify([activity.state, activity.tasks.map(t => [t.taskId, t.status])]);
+    durable.slice(1).forEach((activity, i) => expect(shape(activity)).not.toBe(shape(durable[i]))); // none for usage alone
+    expect(toOlder).toEqual([]);
+    await older.close();
   }, 30_000);
 
   test('session activity is null for a conversation with no process and not_found for an unknown one', async () => {

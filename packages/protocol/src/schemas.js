@@ -203,7 +203,7 @@ export const ResponseSchema = z.union([
 
 export const NotificationSchema = z.object({
   jsonrpc: z.literal("2.0"),
-  method: z.enum(["event", "preview", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
+  method: z.enum(["event", "preview", "activity", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
   params: z.record(z.string(), z.unknown()),
 });
 
@@ -571,6 +571,12 @@ export const ActivitySchema = z.object({
   truncated: z.boolean(),
   updatedAt: IsoTimestamp,
 });
+
+/**
+ * Transient activity: a process's progress between changes of its state or tasks, sent only to subscribers that
+ * declare `session.activity`; never a durable sequence, which only those changes get.
+ */
+export const ActivityNotificationSchema = z.object({ sessionId: Id, activity: ActivitySchema });
 
 /**
  * A process's activity as it goes on the wire: every running task, and the newest finished ones up to
@@ -1332,6 +1338,11 @@ export function parseEvent(value) {
 export function parsePreview(value) {
   const parsed = PreviewSchema.safeParse(value);
   return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: new ProtocolError("invalid_frame", "invalid preview notification") };
+}
+
+export function parseActivity(value) {
+  const parsed = ActivityNotificationSchema.safeParse(value);
+  return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: new ProtocolError("invalid_frame", "invalid activity notification") };
 }
 
 /** Compare durable sequence strings numerically without losing precision. */

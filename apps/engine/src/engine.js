@@ -142,7 +142,12 @@ export function createEngine(options) {
     const emptyResultGraceMs = Number((options.env ?? process.env).JOLO_EMPTY_RESULT_GRACE_MS ?? EMPTY_RESULT_GRACE_MS);
     hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId),
       // What a conversation's process is doing goes to clients as it changes; a conversation deleted meanwhile has no one to tell.
-      onActivity: (sessionId, activity) => { if (storage.getSession(sessionId)) storage.appendEvent({ sessionId, type: 'session.activity', payload: activityPayload(activity) }); } });
+      // A new state or a task started or ended is kept for replay; progress alone is only sent to those listening now.
+      onActivity: (sessionId, activity, reason) => {
+        if (!storage.getSession(sessionId)) return;
+        if (reason === 'progress') runs?.previews.emit('activity', { sessionId, activity: activityPayload(activity) });
+        else storage.appendEvent({ sessionId, type: 'session.activity', payload: activityPayload(activity) });
+      } });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
       mcpConfig, links: hostedLinks, emptyResultGraceMs, dialogs,
       providerFactory, settings: settingsService, native: jolo,

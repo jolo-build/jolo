@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, activityPayload } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -73,6 +73,14 @@ describe("schemas", () => {
     expect(ActivitySchema.safeParse(activity).success).toBe(true);
     expect(TaskRecordSchema.safeParse({ ...task, status: 'paused' }).success).toBe(false);
     expect(GATED_EVENT_TYPES).toContain("session.activity");
+  });
+  test("a process's progress travels as a transient activity notification", () => {
+    const activity = ActivitySchema.parse({ state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() });
+    expect(NotificationSchema.safeParse({ jsonrpc: "2.0", method: "activity", params: { sessionId: 's1', activity } }).success).toBe(true);
+    expect(parseEnvelope({ jsonrpc: "2.0", method: "activity", params: { sessionId: 's1', activity } }).ok).toBe(true);
+    expect(parseActivity({ sessionId: 's1', activity })).toEqual({ ok: true, value: { sessionId: 's1', activity } });
+    expect(parseActivity({ activity }).ok).toBe(false);
+    expect(parseActivity({ sessionId: 's1', activity: { ...activity, state: 'busy' } }).ok).toBe(false);
   });
   describe("an activity with more tasks than a payload carries", () => {
     const updatedAt = new Date().toISOString();

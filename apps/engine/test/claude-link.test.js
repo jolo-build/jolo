@@ -515,6 +515,37 @@ test('the link keeps a record of each background task with its usage and reports
   await registry.closeAll();
 });
 
+test('each activity report says why it was made: a new state, a task started or ended, or only progress', async () => {
+  const seen = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => seen.push({ reason, activity }) });
+  const link = open(registry);
+  // Usage and phases come halfway through, more than a coalescing window before the tasks end.
+  await turn(link, 'tasks 2 1000', { init: true });
+  await waitFor(() => link.activity.state === 'idle', 5000);
+  const statuses = (activity) => activity.tasks.map(t => [t.taskId, t.status]);
+  expect(seen.find(r => r.activity.state === 'background')?.reason).toBe('state');
+  expect(seen.some(r => r.reason === 'progress' && r.activity.tasks.every(t => t.usage.totalTokens !== null))).toBe(true);
+  expect(seen.at(-1)).toMatchObject({ reason: 'state', activity: { state: 'idle' } });
+  seen.forEach(({ reason, activity }, i) => {
+    const before = seen[i - 1]?.activity ?? { state: 'idle', tasks: [] };
+    expect(reason === 'state').toBe(activity.state !== before.state);
+    if (reason === 'progress') expect(statuses(activity)).toEqual(statuses(before)); // no task started or ended
+  });
+  await registry.closeAll();
+});
+
+test('a task ending while others run is reported as a change of tasks', async () => {
+  const seen = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => seen.push({ reason, activity }) });
+  const link = open(registry);
+  await turn(link, 'tasks 2 5000', { init: true });
+  await waitFor(() => link.activity.state === 'background');
+  await link.stopTask('task-1');
+  await waitFor(() => seen.some(r => r.activity.tasks.some(t => t.taskId === 'task-1' && t.status === 'stopped')));
+  expect(seen.at(-1)).toMatchObject({ reason: 'tasks', activity: { state: 'background' } });
+  await registry.closeAll();
+});
+
 test('a task that ends without ever having been seen to start is still recorded', async () => {
   // The fixture's `notify-unknown` ends a task "ghost" it never started, then answers.
   const registry = createHostedLinks({ log });

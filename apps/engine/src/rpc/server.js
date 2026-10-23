@@ -208,8 +208,18 @@ export function createRpcServer(options) {
     }
   };
 
+  // Only a subscriber that declared session.activity knows the activity notification; an older one would drop its connection.
+  const onActivity = (activity) => {
+    for (const conn of connections) {
+      const sub = conn.subscription;
+      if (!sub || (sub.sessionId && sub.sessionId !== activity.sessionId) || !sub.eventTypes.has("session.activity")) continue;
+      send(conn, { jsonrpc: "2.0", method: "activity", params: activity });
+    }
+  };
+
   storage.events.on("event", onEvent);
   previews.on("preview", onPreview);
+  previews.on("activity", onActivity);
 
   const server = net.createServer((socket) => {
     if (closing || connections.size >= LIMITS.maxClients + LIMITS.maxControlClients + MAX_SCOPED_CLIENTS + MAX_CONVERSATION_CLIENTS + 8) { socket.destroy(); return; }
@@ -264,6 +274,7 @@ export function createRpcServer(options) {
       closing = true;
       storage.events.off("event", onEvent);
       previews.off("preview", onPreview);
+      previews.off("activity", onActivity);
       for (const conn of connections) conn.socket.destroy();
       return new Promise((resolve) => server.close(() => resolve()));
     },

@@ -58,6 +58,11 @@ const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped']
  * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing.
  * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], updatedAt: string }} Activity
  */
+/**
+ * Why an activity is reported, the strongest change since the last report first: its state changed, a task started or
+ * ended (its status changed), or only a task's usage, phase or description did.
+ * @typedef {'state' | 'tasks' | 'progress'} ActivityReason
+ */
 
 /**
  * Whether a message from a process no run is listening to is the start of a turn it began by itself. Subagents
@@ -104,9 +109,9 @@ export function removeScratch(dir, log, context = {}) {
 /**
  * The links of this engine, one per conversation at most.
  * `lifetime` is told while a process has background work running, which keeps the engine up for it with no client.
- * `onActivity` is told what a process is doing as that changes (see `link.activity`).
+ * `onActivity` is told what a process is doing as that changes (see `link.activity`), and why.
  * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, scratchRoot?: string, lifetime?: any,
- *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity) => void }} options
+ *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity, reason: ActivityReason) => void }} options
  * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
 export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {} }) {
@@ -128,7 +133,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
       const link = createLink({
         sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited,
         onBackground: (running) => { if (running) lifetime?.workStarted(); else lifetime?.workFinished(); },
-        onActivity: (activity) => onActivity(sessionId, activity),
+        onActivity: (activity, reason) => onActivity(sessionId, activity, reason),
         // Forgotten the moment the process is gone, before anything waiting on the link is told.
         onEnded: () => { if (links.get(sessionId) === link) links.delete(sessionId); try { onClosed?.(); } catch (error) { log.warn('hosted link cleanup failed', { sessionId, error: String(error) }); } },
       });
@@ -150,7 +155,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
   };
 }
 
-function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity) => {}, onEnded }) {
+function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity, /** @type {ActivityReason} */ _reason) => {}, onEnded }) {
   // One private scratch directory per process. Never grant access to all of /tmp.
   const scratchDir = realpathSync(mkdtempSync(path.join(scratchRoot, 'jolo-agent-')));
   const { argv, env } = prepare(scratchDir);
@@ -243,9 +248,11 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   const endWatchers = new Set();
   const tasksEnded = () => { for (const watcher of [...endWatchers]) watcher(); };
   // What the process is doing, told to `onActivity` at most every ACTIVITY_COALESCE_MS while its tasks change, and at
-  // once whenever its state does.
+  // once whenever its state does, with the strongest reason seen since the last report.
   let activityAt = new Date().toISOString();
   let reportedState = 'idle';
+  /** @type {'tasks' | 'progress' | null} how its tasks changed since the last report */
+  let tasksChange = null;
   let activityTimer = null;
   const activityState = () => (current ? 'working' : running() ? 'background' : 'idle');
   /** @returns {Activity} */
@@ -253,13 +260,21 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   const reportActivity = () => {
     if (activityTimer) { clearTimeout(activityTimer); activityTimer = null; }
     const activity = snapshotActivity();
+    /** @type {ActivityReason} */
+    const reason = activity.state !== reportedState ? 'state' : tasksChange ?? 'progress';
     reportedState = activity.state;
-    try { onActivity(activity); } catch (error) { log.warn('could not report what the agent process is doing', { sessionId, agentId, error: String(error?.message ?? error) }); }
+    tasksChange = null;
+    try { onActivity(activity, reason); } catch (error) { log.warn('could not report what the agent process is doing', { sessionId, agentId, error: String(error?.message ?? error) }); }
   };
-  /** Its tasks changed (`tasksChanged`), or a turn began or ended: report it, at once when its state is a new one. */
-  const activityChanged = (tasksChanged = false) => {
+  /**
+   * Its tasks changed (`change`: 'tasks' when one started or ended, 'progress' when only its usage, phase or
+   * description did), or a turn began or ended: report it, at once when its state is a new one.
+   * @param {'tasks' | 'progress' | null} [change]
+   */
+  const activityChanged = (change = null) => {
     const stateChanged = activityState() !== reportedState;
-    if (!tasksChanged && !stateChanged) return;
+    if (!change && !stateChanged) return;
+    if (change && tasksChange !== 'tasks') tasksChange = change;
     activityAt = new Date().toISOString();
     if (stateChanged) reportActivity();
     else if (!activityTimer) { activityTimer = setTimeout(reportActivity, ACTIVITY_COALESCE_MS); activityTimer.unref?.(); }
@@ -306,6 +321,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     if (message.type !== 'system' || !message.task_id) return;
     const at = new Date().toISOString();
     let task = tasks.get(message.task_id);
+    const was = task?.status ?? null;
     if (message.subtype === 'task_started') {
       if (!running()) onBackground(true);
       tasks.delete(message.task_id); // one started again is listed anew, as the newest
@@ -329,7 +345,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       takeUsage(task, message.usage);
     } else return;
     trimTasks();
-    activityChanged(true);
+    // A task listed anew, or one whose status changed, is a change of its tasks; anything else is their progress.
+    activityChanged(message.subtype === 'task_started' || task.status !== was ? 'tasks' : 'progress');
   };
   const follow = (message) => {
     trackTasks(message);
@@ -492,7 +509,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
         const at = new Date().toISOString();
         for (const task of tasks.values()) if (task.status === 'running') { task.status = 'failed'; task.endedAt = at; }
         onBackground(false);
-        activityChanged(true);
+        activityChanged('tasks');
       }
       for (const answered of [...taskStops.values()]) answered({ ok: false, error: 'process ended' }); // no answer comes now
       tasksEnded();
