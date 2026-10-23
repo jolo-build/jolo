@@ -313,8 +313,8 @@ async function turn(prompt, images = [], uuid = null) {
     inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
   } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
-    // <n> background tasks that report their usage halfway through <ms>, end together after it, and are reported in a
-    // turn of their own, as "background" is.
+    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, end together after
+    // it, and are reported in a turn of their own, as "background" is.
     const [count, ms] = [Number(match[1]), Number(match[2])];
     say(`Started ${count} tasks.`);
     const taskIds = [];
@@ -322,13 +322,21 @@ async function turn(prompt, images = [], uuid = null) {
       const taskId = `task-${i}`;
       taskIds.push(taskId);
       out({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `toolu_task_${i}`, description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
-      inBackground(() => out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId }), ms / 2);
+      inBackground(() => {
+        out({ type: "system", subtype: "task_updated", task_id: taskId, patch: { workflow_phase: "review", description: `task ${i}, reviewing` }, session_id: sessionId });
+        out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
+      }, ms / 2);
     }
     inBackground(() => enqueue(() => selfStartedTurn(`All ${count} tasks done.`, taskIds)), ms);
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
     say("A task nobody saw start has ended.");
+  } else if (prompt === "task-updated-stop") {
+    // A background task whose update names its phase and says it was stopped, with no notice of its end; then the turn answers.
+    out({ type: "system", subtype: "task_started", task_id: "patched", description: "patched task", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_updated", task_id: "patched", patch: { phase: "build", status: "stopped" }, session_id: sessionId });
+    say("A task was stopped.");
   } else if ((match = prompt.match(/^background-slow (\d+) (\d+) (.+)$/s))) {
     say("Background work started.");
     const [, delay, ms, text] = match;

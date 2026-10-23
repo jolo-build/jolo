@@ -499,6 +499,8 @@ test('the link keeps a record of each background task with its usage and reports
   expect(link.activity.tasks.map(t => [t.taskId, t.status, t.backgrounded])).toEqual([['task-1', 'running', true], ['task-2', 'running', true]]);
   await waitFor(() => link.activity.tasks.every(t => t.usage.totalTokens !== null));
   expect(link.activity.tasks[1].usage).toEqual({ totalTokens: 2000, toolUses: 2, durationMs: 150 });
+  await waitFor(() => link.activity.tasks.every(t => t.phase !== null));
+  expect(link.activity.tasks.map(t => [t.phase, t.description, t.status])).toEqual([['review', 'task 1, reviewing', 'running'], ['review', 'task 2, reviewing', 'running']]);
   await waitFor(() => link.activity.state === 'idle', 5000);
   expect(link.activity.tasks.map(t => t.status)).toEqual(['completed', 'completed']);
   expect(link.activity.tasks[0].endedAt).not.toBeNull();
@@ -513,6 +515,15 @@ test('a task that ends without ever having been seen to start is still recorded'
   const link = open(registry);
   await turn(link, 'notify-unknown', { init: true });
   expect(link.activity.tasks.find(t => t.taskId === 'ghost')).toMatchObject({ status: 'failed', startedAt: expect.any(String), description: '' });
+  await registry.closeAll();
+});
+
+test('an update that says a task was stopped ends it, before any notice of its end', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'task-updated-stop', { init: true });
+  expect(link.activity.tasks).toEqual([expect.objectContaining({ taskId: 'patched', phase: 'build', status: 'stopped', endedAt: expect.any(String) })]);
+  expect(link.activity.state).toBe('idle');
   await registry.closeAll();
 });
 
