@@ -9,6 +9,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { SessionProjection } from "@jolo/client/projection";
 import { engineCall as call, useEngineConnection } from "./engine-context.jsx";
 import { PendingPermissions } from "./pending-permissions.js";
+import { PendingDialogs } from "./pending-dialogs.js";
 import { useWorkingChanges } from './use-working-changes.js';
 
 const WORKSPACE_EVENTS = new Set(["workspace.created", "workspace.removed"]);
@@ -29,6 +30,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const [sessionId, setSessionId] = useState(null);
   const [error, setError] = useState(null);
   const permissions = useRef(new PendingPermissions());
+  const dialogs = useRef(new PendingDialogs());
+  /** What the selected conversation's Claude process is doing in the background (D4); null until it is read. */
+  const [activity, setActivity] = useState(null);
   const [changes, setChanges] = useState([]);
   const [plans, setPlans] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -128,6 +132,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     setSessionId(id);
     const requests = new PendingPermissions();
     permissions.current = requests;
+    const open = new PendingDialogs();
+    dialogs.current = open;
+    setActivity(null);
     setChanges([]);
     void refreshSchedules(id); // the panels menu badges this task's heartbeats before its panel opens
     history.current = null;
@@ -148,6 +155,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       ? sessionsRef.current.map(session => session.id === id ? page.session : session)
       : [...sessionsRef.current, page.session]);
     requests.seed(page.pendingPermissions ?? [], page.cursor);
+    open.seed(page.pendingDialogs ?? [], page.cursor);
+    // An older engine has no session.activity; a reply for a conversation no longer shown is dropped (Review Focus 1).
+    void call("session.activity", { sessionId: id }).then(r => { if (sessionRef.current === id && projection.current === next) setActivity(r.activity); }).catch(() => {});
     // An engine already running during a desktop update may predate snapshot permissions.
     if (page.pendingPermissions === undefined) {
       void call("board.list", {}).then(({ projects }) => {
@@ -364,6 +374,27 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
 
   const resumeRun = useCallback(async (runId) => call("run.resume", { runId }), []);
 
+  const stopBackground = useCallback(async () => call("session.stopBackground", { sessionId: sessionRef.current }), []);
+  const stopTask = useCallback(async (taskId) => call("session.stopTask", { sessionId: sessionRef.current, taskId }), []);
+  const closeProcess = useCallback(async () => call("session.closeProcess", { sessionId: sessionRef.current }), []);
+  const resolveDialog = useCallback(async (dialogId, response) => {
+    const open = dialogs.current;
+    await call("dialog.resolve", { dialogId, response });
+    open.remove(dialogId);
+    redraw();
+  }, [redraw]);
+  const dismissDialog = useCallback(async (dialogId, message) => {
+    const open = dialogs.current;
+    await call("dialog.dismiss", { dialogId, message });
+    open.remove(dialogId);
+    redraw();
+  }, [redraw]);
+  /** The selected conversation's delegated children; an older engine without delegation.list has none to show. */
+  const delegationList = useCallback(async () => {
+    try { return (await call("delegation.list", { sessionId: sessionRef.current })).delegations; }
+    catch (error) { if (error.code === "unknown_method") return []; throw error; }
+  }, []);
+
   /** Jump from a board row into its project and task; the row's pending request opens as the dialog. */
   const openFromBoard = useCallback(async (row) => {
     const current = projectRef.current;
@@ -454,12 +485,16 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
             }
             if (item.value.type === "context.compacted") showNotice({ key: `compact:${item.value.sessionId}`, tone: "muted", title: "Context compacted", body: `${item.value.payload.summarizedItems} earlier items summarized` });
             permissions.current.apply(item.value);
+            dialogs.current.apply(item.value);
+            if (item.value.type === "session.activity") setActivity(item.value.payload);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));
           }
           if (item.value.type.startsWith("session.") || (item.value.type === "run.state" && TERMINAL.has(item.value.payload.state))) sessionsChanged = true;
           if (item.value.sessionId === sessionRef.current && (item.value.type === "session.deleted" || (item.value.type === "session.updated" && item.value.payload.session.state !== historyRef.current))) void selectSession(null);
         } else if (item.kind === "preview" && item.value.sessionId === sessionRef.current && current) {
           current.applyPreview(item.value);
+        } else if (item.kind === "activity" && item.value.sessionId === sessionRef.current) {
+          setActivity(item.value.activity);
         }
       }
       if (sessionsChanged) void refreshSessions();
@@ -490,11 +525,12 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     // A turn Claude began by itself is not a message the user queued.
     queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued' && (run.prompt || run.promptPreview)) : [],
     usageFor: usageSummary, taskAgents,
-    pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
+    pendingPermission: permissions.current.first, pendingDialog: dialogs.current.first, activity, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
     board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
     plans, refreshPlans,
     schedules, refreshSchedules,
     openProject, selectSession, newSession, newChat, send, sendNow, removeQueued, cancel, refreshSettings, resolvePermission, resumeRun, loadDiff, loadFile, revertChange,
+    stopBackground, stopTask, closeProcess, resolveDialog, dismissDialog, delegationList,
     call,
   };
 }
