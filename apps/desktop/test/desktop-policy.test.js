@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { installBrowserHost } from '../src/main/browser-host.js';
 import { createAttentionService } from '../src/main/attention-service.js';
+import { noticeFrom, withoutAnswered } from '../src/renderer/engine-context.jsx';
 import { projectAX } from '../src/main/ax-projection.js';
 import { readFileSync } from 'node:fs';
 import { METHOD_NAMES } from '@jolo/protocol';
@@ -71,14 +72,19 @@ function attentionFixture({ focused = true, read } = {}) {
     close() { this.closed = true; }
   }
   const pending = [{ permissionId: 'approval', runId: 'r', summary: 'run command' }];
+  /** A question Claude asks, as its dialog.requested event and the page's pendingDialogs show it. @type {{ dialogId: string, runId: string, tool: string, input: any, toolUseId: string | null }} */
+  const question = { dialogId: 'dlg', runId: 'r', tool: 'AskUserQuestion', input: { questions: [{ question: 'tea or coffee?', header: 'Choice', options: [], multiSelect: false }] }, toolUseId: null };
+  const dialogs = [question];
   // Partial doubles again, including the Notification class above, which implements only the three
   // members the service uses and records what it was asked to show.
-  const service = createAttentionService({ bridge: { rawCall: read ?? (async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: pending }) },
+  const service = createAttentionService({ bridge: { rawCall: read ?? (async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: pending, pendingDialogs: dialogs }) },
     window: /** @type {any} */ ({ isDestroyed: () => false, isFocused: () => focused, webContents: { send: (_channel, notice) => notices.push(notice) } }),
     app: /** @type {any} */ ({ dock: { setBadge() {} }, setBadgeCount() {}, getName: () => 'Jolo' }), Notification: /** @type {any} */ (Notification), log });
   const requested = { type: 'permission.requested', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', summary: 'run command' } };
   const resolved = { type: 'permission.resolved', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', decision: 'allow_run' } };
-  return { service, notices, notifications, pending, row, requested, resolved };
+  const asked = { type: 'dialog.requested', runId: 'r', sessionId: 's', payload: question };
+  const answered = { type: 'dialog.resolved', runId: 'r', sessionId: 's', payload: { dialogId: 'dlg', state: 'answered' } };
+  return { service, notices, notifications, pending, dialogs, question, row, requested, resolved, asked, answered };
 }
 
 test('a decision cancels a notice still waiting on a board read', async () => {
@@ -118,6 +124,98 @@ test('approving closes the OS notification and a late OS failure cannot restore 
     f.notifications[0].emit('failed', {}, 'late failure');
     expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(0);
   } finally { f.service.dispose(); }
+});
+
+test('a question Claude asks is told like an approval, and withdrawn once answered', async () => {
+  const f = attentionFixture();
+  try {
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]).toMatchObject({ kind: 'approval', dialogId: 'dlg', permissionId: null, title: 'repo needs your answer', body: 'tea or coffee?' });
+    f.dialogs.length = 0;
+    f.service.onEvent(f.answered);
+    await Bun.sleep(1);
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+    expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(1);
+  } finally { f.service.dispose(); }
+});
+
+test('a plan says it is ready for review, a question too long to send names its tool, and both may sound', async () => {
+  const f = attentionFixture({ focused: false });
+  try {
+    f.dialogs[0] = { ...f.question, tool: 'ExitPlanMode', input: { plan: 'Rename the module' } };
+    f.service.onEvent({ ...f.asked, payload: f.dialogs[0] });
+    await Bun.sleep(1);
+    expect(f.notifications[0].options).toEqual({ title: 'repo needs your answer', body: 'Plan ready for your review', silent: false });
+    f.service.onEvent(f.answered);
+    expect(f.notifications[0].closed).toBe(true);
+    f.dialogs[0] = { ...f.question, dialogId: 'dlg2', input: { truncated: true, preview: '{"questions":[{"question":"tea or' } };
+    f.service.onEvent({ ...f.asked, payload: f.dialogs[0] });
+    await Bun.sleep(1);
+    expect(f.notifications[1].options).toEqual({ title: 'repo needs your answer', body: 'AskUserQuestion', silent: false });
+  } finally { f.service.dispose(); }
+});
+
+test('a question already answered by the time it is read produces no notice', async () => {
+  const f = attentionFixture();
+  try {
+    f.dialogs.length = 0;
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(0);
+  } finally { f.service.dispose(); }
+});
+
+test('answering a question cancels its notice still waiting on a board read', async () => {
+  /** @type {(value: any) => void} the board read's resolve, captured by the promise below */
+  let release;
+  // The page still lists the question, as if it was read before the answer arrived.
+  const f = attentionFixture({ focused: false, read: async method => method === 'board.list' ? new Promise(resolve => { release = resolve; }) : { pendingPermissions: [], pendingDialogs: f.dialogs } });
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.answered);
+    release({ projects: [f.row] });
+    await Bun.sleep(1);
+    expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(0);
+    expect(f.notifications).toHaveLength(0);
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+  } finally { f.service.dispose(); }
+});
+
+test('a question replayed while still open is told once', async () => {
+  const f = attentionFixture();
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(1);
+  } finally { f.service.dispose(); }
+});
+
+test('a question is withdrawn when its run ends, and answering a permission of that run does not withdraw it', async () => {
+  /** @type {(value: any) => void} the board read's resolve, captured by the promise below */
+  let release;
+  const f = attentionFixture({ read: async method => method === 'board.list' ? new Promise(resolve => { release = resolve; }) : { pendingPermissions: [], pendingDialogs: f.dialogs } });
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.resolved);
+    release({ projects: [f.row] });
+    await Bun.sleep(1);
+    expect(f.notices.filter(notice => !notice.dismiss)).toMatchObject([{ dialogId: 'dlg' }]);
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'cancelled' } });
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+  } finally { f.service.dispose(); }
+});
+
+test('the app drops the notice of a question once it is answered, and only that notice', () => {
+  const news = { kind: 'approval', projectId: 'p', rootPath: '/repo', sessionId: 's', tone: 'needs', at: 1 };
+  const question = noticeFrom({ ...news, permissionId: null, dialogId: 'dlg', title: 'repo needs your answer', body: 'tea or coffee?' });
+  const approval = noticeFrom({ ...news, permissionId: 'approval', title: 'repo needs your approval', body: 'run command' });
+  const engine = { key: 'engine', tone: 'needs', title: 'Local engine stopped', body: '' };
+  // Main's dismissal { dismiss: true, dialogId } and the dialog.resolved event's payload both name the question by its id.
+  expect(withoutAnswered([question, approval, engine], { dialogId: 'dlg' })).toEqual([approval, engine]);
+  expect(withoutAnswered([question, approval, engine], { permissionId: 'approval' })).toEqual([question, engine]);
 });
 
 test('commands covered by a standing approval generate no approval notices', async () => {

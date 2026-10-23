@@ -18,6 +18,28 @@ const NOTIFY_LIMIT = 4;
 
 const BOARD_EVENTS = new Set(["run.state", "permission.requested", "permission.resolved", "workspace.viewed", "workspace.created", "workspace.removed", "session.created", "session.updated", "session.deleted", "files.changed", "run.verification", "tool.started", "tool.completed"]);
 
+/** The notice for news from main. Its focus says what opening it shows, and which request's answer retires it. */
+export function noticeFrom(payload) {
+  return {
+    key: `${payload.sessionId ?? payload.projectId ?? payload.kind}:${payload.kind}:${payload.title}`,
+    tone: payload.tone ?? "muted",
+    title: payload.title,
+    body: payload.body,
+    at: payload.at ?? Date.now(),
+    focus: { projectId: payload.projectId, rootPath: payload.rootPath, sessionId: payload.sessionId, permissionId: payload.permissionId ?? null, dialogId: payload.dialogId ?? null },
+  };
+}
+
+/**
+ * The notices still news once a request is answered: a permission named by its id, or a question Claude asked by its
+ * dialog id. A notice about neither, such as the engine's, stays.
+ * @param {any[]} notices @param {{ permissionId?: string | null, dialogId?: string | null }} answered
+ */
+export function withoutAnswered(notices, { permissionId = null, dialogId = null }) {
+  const about = dialogId ? (notice) => notice.focus?.dialogId === dialogId : permissionId ? (notice) => notice.focus?.permissionId === permissionId : () => false;
+  return notices.filter((notice) => !about(notice));
+}
+
 // All panes share connection status, provider settings, and one debounced board subscription.
 export function EngineProvider({ children }) {
   const [engine, setEngine] = useState({ connected: false });
@@ -80,9 +102,9 @@ export function EngineProvider({ children }) {
       if (!timer && items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
       // A request that has been answered is no longer news, wherever it was answered.
       for (const item of items) {
-        if (item.kind !== "event" || item.value.type !== "permission.resolved") continue;
-        const { permissionId } = item.value.payload;
-        setNotices((list) => list.filter((notice) => notice.focus?.permissionId !== permissionId));
+        if (item.kind !== "event") continue;
+        if (item.value.type === "permission.resolved") setNotices((list) => withoutAnswered(list, { permissionId: item.value.payload.permissionId }));
+        else if (item.value.type === "dialog.resolved") setNotices((list) => withoutAnswered(list, { dialogId: item.value.payload.dialogId }));
       }
     });
     // News from main, which alone knows whether the window is focused. A task the user is already watching
@@ -90,18 +112,11 @@ export function EngineProvider({ children }) {
     const offNotice = window.jolo.onNotice((payload) => {
       if (disposed) return;
       if (payload.dismiss) {
-        setNotices(list => list.filter(notice => notice.focus?.permissionId !== payload.permissionId));
+        setNotices(list => withoutAnswered(list, payload));
         return;
       }
       if (payload.sessionId && (payload.kind === "approval" ? approvalOnScreen : onScreen).current.has(payload.sessionId)) return;
-      showNotice({
-        key: `${payload.sessionId ?? payload.projectId ?? payload.kind}:${payload.kind}:${payload.title}`,
-        tone: payload.tone ?? "muted",
-        title: payload.title,
-        body: payload.body,
-        at: payload.at ?? Date.now(),
-        focus: { projectId: payload.projectId, rootPath: payload.rootPath, sessionId: payload.sessionId, permissionId: payload.permissionId ?? null },
-      });
+      showNotice(noticeFrom(payload));
     });
     return () => { disposed = true; offEngine(); offEvents(); offNotice(); clearTimeout(timer); clearTimeout(offline); };
   }, [refreshSettings, refreshBoard, refreshCatalog, showNotice, dismissNotice]);
