@@ -74,14 +74,32 @@ describe("schemas", () => {
     expect(TaskRecordSchema.safeParse({ ...task, status: 'paused' }).success).toBe(false);
     expect(GATED_EVENT_TYPES).toContain("session.activity");
   });
-  test("an activity with more tasks than a payload carries keeps the newest and says some were left out", () => {
+  describe("an activity with more tasks than a payload carries", () => {
     const updatedAt = new Date().toISOString();
-    const task = (i) => ({ taskId: `t${i}`, runId: null, toolUseId: null, description: '', subagentType: null, phase: null, backgrounded: true, status: 'running', startedAt: updatedAt, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null } });
-    const many = activityPayload({ state: 'background', tasks: Array.from({ length: TASK_HISTORY_LIMIT + 2 }, (_, i) => task(i)), updatedAt });
-    expect(many.truncated).toBe(true);
-    expect(many.tasks.map(t => t.taskId)).toEqual(Array.from({ length: TASK_HISTORY_LIMIT }, (_, i) => `t${i + 2}`));
-    expect(ActivitySchema.safeParse(many).success).toBe(true);
-    expect(activityPayload({ state: 'idle', tasks: [task(0)], updatedAt })).toEqual({ state: 'idle', tasks: [task(0)], truncated: false, updatedAt });
+    const task = (taskId, status = 'completed') => ({ taskId, runId: null, toolUseId: null, description: '', subagentType: null, phase: null, backgrounded: true, status, startedAt: updatedAt, endedAt: status === 'running' ? null : updatedAt, usage: { totalTokens: null, toolUses: null, durationMs: null } });
+    const finished = (count) => Array.from({ length: count }, (_, i) => task(`done-${i}`));
+    test("keeps an old running task and the newest finished ones, and says finished ones were left out", () => {
+      const payload = activityPayload({ state: 'background', tasks: [task('old-running', 'running'), ...finished(TASK_HISTORY_LIMIT + 1)], updatedAt });
+      expect(payload.tasks.map(t => t.taskId)).toContain('old-running');
+      expect(payload.truncated).toBe(true);
+      expect(payload.tasks.map(t => t.taskId)).toEqual(['old-running', ...Array.from({ length: TASK_HISTORY_LIMIT - 1 }, (_, i) => `done-${i + 2}`)]);
+      expect(ActivitySchema.safeParse(payload).success).toBe(true);
+    });
+    test("never drops a running task, even past the limit, and is truncated only when finished ones go", () => {
+      const running = Array.from({ length: TASK_HISTORY_LIMIT + 1 }, (_, i) => task(`running-${i}`, 'running'));
+      const crowded = activityPayload({ state: 'background', tasks: [...finished(1), ...running], updatedAt });
+      expect(crowded.tasks).toEqual(running);
+      expect(crowded.truncated).toBe(true);
+      expect(ActivitySchema.safeParse(crowded).success).toBe(true);
+      const onlyRunning = activityPayload({ state: 'background', tasks: running, updatedAt });
+      expect(onlyRunning).toEqual({ state: 'background', tasks: running, truncated: false, updatedAt });
+      expect(ActivitySchema.safeParse(onlyRunning).success).toBe(true);
+    });
+    test("passes a small activity through whole, and the schema still bounds finished tasks", () => {
+      expect(activityPayload({ state: 'idle', tasks: finished(1), updatedAt })).toEqual({ state: 'idle', tasks: finished(1), truncated: false, updatedAt });
+      expect(ActivitySchema.safeParse({ state: 'idle', tasks: finished(TASK_HISTORY_LIMIT + 1), truncated: false, updatedAt }).success).toBe(false);
+      expect(ActivitySchema.safeParse({ state: 'background', tasks: [task('r', 'running'), ...finished(TASK_HISTORY_LIMIT)], truncated: false, updatedAt }).success).toBe(false);
+    });
   });
   test("rpc errors never leak internal messages", () => {
     const e = toRpcError(new Error("stack trace with secrets"));

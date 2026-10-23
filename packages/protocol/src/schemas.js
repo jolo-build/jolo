@@ -541,8 +541,12 @@ export const ScheduleSchema = z.object({
 // What a conversation's agent process is doing between and during turns: the background tasks it runs (agents,
 // workflows, commands) and those it finished lately.
 
-/** The most tasks an activity names; a process that has more is cut to its newest. */
+/**
+ * The most tasks an activity names, unless more than that are running: running tasks are never dropped. Finished
+ * ones fill the room left, the newest kept.
+ */
 export const TASK_HISTORY_LIMIT = 200;
+const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
 
 export const TaskRecordSchema = z.object({
   taskId: z.string(),
@@ -558,16 +562,30 @@ export const TaskRecordSchema = z.object({
   usage: z.object({ totalTokens: z.number().nullable(), toolUses: z.number().nullable(), durationMs: z.number().nullable() }),
 });
 
-/** `truncated` says the process had more tasks than these, the newest TASK_HISTORY_LIMIT (it never forgets running ones). */
+/** `truncated` says the process had finished tasks left out of these. */
 export const ActivitySchema = z.object({
   state: z.enum(["idle", "working", "background"]),
-  tasks: z.array(TaskRecordSchema).max(TASK_HISTORY_LIMIT),
+  tasks: z.array(TaskRecordSchema).refine((tasks) => tasks.length <= Math.max(TASK_HISTORY_LIMIT, runningCount(tasks)), { message: `at most ${TASK_HISTORY_LIMIT} tasks, unless more are running: running tasks are never dropped` }),
   truncated: z.boolean(),
   updatedAt: IsoTimestamp,
 });
 
-/** A process's activity as it goes on the wire: its newest TASK_HISTORY_LIMIT tasks, and whether any were left out. */
-export const activityPayload = ({ state, tasks, updatedAt }) => ({ state, tasks: tasks.slice(-TASK_HISTORY_LIMIT), truncated: tasks.length > TASK_HISTORY_LIMIT, updatedAt });
+/**
+ * A process's activity as it goes on the wire: every running task, and the newest finished ones up to
+ * TASK_HISTORY_LIMIT in all, in the order they started; `truncated` when finished ones were left out.
+ */
+export const activityPayload = ({ state, tasks, updatedAt }) => {
+  const running = runningCount(tasks);
+  const room = Math.max(0, TASK_HISTORY_LIMIT - running); // for finished tasks
+  let left = Math.max(0, tasks.length - running - room); // the oldest finished ones, left out
+  const truncated = left > 0;
+  const kept = tasks.filter((task) => {
+    if (task.status === "running" || left === 0) return true;
+    left -= 1;
+    return false;
+  });
+  return { state, tasks: kept, truncated, updatedAt };
+};
 
 /** A task as it is written down, before it has an identity. */
 export const PlanTaskDraftSchema = z.object({
