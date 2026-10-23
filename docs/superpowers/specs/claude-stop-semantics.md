@@ -91,3 +91,17 @@ What follows for Jolo:
 - So the capability fallback in spec §5.3 ("if `stop_task` is not supported, Stop background work falls back to
   `interrupt`") stops background agents on such a binary, but not background commands. Only `stop_task` (or closing the
   process) ends a background command.
+
+## Run 3 (controller, 2026-10-23): a background *agent* under `perTaskStopAffordance: true`
+
+Same launch as above, `--max-budget-usd 1.5`. `initialize` carried `perTaskStopAffordance: true` and `forwardNestedSubagentToolCalls: true`.
+
+1. Prompt: `Use the Agent tool with run_in_background set to true to start one general-purpose subagent whose only job is to run the shell command "sleep 150" with Bash and then reply done. Do not wait for it. Then reply with exactly: launched`
+   - `task_started` at 6.3 s: `task_id a1ddd6d7…`, description `Sleep 150 seconds`, `is_backgrounded: true`; the subagent's `can_use_tool` for Bash was allowed by the host; result `launched` at 9.5 s (0.50 USD).
+   - `ps`: a `sleep 150` process alive.
+2. Second prompt `Count slowly from 1 to 200, one number per line.`; on its first `stream_event` the host sent `{ subtype: "interrupt", cancel_queued: true }` (78.0 s).
+   - Within 12 s after the interrupt: no `agents_killed`, no `task_notification` for the agent task. `sleep 150` still alive.
+   - Results seen: `launched`; the interrupted count (`1\n2\n…`); then a self-started turn `The background agent reported an interim…` (the agent kept working and reported).
+3. stdin closed at ~95 s; process exited 0.4 s later with code 0.
+
+Verdict: with the declaration, an interrupt ends the turn and spares a background **subagent** as well as a background command. This closes the half the earlier runs could not show. The control case (no declaration, background agent) was not run; the design does not depend on it.
