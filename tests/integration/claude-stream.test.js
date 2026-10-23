@@ -55,6 +55,18 @@ async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {
   return { home, repo, engine, client, events, project, session, runTo, text, messagesOf, starts };
 }
 
+/**
+ * A parent run kept live, as a delegating parent is while it waits on its children: the fixture asks permission for
+ * its command and nobody answers. Its prompt selects the fixture itself as the delegation model `m1`.
+ */
+async function bootWithParent() {
+  const booted = await boot({ manifest: { modelArgs: ['--model', '{model}'] } });
+  const { client, events, session } = booted;
+  const { run: parent } = await client.call('run.start', { sessionId: session.id, requestId: 'parent', prompt: 'run sleep 600 ^agent:claude/default' });
+  await waitFor(() => events.some(e => e.type === 'permission.requested' && e.runId === parent.id), { label: 'the parent waits on its permission', timeoutMs: 20_000 });
+  return { ...booted, parent };
+}
+
 describe("Claude Code through its structured stream", () => {
   test('Claude reports how full its window is, from its own usage report', async () => {
     const { runTo } = await boot();
@@ -1385,5 +1397,19 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
     // An answer to the question it took back would have made Claude leave; the same process answers the next message.
     expect((await runTo('after-withdraw', 'still here?')).state).toBe('completed');
     expect(starts()).toHaveLength(1);
+  }, 30_000);
+});
+
+describe('A delegated Claude child', () => {
+  test('a delegated child that keeps working after its first answer is done only when its process is idle, and the follow-up is its answer', async () => {
+    const { client, events, parent } = await bootWithParent();
+    try {
+      const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'bg child', prompt: 'background 1500 Follow-up: all good', requestId: 'c1' } });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered' });
+      const early = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id } });
+      expect(early.delegation).toMatchObject({ done: false, partial: true, activity: 'background', output: 'Background work started.' });
+      const late = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(late.delegation).toMatchObject({ done: true, partial: false, output: 'Follow-up: all good' });
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
   }, 30_000);
 });

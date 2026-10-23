@@ -879,6 +879,12 @@ export const DelegationSchema = z.object({
   id: Id, parentRunId: Id, runId: Id, sessionId: Id, title: z.string(), modelAlias: z.string(),
   state: RunStateSchema, failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
   createdAt: IsoTimestamp, output: z.string(), truncated: z.boolean(),
+  /** What the child's agent process is doing; null when it has none running. */
+  activity: z.enum(['idle', 'working', 'background']).nullable(),
+  /** Its runs have ended and its process is idle: `output` is its answer. */
+  done: z.boolean(),
+  /** `output` is there but the child is not done: it may still be followed by another answer. */
+  partial: z.boolean(),
 });
 
 Object.assign(MethodSchemas, {
@@ -952,6 +958,15 @@ const BudgetPatchSchema = z.object({
   hostedToolDeadlineMs: BudgetSettingsSchema.shape.hostedToolDeadlineMs.removeDefault().optional(),
 });
 
+export const DelegationSettingsSchema = z.object({
+  /** The longest a parent's delegation_status may wait inside Jolo for a child, spending no model turns. */
+  maxWaitMs: z.number().int().min(1_000).max(3_600_000).default(600_000),
+});
+
+const DelegationPatchSchema = z.object({
+  maxWaitMs: DelegationSettingsSchema.shape.maxWaitMs.removeDefault().optional(),
+});
+
 export const SettingsSchema = z.object({
   model: ModelRefSchema.nullable().default(null),
   providers: ProviderOverridesSchema.default({}),
@@ -959,6 +974,8 @@ export const SettingsSchema = z.object({
   /** Read-only engine capability; older engines do not advertise demo support. */
   demoProviderEnabled: z.boolean().default(false),
   budgets: BudgetSettingsSchema,
+  /** Older engines do not report it; their parent waits are capped at the default. */
+  delegation: DelegationSettingsSchema.prefault({}),
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
   /** Agents ("agent:<id>") and providers ("provider:<preset>") the user keeps out of the model menu. */
@@ -1036,6 +1053,7 @@ Object.assign(MethodSchemas, {
       model: ModelRefSchema.nullable().optional(),
       providers: ProviderOverridesSchema.optional(),
       budgets: BudgetPatchSchema.optional(),
+      delegation: DelegationPatchSchema.optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
       hiddenSources: z.array(z.string().min(1).max(80)).max(100).optional(),
     }),

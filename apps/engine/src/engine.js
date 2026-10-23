@@ -153,7 +153,7 @@ export function createEngine(options) {
     }, workspaceBusy: id => worktrees.isBusy(id),
     // A turn the agent began by itself while a run held its conversation waits; offer it again once the conversation is free.
     sessionIdle: sessionId => hostedLinks?.reoffer(sessionId) });
-    delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory });
+    delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links: hostedLinks, settings: settingsService });
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
     // Plans are reconciled after runs, so a task whose run has just been called interrupted is seen as such.

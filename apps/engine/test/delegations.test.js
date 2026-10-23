@@ -4,9 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { Storage } from '../src/storage/index.js';
 import { RunService } from '../src/runs/service.js';
+import { SettingsService } from '../src/settings.js';
 import { createDelegationService, delegationInstructions } from '../src/delegation/index.js';
+import { delegationBridge } from '../src/delegation/mcp.js';
 
-function fixture({ holdChild = false } = {}) {
+/** `settings` is a settings patch applied before the service starts. */
+function fixture({ holdChild = false, settings: patch = null } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'jolo-delegations-'));
   const storage = new Storage({ databasePath: path.join(root, 'db'), artifactsDir: path.join(root, 'artifacts'), bootId: 'test' });
   const project = storage.upsertProject({ identity: root, rootPath: root });
@@ -29,9 +32,22 @@ function fixture({ holdChild = false } = {}) {
   const catalog = { list: () => [{ id: 'codex', displayName: 'Codex', available, supportsModel: true, transport: 'codex-app-server' }] };
   const agentModels = { list: async () => ({ models: [{ id: 'model-v1', displayName: 'Model V1', efforts: ['high'] }] }) };
   const providerFactory = { presets: async () => ({ presets: [] }) };
-  const service = createDelegationService({ storage, runs, catalog, agentModels, providerFactory });
+  // What each child conversation's process is doing, as the hosted links report it; no entry is no live process.
+  const links = { activities: new Map(), get(id) { const a = this.activities.get(id); return a ? { activity: a, working: a.state !== 'idle' } : null; } };
+  const settings = new SettingsService(storage, { env: {} });
+  if (patch) settings.update(patch);
+  const service = createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings });
   const parent = runs.start({ sessionId: session.id, requestId: 'parent', prompt: 'Review this' }).run;
-  return { storage, session, runs, service, parent, executions, catalog, agentModels, providerFactory,
+  return { storage, session, runs, service, parent, executions, catalog, agentModels, providerFactory, links, settings,
+    /** Resolves once the run has ended, at once when it already has. */
+    settled(runId) {
+      return new Promise(resolve => {
+        const done = run => { if (run.id === runId) { runs.settled.removeListener('run', done); resolve(run); } };
+        runs.settled.on('run', done);
+        const run = storage.getRun(runId);
+        if (['completed', 'failed', 'cancelled', 'interrupted', 'paused'].includes(run.state)) done(run);
+      });
+    },
     unavailable() { available = false; },
     async select() { const choices = await service.prepare('Review with ^agent:codex/model-v1~high'); storage.transaction(() => service.register(session.id, choices)); },
     async close() { service.close(); await runs.stopAll(); storage.close(); rmSync(root, { recursive: true, force: true }); },
@@ -82,6 +98,65 @@ test('children cannot delegate again and another conversation cannot read or can
     expect(f.storage.getRun(delegation.runId).state).toBe('cancelled');
   } finally { await f.close(); }
 });
+const activity = state => ({ state, tasks: [], truncated: false, updatedAt: new Date().toISOString() });
+
+test('a child whose process still has background work is not done, and its output is partial', async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { modelAlias: 'm1', prompt: 'model', title: 'Child', requestId: 'r1' });
+    await f.settled(delegation.runId);
+    f.links.activities.set(delegation.sessionId, activity('background'));
+    const working = await f.service.status(f.parent.id, { delegationId: delegation.id });
+    expect(working.delegation).toMatchObject({ state: 'completed', activity: 'background', done: false, partial: true });
+    const waiting = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 5000 });
+    f.links.activities.set(delegation.sessionId, activity('idle'));
+    f.storage.appendEvent({ sessionId: delegation.sessionId, type: 'session.activity', payload: f.links.activities.get(delegation.sessionId) });
+    expect((await waiting).delegation).toMatchObject({ done: true, partial: false });
+  } finally { await f.close(); }
+});
+
+test('waitMs is capped by the delegation.maxWaitMs setting', async () => {
+  const f = fixture({ settings: { delegation: { maxWaitMs: 1000 } } });
+  try {
+    await f.select();
+    expect(f.settings.get().delegation.maxWaitMs).toBe(1000);
+    const { delegation } = await f.service.start(f.parent.id, { modelAlias: 'm1', prompt: 'model', title: 'Child', requestId: 'r2' });
+    f.links.activities.set(delegation.sessionId, activity('background'));
+    const started = Date.now();
+    await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
+    expect(Date.now() - started).toBeLessThan(2500);
+  } finally { await f.close(); }
+});
+
+test('a wait ends when the child asks for permission, when the waiting tool call is stopped, and when the parent is', async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r3' });
+    await f.settled(delegation.runId);
+    f.links.activities.set(delegation.sessionId, activity('working'));
+    const waiting = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
+    f.storage.appendEvent({ sessionId: delegation.sessionId, runId: delegation.runId, type: 'permission.requested',
+      payload: { permissionId: 'perm-1', runId: delegation.runId, workspaceId: 'ws', tool: 'Bash', summary: 'Bash ls', cwd: '.', isolation: 'none', revision: 1 } });
+    expect((await waiting).delegation).toMatchObject({ activity: 'working', done: false });
+    const stop = new AbortController();
+    const stopped = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 }, stop.signal);
+    stop.abort();
+    expect((await stopped).delegation.done).toBe(false);
+    const orphaned = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
+    f.runs.cancel({ runId: f.parent.id });
+    expect((await orphaned).delegation.done).toBe(false);
+  } finally { await f.close(); }
+});
+
+test('the hosted bridge waits for delegation_status as long as the tool may take', async () => {
+  const calls = [];
+  const client = { call: async (...args) => { calls.push(args); return { delegation: {} }; } };
+  await delegationBridge.call(client, 'ws', { name: 'delegation_status', arguments: { delegationId: 'del-1', waitMs: 600_000 } });
+  expect(calls[0][2].timeoutMs).toBeGreaterThan(3_600_000);
+});
+
 test('concurrent retries admit one child and active child count is bounded', async () => {
   const f = fixture({ holdChild: true });
   try {

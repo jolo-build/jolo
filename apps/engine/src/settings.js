@@ -1,9 +1,10 @@
 // Engine settings persisted in the preferences table; runtime-validated.
-import { SettingsSchema, ProviderSettingsSchema, BudgetSettingsSchema, AgentModelSettingsSchema, AgentModelPatchSchema, ModelRefSchema, ProviderOverridesSchema, ProtocolError } from "@jolo/protocol";
+import { SettingsSchema, ProviderSettingsSchema, BudgetSettingsSchema, DelegationSettingsSchema, AgentModelSettingsSchema, AgentModelPatchSchema, ModelRefSchema, ProviderOverridesSchema, ProtocolError } from "@jolo/protocol";
 import { demoProviderEnabled } from "./providers/mode.js";
 
 const PROVIDER_KEY = "provider";
 const BUDGETS_KEY = "budgets";
+const DELEGATION_KEY = "delegation";
 const AGENTS_KEY = "agents";
 const HIDDEN_KEY = "hidden-sources";
 
@@ -33,11 +34,12 @@ export class SettingsService {
     const providers = ProviderOverridesSchema.parse(this.storage.getPreference('providers') ?? {});
     const provider = this.storage.getPreference(PROVIDER_KEY) ?? null;
     const budgets = BudgetSettingsSchema.parse(this.storage.getPreference(BUDGETS_KEY) ?? {});
+    const delegation = DelegationSettingsSchema.parse(this.storage.getPreference(DELEGATION_KEY) ?? {});
     const parsedProvider = provider ? ProviderSettingsSchema.safeParse(provider) : null;
     const agents = SettingsSchema.shape.agents.safeParse(this.storage.getPreference(AGENTS_KEY) ?? {});
     const hiddenSources = SettingsSchema.shape.hiddenSources.safeParse(this.storage.getPreference(HIDDEN_KEY) ?? []);
     const effectiveProvider = parsedProvider?.success && (parsedProvider.data.name !== "fake" || this.demoProviderEnabled) ? parsedProvider.data : null;
-    return SettingsSchema.parse({ model: model?.preset === 'fake' && !this.demoProviderEnabled ? null : model, providers, provider: effectiveProvider, demoProviderEnabled: this.demoProviderEnabled, budgets, agents: agents.success ? agents.data : {} , hiddenSources: hiddenSources.success ? hiddenSources.data : [] });
+    return SettingsSchema.parse({ model: model?.preset === 'fake' && !this.demoProviderEnabled ? null : model, providers, provider: effectiveProvider, demoProviderEnabled: this.demoProviderEnabled, budgets, delegation, agents: agents.success ? agents.data : {} , hiddenSources: hiddenSources.success ? hiddenSources.data : [] });
   }
 
   /** What a hosted agent should run with. Never throws: an unconfigured agent simply uses its own default. */
@@ -55,9 +57,9 @@ export class SettingsService {
   /**
    * Apply a patch. Every field is optional: an absent one leaves its setting alone, where an
    * explicit null clears it.
-   * @param {{ provider?: any, model?: any, providers?: Record<string, any>, budgets?: any, agents?: Record<string, any>, hiddenSources?: string[] }} patch
+   * @param {{ provider?: any, model?: any, providers?: Record<string, any>, budgets?: any, delegation?: any, agents?: Record<string, any>, hiddenSources?: string[] }} patch
    */
-  update({ provider, model, providers, budgets, agents, hiddenSources }) {
+  update({ provider, model, providers, budgets, delegation, agents, hiddenSources }) {
     this.get(); // Migrate before applying a new-format patch, including an explicit null.
     return this.storage.transaction(() => {
       if (provider !== undefined && model !== undefined) throw new ProtocolError('invalid_params', 'Choose model or legacy provider settings, not both');
@@ -84,6 +86,9 @@ export class SettingsService {
       if (budgets) {
         const merged = BudgetSettingsSchema.parse({ ...(this.storage.getPreference(BUDGETS_KEY) ?? {}), ...budgets });
         this.storage.setPreference(BUDGETS_KEY, merged);
+      }
+      if (delegation) {
+        this.storage.setPreference(DELEGATION_KEY, DelegationSettingsSchema.parse({ ...(this.storage.getPreference(DELEGATION_KEY) ?? {}), ...delegation }));
       }
       if (agents) {
         // A patch, one agent at a time: given fields merge, null forgets the agent, and an entry that says
