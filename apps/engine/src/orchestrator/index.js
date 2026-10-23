@@ -24,12 +24,22 @@ const OUTCOME = Object.freeze({
 
 const PAUSE_BLOCKED = Object.freeze({ permission: "permission", user: "declined", budget: "budget" });
 
+/** What a task whose run completed says while its process finishes the background work it started. */
+const FINISHING_SUMMARY = "finishing background work";
+/** How soon to look again at a process that is idle but has finished background work still to report. */
+const SETTLE_RECHECK_MS = 1_000;
+
 /**
- * @param {{ storage: any, runs: any, catalog: any, log: any }} deps
+ * @param {{ storage: any, runs: any, catalog: any, log: any, links?: any }} deps
  */
-export function createOrchestrator({ storage, runs, catalog, log }) {
+export function createOrchestrator({ storage, runs, catalog, log, links = null }) {
   /** Plans currently being pumped, so a settled run cannot start two tasks at once. */
   const pumping = new Set();
+  /**
+   * Completed runs whose task waits for its process to go idle, by run id.
+   * @type {Map<string, { sessionId: string, timer: ReturnType<typeof setTimeout> | null }>}
+   */
+  const finishing = new Map();
 
   const emit = (type, payload) => storage.appendEvent({ type, payload });
 
@@ -161,11 +171,19 @@ export function createOrchestrator({ storage, runs, catalog, log }) {
     // An engine on its way out is not a decision about the work. Leaving the task as it stands lets the next
     // boot call it interrupted, which is the truth, rather than cancelled, which would blame the user (§14.4).
     if (runs.isStopping) return;
+    if (finishing.has(run.id)) return; // already waiting for its process to go idle
     const execution = storage.planExecutionForRun(run.id);
     if (!execution || execution.endedAt) return;
     const task = storage.getPlanTask(execution.taskId);
     const plan = task && storage.getPlan(task.planId);
     if (!task || !plan) return;
+    // A run that completed while its process still works (a workflow, subagents, a report of finished work about to
+    // begin) has not finished the task: that work answers in a turn of its own. The task ends once the process is idle.
+    if (run.state === "completed" && links?.get(run.sessionId)?.working) {
+      publishTask(storage.updatePlanTaskState(task.id, "running", { summary: FINISHING_SUMMARY }), { runId: run.id, executionId: execution.id });
+      storage.afterCommit(() => { finishing.set(run.id, { sessionId: run.sessionId, timer: null }); finishWhenIdle(run.id); });
+      return;
+    }
     const mapped = OUTCOME[run.state] ?? OUTCOME.failed;
     const detail = run.failure ?? run.note?.summary ?? null;
     storage.finishPlanExecution(execution.id, { outcome: mapped.outcome, detail: detail?.slice(0, 600) ?? null, usage: run.usage ?? null });
@@ -187,7 +205,7 @@ export function createOrchestrator({ storage, runs, catalog, log }) {
     else if (plan.state === "paused" || plan.state === "cancelled") log.info("plan task finished after the plan stopped", { planId: plan.id, taskId: task.id, state: updated.state });
   });
 
-  runs.settled.on("run", run => {
+  const record = (run) => {
     try { onRunSettled(run); }
     catch (error) {
       log.error("could not record how a plan task ended", { runId: run?.id, error: String(error) });
@@ -210,9 +228,44 @@ export function createOrchestrator({ storage, runs, catalog, log }) {
         }
       });
     }
-  });
+  };
+  runs.settled.on("run", record);
+
+  /**
+   * Record how a completed run's task ended once its process has nothing left to do: no turn, no background work, no
+   * report of finished work about to begin. Looked at when the run completes and whenever its conversation goes idle.
+   */
+  const finishWhenIdle = (runId) => {
+    const waiting = finishing.get(runId);
+    if (!waiting || runs.isStopping) return;
+    clearTimeout(waiting.timer);
+    waiting.timer = null;
+    const link = links.get(waiting.sessionId);
+    if (link?.working) {
+      // Finished background work is reported in a turn the process begins a moment later, whose end is reported as
+      // idle again; a report that never begins tells nobody, so look again.
+      if (link.activity.state === "idle") { waiting.timer = setTimeout(() => finishWhenIdle(runId), SETTLE_RECHECK_MS); waiting.timer.unref?.(); }
+      return;
+    }
+    finishing.delete(runId);
+    const run = storage.getRun(runId);
+    if (run) record(run);
+  };
+  const onEvent = (event) => {
+    if (event.type !== "session.activity" || event.payload.state !== "idle") return;
+    for (const [runId, waiting] of [...finishing]) if (waiting.sessionId === event.sessionId) finishWhenIdle(runId);
+  };
+  storage.events.on("event", onEvent);
 
   return {
+    /** Stop listening for runs and processes; a task still waiting for its process is left running, for the next boot to call interrupted. */
+    close() {
+      runs.settled.removeListener("run", record);
+      storage.events.removeListener("event", onEvent);
+      for (const waiting of finishing.values()) clearTimeout(waiting.timer);
+      finishing.clear();
+    },
+
     /** Write a plan down. Nothing is started, and nothing is asked of any agent, until the user says so. */
     create({ projectId, workspaceId, goal, tasks, policy }) {
       const project = storage.getProject(projectId);

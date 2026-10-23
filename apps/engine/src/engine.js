@@ -157,7 +157,7 @@ export function createEngine(options) {
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
     // Plans are reconciled after runs, so a task whose run has just been called interrupted is seen as such.
-    plans = createOrchestrator({ storage, runs, catalog, log });
+    plans = createOrchestrator({ storage, runs, catalog, log, links: hostedLinks });
     const stopped = plans.reconcile();
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
@@ -195,6 +195,7 @@ export function createEngine(options) {
         if (delegations) await step("delegations", () => delegations.close());
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
+        if (plans) await step("plans", () => plans.close());
         if (hostedLinks) await step("hosted agents", () => hostedLinks.closeAll());
         if (search) await step("search", () => search.close());
         if (agents) await step("agents", () => agents.dispose());
