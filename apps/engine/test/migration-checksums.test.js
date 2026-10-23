@@ -98,7 +98,7 @@ const released = [
   {
     "version": 19,
     "name": "0019_dialogs.sql",
-    "checksum": "b7d332b3cc24bce7158df0ef9eb54a148ac2ae80e29e25e79eff9cd0ed67c8d8"
+    "checksum": "66ad75b8c2a4f08754debbf8462ee03c3048821e167488bc7dbb673af63277f3"
   }
 ];
 

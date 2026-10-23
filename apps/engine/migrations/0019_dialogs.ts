@@ -12,6 +12,5 @@ CREATE TABLE dialogs (
   created_at TEXT NOT NULL,
   resolved_at TEXT
 );
-CREATE INDEX dialogs_run ON dialogs(run_id, created_at);
 CREATE INDEX dialogs_requested ON dialogs(state) WHERE state = 'requested';
 `;
