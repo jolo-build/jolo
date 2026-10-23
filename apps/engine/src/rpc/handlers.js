@@ -274,7 +274,8 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit, hideUserMessagesOf: CONTINUATION_PREFIX });
       const runsOf = storage.listRunsForSession(sessionId).map(run => isContinuation(run) ? { ...run, prompt: "" } : run);
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
-      return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
+      const pendingDialogs = dialogs?.pendingForSession(sessionId) ?? [];
+      return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, pendingDialogs, hasOlder, cursor: storage.maxSeq() };
     }),
     // What the conversation's agent process is doing now, for a client that joins while its work runs.
     "session.activity": ({ sessionId }) => {

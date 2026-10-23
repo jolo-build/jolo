@@ -52,6 +52,24 @@ test('a dialog whose input is too large for an event is published as a preview, 
   } finally { f.close(); }
 });
 
+test('the dialogs still waiting on the person in a conversation are listed as their events showed them', () => {
+  const f = fixture();
+  try {
+    const first = f.ask();
+    const second = f.service.request({ run: f.run, requestId: 'req-2', tool: 'AskUserQuestion', toolUseId: null, input: INPUT });
+    const other = f.storage.createSession({ projectId: f.session.projectId, workspaceId: f.session.workspaceId, title: 'Asked too' });
+    const otherRun = f.storage.insertRun({ sessionId: other.id, requestId: 'ask-other', prompt: 'ask me too' });
+    const big = f.service.request({ run: otherRun, requestId: 'req-big', tool: 'AskUserQuestion', toolUseId: null, input: { ...INPUT, context: 'x'.repeat(DIALOG_INPUT_EVENT_MAX) } });
+    f.service.resolve(first.id, { answers: { q: 'tea' } });
+    expect(f.service.pendingForSession(f.session.id)).toEqual([{ dialogId: second.id, runId: f.run.id, tool: 'AskUserQuestion', input: INPUT, toolUseId: null }]);
+    expect(f.service.pendingForSession(other.id)).toEqual([{ dialogId: big.id, runId: otherRun.id, tool: 'AskUserQuestion', input: { truncated: true, preview: expect.any(String) }, toolUseId: null }]);
+    // Each is the payload its dialog.requested event carried.
+    const published = (dialogId) => f.events.find(event => event.type === 'dialog.requested' && event.payload.dialogId === dialogId).payload;
+    expect(f.service.pendingForSession(f.session.id)).toEqual([published(second.id)]);
+    expect(f.service.pendingForSession(other.id)).toEqual([published(big.id)]);
+  } finally { f.close(); }
+});
+
 test('an answer settles the wait, is published once, and a second answer is a conflict', async () => {
   const f = fixture();
   try {

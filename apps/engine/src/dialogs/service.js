@@ -5,10 +5,12 @@ import { DIALOG_INPUT_EVENT_MAX, ProtocolError } from "@jolo/protocol";
 /** How much of an input too large for its event the event shows instead: the start of its JSON. */
 const PREVIEW_CHARS = 4096;
 /** What a dialog.requested event carries of the input; the dialog's record keeps all of it. */
-const eventInput = (input) => {
+export const eventInput = (input) => {
   const json = JSON.stringify(input);
   return json.length <= DIALOG_INPUT_EVENT_MAX ? input : { truncated: true, preview: json.slice(0, PREVIEW_CHARS) };
 };
+/** A dialog as its dialog.requested event shows it. */
+const requestedPayload = (dialog) => ({ dialogId: dialog.id, runId: dialog.runId, tool: dialog.tool, input: eventInput(dialog.input), toolUseId: dialog.toolUseId });
 
 /** @param {{ storage: any }} deps */
 export function createDialogService({ storage }) {
@@ -36,11 +38,13 @@ export function createDialogService({ storage }) {
     request({ run, requestId, tool, toolUseId = null, input }) {
       return storage.transaction(() => {
         const dialog = storage.dialogs.insert({ sessionId: run.sessionId, runId: run.id, requestId, tool, toolUseId, input });
-        storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "dialog.requested", payload: { dialogId: dialog.id, runId: run.id, tool, input: eventInput(input), toolUseId } });
+        storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "dialog.requested", payload: requestedPayload(dialog) });
         return dialog;
       });
     },
     get: (dialogId) => storage.dialogs.get(dialogId),
+    /** The conversation's dialogs still waiting on the person, oldest first, as their dialog.requested events showed them. */
+    pendingForSession: (sessionId) => storage.dialogs.requestedForSession(sessionId).map(requestedPayload),
     /** The settled dialog; rejects once `signal` aborts, after marking the dialog cancelled. */
     waitForResolution(dialogId, signal) {
       return new Promise((resolve, reject) => {

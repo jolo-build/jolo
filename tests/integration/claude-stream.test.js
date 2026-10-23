@@ -1402,6 +1402,15 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
     expect(await text((await messagesOf(run.id)).at(-1))).toBe('You answered: coffee');
   }, 30_000);
 
+  test('a client that opens the conversation while a question is still waiting finds it in pendingDialogs until it is answered', async () => {
+    const { client, events, session } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-page', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect((await client.call('session.page', { sessionId: session.id })).pendingDialogs).toEqual([asked.payload]);
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    expect((await client.call('session.page', { sessionId: session.id })).pendingDialogs).toEqual([]);
+  }, 30_000);
+
   test('dismissing a dialog tells Claude the person did not answer', async () => {
     const { client, events, session, messagesOf, text } = await boot();
     const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-dismiss', prompt: 'ask-user tea or coffee?' });

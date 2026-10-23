@@ -815,7 +815,7 @@ export const MethodSchemas = {
   },
   "session.page": {
     params: z.object({ sessionId: Id, beforeOrdinal: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).default(100) }),
-    result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
+    result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), pendingDialogs: z.array(EventPayloadSchemas['dialog.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
   },
   /** What the conversation's agent process is doing now; null when it has none. */
   "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },

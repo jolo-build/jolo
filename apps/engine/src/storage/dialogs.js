@@ -21,4 +21,6 @@ export class DialogRepository {
   }
 
   requested() { return this.db.query("SELECT * FROM dialogs WHERE state = 'requested' ORDER BY created_at, id").all().map(mapDialog); }
+
+  requestedForSession(sessionId) { return this.db.query("SELECT * FROM dialogs WHERE state = 'requested' AND session_id = ?1 ORDER BY created_at, id").all(sessionId).map(mapDialog); }
 }
