@@ -7,9 +7,13 @@ import { RunService } from '../src/runs/service.js';
 import { SettingsService } from '../src/settings.js';
 import { createDelegationService, delegationInstructions } from '../src/delegation/index.js';
 import { delegationBridge } from '../src/delegation/mcp.js';
+import { delegationTools } from '../src/tools/delegation.js';
 
-/** `settings` is a settings patch applied before the service starts. */
-function fixture({ holdChild = false, settings: patch = null } = {}) {
+/**
+ * `settings` is a settings patch applied before the service starts. `holdChild` keeps the child working until it is
+ * stopped, in the run state it names (true: model); `childOutcome` is how a child that is not held ends.
+ */
+function fixture({ holdChild = false, childOutcome = 'completed', settings: patch = null } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'jolo-delegations-'));
   const storage = new Storage({ databasePath: path.join(root, 'db'), artifactsDir: path.join(root, 'artifacts'), bootId: 'test' });
   const project = storage.upsertProject({ identity: root, rootPath: root });
@@ -20,13 +24,13 @@ function fixture({ holdChild = false, settings: patch = null } = {}) {
   const runs = new RunService({ storage, log: { error() {}, warn() {} }, lifetime: { workStarted() {}, workFinished() {} },
     executor: { async execute(ctx) {
       if (!ctx.run.execution?.pinned || holdChild) {
-        ctx.transition('model');
+        ctx.transition(ctx.run.execution?.pinned && typeof holdChild === 'string' ? holdChild : 'model');
         await new Promise(resolve => { if (ctx.signal.aborted) resolve(null); else ctx.signal.addEventListener('abort', resolve, { once: true }); });
         return { outcome: 'cancelled' };
       }
       executions.push(ctx.run.execution);
       const message = ctx.startMessage('assistant', 'text'); ctx.appendText(message, 'Reviewed by the selected model.'); ctx.finishMessage(message, 'complete');
-      return { outcome: 'completed' };
+      return { outcome: childOutcome };
     } },
   });
   const catalog = { list: () => [{ id: 'codex', displayName: 'Codex', available, supportsModel: true, transport: 'codex-app-server' }] };
@@ -153,6 +157,37 @@ test('a wait ends when the child asks for permission, when the waiting tool call
     f.runs.cancel({ runId: f.parent.id });
     expect((await orphaned).delegation.done).toBe(false);
   } finally { await f.close(); }
+});
+
+test('a wait begun while the child already waits on the person returns at once with that state', async () => {
+  const f = fixture({ holdChild: 'awaiting_permission' });
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r6' });
+    for (let tries = 0; f.storage.getRun(delegation.runId).state !== 'awaiting_permission'; tries++) { if (tries > 200) throw new Error('the child never asked'); await Bun.sleep(5); }
+    const started = Date.now();
+    const { delegation: asking } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(asking).toMatchObject({ state: 'awaiting_permission', done: false });
+  } finally { await f.close(); }
+});
+
+test('a paused child is not done, and a wait on it returns at once', async () => {
+  const f = fixture({ childOutcome: 'paused' });
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { ...request, requestId: 'r7' });
+    await f.settled(delegation.runId);
+    const started = Date.now();
+    const { delegation: paused } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(paused).toMatchObject({ state: 'paused', done: false });
+  } finally { await f.close(); }
+});
+
+test('the delegation_status tool tells a parent to open a child that waits on the person', () => {
+  const status = delegationTools.find(tool => tool.name === 'delegation_status');
+  expect(status.description).toContain('If `activity` is working or background, the child is still working; if the child is awaiting_permission or paused, open the child task for user action; do not report `output` as final while `partial` is true.');
 });
 
 test('a wait begun while the child runs ends when the child is cancelled or fails without text', async () => {

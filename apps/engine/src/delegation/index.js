@@ -11,6 +11,8 @@ export const MAX_ACTIVE = 4;
  */
 const SETTLE_RECHECK_MS = 1_000;
 const ended = run => !run || TERMINAL_RUN_STATES.includes(run.state) || run.state === 'paused';
+/** A child run in one of these waits on the person: its parent has to say so, and send them to it. */
+const ASKING_STATES = ['awaiting_permission', 'paused'];
 /** A parent run that ends in one of these stops its children, and its own waits on them. */
 const STOPPED_STATES = ['cancelled', 'failed', 'interrupted', 'paused'];
 
@@ -84,11 +86,12 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     return null;
   }
   /**
-   * Done: every run of the child's conversation has ended, and its process (if one is running) has nothing left to do:
-   * no turn, no background work, no report of finished work about to begin.
+   * Done: every run of the child's conversation has ended, none of them paused for the person, and its process (if one
+   * is running) has nothing left to do: no turn, no background work, no report of finished work about to begin.
    */
   function isDone(run, link) {
-    return ended(run) && (!run || (storage.listRunsForSession(run.sessionId).every(ended) && !link?.working));
+    const over = r => !r || TERMINAL_RUN_STATES.includes(r.state);
+    return over(run) && (!run || (storage.listRunsForSession(run.sessionId).every(over) && !link?.working));
   }
   function view(row, includeOutput = false) {
     const run = storage.getRun(row.childRunId), session = run && storage.getSession(run.sessionId);
@@ -211,9 +214,10 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
         };
         const check = () => {
           clearTimeout(recheck);
-          const link = links.get(child.sessionId);
-          // Read the run again: one that ended without a word (cancelled, failed) is done all the same.
-          if (isDone(storage.getRun(child.id), link) || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
+          const link = links.get(child.sessionId), run = storage.getRun(child.id);
+          // Read the run again: one that ended without a word (cancelled, failed) is done all the same, and one that waits
+          // on the person (asked before the wait began, or paused for them) needs its parent to say so.
+          if (isDone(run, link) || ASKING_STATES.includes(run?.state) || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
           if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
         };
         const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: final => { if (waiters.has(waiter)) final ? finish() : check(); } };
