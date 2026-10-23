@@ -3,7 +3,18 @@ import { EventEmitter } from 'node:events';
 import { installBrowserHost } from '../src/main/browser-host.js';
 import { createAttentionService } from '../src/main/attention-service.js';
 import { projectAX } from '../src/main/ax-projection.js';
+import { readFileSync } from 'node:fs';
+import { METHOD_NAMES } from '@jolo/protocol';
 const log = { info() {}, warn() {} };
+
+test('the renderer may call the engine methods for background work and dialogs, and only methods the engine has', () => {
+  // The main process cannot be imported outside Electron; its allow-list is read from the source, as the preload test reads its own.
+  const source = readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8');
+  const list = (source.match(/const RENDERER_METHODS = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '').replace(/\/\/.*$/gm, '');
+  const methods = [...list.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
+  expect(methods).toEqual(expect.arrayContaining(['session.activity', 'session.stopBackground', 'session.stopTask', 'dialog.resolve', 'dialog.dismiss']));
+  expect(methods.filter(method => !METHOD_NAMES.includes(method))).toEqual([]);
+});
 
 test('browser attachment rejects unsafe URLs and keeps concurrent workspaces separate', () => {
   const contents = new EventEmitter(), sessions = new Map(), attached = [];
