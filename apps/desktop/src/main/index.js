@@ -125,6 +125,7 @@ class EngineBridge {
       await client.subscribe({ after }, {
         onEvent: (event) => { this.lastSeq = event.eventSeq; this.relay.push("event", event); this.attention?.onEvent(event); },
         onPreview: (preview) => this.relay.push("preview", preview),
+        onActivity: (activity) => this.relay.push("activity", activity),
       });
       this.notify({ connected: true, started, status });
       void this.attention?.refresh();

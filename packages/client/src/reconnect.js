@@ -13,7 +13,7 @@
 export async function connectResumable({ open, onResync = () => {}, retryBaseMs = 100, retryMaxMs = 5000 }) {
   let current = null, connecting = null, stopped = false, retryTimer = null, failures = 0, fatal = null;
   let subscription = null, cursor = '0', streamId = null;
-  const events = new Set(), previews = new Set(), closes = new Set(), notifications = new Map();
+  const events = new Set(), previews = new Set(), activities = new Set(), closes = new Set(), notifications = new Map();
   const reconnects = new Set();
   const emit = (handlers, value) => { for (const fn of handlers ?? []) { try { Promise.resolve(fn(value)).catch(error => console.error("client listener failed", error)); } catch (error) { console.error('client listener failed', error); } } };
   const schedule = () => {
@@ -36,6 +36,8 @@ export async function connectResumable({ open, onResync = () => {}, retryBaseMs 
       client.onClose(error => { if (current !== client) return; current = null; emit(closes, error); schedule(); });
       client.onEvent(event => { cursor = event.eventSeq; emit(events, event); });
       client.onPreview(preview => emit(previews, preview));
+      // A connection that predates activity ticks has no such hook; it simply never delivers one.
+      client.onActivity?.(activity => emit(activities, activity));
       for (const method of notifications.keys()) client.onNotification(method, params => emit(notifications.get(method), params));
       const changed = streamId && client.hello.eventStreamId && streamId !== client.hello.eventStreamId;
       streamId = client.hello.eventStreamId ?? streamId;
@@ -73,6 +75,7 @@ export async function connectResumable({ open, onResync = () => {}, retryBaseMs 
       if (subscription) throw Object.assign(new Error('already subscribed'), { code: 'conflict' });
       if (handlers.onEvent) events.add(handlers.onEvent);
       if (handlers.onPreview) previews.add(handlers.onPreview);
+      if (handlers.onActivity) activities.add(handlers.onActivity);
       const client = await ensure();
       cursor = params.after ?? '0';
       try {
@@ -91,6 +94,7 @@ export async function connectResumable({ open, onResync = () => {}, retryBaseMs 
     },
     onEvent(fn) { events.add(fn); return () => events.delete(fn); },
     onPreview(fn) { previews.add(fn); return () => previews.delete(fn); },
+    onActivity(fn) { activities.add(fn); return () => activities.delete(fn); },
     onClose(fn) { closes.add(fn); return () => closes.delete(fn); },
     onReconnect(fn) { reconnects.add(fn); return () => reconnects.delete(fn); },
     onNotification(method, fn) {
