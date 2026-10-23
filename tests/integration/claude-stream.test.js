@@ -1433,4 +1433,44 @@ describe('A delegated Claude child', () => {
       expect(late.delegation).toMatchObject({ done: true, partial: false, output: 'Follow-up: all good' });
     } finally { await client.call('run.cancel', { runId: parent.id }); }
   }, 30_000);
+
+  /** A child that answered and left two background tasks running, which only stop_task ends (its Stop spares them). */
+  const childInBackground = async ({ client, events, parent }, requestId) => {
+    const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'bg child', prompt: 'tasks 2 20000', requestId } });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered', timeoutMs: 10_000 });
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === delegation.sessionId && e.payload.state === 'background'), { label: 'the child works in the background' });
+    return delegation;
+  };
+  const tasksStopped = (events, sessionId) => events.some(e => e.type === 'session.activity' && e.sessionId === sessionId && e.payload.state === 'idle'
+    && e.payload.tasks.length === 2 && e.payload.tasks.every(t => t.status === 'stopped'));
+
+  test('stopping the parent also stops the background tasks of a child whose run already ended', async () => {
+    const booted = await bootWithParent();
+    const delegation = await childInBackground(booted, 'c-stop');
+    await booted.client.call('run.cancel', { runId: booted.parent.id });
+    await waitFor(() => tasksStopped(booted.events, delegation.sessionId), { label: 'the child\'s tasks stopped' });
+  }, 30_000);
+
+  test('delegation_cancel stops the background tasks of a child whose run already ended, and the child is then done', async () => {
+    const booted = await bootWithParent();
+    const { client, events, parent } = booted;
+    try {
+      const delegation = await childInBackground(booted, 'c-cancel');
+      await client.call('delegation.call', { runId: parent.id, name: 'delegation_cancel', arguments: { delegationId: delegation.id } });
+      await waitFor(() => tasksStopped(events, delegation.sessionId), { label: 'the child\'s tasks stopped' });
+      const after = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(after.delegation).toMatchObject({ state: 'completed', activity: 'idle', done: true });
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
+  }, 30_000);
 });
+
+test('cancelling a plan stops the background tasks of a task waiting for its process to finish them', async () => {
+  const { client, events, project } = await boot();
+  const { plan } = await client.call('plan.create', { projectId: project.projectId, goal: 'background work', tasks: [{ title: 'bg', brief: 'tasks 2 20000', agentId: 'claude' }] });
+  await client.call('plan.start', { planId: plan.id });
+  const deferred = await waitFor(() => events.find(e => e.type === 'plan.task.state' && e.payload.planId === plan.id && e.payload.summary === 'finishing background work'), { label: 'the task waits for its process', timeoutMs: 10_000 });
+  await client.call('plan.cancel', { planId: plan.id });
+  await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === deferred.payload.sessionId && e.payload.state === 'idle'
+    && e.payload.tasks.length === 2 && e.payload.tasks.every(t => t.status === 'stopped')), { label: 'the task\'s background tasks stopped' });
+  await waitFor(async () => (await client.call('plan.get', { planId: plan.id })).tasks[0].state !== 'running', { label: 'the task no longer runs', timeoutMs: 10_000 });
+}, 30_000);

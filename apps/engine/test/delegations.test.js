@@ -32,13 +32,18 @@ function fixture({ holdChild = false, settings: patch = null } = {}) {
   const catalog = { list: () => [{ id: 'codex', displayName: 'Codex', available, supportsModel: true, transport: 'codex-app-server' }] };
   const agentModels = { list: async () => ({ models: [{ id: 'model-v1', displayName: 'Model V1', efforts: ['high'] }] }) };
   const providerFactory = { presets: async () => ({ presets: [] }) };
-  // What each child conversation's process is doing, as the hosted links report it; no entry is no live process.
-  const links = { activities: new Map(), get(id) { const a = this.activities.get(id); return a ? { activity: a, working: a.state !== 'idle' } : null; } };
+  // What each child conversation's process is doing, as the hosted links report it; no entry is no live process. The
+  // conversations whose background work was asked to stop are in `stopped`.
+  const links = { activities: new Map(), stopped: [], get(id) {
+    const a = this.activities.get(id);
+    return a ? { activity: a, working: a.state !== 'idle', stopBackground: async () => { this.stopped.push(id); return { requested: 0, stopped: 0, escalated: false }; } } : null;
+  } };
   const settings = new SettingsService(storage, { env: {} });
   if (patch) settings.update(patch);
-  const service = createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings });
+  const log = { warn() {}, error() {}, info() {} };
+  const service = createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings, log });
   const parent = runs.start({ sessionId: session.id, requestId: 'parent', prompt: 'Review this' }).run;
-  return { storage, session, runs, service, parent, executions, catalog, agentModels, providerFactory, links, settings,
+  return { storage, session, runs, service, parent, executions, catalog, agentModels, providerFactory, links, settings, log,
     /** Resolves once the run has ended, at once when it already has. */
     settled(runId) {
       return new Promise(resolve => {

@@ -12,6 +12,7 @@
 // whose run stops for a permission nobody answered is blocked, and the plan waits for the user, exactly as a
 // single task does today.
 import { ProtocolError, PlanPolicySchema, PLAN_TASK_DRAFT_LIMIT } from "@jolo/protocol";
+import { stopBackgroundWork } from "../delegation/index.js";
 
 /** How a run's ending translates into the state of the task it was carrying out. */
 const OUTCOME = Object.freeze({
@@ -323,7 +324,10 @@ export function createOrchestrator({ storage, runs, catalog, log, links = null }
       return { plan: publishPlan(storage.updatePlanState(planId, "paused")) };
     },
 
-    /** Give up on the plan: the task in flight is cancelled, and nothing pending will be asked for. */
+    /**
+     * Give up on the plan: the task in flight is cancelled, and nothing pending will be asked for. The background work of
+     * the tasks' processes is stopped too (a Stop spares it), a task waiting for its process to finish such work included.
+     */
     cancel(planId) {
       const plan = requirePlan(planId);
       if (["done", "cancelled"].includes(plan.state)) return { plan };
@@ -332,6 +336,7 @@ export function createOrchestrator({ storage, runs, catalog, log, links = null }
           const execution = storage.listPlanExecutions(planId).findLast((entry) => entry.taskId === task.id && !entry.endedAt);
           if (execution?.runId) { try { runs.cancel({ runId: execution.runId }); } catch { /* already stopped */ } }
         }
+        if (task.sessionId) stopBackgroundWork(links, task.sessionId, log);
         if (["pending", "blocked", "failed"].includes(task.state)) publishTask(storage.updatePlanTaskState(task.id, "cancelled", { blockedReason: null }));
       }
       return { plan: publishPlan(storage.updatePlanState(planId, "cancelled")) };

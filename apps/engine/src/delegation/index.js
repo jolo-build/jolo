@@ -13,10 +13,20 @@ const ended = run => !run || TERMINAL_RUN_STATES.includes(run.state) || run.stat
 const STOPPED_STATES = ['cancelled', 'failed', 'interrupted', 'paused'];
 
 /**
+ * Stop the background tasks of a conversation's process, whatever state its runs are in: Stop ends a turn but spares
+ * them (spec 5.5, stop cascades). Not waited on; a failure is logged.
+ * @param {{ get(sessionId: string): any } | null} links @param {string} sessionId @param {any} log
+ */
+export function stopBackgroundWork(links, sessionId, log) {
+  const link = links?.get(sessionId);
+  if (link) (async () => link.stopBackground())().catch(error => log.warn('could not stop the background work of a conversation', { sessionId, error: String(error?.message ?? error) }));
+}
+
+/**
  * Only user submissions can register models. Agent tools receive aliases and cannot invent providers.
  * `links` are the hosted agents' processes, by conversation (what a child's process is doing); `settings` bound a wait.
  */
-export function createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings }) {
+export function createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings, log }) {
   const repository = storage.delegations;
   /** Parents waiting in delegation_status, each `{ sessionId, parentRunId, wake(final) }`; see `status`. */
   const waiters = new Set();
@@ -102,11 +112,14 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     if (!row) throw new ProtocolError('not_found', 'Unknown delegated task in this conversation');
     return row;
   }
+  /** Stop the children of a stopped parent: their runs, and the background work of their processes, ended runs' too. */
   function cancelChildren(run) {
     if (!STOPPED_STATES.includes(run.state)) return;
     for (const row of repository.rows(run.sessionId, { parentRunId: run.id })) {
       const child = storage.getRun(row.childRunId);
-      if (child && !TERMINAL_RUN_STATES.includes(child.state) && child.state !== 'cancelling') runs.cancel({ runId: child.id });
+      if (!child) continue;
+      if (!TERMINAL_RUN_STATES.includes(child.state) && child.state !== 'cancelling') runs.cancel({ runId: child.id });
+      stopBackgroundWork(links, child.sessionId, log);
     }
   }
   /** Tell the parents waiting on a conversation's child that something happened there; `final` ends their wait. */
@@ -213,6 +226,7 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     cancel(runId, delegationId) {
       const row = scopedRow(runId, delegationId), child = storage.getRun(row.childRunId);
       if (child && !TERMINAL_RUN_STATES.includes(child.state)) runs.cancel({ runId: child.id });
+      if (child) stopBackgroundWork(links, child.sessionId, log);
       return { delegation: view(row, true) };
     },
     close() {
