@@ -392,6 +392,21 @@ describe("one Claude process per conversation", () => {
     expect(alive(starts()[0])).toBe(true);
   }, 30_000);
 
+  test('force-stopping a conversation closes its process, which ends the tasks that ignored stop_task', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('stubborn', 'tasks-stubborn 2');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toMatchObject({ requested: 2, stopped: 0 }); // stubborn tasks acknowledge stop_task and keep running: escalated stays false
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+    await waitFor(() => !alive(starts()[0]), { timeoutMs: 15_000 });
+    const activityOf = () => events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).at(-1);
+    await waitFor(() => activityOf().payload.state !== 'background', { label: 'the process end reported' }); // reported once the engine reads its output's end, a moment after it is gone
+    const last = activityOf();
+    expect(last.payload.state).toBe('idle');
+    expect(last.payload.tasks.map(t => t.status)).toEqual(['failed', 'failed']); // both stubborn tasks ended with the process
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: false });
+  }, 30_000);
+
   test('stopping one background task ends only that task, and Claude\'s reason comes back when it will not', async () => {
     const { client, events, session, runTo } = await boot();
     await runTo('bg', 'tasks 2 20000');
@@ -402,12 +417,18 @@ describe("one Claude process per conversation", () => {
     expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'nope' })).toEqual({ ok: false, error: 'stop_task: unknown task' });
   }, 30_000);
 
-  test('stopping background work or a task of a conversation with no process stops nothing; an unknown one is not_found', async () => {
-    const { client, session } = await boot();
+  test('stopping background work, a task or the process of a conversation with no process stops nothing; an unknown one is not_found', async () => {
+    const { engine, client, session } = await boot();
     expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 0, stopped: 0, escalated: false });
     expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'task-1' })).toEqual({ ok: false, error: 'no process' });
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: false });
     await expect(client.call('session.stopBackground', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
     await expect(client.call('session.stopTask', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(client.call('session.closeProcess', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    // Closing a process ends Claude's work: only an interactive client may ask.
+    const headless = await engine.connect({ clientKind: 'headless' });
+    await expect(headless.call('session.closeProcess', { sessionId: session.id })).rejects.toMatchObject({ code: 'permission_denied' });
+    await headless.close();
   }, 30_000);
 
   test("an empty result ahead of the answer does not end the turn", async () => {

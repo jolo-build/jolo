@@ -58,7 +58,7 @@ const RENDERER_METHODS = new Set([
   "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel",
   "delegation.models",
   // What a conversation's agent process is doing in the background, and stopping it; Claude's questions to the person.
-  "session.activity", "session.stopBackground", "session.stopTask", "dialog.resolve", "dialog.dismiss",
+  "session.activity", "session.stopBackground", "session.stopTask", "session.closeProcess", "delegation.list", "dialog.resolve", "dialog.dismiss",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
   'account.status', 'account.sync', 'account.login', 'account.cancel', 'account.logout',

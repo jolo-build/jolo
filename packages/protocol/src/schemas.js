@@ -830,6 +830,11 @@ export const MethodSchemas = {
   },
   /** Stop one background task of the conversation's agent process; `error` says why not ('no process' when it has none). */
   "session.stopTask": { params: z.object({ sessionId: Id, taskId: Id }), result: z.object({ ok: z.boolean(), error: z.string().nullable() }) },
+  /**
+   * Close the conversation's agent process, ending its turn and every task it runs, for tasks that ignored a stop: the
+   * close goes on after the answer. `closing` is false when it has no process.
+   */
+  "session.closeProcess": { params: z.object({ sessionId: Id }), result: z.object({ closing: z.boolean() }) },
   "run.start": {
     params: z.object({
       sessionId: Id,

@@ -294,6 +294,14 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const link = hostedLinks?.get(sessionId);
       return link?.alive ? link.stopTask(taskId) : { ok: false, error: "no process" };
     },
+    // Close the process itself, for tasks that ignored stop_task; a graceful close can outlast the call, so it is not awaited.
+    "session.closeProcess": ({ sessionId }, conn) => {
+      requireInteractive(conn, "only an interactive client can stop a conversation's process");
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      if (!hostedLinks?.get(sessionId)?.alive) return { closing: false };
+      void hostedLinks.close(sessionId, "stopped by the person");
+      return { closing: true };
+    },
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
     'delegation.call': (params, conn) => {
