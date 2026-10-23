@@ -846,6 +846,19 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .permission-scope { display: flex; gap: 9px; align-items: center; font-size: 12px; color: var(--muted); }
 .permission-scope { flex-wrap: wrap; }
 .permission-scope select { font-size: 12px; line-height: 20px; padding: 5px 34px 5px 12px; }
+.dialog-modal { width: min(560px, calc(100vw - 40px)); }
+.dialog-question { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.dialog-question legend { display: flex; flex-direction: column; gap: 5px; padding: 0; margin-bottom: 4px; font-size: 14px; overflow-wrap: anywhere; }
+.dialog-option { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; }
+.dialog-option > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.dialog-option input:is([type=radio], [type=checkbox]) { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+.dialog-other { align-items: center; }
+.dialog-other label { flex: none; display: flex; align-items: center; gap: 9px; }
+.dialog-other input:is([type=radio], [type=checkbox]) { margin: 0; }
+.dialog-other input[type=text] { flex: 1; padding: 5px 8px; font-size: 12px; }
+.plan-body { max-height: min(50vh, 420px); overflow: auto; overscroll-behavior: contain; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); font-size: 13px; }
+.dialog-modal textarea { min-height: 56px; resize: vertical; padding: 8px 10px; border-radius: 6px; background: var(--field-background, var(--field)); font-size: 12px; }
+.dialog-modal .command:last-child { margin-bottom: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 3px; }
 .task-dialog { display: flex; flex-direction: column; gap: 16px; }
 .task-dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
