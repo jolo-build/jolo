@@ -16,6 +16,8 @@ import { PanelItemTabs } from './panel-item-tabs.jsx';
 import { usePanelTabs } from '../use-panel-tabs.js';
 import { PermissionDialog } from "./permission-dialog.jsx";
 import { PermissionNotice } from "./permission-notice.jsx";
+import { ActivityLine } from "./activity-line.jsx";
+import { groupActivity, stopFor, workflowNames } from "../activity.js";
 import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
@@ -111,6 +113,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [revealPath, setRevealPath] = useState(/** @type {{ path: string } | null} */ (null)); // a folder a breadcrumb asked the tree to show
   const [filesExpanded, setFilesExpanded] = useState(false); // the Files panel over the whole pane, the conversation set aside
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
+  const [stop, setStop] = useState(/** @type {import('../activity.js').StopState | null} */ (null)); // the last Stop background work, for the conversation that sent it
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
   const panelTabs = usePanelTabs(panelScope, (file, remaining) => {
@@ -209,6 +212,19 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const projectLabel = project?.standalone ? 'Chat' : project ? basename(project.rootPath) : 'Workspace';
   const newChat = () => reportError(async () => { await state.newChat(); setAnswerer(null); });
   const changedFiles = useMemo(() => uniqueChanges(changes), [changes]);
+  // The workflow runs' names, found in the transcript (D3); the projection changes in place, so they follow the activity.
+  const runNames = useMemo(() => workflowNames(projection?.ordered() ?? [], projection ? [...projection.tools.values()] : [], groupActivity(state.activity).runs), [projection, state.activity]);
+  // `stopResult` is the shown conversation's last stop reply, or null; the Activity panel reads it for its force-stop.
+  const { stopping, stopResult } = stopFor(stop, sessionId);
+  const stopBackground = () => {
+    const id = sessionId;
+    // A reply lands on the stop it answers; a newer stop sent from another conversation has taken the slot by then.
+    const settle = fields => setStop(current => current?.sessionId === id ? { ...current, ...fields } : current);
+    return reportError(async () => {
+      setStop({ sessionId: id, pending: true, result: null });
+      try { settle({ result: await state.stopBackground() }); } finally { settle({ pending: false }); }
+    });
+  };
   const verification = lastRun?.verification;
   const newBrowser = (url = '') => { onBrowserOpen(pane.id); browserTabs.add({ id: crypto.randomUUID(), title: 'New tab', url, icon: 'browser' }); setContext('browser'); };
   const openBrowser = (url = undefined) => { if (!browser || (url !== undefined && url !== browser.url)) newBrowser(url); else { onBrowserOpen(pane.id); selectTab(browser.id); } };
@@ -463,6 +479,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={path => { if (typeof path === 'string') setChangesFocus({ path, at: Date.now() }); selectContext("changes"); }} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} />
+          <ActivityLine activity={state.activity} workflowNames={runNames} stopping={stopping} onStop={stopBackground} onOpenPanel={() => selectContext('activity')} />
           <PermissionNotice request={pendingPermission} active={active} onReview={() => onFocus(pane.id)} />
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
           {session?.state === "archived" ? <div className="resume-note"><span>This task is archived.</span><button onClick={() => reportError(() => state.manageSession(session, "archive"))}>Restore task</button></div> : <Composer key={`composer:${sessionId ?? project?.workspaceId ?? "draft"}`} initialText={firstTaskDraft && (firstTaskDraft.sessionId ?? sessionId) === sessionId ? firstTaskDraft.prompt : ""} onInitialTextUsed={() => setFirstTaskDraft(null)} agents={hostedAgents} workspace={mentionWorkspace} projects={otherProjects} disabled={!project || !engine.connected || needsFolder} offline={!engine.connected} autoFocusOnType={active && visible && !showSettings && !pendingPermission && !taskDialog && !worktreeDialog && !pickerOpen && !modelMenuOpen} running={Boolean(activeRun)} model={modelLabel(providerLabel)} standalone={Boolean(project?.standalone)} changesCount={changedFiles.length} onReview={() => selectContext("changes")} onSettings={() => setShowSettings(true)} answerer={answererLabel} answererId={chosenAgentId ?? "jolo"} answererName={chosenAgentId ? agentName(chosenAgentId) : "Jolo"} usageTabs={usageTabs} onCompact={compactable ? () => reportError(() => state.send("/compact", { agentId: chosenAgentId })) : null} modelControl={<ModelControls agents={chatAgents} hiddenSources={settings?.hiddenSources ?? []} agentId={chosenAgentId ?? 'jolo'} nativeModel={selectedModel} hasSession={Boolean(sessionId)} disabled={!engine.connected || !active || !visible || showSettings || Boolean(pendingPermission || taskDialog || worktreeDialog)} onSave={saveModelChoice} call={state.call} onSettings={setShowSettings} onOpenChange={setModelMenuOpen} />} queuedRuns={state.queuedRuns} onSendNow={id => reportError(() => state.sendNow(id))} onRemoveQueued={id => reportError(() => state.removeQueued(id))} onSend={async (prompt, options) => { try { const run = await state.send(prompt, { ...options, agentId: chosenAgentId }); setAnswerer(null); return run; } catch (e) { state.setError(e.message); throw e; } }} onStop={() => reportError(() => state.cancel())} />}

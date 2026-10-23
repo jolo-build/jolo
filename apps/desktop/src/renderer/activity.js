@@ -27,6 +27,35 @@ export function runningTasks(activity) {
   return activity ? activity.tasks.filter(task => task.status === 'running') : [];
 }
 
+/**
+ * The snapshot to keep when a `session.activity` read answers after an event or tick brought a newer one: every source
+ * carries the process's one monotonic `updatedAt`, so the read replaces only an older snapshot. Selecting the
+ * conversation cleared the activity before the read was sent, so one that is there now is newer than a read of none.
+ * @param {Activity | null} current
+ * @param {Activity | null} read
+ * @returns {Activity | null}
+ */
+export function newerActivity(current, read) {
+  return current && (!read || Date.parse(current.updatedAt) > Date.parse(read.updatedAt)) ? current : read;
+}
+
+/**
+ * The last `Stop background work` a pane sent: the conversation it was for, whether its reply is still due, and the reply.
+ * @typedef {{ requested: number, stopped: number, escalated: boolean }} StopResult
+ * @typedef {{ sessionId: string, pending: boolean, result: StopResult | null }} StopState
+ */
+
+/**
+ * What the shown conversation sees of that stop: a stop belongs to the conversation that sent it, so its wait and its
+ * reply never carry into another one, whose force-stop would otherwise read a reply about a different process.
+ * @param {StopState | null} stop
+ * @param {string | null} sessionId
+ * @returns {{ stopping: boolean, stopResult: StopResult | null }}
+ */
+export function stopFor(stop, sessionId) {
+  return stop?.sessionId === sessionId ? { stopping: stop.pending, stopResult: stop.result } : { stopping: false, stopResult: null };
+}
+
 /** The tokens the tasks reported, or null when none did: unknown usage is never a 0 (spec §2). */
 const tokensOf = (/** @type {TaskRecord[]} */ tasks) => {
   let total = null;
@@ -96,17 +125,21 @@ export function formatElapsed(ms) {
   return hours ? `${hours}:${pad(minutes)}:${pad(seconds % 60)}` : `${pad(minutes)}:${pad(seconds % 60)}`;
 }
 
+/** A running task the process was told to keep in the background (D1). */
+const background = (/** @type {TaskRecord} */ task) => task.status === 'running' && task.backgrounded;
+
 /**
- * The line above the composer while the process has running tasks (D1); null when nothing runs.
+ * The line above the composer while the process has running background tasks (D1); null when none runs. A foreground
+ * subagent is left out: the transcript shows it as a subagent block and the composer's Stop ends it with the turn.
  * @param {Activity | null} activity
  * @param {{ now: number, workflowNames: Map<string, string> }} options
  * @returns {{ text: string, running: number } | null}
  */
 export function activityLine(activity, { now, workflowNames }) {
-  const running = runningTasks(activity);
+  const running = runningTasks(activity).filter(background);
   if (!running.length) return null;
   const tokens = (/** @type {number | null} */ count) => count === null ? '' : ` · ${formatTokens(count)} tokens`;
-  const run = groupActivity(activity).runs.filter(item => item.running).at(-1);
+  const run = groupActivity(activity).runs.filter(item => item.tasks.some(background)).at(-1);
   if (run) {
     const name = workflowNames.get(run.runId) ?? run.tasks[0].description;
     const active = run.tasks.filter(task => task.status === 'running' && task.phase !== null);

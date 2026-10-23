@@ -1,21 +1,22 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, formatElapsed, formatTokens, groupActivity, parseWorkflowName, runningTasks, workflowNames } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, formatElapsed, formatTokens, groupActivity, newerActivity, parseWorkflowName, runningTasks, stopFor, workflowNames } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
 let ids = 0;
 /** @typedef {import('../src/renderer/activity.js').TaskRecord} TaskRecord */
 /** @param {Record<string, any>} [options] @returns {TaskRecord} */
-const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task' } = {}) => ({
-  taskId: `t${++ids}`, runId, toolUseId, description, subagentType: null, phase, backgrounded: true, status,
+const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true } = {}) => ({
+  taskId: `t${++ids}`, runId, toolUseId, description, subagentType: null, phase, backgrounded, status,
   startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null },
 });
 /** @param {TaskRecord[]} tasks @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks) => ({ state: 'background', tasks, truncated: false, updatedAt: at(0) });
 
-test('runningTasks keeps the running ones and reads nothing from no activity', () => {
+test('runningTasks keeps the running ones, foreground ones too, and reads nothing from no activity', () => {
   const running = task();
-  expect(runningTasks(activity([running, task({ status: 'completed', ended: 5 })]))).toEqual([running]);
+  const foreground = task({ backgrounded: false });
+  expect(runningTasks(activity([running, foreground, task({ status: 'completed', ended: 5 })]))).toEqual([running, foreground]);
   expect(runningTasks(null)).toEqual([]);
 });
 
@@ -102,9 +103,39 @@ test('a workflow run without phases or a known name reads as its agents under it
   expect(activityLine(activity(tasks), { now: START + 5_000, workflowNames: new Map() })?.text).toBe('Workflow Check the API: 2 agents');
 });
 
+test('a foreground subagent is not background work: the transcript shows it and the composer stops it', () => {
+  const options = { now: START + 30_000, workflowNames: new Map() };
+  expect(activityLine(activity([task({ backgrounded: false })]), options)).toBeNull();
+  expect(activityLine(activity([task({ backgrounded: false, started: 0, tokens: 9_000 }), task({ started: 10 })]), options)).toEqual({ text: 'Background work: 1 task · 00:20', running: 1 });
+  expect(activityLine(activity([task({ runId: 'wf', backgrounded: false }), task({ started: 10 })]), options)?.text).toBe('Background work: 1 task · 00:20');
+});
+
 test('the activity line is absent when nothing runs', () => {
   expect(activityLine(activity([task({ status: 'completed', ended: 3 })]), { now: START, workflowNames: new Map() })).toBeNull();
   expect(activityLine(null, { now: START, workflowNames: new Map() })).toBeNull();
+});
+
+test('a read of the activity keeps a newer snapshot that arrived meanwhile, and replaces an older one', () => {
+  const older = { ...activity([task()]), updatedAt: at(1) };
+  const newer = { ...activity([]), updatedAt: at(2) };
+  expect(newerActivity(newer, older)).toBe(newer);
+  expect(newerActivity(older, newer)).toBe(newer);
+  expect(newerActivity(null, older)).toBe(older);
+});
+
+test('a read that finds no process keeps a snapshot that arrived meanwhile: the selection cleared the old one first', () => {
+  const newer = { ...activity([task()]), updatedAt: at(2) };
+  expect(newerActivity(newer, null)).toBe(newer);
+  expect(newerActivity(null, null)).toBeNull();
+});
+
+test('a stop belongs to the conversation that sent it: another one shows neither its wait nor its reply', () => {
+  const result = { requested: 2, stopped: 0, escalated: true };
+  expect(stopFor({ sessionId: 'a', pending: true, result: null }, 'a')).toEqual({ stopping: true, stopResult: null });
+  expect(stopFor({ sessionId: 'a', pending: true, result: null }, 'b')).toEqual({ stopping: false, stopResult: null });
+  expect(stopFor({ sessionId: 'a', pending: false, result }, 'a')).toEqual({ stopping: false, stopResult: result });
+  expect(stopFor({ sessionId: 'a', pending: false, result }, 'b')).toEqual({ stopping: false, stopResult: null });
+  expect(stopFor(null, 'a')).toEqual({ stopping: false, stopResult: null });
 });
 
 test('tokens and elapsed time read compactly', () => {

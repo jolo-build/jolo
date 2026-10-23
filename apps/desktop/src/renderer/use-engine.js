@@ -10,9 +10,12 @@ import { SessionProjection } from "@jolo/client/projection";
 import { engineCall as call, useEngineConnection } from "./engine-context.jsx";
 import { PendingPermissions } from "./pending-permissions.js";
 import { PendingDialogs } from "./pending-dialogs.js";
+import { newerActivity } from "./activity.js";
 import { useWorkingChanges } from './use-working-changes.js';
 
 const WORKSPACE_EVENTS = new Set(["workspace.created", "workspace.removed"]);
+/** Whether an event can change a row of the sessions list; nothing in a row comes from a process's activity. */
+export const refreshesSessions = (event) => (event.type.startsWith("session.") && event.type !== "session.activity") || (event.type === "run.state" && TERMINAL.has(event.payload.state));
 async function newModelChoice(agentId = undefined) {
   const [{ agents }, { settings }] = await Promise.all([call('agent.catalog', {}), call('settings.get', {})]);
   return newSessionModelChoice(agents, settings.model, agentId);
@@ -156,8 +159,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       : [...sessionsRef.current, page.session]);
     requests.seed(page.pendingPermissions ?? [], page.cursor);
     open.seed(page.pendingDialogs ?? [], page.cursor);
-    // An older engine has no session.activity; a reply for a conversation no longer shown is dropped (Review Focus 1).
-    void call("session.activity", { sessionId: id }).then(r => { if (sessionRef.current === id && projection.current === next) setActivity(r.activity); }).catch(() => {});
+    // An older engine has no session.activity; a reply for a conversation no longer shown is dropped (Review Focus 1),
+    // and so is one older than a snapshot an event or tick brought while the read was out.
+    void call("session.activity", { sessionId: id }).then(r => { if (sessionRef.current === id && projection.current === next) setActivity(current => newerActivity(current, r.activity)); }).catch(() => {});
     // An engine already running during a desktop update may predate snapshot permissions.
     if (page.pendingPermissions === undefined) {
       void call("board.list", {}).then(({ projects }) => {
@@ -489,7 +493,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
             if (item.value.type === "session.activity") setActivity(item.value.payload);
             if (item.value.type === "files.changed") setChanges((list) => [...list, ...item.value.payload.changes.map((c) => ({ ...c, invocationId: item.value.payload.invocationId, tool: item.value.payload.tool, at: item.value.at }))].slice(-200));
           }
-          if (item.value.type.startsWith("session.") || (item.value.type === "run.state" && TERMINAL.has(item.value.payload.state))) sessionsChanged = true;
+          if (refreshesSessions(item.value)) sessionsChanged = true;
           if (item.value.sessionId === sessionRef.current && (item.value.type === "session.deleted" || (item.value.type === "session.updated" && item.value.payload.session.state !== historyRef.current))) void selectSession(null);
         } else if (item.kind === "preview" && item.value.sessionId === sessionRef.current && current) {
           current.applyPreview(item.value);

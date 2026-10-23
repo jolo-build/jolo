@@ -548,6 +548,13 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .stop-progress { display: block; flex: none; }
 .resume-note { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 12px; color: var(--muted); margin: 0 15px 12px; }
 .resume-note button { color: var(--accent); }
+/* Background work, quiet as the resume note: the text opens the Activity panel, the stop is the one accent. */
+.activity-line { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--muted); margin: 0 15px 12px; }
+.activity-line button { padding: 3px 7px; }
+.activity-line-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.activity-line-stop { flex: none; color: var(--accent); }
+/* The transcript fade must not paint over the line either. */
+.activity-line + .compose-dock::before { display: none; }
 .permission-notice { flex: none; width: 100%; padding-top: 6px; overflow: hidden; container-type: inline-size; font-size: 12px; }
 .permission-notice-row { display: flex; align-items: center; gap: 12px; }
 .permission-notice-content { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
