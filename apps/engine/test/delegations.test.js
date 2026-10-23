@@ -12,6 +12,7 @@ import { delegationTools } from '../src/tools/delegation.js';
 /**
  * `settings` is a settings patch applied before the service starts. `holdChild` keeps the child working until it is
  * stopped, in the run state it names (true: model); `childOutcome` is how a child that is not held ends.
+ * @param {{ holdChild?: boolean | string, childOutcome?: string, settings?: any }} [options]
  */
 function fixture({ holdChild = false, childOutcome = 'completed', settings: patch = null } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'jolo-delegations-'));
