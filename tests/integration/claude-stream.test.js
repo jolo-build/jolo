@@ -511,6 +511,23 @@ describe('background work after the turn, against a binary that queues turns lik
     expect(alive(starts()[0])).toBe(true);
   }, 30_000);
 
+  test('a background subagent asking the person gets a short run of its own, held by its dialog until answered', async () => {
+    const booted = await boot();
+    const { client, events, runTo, starts } = booted;
+    const launch = await runTo('launch', 'background-dialog 100 300');
+    expect(launch.state).toBe('completed');
+    const asked = await waitFor(() => events.find((e) => e.type === 'dialog.requested'), { label: 'the subagent asked the person', timeoutMs: 5000 });
+    expect(asked.runId).not.toBe(launch.id);
+    expect(events.some((e) => e.type === 'permission.requested')).toBe(false);
+    expect((await client.call('run.snapshot', { runId: asked.runId })).run.state).toBe('awaiting_permission');
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    // The question's run ends as soon as it is answered, before the subagent reports back.
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === asked.runId && e.payload.state === 'completed'), { label: 'the question run ended', timeoutMs: 1000 });
+    await waitFor(async () => (await later(booted, [launch.id, asked.runId])).some((run) => run.state === 'completed' && run.said === 'Background agent finished: coffee'), { label: 'the report', timeoutMs: 5000 });
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
   test('stopping a background subagent’s question denies it and keeps the process and its work', async () => {
     const booted = await boot();
     const { client, events, runTo, starts } = booted;
@@ -1404,6 +1421,20 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
     await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
     // A second answer to the question would have made Claude leave; the same process answers the next message.
     expect((await runTo('after-stop', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('stopping a run while Claude acts on a dialog\'s answer still answers Claude exactly once', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    // The fixture takes 3 s to act on the answer: the Stop lands while the answer is still in flight.
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-race', prompt: 'ask-user-slow 3000' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'the run cancelled' });
+    expect(events.filter(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId).map(e => e.payload.state)).toEqual(['answered']);
+    // A second answer to the question would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-race', 'still here?')).state).toBe('completed');
     expect(starts()).toHaveLength(1);
   }, 30_000);
 

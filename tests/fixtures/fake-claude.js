@@ -214,15 +214,16 @@ const selfStartedTurn = async (text, taskIds = ["fake-task"]) => {
 
 /** A subagent asking permission, as the real binary sends it: it names its agent, and its tool call comes first. By
  * default a background agent's; `call` names the main thread's Agent call a foreground one runs under, and `forwarded`
- * false is a nested agent, which asks before its call is forwarded. */
+ * false is a nested agent, which asks before its call is forwarded. `person` makes it a question for the person instead
+ * (`tool` AskUserQuestion, say), marked requires_user_interaction as Claude Code 2.1.304 sends one. */
 let lastQuestion = null;
-const subagentAsks = (input, { call = "toolu_bg_agent", agent = "fake-agent", toolUseId = "toolu_bg_bash", forwarded = true } = {}) => new Promise((resolve) => {
+const subagentAsks = (input, { call = "toolu_bg_agent", agent = "fake-agent", toolUseId = "toolu_bg_bash", forwarded = true, tool = "Bash", person = false } = {}) => new Promise((resolve) => {
   const requestId = `req-${++counter}`;
   lastQuestion = requestId;
   pending.set(requestId, resolve);
-  const toolUse = { type: "assistant", parent_tool_use_id: call, agent_id: agent, message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Bash", input }] }, session_id: sessionId };
+  const toolUse = { type: "assistant", parent_tool_use_id: call, agent_id: agent, message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: tool, input }] }, session_id: sessionId };
   if (forwarded) out(toolUse);
-  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "Bash", display_name: "Bash", input, description: "background command", tool_use_id: toolUseId, agent_id: agent } });
+  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: tool, display_name: tool, input, tool_use_id: toolUseId, agent_id: agent, ...(person ? { requires_user_interaction: true } : { description: "background command" }) } });
   if (!forwarded) out(toolUse);
   out({ type: "system", subtype: "task_progress", task_id: "fake-task", description: "waiting for permission", session_id: sessionId }); // a notice, not a turn
 });
@@ -353,6 +354,17 @@ async function turn(prompt, images = [], uuid = null) {
     turns = 2;
     const outcome = await tool("Read", { file_path: match[1] }, async (input) => ({ content: await Bun.file(input.file_path).text() }));
     if (!state.interrupted) say(outcome.denied ? `I could not read it: ${outcome.message}` : `The file says: ${outcome.content.trim()}`);
+  } else if ((match = prompt.match(/^ask-user-slow (\d+)$/))) {
+    // Claude asks the person "tea or coffee?", then takes <ms> to act on the answer, so a Stop lands while it is in flight.
+    turns = 2;
+    const question = "tea or coffee?";
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    for (let waited = 0; waited < Number(match[1]) && !state.interrupted; waited += 20) await sleep(20);
+    if (state.interrupted) return;
+    say(`You answered: ${decision.updatedInput?.answers?.[question] ?? decision.message}`);
   } else if ((match = prompt.match(/^ask-user (.+)$/s))) {
     // Claude asks the person (AskUserQuestion). An allow carries the answers, keyed by the question's text; an allow
     // without them is a question nobody answered, as the real binary reports it; a deny is the person not answering.
@@ -493,6 +505,18 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(async () => {
       const decision = await subagentAsks({ command: "echo background" });
       setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${decision.behavior}`)), Number(work));
+    }, Number(delay));
+  } else if ((match = prompt.match(/^background-dialog (\d+) (\d+)$/))) {
+    // As background-permission, but the background subagent asks the person "tea or coffee?" (AskUserQuestion) and
+    // reports the answer, or why there was none.
+    say("Background agent started.");
+    const [, delay, work] = match;
+    const question = "tea or coffee?";
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    setTimeout(async () => {
+      const decision = await subagentAsks(input, { tool: "AskUserQuestion", toolUseId: "toolu_bg_ask", person: true });
+      const answer = decision.behavior === "allow" ? decision.updatedInput?.answers?.[question] : decision.message;
+      setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer}`)), Number(work));
     }, Number(delay));
   } else if ((match = prompt.match(/^race-self (.+)$/s))) {
     say(`You said: ${match[1]}`);
