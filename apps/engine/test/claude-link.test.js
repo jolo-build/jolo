@@ -551,7 +551,7 @@ test('tasks still running when the process ends are recorded as failed', async (
   const link = open(registry);
   await turn(link, 'tasks 2 5000', { init: true });
   expect(link.working).toBe(true);
-  await registry.closeAll();
+  await registry.close('session', 'test', { graceful: false }); // a graceful close would stop them first
   expect(link.activity.state).toBe('idle');
   expect(link.activity.tasks.map(t => [t.status, t.endedAt !== null])).toEqual([['failed', true], ['failed', true]]);
 });
@@ -659,4 +659,14 @@ test('stopping background work Claude says is already over reports it not stoppe
   expect(link.alive).toBe(true);
   expect(link.activity.tasks.map(t => t.status)).toEqual(['running']); // listed as Claude last told it, until its notice comes
   await registry.closeAll();
+});
+
+test('closing a process with background work stops the tasks first, then the process leaves', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks 2 20000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  await link.close({ reason: 'test' });
+  expect(link.activity.tasks.map(t => t.status)).toEqual(['stopped', 'stopped']);
+  expect(link.alive).toBe(false);
 });

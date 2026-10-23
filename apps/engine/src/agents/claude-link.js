@@ -571,8 +571,10 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       clearIdle();
       if (alive) {
         log.info('closing hosted agent process', { sessionId, agentId, reason, graceful });
-        if (graceful) { child.end(); child.terminate({ graceful: true }); } // EOF first: the process leaves by itself; signals follow if it does not
-        else { gracefulClose = false; controller.abort(); }
+        if (graceful) {
+          if (running()) await stopBackground(); // its tasks are stopped first, within the grace; any still running end with the process
+          if (alive) { child.end(); child.terminate({ graceful: true }); } // EOF first: the process leaves by itself; signals follow if it does not
+        } else { gracefulClose = false; controller.abort(); }
       }
       await closed;
     })();
