@@ -3,6 +3,7 @@ import { PermissionRepository } from "./permissions.js";
 import { PlanRepository } from "./plans.js";
 import { ScheduleRepository } from "./schedules.js";
 import { DelegationRepository } from "./delegations.js";
+import { DialogRepository } from "./dialogs.js";
 // Storage service: the only module that touches SQLite.
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
@@ -39,6 +40,7 @@ export class Storage {
     this.plans = new PlanRepository(this);
     this.schedules = new ScheduleRepository(this);
     this.delegations = new DelegationRepository(this);
+    this.dialogs = new DialogRepository(this);
     this.eventRepository = new EventRepository(this.db);
     this.eventRepository.bootstrap();
     this.eventRepository.prune();

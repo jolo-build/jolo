@@ -94,6 +94,11 @@ const released = [
     "version": 18,
     "name": "0018_session_agent_model.sql",
     "checksum": "1b8390c0fb8b48376ad3f292a0d3677f0b43b8a5af923ac70df0967f2a7c0344"
+  },
+  {
+    "version": 19,
+    "name": "0019_dialogs.sql",
+    "checksum": "b7d332b3cc24bce7158df0ef9eb54a148ac2ae80e29e25e79eff9cd0ed67c8d8"
   }
 ];
 

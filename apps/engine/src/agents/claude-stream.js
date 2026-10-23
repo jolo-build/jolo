@@ -17,6 +17,7 @@ import { browserPreview } from '../browser/mcp.js';
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
+import { dialogControlResponse, isDialogRequest } from './claude-dialogs.js';
 
 export { insideWorkspace };
 
@@ -45,6 +46,8 @@ export const isContinuation = (run) => typeof run?.requestId === "string" && run
 /** What a continuation that was paused and then resumed says: what it was continuing was stopped when it paused. */
 /** Claude Code commands Jolo answers itself: the model, effort and fast mode are Jolo's to choose. */
 export const JOLO_OWNED_COMMANDS = new Set(["model", "effort", "fast"]);
+/** What Claude is told about a question still open when its run is stopped. */
+const STOPPED = { behavior: "deny", message: "The run was stopped in Jolo." };
 /** How long a run stays open for a Jolo tool call it allowed that never reports back. */
 const JOLO_CALL_HOLD_MS = 10 * 60_000;
 export const RESUMED_CONTINUATION = "Jolo paused this and the user has resumed it. Carry on where you left off.";
@@ -103,9 +106,10 @@ export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
  * engine's registry of conversation processes; an executor built without one keeps its own.
  * @param {{ storage: any, catalog: any, permissions: any, supervisor: any, log: any,
  *   mcpConfig?: (workspace: any, run: any, owner?: string) => { server: any, hasBrowser: boolean, hasSearch: boolean } | null,
- *   providerFactory?: any, settings?: any, links?: any, revoke?: (owner: string) => void, emptyResultGraceMs?: number }} deps
+ *   providerFactory?: any, settings?: any, links?: any, revoke?: (owner: string) => void, emptyResultGraceMs?: number, dialogs?: any }} deps
+ * `dialogs` takes Claude's questions to the person (see claude-dialogs.js); without it they are asked as permissions.
  */
-export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, mcpConfig, providerFactory = null, settings = null, links = null, revoke = () => {}, emptyResultGraceMs = EMPTY_RESULT_GRACE_MS }) {
+export function createClaudeStreamExecutor({ storage, catalog, permissions, supervisor, log, mcpConfig, providerFactory = null, settings = null, links = null, revoke = () => {}, emptyResultGraceMs = EMPTY_RESULT_GRACE_MS, dialogs = null }) {
   const registry = links ?? createHostedLinks({ log });
   return {
     name: "claude-stream",
@@ -281,17 +285,40 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       };
       /** The main thread's subagent calls (Agent/Task) among its tools. */
       const subagentCalls = new Set();
-      const deny = (requestId) => link.write({ type: "control_response", response: { request_id: requestId, subtype: "success", response: { behavior: "deny", message: "The run was stopped in Jolo." } } });
+      const deny = (requestId) => link.write({ type: "control_response", response: { request_id: requestId, subtype: "success", response: STOPPED } });
+      /** Questions for the person this run has answered, by request id: each is answered once, even if Claude asks again. */
+      const answeredDialogs = new Set();
+      const answerDialog = (requestId, response) => {
+        if (answeredDialogs.has(requestId)) return;
+        answeredDialogs.add(requestId);
+        link.write({ type: "control_response", response: { request_id: requestId, subtype: "success", response } });
+      };
+      /**
+       * A question for the person (AskUserQuestion, plan approval): a dialog, never a permission, answered with what they
+       * said. Stopped while open, Claude is told so; taken back by Claude, nothing is answered.
+       */
+      const askPerson = async (requestId, request, withdrawn) => {
+        const dialog = dialogs.request({ run, requestId, tool: String(request.tool_name ?? ""), toolUseId: request.tool_use_id ?? null, input: request.input ?? {} });
+        ctx.transition("awaiting_permission");
+        let settled;
+        try { settled = await dialogs.waitForResolution(dialog.id, withdrawn); }
+        catch { if (signal.aborted) answerDialog(requestId, STOPPED); return; }
+        if (deciding.size <= 1) ctx.transition("tools"); // no other question still waits on the user
+        answerDialog(requestId, dialogControlResponse(settled) ?? STOPPED); // closed by Jolo meanwhile: Claude must not wait on it
+      };
       const onControlRequest = async (message, background, call = null, scope = "idle") => {
         const request = message.request ?? {};
         if (request.subtype !== "can_use_tool") { link.write({ type: "control_response", response: { request_id: message.request_id, subtype: "error", error: `Jolo does not handle ${request.subtype ?? "this request"}` } }); return; }
-        if (signal.aborted) { deny(message.request_id); return; } // asked after Stop: nobody will be asked now
+        const asksPerson = Boolean(dialogs) && isDialogRequest(request);
+        if (asksPerson && (deciding.has(message.request_id) || answeredDialogs.has(message.request_id))) return; // asked again: one dialog, one answer
+        if (signal.aborted) { if (asksPerson) answerDialog(message.request_id, STOPPED); else deny(message.request_id); return; } // asked after Stop: nobody will be asked now
         const withdrawn = new AbortController();
         const stop = () => withdrawn.abort();
         signal.addEventListener("abort", stop, { once: true });
         deciding.set(message.request_id, { withdrawn, background, call: call && mainTools.has(call) ? call : null, toolUseId: request.tool_use_id ?? null });
         settleWaiting();
         try {
+          if (asksPerson) { await askPerson(message.request_id, request, withdrawn.signal); return; }
           const decision = await decide(request, withdrawn.signal, background, scope);
           if (withdrawn.signal.aborted && !signal.aborted) return; // the process took the question back: nothing to answer
           // Cancelled while waiting (Stop, or no window left to ask in): the asker must not wait forever, least of all a

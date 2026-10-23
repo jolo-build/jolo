@@ -1337,3 +1337,53 @@ describe('slash commands and the task\'s own choices inside a kept process', () 
   }, 30_000);
 });
 
+
+describe("Claude's questions to the person reach Jolo as dialogs", () => {
+  test('a question Claude asks the person reaches Jolo as a dialog and the answer goes back', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect(asked.payload.tool).toBe('AskUserQuestion');
+    expect(asked.payload.input.questions[0].question).toBe('tea or coffee?');
+    expect(events.some(e => e.type === 'permission.requested' && e.runId === run.id)).toBe(false);
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('awaiting_permission');
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('You answered: coffee');
+  }, 30_000);
+
+  test('dismissing a dialog tells Claude the person did not answer', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-dismiss', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('dialog.dismiss', { dialogId: asked.payload.dialogId, message: 'Not now.' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('No answer: Not now.');
+  }, 30_000);
+
+  test('stopping a run with a dialog open cancels the dialog and answers Claude exactly once', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-stop', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled'), { label: 'dialog cancelled' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'run cancelled' });
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+    // A second answer to the question would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-stop', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('a question Claude takes back closes its dialog and is never answered', async () => {
+    const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-withdraw', prompt: 'ask-user-withdraw 300' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await waitFor(() => events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled'), { label: 'dialog cancelled' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('Never mind the question.');
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+    // An answer to the question it took back would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-withdraw', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+});

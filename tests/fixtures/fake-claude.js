@@ -11,8 +11,10 @@
 // pause, "exit-after-turn" leaves once its answer is out, "background-permission <ms> <ms>" answers at once and then,
 // <ms> later, has a background subagent ask permission while the main thread is idle and report back <ms> after the
 // answer, "race-self <text>" begins a turn of its own just before taking up the message (a background task finishing
-// as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, and anything
-// else just answers in prose. The other scenarios are described where they are played.
+// as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, "ask-user
+// <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
+// that question back <ms> later, and anything else just answers in prose. A second control response to one request, or
+// one to a request it took back, makes the fixture exit 70. The other scenarios are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
 // --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
@@ -122,6 +124,21 @@ const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
   pending.set(requestId, resolve);
   out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, description: extra.description ?? toolName, permission_suggestions: [], tool_use_id: extra.toolUseId } });
 });
+/** A question that needs the person, as Claude Code 2.1.304 sends AskUserQuestion in host mode: an ordinary can_use_tool
+ * marked requires_user_interaction, answered inside the permission answer (see docs/superpowers/specs/claude-dialogs.md). */
+const askPerson = (toolName, input, toolUseId) => new Promise((resolve) => {
+  const requestId = `req-${++counter}`;
+  pending.set(requestId, resolve);
+  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, tool_use_id: toolUseId, requires_user_interaction: true } });
+});
+/** Requests the process took back: the host must not answer them. */
+const withdrawn = new Set();
+/** Take back a question nobody has answered, as the real binary does with control_cancel_request. */
+const takeBack = (requestId) => {
+  withdrawn.add(requestId);
+  out({ type: "control_cancel_request", request_id: requestId });
+  const resolve = pending.get(requestId); pending.delete(requestId); resolve?.({ behavior: "withdrawn" });
+};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const result = (turns, uuid = null) => out({ type: "result", subtype: "success", is_error: false, result: "done", ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
 const say = (text) => {
@@ -336,6 +353,31 @@ async function turn(prompt, images = [], uuid = null) {
     turns = 2;
     const outcome = await tool("Read", { file_path: match[1] }, async (input) => ({ content: await Bun.file(input.file_path).text() }));
     if (!state.interrupted) say(outcome.denied ? `I could not read it: ${outcome.message}` : `The file says: ${outcome.content.trim()}`);
+  } else if ((match = prompt.match(/^ask-user (.+)$/s))) {
+    // Claude asks the person (AskUserQuestion). An allow carries the answers, keyed by the question's text; an allow
+    // without them is a question nobody answered, as the real binary reports it; a deny is the person not answering.
+    turns = 2;
+    const question = match[1];
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    if (state.interrupted) return;
+    const answer = decision.behavior === "allow" ? decision.updatedInput?.answers?.[question] : undefined;
+    const unanswered = answer === undefined ? (decision.behavior === "allow" ? "The user did not answer the questions." : decision.message) : null;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: unanswered ?? `Your questions have been answered: "${question}"="${answer}". You can now continue with these answers in mind.`, ...(decision.behavior === "allow" ? {} : { is_error: true }) }] }, session_id: sessionId });
+    say(unanswered === null ? `You answered: ${answer}` : `No answer: ${unanswered}`);
+  } else if ((match = prompt.match(/^ask-user-withdraw (\d+)$/))) {
+    // Claude asks the person, then takes the question back <ms> later and answers without it.
+    const input = { questions: [{ question: "tea or coffee?", header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    void askPerson("AskUserQuestion", input, toolUseId);
+    const asked = `req-${counter}`;
+    await sleep(Number(match[1]));
+    if (state.interrupted) return;
+    takeBack(asked);
+    say("Never mind the question.");
   } else if (prompt === "history") {
     say(`${continuing ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
@@ -406,8 +448,7 @@ async function turn(prompt, images = [], uuid = null) {
       void subagentAsks({ command: "echo background" });
       const asked = lastQuestion;
       setTimeout(() => {
-        out({ type: "control_cancel_request", request_id: asked });
-        const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+        takeBack(asked);
         setTimeout(() => enqueue(() => selfStartedTurn("Background agent finished: withdrawn")), 100);
       }, Number(ms));
     }, Number(delay));
@@ -905,8 +946,7 @@ async function turn(prompt, images = [], uuid = null) {
     await sleep(300);
     say("Still working. ");
     await sleep(300);
-    out({ type: "control_cancel_request", request_id: asked });
-    const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+    takeBack(asked);
     await sleep(200);
     say("Done.");
   } else if ((match = prompt.match(/^zero-result-compact (\d+) (.+)$/s))) {
@@ -956,6 +996,8 @@ async function turn(prompt, images = [], uuid = null) {
   result(turns, uuid);
 }
 
+/** The requests the host has answered, by request id. */
+const answered = new Set();
 let buffered = "";
 const decoder = new TextDecoder();
 for await (const chunk of Bun.stdin.stream()) {
@@ -977,7 +1019,14 @@ for await (const chunk of Bun.stdin.stream()) {
       if (entry) lifecycle(entry.uuid, "cancelled");
       out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { cancelled: Boolean(entry) } } });
     }
-    else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
+    else if (message.type === "control_response") {
+      // Each request is answered once: a second answer is a host bug, and leaving makes the test that caused it fail.
+      const requestId = message.response?.request_id;
+      if (answered.has(requestId)) { process.stderr.write(`fake-claude: second control response for ${requestId}\n`); process.exit(70); }
+      if (withdrawn.has(requestId)) { process.stderr.write(`fake-claude: control response for ${requestId}, which was taken back\n`); process.exit(70); }
+      answered.add(requestId);
+      const resolve = pending.get(requestId); if (resolve) { pending.delete(requestId); resolve(message.response.response); }
+    }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
     else if (message.type === "user") { const entry = { cancelled: false, uuid: message.uuid ?? null }; waiting.push(entry); lifecycle(entry.uuid, "queued"); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (entry.cancelled) return; lifecycle(entry.uuid, "started"); await turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image"), message.uuid ?? null).catch((error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); }); lifecycle(entry.uuid, stoppedMessages.delete(entry.uuid) ? "cancelled" : "completed"); }); }
   }

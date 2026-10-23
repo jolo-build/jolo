@@ -68,6 +68,8 @@ const refreshBranch = migrations.filter(migration => migration.version <= 16).ma
   ...migration,
   ...(migration.historicalVariants?.[0] ?? {}),
 }));
+/** The newest schema this build migrates to. */
+const latest = migrations.at(-1).version;
 const histories = [
   { label: 'before version 15', source: migrations.filter(m => m.version <= 14) },
   { label: 'original version 15', source: migrations.filter(m => m.version <= 15) },
@@ -99,13 +101,13 @@ test.each(histories)('$label upgrades without losing saved data or rewriting its
     }
     const ledger = db.query('SELECT * FROM schema_migrations ORDER BY version').all();
     const backups = [];
-    expect(migrate(db, migrations, { beforeMigrate: range => backups.push(range) })).toEqual({ version: 18, appliedNow: 18 - source.length });
-    expect(backups).toEqual([{ from: source.at(-1).version, to: 18 }]);
+    expect(migrate(db, migrations, { beforeMigrate: range => backups.push(range) })).toEqual({ version: latest, appliedNow: latest - source.length });
+    expect(backups).toEqual([{ from: source.at(-1).version, to: latest }]);
     expect(db.query('SELECT * FROM schema_migrations WHERE version <= ? ORDER BY version').all(source.at(-1).version)).toEqual(ledger);
     expect(db.query('SELECT * FROM sessions').get()).toMatchObject({ ...session, pinned_at: session.pinned_at ?? null, agent_model: session.agent_model ?? null });
     expect(db.query("SELECT 1 FROM sqlite_master WHERE name = 'sessions_pinned'").get()).not.toBeNull();
     if (hadChangeEvents) expect(db.query('SELECT payload FROM run_change_events WHERE seq = 1').get().payload).toBe('{"changes":[]}');
-    expect(migrate(db, migrations)).toEqual({ version: 18, appliedNow: 0 });
+    expect(migrate(db, migrations)).toEqual({ version: latest, appliedNow: 0 });
     expect(db.query('PRAGMA integrity_check').get().integrity_check).toBe('ok');
   } finally { db.close(); }
 });

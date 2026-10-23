@@ -246,6 +246,8 @@ export const EVENT_TYPES = Object.freeze([
   "schedule.fired",
   "schedule.updated",
   "session.activity",
+  "dialog.requested",
+  "dialog.resolved",
 ]);
 
 /**
@@ -596,6 +598,19 @@ export const PlanTaskDraftSchema = z.object({
   effort: z.string().max(40).nullable().optional(),
 });
 
+/**
+ * A question an agent asks the person rather than a permission: Claude's AskUserQuestion and plan approval (ExitPlanMode).
+ * `input` is the tool's input as Claude sent it; `response` is the person's answer (`{ message }` when dismissed).
+ */
+export const DIALOG_STATES = Object.freeze(["requested", "answered", "dismissed", "cancelled"]);
+const DialogTool = z.string().min(1).max(200);
+const DialogValue = z.record(z.string(), z.unknown());
+export const DialogSchema = z.object({
+  id: Id, sessionId: Id, runId: Id, requestId: Id, tool: DialogTool, toolUseId: Id.nullable(),
+  input: DialogValue, response: DialogValue.nullable(), state: z.enum(DIALOG_STATES),
+  createdAt: IsoTimestamp, resolvedAt: IsoTimestamp.nullable(),
+});
+
 export const EventPayloadSchemas = Object.freeze({
   "account.changed": z.object({ state: z.enum(['signed_out', 'pending', 'signed_in']) }),
   "session.created": z.object({ session: SessionSchema }),
@@ -623,6 +638,8 @@ export const EventPayloadSchemas = Object.freeze({
   "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
   "schedule.updated": z.object({ schedule: ScheduleSchema }),
   "session.activity": ActivitySchema,
+  "dialog.requested": z.object({ dialogId: Id, runId: Id, tool: DialogTool, input: DialogValue, toolUseId: Id.nullable() }),
+  "dialog.resolved": z.object({ dialogId: Id, state: z.enum(DIALOG_STATES.filter((state) => state !== "requested")) }),
   "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
   "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
@@ -985,6 +1002,10 @@ Object.assign(MethodSchemas, {
   "terminal.lease": { params: z.object({ terminalId: Id }), result: z.object({ inputLease: z.literal(true) }) },
   "terminal.close": { params: z.object({ terminalId: Id }), result: z.object({ closed: z.literal(true) }) },
   "terminal.list": { params: z.object({ workspaceId: Id.optional() }), result: z.object({ terminals: z.array(TerminalSchema) }) },
+  /** The person's answer to a dialog: it goes to the agent as the tool's input with `response` merged in. */
+  "dialog.resolve": { params: z.object({ dialogId: Id, response: DialogValue }), result: z.object({ dialogId: Id, state: z.literal("answered") }) },
+  /** The person will not answer: the agent is told `message`. */
+  "dialog.dismiss": { params: z.object({ dialogId: Id, message: z.string().min(1).max(2000) }), result: z.object({ dialogId: Id, state: z.literal("dismissed") }) },
   "permission.resolve": {
     params: z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), expectedRevision: Revision.optional() }),
     result: z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, runId: Id }),

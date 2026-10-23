@@ -23,7 +23,7 @@ import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '
  * a single method stands in for the few that method touches and names this type as it does so.
  * @typedef {{
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, agentLimits: any, credentials: any,
- *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
+ *   account: any, tasks: any, permissions: any, dialogs: any, dispatcher: any, browser: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   hostedLinks?: any, paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
  *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
@@ -31,7 +31,7 @@ import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -378,6 +378,15 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         try { runs.resume({ runId: paused.id }); } catch { /* it stays paused, to be resumed by hand */ }
       }
       return { permissionId: permission.id, decision: permission.decision, revision: permission.revision, runId: permission.runId };
+    },
+    // The person's answer to a question an agent asked them, or their refusal to answer; the first settlement wins.
+    "dialog.resolve": ({ dialogId, response }, conn) => {
+      requireInteractive(conn, "only an interactive client can answer for the user");
+      return { dialogId, state: dialogs.resolve(dialogId, response).state };
+    },
+    "dialog.dismiss": ({ dialogId, message }, conn) => {
+      requireInteractive(conn, "only an interactive client can answer for the user");
+      return { dialogId, state: dialogs.dismiss(dialogId, message).state };
     },
     "run.resume": (params) => ({ run: runs.resume(params) }),
     "terminal.open": (params, conn) => { requireInteractive(conn, "terminals are for interactive clients"); return terminals.open({ conn, ...params }); },

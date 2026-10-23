@@ -12,6 +12,7 @@ import { CredentialService } from "./credentials/index.js";
 import { ChatSync } from './account/chat-sync.js';
 import { AccountService } from './account/service.js';
 import { PermissionService } from "./permissions/service.js";
+import { createDialogService } from "./dialogs/service.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { ToolDispatcher, resolveToolEnvironment } from "./tools/dispatcher.js";
 import { createProviderCatalog } from './providers/presets.js';
@@ -65,6 +66,7 @@ export function createEngine(options) {
   let credentials = null;
   let account = null;
   let permissions = null;
+  let dialogs = null;
   let dispatcher = null;
   let browser = null;
   let supervisor = null;
@@ -112,6 +114,7 @@ export function createEngine(options) {
     credentials = new CredentialService({ log, env: options.env ?? process.env, catalog: providerCatalog });
     account = new AccountService({ storage, paths, lifetime, env: options.env ?? process.env, fetchImpl: options.accountFetchImpl, secrets: options.accountSecrets });
     permissions = new PermissionService({ storage });
+    dialogs = createDialogService({ storage });
     account.chatSync = new ChatSync({ account, storage, paths, permissions });
     void account.chatSync.run();
     const registry = new ToolRegistry();
@@ -141,7 +144,7 @@ export function createEngine(options) {
       // What a conversation's process is doing goes to clients as it changes; a conversation deleted meanwhile has no one to tell.
       onActivity: (sessionId, activity) => { if (storage.getSession(sessionId)) storage.appendEvent({ sessionId, type: 'session.activity', payload: activityPayload(activity) }); } });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      mcpConfig, links: hostedLinks, emptyResultGraceMs,
+      mcpConfig, links: hostedLinks, emptyResultGraceMs, dialogs,
       providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
     runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
@@ -159,7 +162,7 @@ export function createEngine(options) {
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
