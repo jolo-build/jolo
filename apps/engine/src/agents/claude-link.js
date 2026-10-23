@@ -17,7 +17,7 @@
 import path from 'node:path';
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { TASK_HISTORY_LIMIT } from '@jolo/protocol';
+import { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX } from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
 
 /** How long an idle process is kept. Long on purpose: the point is that background work gets to finish. */
@@ -43,10 +43,17 @@ export const REPORT_GRACE_MS = 3_000;
 /** How often a link reports its activity at most while its tasks progress; a change of its state is reported at once. */
 export const ACTIVITY_COALESCE_MS = 250;
 // A link remembers TASK_HISTORY_LIMIT finished tasks, the most an activity names, forgetting the oldest first; those
-// still running are never forgotten.
-export { TASK_HISTORY_LIMIT };
+// still running are never forgotten. What Claude says about a task is kept to TASK_TEXT_MAX characters (a description, a
+// phase) and TASK_ID_MAX (an id, a subagent type).
+export { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX };
 /** @type {Map<string, TaskRecord['status']>} how a task's end is recorded, by the status Claude names; any other is completed */
 const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
+/** The notices that say something about one task, by its id. */
+const TASK_NOTICES = new Set(['task_started', 'task_progress', 'task_updated', 'task_notification']);
+/** Text Claude sent, cut to `max` characters: a number or a boolean as written, anything else (an object, nothing) null. */
+const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof value) ? String(value).slice(0, max) : null);
+/** A count Claude sent, as a whole number from 0 to the largest safe integer; null when it is not a number of zero or more. */
+const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER) : null);
 
 /**
  * A background task of the process (an agent, a workflow, a command), as its notices describe it.
@@ -283,18 +290,21 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   // begins, the work is not over, and a stop or a reload must not cut the report off.
   let reportDue = null;
   const settleReport = () => { if (reportDue) { clearTimeout(reportDue); reportDue = null; } };
-  /** @param {any} message @param {string} at @returns {TaskRecord} */
-  const newTask = (message, at) => ({
-    taskId: message.task_id, runId: message.run_id ?? null, toolUseId: message.tool_use_id ?? null, description: message.description ?? '',
-    subagentType: message.subagent_type ?? null, phase: null, backgrounded: message.is_backgrounded === true, status: 'running',
+  // Every field is read through textOf/countOf: what Claude sends is bounded and typed before it is kept or published.
+  /** @param {string} taskId @param {any} message @param {string} at @returns {TaskRecord} */
+  const newTask = (taskId, message, at) => ({
+    taskId, runId: textOf(message.run_id, TASK_ID_MAX), toolUseId: textOf(message.tool_use_id, TASK_ID_MAX), description: textOf(message.description, TASK_TEXT_MAX) ?? '',
+    subagentType: textOf(message.subagent_type, TASK_ID_MAX), phase: null, backgrounded: message.is_backgrounded === true, status: 'running',
     startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null },
   });
-  /** @param {TaskRecord} task @param {any} usage */
+  /** A count that is not one leaves what was known. @param {TaskRecord} task @param {any} usage */
   const takeUsage = (task, usage) => {
-    if (Number.isFinite(usage?.total_tokens)) task.usage.totalTokens = usage.total_tokens;
-    if (Number.isFinite(usage?.tool_uses)) task.usage.toolUses = usage.tool_uses;
-    if (Number.isFinite(usage?.duration_ms)) task.usage.durationMs = usage.duration_ms;
+    task.usage.totalTokens = countOf(usage?.total_tokens) ?? task.usage.totalTokens;
+    task.usage.toolUses = countOf(usage?.tool_uses) ?? task.usage.toolUses;
+    task.usage.durationMs = countOf(usage?.duration_ms) ?? task.usage.durationMs;
   };
+  /** Whether a notice naming no usable task was logged already: one is enough to tell. */
+  let namelessLogged = false;
   /** @param {TaskRecord} task @param {TaskRecord['status']} status @param {string} at */
   const finish = (task, status, at) => {
     const was = task.status;
@@ -318,29 +328,34 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     }
   };
   const trackTasks = (message) => {
-    if (message.type !== 'system' || !message.task_id) return;
+    if (message.type !== 'system' || !TASK_NOTICES.has(message.subtype)) return;
+    const taskId = textOf(message.task_id, TASK_ID_MAX);
+    if (!taskId) {
+      if (!namelessLogged) log.warn('ignored task notices from the agent process that name no task', { sessionId, agentId, subtype: message.subtype });
+      namelessLogged = true;
+      return;
+    }
     const at = new Date().toISOString();
-    let task = tasks.get(message.task_id);
+    let task = tasks.get(taskId);
     const was = task?.status ?? null;
     if (message.subtype === 'task_started') {
       if (!running()) onBackground(true);
-      tasks.delete(message.task_id); // one started again is listed anew, as the newest
-      tasks.set(message.task_id, newTask(message, at));
+      tasks.delete(taskId); // one started again is listed anew, as the newest
+      tasks.set(taskId, newTask(taskId, message, at));
     } else if (message.subtype === 'task_progress' && task) {
       takeUsage(task, message.usage);
     } else if (message.subtype === 'task_updated' && task) {
       const patch = message.patch ?? {};
-      const phase = patch.workflow_phase ?? patch.phase;
-      if (typeof phase === 'string') task.phase = phase;
-      if (typeof patch.description === 'string') task.description = patch.description;
+      task.phase = textOf(patch.workflow_phase ?? patch.phase, TASK_TEXT_MAX) ?? task.phase;
+      task.description = textOf(patch.description, TASK_TEXT_MAX) ?? task.description;
       const ending = TASK_ENDINGS.get(patch.status);
       if (ending) finish(task, ending, at);
     } else if (message.subtype === 'task_notification') {
       const ending = TASK_ENDINGS.get(message.status) ?? 'completed';
       if (task) finish(task, ending, at);
       else { // one never seen to start is recorded all the same; it never kept the process
-        task = { ...newTask(message, at), status: ending, endedAt: at };
-        tasks.set(message.task_id, task);
+        task = { ...newTask(taskId, message, at), status: ending, endedAt: at };
+        tasks.set(taskId, task);
       }
       takeUsage(task, message.usage);
     } else return;

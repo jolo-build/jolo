@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -73,6 +73,25 @@ describe("schemas", () => {
     expect(ActivitySchema.safeParse(activity).success).toBe(true);
     expect(TaskRecordSchema.safeParse({ ...task, status: 'paused' }).success).toBe(false);
     expect(GATED_EVENT_TYPES).toContain("session.activity");
+  });
+  test("a task record's text and counts are bounded", () => {
+    const task = { taskId: 't1', runId: 'r', toolUseId: 'u', description: 'x', subagentType: 'Explore', phase: 'p', backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: 1, toolUses: 0, durationMs: 5 } };
+    const valid = (patch) => TaskRecordSchema.safeParse({ ...task, ...patch }).success;
+    expect(valid({ description: 'd'.repeat(TASK_TEXT_MAX), phase: 'p'.repeat(TASK_TEXT_MAX), taskId: 't'.repeat(TASK_ID_MAX), runId: 'r'.repeat(TASK_ID_MAX), toolUseId: 'u'.repeat(TASK_ID_MAX), subagentType: 's'.repeat(TASK_ID_MAX) })).toBe(true);
+    for (const patch of [{ description: 'd'.repeat(TASK_TEXT_MAX + 1) }, { phase: 'p'.repeat(TASK_TEXT_MAX + 1) }, { taskId: 't'.repeat(TASK_ID_MAX + 1) }, { taskId: '' },
+      { runId: 'r'.repeat(TASK_ID_MAX + 1) }, { toolUseId: 'u'.repeat(TASK_ID_MAX + 1) }, { subagentType: 's'.repeat(TASK_ID_MAX + 1) }, { description: 42 }]) expect(valid(patch)).toBe(false);
+    for (const count of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2]) expect(valid({ usage: { ...task.usage, totalTokens: count } })).toBe(false);
+  });
+  test("a dialog's tool and the input its event carries are bounded; the record keeps any input", () => {
+    const at = new Date().toISOString();
+    const dialog = { id: 'dlg_1', sessionId: 's1', runId: 'r1', requestId: 'req-1', tool: 'AskUserQuestion', toolUseId: null, input: { big: 'x'.repeat(DIALOG_INPUT_EVENT_MAX) }, response: null, state: 'requested', createdAt: at, resolvedAt: null };
+    expect(DialogSchema.safeParse(dialog).success).toBe(true);
+    expect(DialogSchema.safeParse({ ...dialog, tool: 't'.repeat(129) }).success).toBe(false);
+    const requested = (input, tool = 'AskUserQuestion') => EventPayloadSchemas["dialog.requested"].safeParse({ dialogId: 'dlg_1', runId: 'r1', tool, input, toolUseId: null }).success;
+    expect(requested({ big: 'x'.repeat(DIALOG_INPUT_EVENT_MAX - 20) })).toBe(true);
+    expect(requested({ big: 'x'.repeat(DIALOG_INPUT_EVENT_MAX) })).toBe(false);
+    expect(requested({ truncated: true, preview: '{"big":"xxx' })).toBe(true);
+    expect(requested({}, 't'.repeat(129))).toBe(false);
   });
   test("a process's progress travels as a transient activity notification", () => {
     const activity = ActivitySchema.parse({ state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() });

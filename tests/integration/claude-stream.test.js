@@ -1407,6 +1407,15 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
     expect(starts()).toHaveLength(1);
   }, 30_000);
 
+  test('a question Jolo cannot record is refused at once, so Claude never waits on it', async () => {
+    const { events, runTo, messagesOf, text, starts } = await boot();
+    const run = await runTo('ask-unrecordable', 'ask-user-unrecordable');
+    expect(run.state).toBe('completed');
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('No answer: Jolo could not record the question.');
+    expect(events.some(e => e.type === 'dialog.requested')).toBe(false);
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
   test('a question Claude takes back closes its dialog and is never answered', async () => {
     const { client, events, session, runTo, messagesOf, text, starts } = await boot();
     const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-withdraw', prompt: 'ask-user-withdraw 300' });

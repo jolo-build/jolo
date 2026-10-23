@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { EventPayloadSchemas, activityPayload } from '@jolo/protocol';
+import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -552,6 +553,25 @@ test('a task that ends without ever having been seen to start is still recorded'
   const link = open(registry);
   await turn(link, 'notify-unknown', { init: true });
   expect(link.activity.tasks.find(t => t.taskId === 'ghost')).toMatchObject({ status: 'failed', startedAt: expect.any(String), description: '' });
+  await registry.closeAll();
+});
+
+test('what Claude says about a task is bounded and of the right type, and a notice naming no task is ignored and logged once', async () => {
+  // The fixture's `tasks-malformed` sends fields of the wrong type or far too long, and two task notices with no usable id.
+  const warnings = [];
+  const reports = [];
+  const registry = createHostedLinks({ log: { ...log, warn: (text, context) => warnings.push({ text, context }) }, onActivity: (sessionId, activity) => reports.push(activity) });
+  const link = open(registry);
+  await turn(link, 'tasks-malformed', { init: true });
+  const [odd, long] = link.activity.tasks;
+  expect(link.activity.tasks.map(t => t.taskId)).toEqual(['odd', 'long']);
+  expect(odd).toMatchObject({ description: '42', runId: '7', subagentType: null, usage: { totalTokens: null, toolUses: 2, durationMs: null } });
+  expect(odd.toolUseId).toHaveLength(TASK_ID_MAX);
+  expect(long.description).toBe('d'.repeat(TASK_TEXT_MAX)); // the update's description was not text, so it is kept
+  expect(long.phase).toBe('p'.repeat(TASK_TEXT_MAX));
+  expect(warnings.filter(w => w.text.includes('name no task'))).toHaveLength(1);
+  // What the engine keeps of each report still parses as a durable event.
+  for (const activity of [...reports, link.activity]) expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(activity)).success).toBe(true);
   await registry.closeAll();
 });
 

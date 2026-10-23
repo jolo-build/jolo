@@ -48,6 +48,8 @@ export const isContinuation = (run) => typeof run?.requestId === "string" && run
 export const JOLO_OWNED_COMMANDS = new Set(["model", "effort", "fast"]);
 /** What Claude is told about a question still open when its run is stopped. */
 const STOPPED = { behavior: "deny", message: "The run was stopped in Jolo." };
+/** What Claude is told about a question Jolo could not record, so could not ask the person. */
+const UNRECORDED = { behavior: "deny", message: "Jolo could not record the question." };
 /** How long a run stays open for a Jolo tool call it allowed that never reports back. */
 const JOLO_CALL_HOLD_MS = 10 * 60_000;
 export const RESUMED_CONTINUATION = "Jolo paused this and the user has resumed it. Carry on where you left off.";
@@ -298,7 +300,13 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
        * said. Stopped while open, Claude is told so; taken back by Claude, nothing is answered.
        */
       const askPerson = async (requestId, request, withdrawn) => {
-        const dialog = dialogs.request({ run, requestId, tool: String(request.tool_name ?? ""), toolUseId: request.tool_use_id ?? null, input: request.input ?? {} });
+        let dialog;
+        try { dialog = dialogs.request({ run, requestId, tool: String(request.tool_name ?? ""), toolUseId: request.tool_use_id ?? null, input: request.input ?? {} }); }
+        catch (error) { // not recorded (a malformed question, a storage failure): Claude is told so rather than left waiting
+          log.warn("could not record a question for the person", { runId: run.id, tool: String(request.tool_name ?? "").slice(0, 128), error: String(error?.message ?? error) });
+          answerDialog(requestId, UNRECORDED);
+          return;
+        }
         ctx.transition("awaiting_permission");
         let settled;
         try { settled = await dialogs.waitForResolution(dialog.id, withdrawn); }

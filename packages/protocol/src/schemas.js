@@ -548,20 +548,26 @@ export const ScheduleSchema = z.object({
  * ones fill the room left, the newest kept.
  */
 export const TASK_HISTORY_LIMIT = 200;
+/** The most characters a task's description or phase keeps, and an id (its own, its run's, its tool call's) or subagent type. */
+export const TASK_TEXT_MAX = 500;
+export const TASK_ID_MAX = 128;
 const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
 
+const TaskId = z.string().max(TASK_ID_MAX);
+const TaskText = z.string().max(TASK_TEXT_MAX);
+const TaskCount = z.number().int().nonnegative().nullable();
 export const TaskRecordSchema = z.object({
-  taskId: z.string(),
-  runId: z.string().nullable(),
-  toolUseId: z.string().nullable(),
-  description: z.string(),
-  subagentType: z.string().nullable(),
-  phase: z.string().nullable(),
+  taskId: TaskId.min(1),
+  runId: TaskId.nullable(),
+  toolUseId: TaskId.nullable(),
+  description: TaskText,
+  subagentType: TaskId.nullable(),
+  phase: TaskText.nullable(),
   backgrounded: z.boolean(),
   status: z.enum(["running", "completed", "stopped", "failed"]),
   startedAt: IsoTimestamp,
   endedAt: IsoTimestamp.nullable(),
-  usage: z.object({ totalTokens: z.number().nullable(), toolUses: z.number().nullable(), durationMs: z.number().nullable() }),
+  usage: z.object({ totalTokens: TaskCount, toolUses: TaskCount, durationMs: TaskCount }),
 });
 
 /** `truncated` says the process had finished tasks left out of these. */
@@ -609,8 +615,16 @@ export const PlanTaskDraftSchema = z.object({
  * `input` is the tool's input as Claude sent it; `response` is the person's answer (`{ message }` when dismissed).
  */
 export const DIALOG_STATES = Object.freeze(["requested", "answered", "dismissed", "cancelled"]);
-const DialogTool = z.string().min(1).max(200);
+/**
+ * The longest a dialog.requested event's `input` may be, as JSON. A longer input is published as `{ truncated: true,
+ * preview }`, `preview` being the start of its JSON; the dialog's record keeps it whole, and the answer is built from that.
+ */
+export const DIALOG_INPUT_EVENT_MAX = 64 * 1024;
+const DialogTool = z.string().min(1).max(128);
 const DialogValue = z.record(z.string(), z.unknown());
+const DialogEventInput = DialogValue
+  .refine((input) => JSON.stringify(input).length <= DIALOG_INPUT_EVENT_MAX, { message: `at most ${DIALOG_INPUT_EVENT_MAX} characters of JSON` })
+  .describe(`The tool's input as Claude sent it; when its JSON is longer than ${DIALOG_INPUT_EVENT_MAX} characters, { truncated: true, preview: <the start of its JSON> } instead.`);
 export const DialogSchema = z.object({
   id: Id, sessionId: Id, runId: Id, requestId: Id, tool: DialogTool, toolUseId: Id.nullable(),
   input: DialogValue, response: DialogValue.nullable(), state: z.enum(DIALOG_STATES),
@@ -644,7 +658,7 @@ export const EventPayloadSchemas = Object.freeze({
   "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
   "schedule.updated": z.object({ schedule: ScheduleSchema }),
   "session.activity": ActivitySchema,
-  "dialog.requested": z.object({ dialogId: Id, runId: Id, tool: DialogTool, input: DialogValue, toolUseId: Id.nullable() }),
+  "dialog.requested": z.object({ dialogId: Id, runId: Id, tool: DialogTool, input: DialogEventInput, toolUseId: Id.nullable() }),
   "dialog.resolved": z.object({ dialogId: Id, state: z.enum(DIALOG_STATES.filter((state) => state !== "requested")) }),
   "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),

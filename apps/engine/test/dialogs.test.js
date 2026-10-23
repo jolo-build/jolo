@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DialogSchema, ProtocolError } from '@jolo/protocol';
+import { DIALOG_INPUT_EVENT_MAX, DialogSchema, ProtocolError } from '@jolo/protocol';
 import { Storage } from '../src/storage/index.js';
 import { createDialogService } from '../src/dialogs/service.js';
 import { dialogControlResponse, isDialogRequest } from '../src/agents/claude-dialogs.js';
@@ -35,6 +35,20 @@ test('a dialog is recorded and published with what Claude asked', () => {
     expect(dialog).toMatchObject({ sessionId: f.session.id, runId: f.run.id, requestId: 'req-1', tool: 'AskUserQuestion', toolUseId: 'toolu_1', input: INPUT, response: null, state: 'requested', resolvedAt: null });
     const requested = f.events.find(event => event.type === 'dialog.requested');
     expect(requested).toMatchObject({ sessionId: f.session.id, runId: f.run.id, payload: { dialogId: dialog.id, runId: f.run.id, tool: 'AskUserQuestion', input: INPUT, toolUseId: 'toolu_1' } });
+  } finally { f.close(); }
+});
+
+test('a dialog whose input is too large for an event is published as a preview, and its record keeps the whole input', () => {
+  const f = fixture();
+  try {
+    const input = { ...INPUT, context: 'x'.repeat(DIALOG_INPUT_EVENT_MAX) };
+    const dialog = f.service.request({ run: f.run, requestId: 'req-big', tool: 'AskUserQuestion', toolUseId: null, input });
+    const published = f.events.find(event => event.type === 'dialog.requested').payload.input;
+    expect(published).toMatchObject({ truncated: true, preview: expect.stringMatching(/^\{"questions":/) });
+    expect(JSON.stringify(published).length).toBeLessThanOrEqual(DIALOG_INPUT_EVENT_MAX);
+    expect(f.service.get(dialog.id).input).toEqual(input);
+    // The answer goes back with everything Claude asked, not the preview.
+    expect(dialogControlResponse(f.service.resolve(dialog.id, { answers: { q: 'tea' } }))).toEqual({ behavior: 'allow', updatedInput: { ...input, answers: { q: 'tea' } } });
   } finally { f.close(); }
 });
 

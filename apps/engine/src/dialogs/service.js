@@ -1,6 +1,14 @@
 // Questions an agent asks the person (dialogs): recorded, published, and settled once, by an answer, a dismissal, or
 // the wait for them ending (a Stop, or the agent taking the question back).
-import { ProtocolError } from "@jolo/protocol";
+import { DIALOG_INPUT_EVENT_MAX, ProtocolError } from "@jolo/protocol";
+
+/** How much of an input too large for its event the event shows instead: the start of its JSON. */
+const PREVIEW_CHARS = 4096;
+/** What a dialog.requested event carries of the input; the dialog's record keeps all of it. */
+const eventInput = (input) => {
+  const json = JSON.stringify(input);
+  return json.length <= DIALOG_INPUT_EVENT_MAX ? input : { truncated: true, preview: json.slice(0, PREVIEW_CHARS) };
+};
 
 /** @param {{ storage: any }} deps */
 export function createDialogService({ storage }) {
@@ -28,7 +36,7 @@ export function createDialogService({ storage }) {
     request({ run, requestId, tool, toolUseId = null, input }) {
       return storage.transaction(() => {
         const dialog = storage.dialogs.insert({ sessionId: run.sessionId, runId: run.id, requestId, tool, toolUseId, input });
-        storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "dialog.requested", payload: { dialogId: dialog.id, runId: run.id, tool, input, toolUseId } });
+        storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "dialog.requested", payload: { dialogId: dialog.id, runId: run.id, tool, input: eventInput(input), toolUseId } });
         return dialog;
       });
     },

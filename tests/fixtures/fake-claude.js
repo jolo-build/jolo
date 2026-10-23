@@ -419,6 +419,22 @@ async function turn(prompt, images = [], uuid = null) {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
     say("A task nobody saw start has ended.");
+  } else if (prompt === "tasks-malformed") {
+    // Task notices with fields of the wrong type or far too long, and two that name no usable task; then the turn answers.
+    out({ type: "system", subtype: "task_started", task_id: "odd", run_id: 7, tool_use_id: "u".repeat(300), description: 42, subagent_type: { name: "x" }, is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "long", description: "d".repeat(2000), is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_progress", task_id: "odd", usage: { total_tokens: -5, tool_uses: 2.7, duration_ms: "soon" }, session_id: sessionId });
+    out({ type: "system", subtype: "task_updated", task_id: "long", patch: { phase: "p".repeat(1000), description: { text: "x" } }, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "", description: "no id", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: { id: 1 }, description: "an object for an id", is_backgrounded: true, session_id: sessionId });
+    say("Malformed tasks reported.");
+  } else if (prompt === "ask-user-unrecordable") {
+    // Claude asks the person with an input that is not an object, which Jolo cannot record as a dialog; says what it was told.
+    turns = 2;
+    const toolUseId = `toolu_${++counter}`;
+    const decision = await askPerson("AskUserQuestion", ["not", "an", "object"], toolUseId);
+    if (state.interrupted) return;
+    say(decision.behavior === "allow" ? "Allowed." : `No answer: ${decision.message}`);
   } else if (prompt === "task-updated-stop") {
     // A background task whose update names its phase and says it was stopped, with no notice of its end; then the turn answers.
     out({ type: "system", subtype: "task_started", task_id: "patched", description: "patched task", is_backgrounded: true, session_id: sessionId });
