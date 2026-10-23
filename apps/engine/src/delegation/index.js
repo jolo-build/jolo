@@ -32,7 +32,7 @@ export function stopBackgroundWork(links, sessionId, log) {
  */
 export function createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings, log }) {
   const repository = storage.delegations;
-  /** Parents waiting in delegation_status, each `{ sessionId, parentRunId, wake(final) }`; see `status`. */
+  /** Parents waiting in delegation_status, each `{ sessionId, parentRunId, wake(final, reason) }`; see `status`. */
   const waiters = new Set();
   async function models(source = null) {
     const presets = source?.startsWith('agent:') ? [] : (await providerFactory.presets()).presets;
@@ -94,13 +94,15 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     const over = r => !r || TERMINAL_RUN_STATES.includes(r.state);
     return over(run) && (!run || (storage.listRunsForSession(run.sessionId).every(over) && !link?.working));
   }
-  function view(row, includeOutput = false) {
+  /** `wakeReason` is why the wait of a status call ended; none when it made no wait. */
+  function view(row, includeOutput = false, wakeReason = null) {
     const run = storage.getRun(row.childRunId), session = run && storage.getSession(run.sessionId);
     const link = run ? links.get(run.sessionId) : null;
+    // The answer goes last: a tool result shown cut short still says the state, why the wait ended, and whether it is done.
     const result = { id: row.id, parentRunId: row.parentRunId, runId: row.childRunId, sessionId: run?.sessionId ?? '',
       title: session?.title ?? 'Deleted task', modelAlias: row.modelAlias, state: run?.state ?? 'interrupted',
-      failure: run?.failure ?? null, execution: run?.execution ?? null, createdAt: row.createdAt, output: '', truncated: false,
-      activity: link?.activity.state ?? null, done: isDone(run, link), partial: false };
+      ...(wakeReason ? { wakeReason } : {}), failure: run?.failure ?? null, execution: run?.execution ?? null, createdAt: row.createdAt,
+      activity: link?.activity.state ?? null, done: isDone(run, link), partial: false, output: '', truncated: false };
     // The final text is the child result; tool transcripts remain in the child's own conversation.
     const answer = includeOutput && run ? latestAnswer(run.sessionId) : null;
     const artifact = answer && storage.getArtifact(answer.message.artifactId);
@@ -128,12 +130,12 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
       stopBackgroundWork(links, child.sessionId, log);
     }
   }
-  /** Tell the parents waiting on a conversation's child that something happened there; `final` ends their wait. */
-  const tell = (sessionId, final) => { for (const waiter of [...waiters]) if (waiter.sessionId === sessionId) waiter.wake(final); };
+  /** Tell the parents waiting on a conversation's child that something happened there; `final` ends their wait, for `reason`. */
+  const tell = (sessionId, final, reason) => { for (const waiter of [...waiters]) if (waiter.sessionId === sessionId) waiter.wake(final, reason); };
   const onSettled = run => {
     cancelChildren(run);
     // A parent that completed may still be listening: Claude Code moves a long tool call to the background and ends its turn.
-    if (STOPPED_STATES.includes(run.state)) for (const waiter of [...waiters]) if (waiter.parentRunId === run.id) waiter.wake(true);
+    if (STOPPED_STATES.includes(run.state)) for (const waiter of [...waiters]) if (waiter.parentRunId === run.id) waiter.wake(true, 'parent_stopped');
     tell(run.sessionId, false);
   };
   runs.settled.on('run', onSettled);
@@ -145,7 +147,7 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     }
     if (event.type === 'session.activity' && event.payload.state === 'idle') tell(event.sessionId, false);
     // A child asking the person needs its parent to say so: the wait is over.
-    if (event.type === 'dialog.requested' || event.type === 'permission.requested') tell(event.sessionId, true);
+    if (event.type === 'dialog.requested' || event.type === 'permission.requested') tell(event.sessionId, true, 'asking');
   };
   storage.events.on('event', onEvent);
   return {
@@ -199,38 +201,43 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     /**
      * Wait up to `waitMs` (at most the delegation.maxWaitMs setting) until the child is done or has a newer answer, or
      * asks the person something, or the parent's run is stopped or `signal` stops the call. Spends no model turns meanwhile.
+     * The result's `wakeReason` says which of these ended the wait.
      */
     async status(runId, { delegationId, waitMs = 0 }, signal = null) {
       const row = scopedRow(runId, delegationId);
       const child = storage.getRun(row.childRunId);
       const limit = Math.min(waitMs, settings.get().delegation.maxWaitMs);
+      let wakeReason = null;
       if (child && limit > 0 && !signal?.aborted) await new Promise(resolve => {
         const answered = latestAnswer(child.sessionId)?.runId ?? null;
         let timer = null, recheck = null;
-        const finish = () => {
+        const finish = reason => {
+          wakeReason ??= reason;
           clearTimeout(timer); clearTimeout(recheck);
           waiters.delete(waiter);
-          signal?.removeEventListener('abort', finish);
+          signal?.removeEventListener('abort', stop);
           resolve(null);
         };
+        const stop = () => finish('stopped');
         const check = () => {
           clearTimeout(recheck);
           const link = links.get(child.sessionId), run = storage.getRun(child.id);
           // Read the runs again: one that ended without a word (cancelled, failed) is done all the same, and any run of
           // the child's conversation that waits on the person (asked before the wait began, or paused for them, a later
           // continuation included) needs its parent to say so.
-          if (isDone(run, link) || storage.listRunsForSession(child.sessionId).some(r => ASKING_STATES.includes(r.state))
-            || (latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish();
+          if (isDone(run, link)) return finish('done');
+          if (storage.listRunsForSession(child.sessionId).some(r => ASKING_STATES.includes(r.state))) return finish('asking');
+          if ((latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish('answer');
           if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
         };
-        const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: final => { if (waiters.has(waiter)) final ? finish() : check(); } };
+        const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: (final, reason) => { if (waiters.has(waiter)) final ? finish(reason) : check(); } };
         // Listening before the first look, so nothing that happens in between is missed.
         waiters.add(waiter);
-        timer = setTimeout(finish, limit);
-        signal?.addEventListener('abort', finish, { once: true });
+        timer = setTimeout(() => finish('timeout'), limit);
+        signal?.addEventListener('abort', stop, { once: true });
         check();
       });
-      return { delegation: view(row, true) };
+      return { delegation: view(row, true, wakeReason) };
     },
     cancel(runId, delegationId) {
       const row = scopedRow(runId, delegationId), child = storage.getRun(row.childRunId);

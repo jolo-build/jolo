@@ -132,7 +132,12 @@ test('a child whose process still has background work is not done, and its outpu
     const waiting = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 5000 });
     f.links.activities.set(delegation.sessionId, activity('idle'));
     f.storage.appendEvent({ sessionId: delegation.sessionId, type: 'session.activity', payload: f.links.activities.get(delegation.sessionId) });
-    expect((await waiting).delegation).toMatchObject({ done: true, partial: false });
+    const { delegation: done } = await waiting;
+    expect(done).toMatchObject({ done: true, partial: false, wakeReason: 'done' });
+    // A tool display cut short still carries why the wait ended; the answer comes last.
+    const keys = Object.keys(done);
+    expect(keys[keys.indexOf('state') + 1]).toBe('wakeReason');
+    expect(keys.slice(-2)).toEqual(['output', 'truncated']);
   } finally { await f.close(); }
 });
 
@@ -142,10 +147,23 @@ test('waitMs is capped by the delegation.maxWaitMs setting', async () => {
     await f.select();
     expect(f.settings.get().delegation.maxWaitMs).toBe(1000);
     const { delegation } = await f.service.start(f.parent.id, { modelAlias: 'm1', prompt: 'model', title: 'Child', requestId: 'r2' });
+    await f.settled(delegation.runId); // its answer is in before the wait begins, so only the cap can end it
     f.links.activities.set(delegation.sessionId, activity('background'));
     const started = Date.now();
-    await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
+    const { delegation: waited } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
     expect(Date.now() - started).toBeLessThan(2500);
+    expect(waited.wakeReason).toBe('timeout');
+  } finally { await f.close(); }
+});
+
+test('a status read that does not wait says no wake reason', async () => {
+  const f = fixture();
+  try {
+    await f.select();
+    const { delegation } = await f.service.start(f.parent.id, { modelAlias: 'm1', prompt: 'model', title: 'Child', requestId: 'r11' });
+    await f.settled(delegation.runId);
+    const result = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 0 });
+    expect(result.delegation).not.toHaveProperty('wakeReason');
   } finally { await f.close(); }
 });
 
@@ -159,14 +177,14 @@ test('a wait ends when the child asks for permission, when the waiting tool call
     const waiting = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
     f.storage.appendEvent({ sessionId: delegation.sessionId, runId: delegation.runId, type: 'permission.requested',
       payload: { permissionId: 'perm-1', runId: delegation.runId, workspaceId: 'ws', tool: 'Bash', summary: 'Bash ls', cwd: '.', isolation: 'none', revision: 1 } });
-    expect((await waiting).delegation).toMatchObject({ activity: 'working', done: false });
+    expect((await waiting).delegation).toMatchObject({ activity: 'working', done: false, wakeReason: 'asking' });
     const stop = new AbortController();
     const stopped = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 }, stop.signal);
     stop.abort();
-    expect((await stopped).delegation.done).toBe(false);
+    expect((await stopped).delegation).toMatchObject({ done: false, wakeReason: 'stopped' });
     const orphaned = f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 60_000 });
     f.runs.cancel({ runId: f.parent.id });
-    expect((await orphaned).delegation.done).toBe(false);
+    expect((await orphaned).delegation).toMatchObject({ done: false, wakeReason: 'parent_stopped' });
   } finally { await f.close(); }
 });
 
@@ -207,7 +225,7 @@ test('a later run of the child that paused for the person ends a wait on the del
     const started = Date.now();
     const { delegation: seen } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
     expect(Date.now() - started).toBeLessThan(1000);
-    expect(seen).toMatchObject({ state: 'completed', done: false });
+    expect(seen).toMatchObject({ state: 'completed', done: false, wakeReason: 'asking' });
   } finally { await f.close(); }
 });
 
@@ -240,7 +258,7 @@ test("a child's answer is the last text of its newest completed run, not of a la
 
 test('the delegation_status tool tells a parent to open a child that waits on the person', () => {
   const status = delegationTools.find(tool => tool.name === 'delegation_status');
-  expect(status.description).toContain('If `activity` is working or background, the child is still working; if the child is awaiting_permission or paused, open the child task for user action; do not report `output` as final while `partial` is true.');
+  expect(status.description).toContain('If `activity` is working or background, the child is still working; if the child is awaiting_permission or paused, open the child task for user action; do not report `output` as final while `partial` is true. `wakeReason` says why a wait ended: done, answer, asking, parent_stopped, stopped (the call itself), or timeout.');
 });
 
 test('a wait begun while the child runs ends when the child is cancelled or fails without text', async () => {

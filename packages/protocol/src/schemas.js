@@ -897,7 +897,13 @@ export const DelegationModelSchema = z.object({
 });
 export const DelegationSchema = z.object({
   id: Id, parentRunId: Id, runId: Id, sessionId: Id, title: z.string(), modelAlias: z.string(),
-  state: RunStateSchema, failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
+  state: RunStateSchema,
+  /**
+   * Why a delegation_status wait ended: the child is done, it has a newer answer, a run of it is asking the person, the
+   * parent was stopped, the waiting call itself was stopped, or `waitMs` elapsed. Absent when no wait was made.
+   */
+  wakeReason: z.enum(['done', 'answer', 'asking', 'parent_stopped', 'stopped', 'timeout']).optional(),
+  failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
   createdAt: IsoTimestamp, output: z.string(), truncated: z.boolean(),
   /** What the child's agent process is doing; null when it has none running. */
   activity: z.enum(['idle', 'working', 'background']).nullable(),
