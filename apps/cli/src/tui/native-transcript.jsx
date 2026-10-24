@@ -4,6 +4,8 @@ import { Box, Text, useTheme } from "./theme.jsx";
 import { clean, line, plainTextLines, renderMarkdown } from "./markdown.js";
 import { Welcome } from "./welcome.jsx";
 import { scrollbackText } from "./scrollback.js";
+import { isDialog, requestKey } from "./permission-queue.js";
+import { dialogLines } from "../dialog-text.js";
 
 const MAX_REASONING_LINES = 24;
 
@@ -57,13 +59,20 @@ export function useNativeTranscript({ projection, revision, opened, width, showT
       if (showTools && message.kind === "tool") expandedTools.current.add(message.id);
       printedOrdinal.current = message.ordinal;
     }
-    if (permission && !printedPermissions.current.has(permission.permissionId)) {
-      items.push({ id: permission.permissionId, lines: [
+    if (permission && !printedPermissions.current.has(requestKey(permission))) {
+      // A dialog from Claude (a question, a plan): its lines as the headless CLI prints them, the plan as rendered
+      // markdown; the keys that answer it are on the live line under the composer, as they depend on what is picked.
+      const [head, ...rest] = isDialog(permission) ? dialogLines(permission) : [];
+      items.push({ id: requestKey(permission), lines: isDialog(permission) ? [
+        ...plainTextLines(head, width, { bold: true, color: "yellow" }),
+        ...(permission.tool === "ExitPlanMode" && typeof permission.input?.plan === "string" && permission.input.truncated !== true ? renderMarkdown(permission.input.plan, { width }).lines : rest.flatMap((row) => plainTextLines(row, width))),
+        line(" "),
+      ] : [
         ...plainTextLines(`Allow the agent to run: ${permission.summary}`, width, { bold: true, color: "yellow" }),
         ...plainTextLines(`cwd ${permission.cwd} · isolation none (your user privileges)`, width, { dim: true }),
         line("[1] Deny  [2] Allow once"), line("[3] Allow task  [4] Allow project"), line(" "),
       ] });
-      printedPermissions.current.add(permission.permissionId);
+      printedPermissions.current.add(requestKey(permission));
     }
     for (const run of projection.runs.values()) {
       // Keyed by revision, not by run: a paused run that is resumed and finishes reports its outcome again.

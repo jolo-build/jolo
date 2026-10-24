@@ -18,7 +18,8 @@ import { currentModelLabel, parseModelCommand } from "./model-config.js";
 import { SessionMenu } from "./sessions.jsx";
 import { parseSessionCommand } from "../sessions.js";
 import { sessionLoader } from "./session-loader.js";
-import { applyPermissionEvent, finished, seedPermissions, touchesPermissions } from "./permission-queue.js";
+import { applyPermissionEvent, finished, isDialog, requestKey, seedPermissions, touchesPermissions } from "./permission-queue.js";
+import { createDialogAnswer, dialogHint, dialogKey, dialogPlaceholder } from "./dialog-answer.js";
 import { ThemeMenu } from "./themes.jsx";
 import { parseThemeCommand, executeThemeCommand } from "../themes/commands.js";
 import { createThemeStore } from "../themes/store.js";
@@ -55,6 +56,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   // Every request of this chat still waiting on the user; the oldest is the one shown.
   const [permissions, setPermissions] = useState([]);
   const permission = permissions[0] ?? null;
+  // The dialog shown, when the oldest request is one, and how far its answer has got; a new dialog starts afresh.
+  const dialog = isDialog(permission) ? permission : null;
+  const [dialogState, setDialogState] = useState(null);
+  const answering = dialog ? (dialogState?.dialogId === dialog.dialogId ? dialogState : createDialogAnswer(dialog)) : null;
   const [status, setStatus] = useState(initialStatus);
   const [showTools, setShowTools] = useState(false);
   const [changes, setChanges] = useState([]);
@@ -100,8 +105,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         setLoadingSession(false);
         if (page.hasOlder) setStatus("Showing the most recent messages in this session.");
         for (const m of page.messages) if (m.committedBytes > 0) void projection.fill(m.id);
-        if (page.pendingPermissions?.length) {
-          setPermissions((queue) => seedPermissions(queue, page.pendingPermissions, settled, (runId) => finished(projection.runs.get(runId)?.state)));
+        const pending = [...(page.pendingPermissions ?? []), ...(page.pendingDialogs ?? [])];
+        if (pending.length) {
+          setPermissions((queue) => seedPermissions(queue, pending, settled, (runId) => finished(projection.runs.get(runId)?.state)));
           setWelcomeOpen(false);
         }
       },
@@ -115,8 +121,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         onChooseAgent(event.payload.session.agentId ?? null);
       }
       if (loader) loader.event(event); else projection.applyEvent(event);
-      if (event.type === "permission.resolved") settled.add(event.payload.permissionId);
-      if (event.type === "permission.requested") setWelcomeOpen(false);
+      if (event.type === "permission.resolved" || event.type === "dialog.resolved") settled.add(requestKey(event.payload));
+      if (event.type === "permission.requested" || event.type === "dialog.requested") setWelcomeOpen(false);
       if (touchesPermissions(event)) setPermissions((queue) => applyPermissionEvent(queue, event));
       if (event.type === "files.changed") setChanges((list) => [...list, ...event.payload.changes].slice(-50));
       if (event.type === "run.verification") setStatus(`verification: ${event.payload.status}`);
@@ -222,6 +228,26 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     if (key.pageUp || key.pageDown) return;
     // A late keyboard capability reply is terminal metadata, never draft text.
     if (/^\[\?\d+u$/.test(chunk)) return;
+    if (dialog && answering) {
+      // A pasted answer or feedback, line breaks and all, is draft text; a lone line break is Enter, handled below.
+      if (chunk && /[\r\n]/.test(chunk) && !/^[\r\n]+$/.test(chunk)) { dispatchPrompt({ type: "paste", chunk }); return; }
+      const action = dialogKey(answering, { chunk, key: key.return || !/^[\r\n]+$/.test(chunk ?? "") ? key : { ...key, return: true }, draft: input });
+      if (action.type !== "edit") {
+        if (action.type === "state") setDialogState(action.state);
+        if (action.type === "resolve" || action.type === "dismiss") {
+          const { dialogId } = dialog;
+          const drop = () => setPermissions((queue) => queue.filter((request) => requestKey(request) !== dialogId));
+          dispatchPrompt({ type: "clear" });
+          // Already settled elsewhere, or lapsed with its run: it is not waiting on anyone, so it must not hold the prompt.
+          (action.type === "resolve" ? client.call("dialog.resolve", { dialogId, response: action.response }) : client.call("dialog.dismiss", { dialogId, message: action.message }))
+            .then(drop).catch((error) => { setStatus(error.message); if (error.code === "conflict" || error.code === "not_found") drop(); });
+        }
+        return;
+      }
+      if (key.upArrow || key.downArrow || key.pageUp || key.pageDown) return; // the prompt history is not an answer
+      dispatchPrompt({ type: "edit", chunk, key });
+      return;
+    }
     if (permission) {
       const decision = { 1: "deny", 2: "allow_once", 3: "allow_run", 4: "allow_project" }[chunk];
       if (decision) {
@@ -288,7 +314,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   // usePaste turns on bracketed-paste mode so terminals wrap pasted text; the full
   // paste — newlines and all — lands in the draft here and never reaches useInput.
   usePaste((text) => {
-    if (permission || themeBusy) return;
+    if ((permission && !dialog) || themeBusy) return;
     steering.clear();
     dispatchPrompt({ type: "paste", chunk: text });
   }, { isActive: (modelConfig === null && sessionMenu === null && !themeMenu) || Boolean(permission) });
@@ -299,8 +325,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const queuedRuns = [...projection.runs.values()].filter(run => run.state === "queued" && (run.prompt || run.promptPreview)); // not Claude's own turns
   const queueRows = rows >= 16 ? Math.min(3, queuedRuns.length) : 0;
   const commandRows = commands.length ? Math.min(5, commands.length, Math.max(1, rows - 9)) : 0;
-  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows));
-  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0)));
+  const dialogRows = answering ? 1 : 0; // the live line that says how to answer the dialog shown
+  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows - dialogRows));
+  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0) - dialogRows));
   const visible = previewRows > 0 ? live.slice(-previewRows) : [];
   const modelSelected = async (message, target) => {
     const wanted = (target?.id === "jolo" || target?.preset) ? null : target?.id;
@@ -336,7 +363,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
       {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}
       {mentioningModel && !commands.length && dismissedCommand !== input && <Text dimColor wrap="truncate-end">{mentionError || (!mentionReport || mentionReport.loading ? 'Loading child-task models…' : mentionReport.notes[0] || 'No matching child-task models')}</Text>}
-      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
+      {answering && <Text color="warning" wrap="truncate-end">{clean(dialogHint(answering, input))}</Text>}
+      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} placeholder={answering ? dialogPlaceholder(answering) : undefined} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}
