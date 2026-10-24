@@ -254,7 +254,7 @@ const MessageArticle = memo(function MessageArticle(/** @type {MessageArticlePro
     {!text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
     {tools && <div className="message-tools">
       <CopyButton className="message-copy" label="Copy message" title="Copy message" text={text} />
-      {createdAt && <time className="message-time" dateTime={createdAt} title={exactTime(createdAt)}>{relativeTime(createdAt, now)}</time>}
+      {createdAt && <time className="message-time" dateTime={createdAt}><span className="message-time-ago">{relativeTime(createdAt, now)}</span><span className="message-time-exact" aria-hidden="true">{exactTime(createdAt)}</span></time>}
     </div>}
   </article>;
 });
