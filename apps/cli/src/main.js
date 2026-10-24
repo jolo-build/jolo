@@ -94,6 +94,14 @@ function emit(json, record) {
   if (json) out(JSON.stringify(record));
 }
 
+/**
+ * How a command that follows a run connects. A person at a terminal is an interactive client, as `jolo permission`
+ * already is: the run then waits for their answer to a question, a plan or a permission request (each printed with the
+ * command that answers it) instead of pausing with nobody to ask, which would close Claude's question unanswered. Piped,
+ * or asked for --json, the command is headless, and a run with nobody to ask pauses as before.
+ */
+const followerKind = (flags) => flags.json !== true && process.stdin.isTTY ? "tui" : "headless";
+
 async function attachEngine(flags, { start = true, clientKind = 'headless' } = {}) {
   const paths = resolvePaths({ home: flags.home, profile: flags.profile });
   const options = { paths, clientKind, build: BUILD };
@@ -120,7 +128,7 @@ async function commandRun({ positional, flags }) {
   if (flags.every !== undefined && !everyMs) { err(EVERY_BOUNDS); return EXIT.usage; }
   if (flags["every-prompt"] !== undefined && !everyMs) { err("--every-prompt needs --every"); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags);
+  const { client } = await attachEngine(flags, { clientKind: followerKind(flags) });
   try {
     if (flags.agent && flags.model) throw new Error('Choose --agent or --model for this run');
     const modelOverride = flags.model ? parseModelTarget(flags.model) : null;
@@ -162,7 +170,7 @@ async function commandAttach({ positional, flags }) {
   const runId = positional[1];
   if (!runId) { err(USAGE); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags, { start: false });
+  const { client } = await attachEngine(flags, { start: false, clientKind: followerKind(flags) });
   if (!client) { err("engine is not running"); return EXIT.failed; }
   try {
     const { run, messages, cursor } = await client.call("run.snapshot", { runId });
@@ -284,7 +292,7 @@ async function commandResume({ positional, flags }) {
   const runId = positional[1];
   if (!runId) { err(USAGE); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags, { start: false });
+  const { client } = await attachEngine(flags, { start: false, clientKind: followerKind(flags) });
   if (!client) { err("engine is not running"); return EXIT.failed; }
   try {
     const { run } = await client.call("run.resume", { runId });

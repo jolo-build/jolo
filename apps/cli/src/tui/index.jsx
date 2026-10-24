@@ -80,6 +80,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     // The work a stop was about has ended (or the closed process is gone): the next Ctrl+X starts afresh.
     if (background.length || stop.phase === "idle" || stop.phase === "stopping") return;
     if (stop.phase === "closing") setStatus("Claude's process closed; its background work ended.");
+    else if (stop.phase === "asking") setStatus("Background work ended; nothing left to force stop."); // the question would otherwise stay up
     setStop({ phase: "idle" });
   }, [background.length, stop.phase]);
   const [showTools, setShowTools] = useState(false);
@@ -227,7 +228,14 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     }
     if (loadingSession) { setStatus("Loading session…"); return; }
     if (!prompt && welcomeOpen) { if (projection.messages.size || lastRun()) setWelcomeOpen(false); return; }
-    if (!prompt) { const run = lastRun(); if (run?.state === "paused" && run.pauseReason !== "permission") client.call("run.resume", { runId: run.id }).catch((error) => setStatus(error.message)); return; }
+    if (!prompt) {
+      // Enter resumes a paused run, unless a permission request of it is still open: answering that resumes it. A run paused on
+      // Claude's question with nobody to answer it has no such request (the pause closed the question), so Enter resumes it too.
+      const run = lastRun();
+      const awaitsPermission = run?.pauseReason === "permission" && permissions.some((request) => request.runId === run.id && !isDialog(request));
+      if (run?.state === "paused" && !awaitsPermission) client.call("run.resume", { runId: run.id }).catch((error) => setStatus(error.message));
+      return;
+    }
     setWelcomeOpen(false);
     dispatchPrompt({ type: "submit", prompt });
     setStatus("connected");

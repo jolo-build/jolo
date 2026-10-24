@@ -1,6 +1,8 @@
-// The headless CLI following a hosted Claude Code conversation: Claude's questions and plans reach the terminal as plain
-// text with the command that answers them, and background work left running when the run ends is named with the
-// command that stops it. The "claude" of these profiles is the protocol fixture, so nothing reaches the real CLI.
+// jolo run following a hosted Claude Code conversation: Claude's questions and plans reach the terminal as plain text with
+// the command that answers them, and background work left running when the run ends is named with the command that stops
+// it. From a terminal, jolo run is an interactive client, so the run waits for the answer; piped or --json it is headless,
+// and a question with nobody to answer it pauses the run, which is said with how to resume it. The "claude" of these
+// profiles is the protocol fixture, so nothing reaches the real CLI.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -36,7 +38,7 @@ async function jolo(args, home) {
   return { stdout, stderr, code };
 }
 
-/** A CLI command followed while it runs: what it has printed so far, and its exit code once it is done. */
+/** A CLI command followed while it runs through pipes (headless): what it has printed so far, and its exit code once done. */
 function follow(args, home) {
   const proc = Bun.spawn([process.execPath, CLI_ENTRY, ...args, "--home", home], { env: { ...process.env, ...ENV }, stdout: "pipe", stderr: "pipe" });
   const collected = { stdout: "", stderr: "" };
@@ -46,57 +48,90 @@ function follow(args, home) {
   return { proc, stdout: () => collected.stdout, stderr: () => collected.stderr, done };
 }
 
+/** A CLI command followed at a terminal (a pseudo-terminal: stdin, stdout and stderr one screen), as a person runs it. */
+function followAtTerminal(args, home) {
+  let output = "";
+  const proc = Bun.spawn([process.execPath, CLI_ENTRY, ...args, "--home", home], {
+    env: { ...process.env, ...ENV, NO_COLOR: "1" },
+    terminal: { cols: 160, rows: 40, data(_terminal, data) { output += new TextDecoder().decode(data); } },
+  });
+  const done = proc.exited.then(() => { proc.terminal?.close(); return proc.exitCode; });
+  return { proc, output: () => output.replaceAll("\r", ""), done };
+}
+
 const records = (stdout) => stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 
 describe("the headless CLI with a hosted Claude", () => {
-  test("a question Claude asks is announced with how to answer it, and jolo dialog answer sends the chosen option back", async () => {
+  test("at a terminal, a question Claude asks is printed with how to answer it and the run waits; jolo dialog answer sends the chosen option back", async () => {
     const { home, repo } = boot();
-    const run = follow(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo, "--json"], home);
+    const run = followAtTerminal(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo], home);
     try {
-      await waitFor(() => run.stdout().includes('"type":"dialog_required"'), { label: "the question announced", timeoutMs: 20_000 });
-      const asked = records(run.stdout()).find((record) => record.type === "dialog_required");
-      expect(asked).toMatchObject({ tool: "AskUserQuestion", kind: "question", answerArgv: ["jolo", "dialog", "answer", asked.runId], dismissArgv: ["jolo", "dialog", "dismiss", asked.runId] });
-      expect(records(run.stdout()).some((record) => record.type === "event" && record.event.type === "dialog.requested" && record.event.payload.dialogId === asked.dialogId)).toBe(true);
-      const answered = await jolo(["dialog", "answer", asked.runId, "2"], home);
+      await waitFor(() => run.output().includes("answer with: jolo dialog answer "), { label: "the question announced", timeoutMs: 20_000 });
+      const output = run.output();
+      expect(output).toContain("Claude asks: tea or coffee?\n  [1] tea\n  [2] coffee\n  or type your own answer\n");
+      const runId = /answer with: jolo dialog answer (\S+) <choice>/.exec(output)[1];
+      expect(output).toContain(`dismiss with: jolo dialog dismiss ${runId}`);
+      // A person at a terminal is an interactive client: the run waits for the answer rather than pausing with nobody to ask.
+      await new Promise((resolve) => setTimeout(resolve, 700)); // past the engine's pause tick
+      expect(run.output()).not.toContain("paused");
+      const answered = await jolo(["dialog", "answer", runId, "2"], home);
       expect(answered.stderr).toBe("");
-      expect(answered.stdout).toBe(`answered for run ${asked.runId}\n`);
+      expect(answered.stdout).toBe(`answered for run ${runId}\n`);
       expect(answered.code).toBe(0);
       expect(await run.done).toBe(0);
-      const said = records(run.stdout()).filter((record) => record.type === "preview" && record.role === "assistant" && record.kind === "text").map((record) => record.text).join("");
-      expect(said).toContain("You answered: coffee");
+      expect(run.output()).toContain("You answered: coffee");
       // Nothing left to answer: the command says so instead of guessing.
-      const nothing = await jolo(["dialog", "answer", asked.runId, "1"], home);
+      const nothing = await jolo(["dialog", "answer", runId, "1"], home);
       expect(nothing.code).toBe(1);
       expect(nothing.stderr).toContain("no open question");
-    } catch (error) { console.error(run.stderr()); throw error; }
+    } catch (error) { console.error(run.output()); throw error; }
     finally { run.proc.kill(); await run.done; }
   }, 60_000);
 
-  test("a plan is printed with how to approve it or send it back, and jolo dialog approve or dismiss does so", async () => {
+  test("piped or --json, jolo run is headless: a question with nobody to answer it pauses the run, which is reported with how to resume it", async () => {
     const { home, repo } = boot();
-    const run = follow(["run", "exit-plan Ship it", "--agent", "claude", "--path", repo], home);
+    const run = follow(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo, "--json"], home);
+    expect(await run.done).toBe(3); // paused, as for a permission nobody could answer
+    const all = records(run.stdout());
+    const asked = all.find((record) => record.type === "dialog_required");
+    expect(asked).toMatchObject({ tool: "AskUserQuestion", kind: "question", answerArgv: ["jolo", "dialog", "answer", asked.runId], dismissArgv: ["jolo", "dialog", "dismiss", asked.runId] });
+    expect(all.some((record) => record.type === "event" && record.event.type === "dialog.requested" && record.event.payload.dialogId === asked.dialogId)).toBe(true);
+    // The pause closed the question (Claude was told the run was stopped), so resuming the run, not answering, is the way on.
+    expect(all.some((record) => record.type === "event" && record.event.type === "dialog.resolved" && record.event.payload.state === "cancelled")).toBe(true);
+    expect(all.at(-1)).toEqual({ type: "run.paused", runId: asked.runId, runRevision: expect.any(Number), reason: "permission", resumeArgv: ["jolo", "resume", asked.runId] });
+    expect(all.some((record) => record.type === "permission_required")).toBe(false);
+    const text = follow(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo], home);
+    expect(await text.done).toBe(3);
+    expect(text.stderr()).toContain("Claude asks: tea or coffee?");
+    expect(text.stderr()).toMatch(/run paused on Claude's question with nobody to answer it; resume from a terminal with: jolo resume \S+\n/);
+    expect(text.stderr()).not.toContain("allow null");
+  }, 60_000);
+
+  test("at a terminal, a plan is printed with how to approve it or send it back, and jolo dialog approve or dismiss does so", async () => {
+    const { home, repo } = boot();
+    const run = followAtTerminal(["run", "exit-plan Ship it", "--agent", "claude", "--path", repo], home);
     try {
-      await waitFor(() => run.stderr().includes("approve with: jolo dialog approve "), { label: "the plan announced", timeoutMs: 20_000 });
-      const stderr = run.stderr();
-      expect(stderr).toContain("Plan ready for your review\n# Ship it\n\n1. Do the thing.\n");
-      const runId = /approve with: jolo dialog approve (\S+)/.exec(stderr)[1];
-      expect(stderr).toContain(`send back with: jolo dialog dismiss ${runId} "<what should change>"`);
+      await waitFor(() => run.output().includes("approve with: jolo dialog approve "), { label: "the plan announced", timeoutMs: 20_000 });
+      const output = run.output();
+      expect(output).toContain("Plan ready for your review\n# Ship it\n\n1. Do the thing.\n");
+      const runId = /approve with: jolo dialog approve (\S+)/.exec(output)[1];
+      expect(output).toContain(`send back with: jolo dialog dismiss ${runId} "<what should change>"`);
       const approved = await jolo(["dialog", "approve", runId], home);
       expect(approved.stdout).toBe(`approved for run ${runId}\n`);
       expect(approved.code).toBe(0);
       expect(await run.done).toBe(0);
-      expect(run.stdout()).toContain("Plan approved: Ship it");
-    } catch (error) { console.error(run.stderr()); throw error; }
+      expect(run.output()).toContain("Plan approved: Ship it");
+    } catch (error) { console.error(run.output()); throw error; }
     finally { run.proc.kill(); await run.done; }
-    const again = follow(["run", "exit-plan Once more", "--agent", "claude", "--path", repo], home);
+    const again = followAtTerminal(["run", "exit-plan Once more", "--agent", "claude", "--path", repo], home);
     try {
-      await waitFor(() => again.stderr().includes("approve with: jolo dialog approve "), { label: "the second plan announced", timeoutMs: 20_000 });
-      const runId = /approve with: jolo dialog approve (\S+)/.exec(again.stderr())[1];
+      await waitFor(() => again.output().includes("approve with: jolo dialog approve "), { label: "the second plan announced", timeoutMs: 20_000 });
+      const runId = /approve with: jolo dialog approve (\S+)/.exec(again.output())[1];
       const sentBack = await jolo(["dialog", "dismiss", runId, "Add tests first."], home);
       expect(sentBack.stdout).toBe(`dismissed for run ${runId}\n`);
       expect(await again.done).toBe(0);
-      expect(again.stdout()).toContain("Plan sent back: Add tests first.");
-    } catch (error) { console.error(again.stderr()); throw error; }
+      expect(again.output()).toContain("Plan sent back: Add tests first.");
+    } catch (error) { console.error(again.output()); throw error; }
     finally { again.proc.kill(); await again.done; }
   }, 60_000);
 

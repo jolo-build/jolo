@@ -14,10 +14,11 @@ const interactiveCommand = process.env.JOLO_TEST_CLI ? [process.env.JOLO_TEST_CL
 
 /**
  * An engine whose "claude" is the fixture, a Claude conversation in it, and the terminal client opened on that conversation.
- * `before` runs against the conversation before the client opens, for what a late-joining client must find.
- * @param {{ before?: (booted: { client: any, events: any[], session: any }) => Promise<void> }} [options]
+ * `before` runs against the conversation before the client opens, for what a late-joining client must find; `clientKind`
+ * is the test's own connection's, "headless" for one that cannot answer for the person.
+ * @param {{ before?: (booted: { client: any, events: any[], session: any }) => Promise<void>, clientKind?: string }} [options]
  */
-async function boot({ before = async () => {} } = {}) {
+async function boot({ before = async () => {}, clientKind = "test" } = {}) {
   const home = tempHome();
   const repo = path.join(home, "repo"); mkdirSync(repo);
   const launcher = path.join(home, "fake-claude");
@@ -25,7 +26,7 @@ async function boot({ before = async () => {} } = {}) {
   const agents = path.join(home, "data", "t", "agents"); mkdirSync(agents, { recursive: true });
   writeFileSync(path.join(agents, "claude.json"), JSON.stringify({ id: "claude", displayName: "Claude Code", binary: launcher, transport: "claude-stream" }));
   const engine = await startEngine({ home });
-  const client = await engine.connect();
+  const client = await engine.connect({ clientKind });
   const events = [];
   const status = await client.call("engine.status", {});
   await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event) });
@@ -161,6 +162,25 @@ test("tasks that ignore the stop are force-stopped by closing the process, after
     const last = t.events.filter((event) => event.type === "session.activity" && event.sessionId === t.session.id).at(-1);
     expect(last.payload.state).toBe("idle");
     expect(last.payload.tasks.map((task) => task.status)).toEqual(["failed", "failed"]);
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 60_000);
+
+test("a run paused on a question with nobody to answer it resumes from the terminal client with Enter", async () => {
+  const t = await boot({ clientKind: "headless", before: async ({ client, events, session }) => {
+    const { run } = await client.call("run.start", { sessionId: session.id, requestId: "asked-unattended", prompt: "ask-user tea or coffee?" });
+    await waitFor(() => events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "paused"), { label: "the run paused with nobody to ask", timeoutMs: 20_000 });
+  } });
+  try {
+    await t.ready();
+    await t.seen("Paused · permission");
+    expect(t.text()).not.toContain("Claude asks:"); // the question lapsed with the pause: nothing stale is asked
+    t.type(ENTER);
+    // Resumed, Claude takes the message up again and asks again; this time someone is there to answer.
+    await t.seen("Claude asks: tea or coffee?");
+    t.type("2");
+    await t.seen("You answered: coffee");
+    await waitFor(async () => (await t.runs()).every((run) => run.state === "completed"), { label: "the run resumed and finished", timeoutMs: 15000 });
   } catch (error) { console.error(t.text()); throw error; }
   finally { await t.close(); }
 }, 60_000);

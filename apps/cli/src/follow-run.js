@@ -167,9 +167,14 @@ export async function followRun(client, { session, cursor, json, startRun, run: 
     if (!json) err(`${left.text} · stop with: jolo background stop ${session.id}`);
   }
   if (pause) {
-    if (pause.pauseReason === "permission" && pause.permissionId) emit(json, { type: "permission_required", runId: run.id, permissionId: pause.permissionId, resumeArgv: ["jolo", "attach", run.id] });
-    emit(json, { type: "run.paused", runId: run.id, runRevision: pause.revision, reason: pause.pauseReason ?? "user", ...(pause.permissionId ? { permissionId: pause.permissionId } : {}), resumeArgv: pause.pauseReason === "permission" ? ["jolo", "permission", "allow", pause.permissionId] : ["jolo", "resume", run.id] });
-    if (!json) err(pause.pauseReason === "permission" ? `run paused for permission; approve with: jolo permission allow ${pause.permissionId}   (then: jolo attach ${run.id})` : `run paused (${pause.pauseReason ?? "user"}); resume with: jolo resume ${run.id}`);
+    // A pause for permission names the request to allow; one on Claude's question names none (the pause closed the
+    // question, and Claude was told the run was stopped), so resuming the run, from a terminal, is the way on.
+    const onPermission = pause.pauseReason === "permission" && Boolean(pause.permissionId);
+    if (onPermission) emit(json, { type: "permission_required", runId: run.id, permissionId: pause.permissionId, resumeArgv: ["jolo", "attach", run.id] });
+    emit(json, { type: "run.paused", runId: run.id, runRevision: pause.revision, reason: pause.pauseReason ?? "user", ...(pause.permissionId ? { permissionId: pause.permissionId } : {}), resumeArgv: onPermission ? ["jolo", "permission", "allow", pause.permissionId] : ["jolo", "resume", run.id] });
+    if (!json) err(onPermission ? `run paused for permission; approve with: jolo permission allow ${pause.permissionId}   (then: jolo attach ${run.id})`
+      : pause.pauseReason === "permission" ? `run paused on Claude's question with nobody to answer it; resume from a terminal with: jolo resume ${run.id}`
+      : `run paused (${pause.pauseReason ?? "user"}); resume with: jolo resume ${run.id}`);
     return pause.pauseReason === "permission" ? EXIT.pausedPermission : pause.pauseReason === "budget" ? EXIT.pausedBudget : EXIT.pausedOther;
   }
   const code = finalState === "completed" ? EXIT.completed : finalState === "cancelled" ? EXIT.cancelled : EXIT.failed;
