@@ -14,12 +14,14 @@ export class RunService {
    * `captureProvider` records which model a native run was dispatched against, and `workspaceBusy`
    * reports a worktree another operation already holds; an engine that has neither still schedules
    * runs, so both are optional. `sessionIdle` hears when a conversation has no run queued or in progress.
-   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean }} options
+   * `titles` is asked for a better name when a first prompt has just named a task; without it the name stays.
+   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean, titles?: { suggest: (session: any, prompt: string) => Promise<string | null> } | null }} options
    */
   constructor(options) {
     this.storage = options.storage;
     this.executor = options.executor;
     this.captureProvider = options.captureProvider;
+    this.titles = options.titles ?? null;
     this.lifetime = options.lifetime;
     this.log = options.log;
     this.maxActive = options.maxActive ?? Infinity;
@@ -92,12 +94,15 @@ export class RunService {
         throw new ProtocolError("conflict", `session revision is ${session.revision}, expected ${expectedSessionRevision}`, { revision: session.revision });
       }
       const images = validateAttachments(this.storage, sessionId, attachments);
-      this.storage.assignSessionTitle(sessionId, prompt);
+      const named = this.storage.assignSessionTitle(sessionId, prompt);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });
       const providerConfig = this.captureProvider?.(session, execution);
       if (providerConfig) this.storage.setRunProviderConfig(run.id, providerConfig);
       this.storage.bumpSessionRevision(sessionId);
       this.storage.appendEvent({ sessionId, runId: run.id, type: "run.state", payload: { state: run.state, revision: run.revision, agentId: run.execution?.agentId ?? null, promptPreview: prompt.slice(0, 500), ...(images.length ? { attachments: images } : {}), ...(run.taskReferences?.length ? { taskReferences: run.taskReferences } : {}) } });
+      // The first prompt named the task just now; its answerer may name it better. Never awaited, and it cannot fail the
+      // run. Asked on a later turn of the event loop, so the run is queued and started before any title work begins.
+      if (named && this.titles) this.storage.afterCommit(() => setTimeout(() => void this.titles?.suggest(session, prompt), 0));
       return { run, deduplicated: false };
     });
     if (!result.deduplicated) {

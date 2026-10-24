@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 export const newId = (prefix) => `${prefix}_${randomBytes(9).toString("base64url")}`;
 export const now = () => new Date().toISOString();
+/** The name a task gets from its first prompt until someone or something gives it a better one: its first 80 characters. */
+export const automaticTitle = (prompt) => Array.from(String(prompt ?? "").replace(/\s+/g, " ").trim()).slice(0, 80).join("");
 
 export const mapSession = (r) => r && ({ id: r.id, projectId: r.project_id, workspaceId: r.workspace_id, title: r.title, revision: r.revision, state: r.state, agentId: r.agent_id ?? null, planTaskId: r.plan_task_id ?? null, pinnedAt: r.pinned_at ?? null, agentModel: r.agent_model ? JSON.parse(r.agent_model) : null, model: r.model_ref ? JSON.parse(r.model_ref) : null, agentState: r.agent_state ? JSON.parse(r.agent_state) : {}, createdAt: r.created_at, updatedAt: r.updated_at });
 export const mapPlan = (r) => r && ({ id: r.id, projectId: r.project_id, workspaceId: r.workspace_id, goal: r.goal, state: r.state, policy: r.policy ? JSON.parse(r.policy) : {}, revision: r.revision, failure: r.failure ?? null, createdAt: r.created_at, updatedAt: r.updated_at });

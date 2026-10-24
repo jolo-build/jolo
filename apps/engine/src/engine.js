@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PROTOCOL_VERSION, SCHEMA_VERSION, activityPayload } from "@jolo/protocol";
 import { Storage, newId } from "./storage/index.js";
 import { RunService } from "./runs/service.js";
+import { createTitleService } from "./titles.js";
 import { createAgentExecutor } from "./agent/loop.js";
 import { SettingsService } from "./settings.js";
 import { CredentialService } from "./credentials/index.js";
@@ -152,7 +153,9 @@ export function createEngine(options) {
       mcpConfig, links: hostedLinks, emptyResultGraceMs, dialogs,
       providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
-    runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
+    // A task named by its first prompt is then named by its answerer, on that answerer's cheapest model.
+    const titles = createTitleService({ storage, providerFactory, catalog, agentModels, supervisor, log, env: options.env ?? process.env });
+    runs = new RunService({ storage, executor, lifetime, log, titles, captureProvider: (session, execution) => {
       const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;
       return !answerer || answerer === SELF_MENTION ? providerFactory.capture(session, execution) : null;
     }, workspaceBusy: id => worktrees.isBusy(id),

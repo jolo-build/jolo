@@ -16,7 +16,7 @@ import { ArtifactStore } from "./artifacts.js";
 export { OwnershipError, SchemaError } from "./db.js";
 
 export { newId } from "./records.js";
-import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInvocation, mapWorkspace, mapArtifact } from "./records.js";
+import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInvocation, mapWorkspace, mapArtifact, automaticTitle } from "./records.js";
 
 // A live turn owns the chat until it settles; otherwise its newest prompt owns the status.
 const SESSION_ACTIVITY_RUN = `SELECT id FROM runs WHERE session_id = s.id
@@ -398,12 +398,25 @@ export class Storage {
     return this.getSession(id);
   }
 
-  /** Name an empty task from its first prompt without changing its activity order. */
+  /** Name an empty task from its first prompt without changing its activity order; true when it was named here. */
   assignSessionTitle(id, prompt) {
-    const title = Array.from(prompt.replace(/\s+/g, ' ').trim()).slice(0, 80).join('');
-    if (!title) return;
+    const title = automaticTitle(prompt);
+    if (!title) return false;
     const result = this.db.query("UPDATE sessions SET title = ?2, revision = revision + 1 WHERE id = ?1 AND TRIM(title) = '' AND deleted_at IS NULL").run(id, title);
     if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
+    return result.changes > 0;
+  }
+
+  /**
+   * Put a suggested title in place of the automatic one, only while that is still the title: a rename by the person
+   * in the meantime wins, and a deleted task stays as it was. True when the title changed.
+   */
+  replaceAutomaticTitle(id, automatic, title) {
+    return this.transaction(() => {
+      const result = this.db.query("UPDATE sessions SET title = ?3, revision = revision + 1, updated_at = ?4 WHERE id = ?1 AND title = ?2 AND deleted_at IS NULL").run(id, automatic, title, now());
+      if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
+      return result.changes > 0;
+    });
   }
 
   /** Older workspace tasks missed automatic naming; recover only genuinely empty names. */

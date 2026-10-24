@@ -31,6 +31,13 @@
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
+// One-shot print mode, how Jolo asks for a task's title: the prompt is the last argument, and the one JSON result line
+// names it after the prompt's first three words.
+if (flags.has("--print") && flags.has("--output-format") && argv[argv.indexOf("--output-format") + 1] === "json" && !flags.has("--input-format")) {
+  const words = (argv.at(-1) ?? "").trim().split(/\s+/).slice(0, 3).join(" ");
+  require("node:fs").writeSync(1, `${JSON.stringify({ type: "result", subtype: "success", result: `Fixture title: ${words}`, is_error: false })}\n`); // whole before the exit
+  process.exit(0);
+}
 if (!flags.has("--print") || !flags.has("--output-format") || !argv.includes("stream-json") || !flags.has("--permission-prompt-tool") || argv[argv.indexOf("--permission-prompt-tool") + 1] !== "stdio") {
   process.stderr.write(`fake-claude: unexpected argv ${JSON.stringify(argv)}\n`);
   process.exit(64);

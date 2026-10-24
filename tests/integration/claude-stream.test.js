@@ -76,6 +76,16 @@ describe("Claude Code through its structured stream", () => {
     expect(turn.usage).toMatchObject({ contextUsed: 41007, contextWindow: 1_000_000, agentId: 'claude' });
   }, 30_000);
 
+  test('a chat Claude answers is named by Claude itself once its first run starts', async () => {
+    const { client, events, project } = await boot();
+    const { session } = await client.call('session.create', { projectId: project.projectId, workspaceId: project.workspaceId, agentId: 'claude' });
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'named', prompt: 'summarise the release notes for me' });
+    const named = await waitFor(() => events.find((e) => e.type === 'session.updated' && e.payload.session.id === session.id && e.payload.session.title.startsWith('Fixture title:')), { label: 'the suggested title', timeoutMs: 20_000 });
+    expect(named.payload.session.title).toBe('Fixture title: summarise the release');
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run finished', timeoutMs: 20_000 });
+    expect((await client.call('session.page', { sessionId: session.id })).session.title).toBe('Fixture title: summarise the release');
+  }, 30_000);
+
   test('subagent review reports stay in tool activity without corrupting or duplicating the parent reply', async () => {
     const { client, events, runTo, messagesOf, text } = await boot();
     try {
