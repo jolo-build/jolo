@@ -10,14 +10,16 @@ const task = ({ status = 'running', backgrounded = true, taskType = null, workfl
 });
 /** @param {import('../src/renderer/activity.js').TaskRecord[]} tasks @param {import('../src/renderer/activity.js').Activity['state']} [state] @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks, state = 'background') => ({ state, tasks, truncated: false, updatedAt: new Date().toISOString() });
-const render = (value, stopping = false) => renderToStaticMarkup(<ActivityLine activity={value} onStop={() => {}} onOpenPanel={() => {}} stopping={stopping} />);
+const render = (value) => renderToStaticMarkup(<ActivityLine activity={value} onOpenPanel={() => {}} />);
 
-test('two background tasks read as one line that opens the Activity panel and stops all of them', () => {
+test('two background tasks read as one line that opens the Activity panel, with no stop of its own', () => {
   const html = render(activity([task(), task()]));
   expect(html).toContain('class="activity-line" role="status"');
   expect(html).toContain('aria-label="Show background work"');
   expect(html).toContain('Background work: 2 tasks');
-  expect(html).toMatch(/<button[^>]*>Stop background work<\/button>/);
+  // The stop lives in the Activity panel: a button beside the composer is too easy to hit by mistake.
+  expect(html).not.toContain('Stop background work');
+  expect(html.match(/<button/g)).toHaveLength(1);
 });
 
 test('two background commands, each with a run id of its own, are two tasks, not workflows', () => {
@@ -44,8 +46,3 @@ test('nothing is lit while no background task runs, a foreground subagent during
   expect(render(activity([task({ backgrounded: false })], 'background'))).toContain('Background work: 1 task');
 });
 
-test('while the stop is pending its button reads Stopping… and is disabled', () => {
-  const html = render(activity([task(), task()]), true);
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Stopping…<\/button>/);
-  expect(html).not.toContain('Stop background work');
-});

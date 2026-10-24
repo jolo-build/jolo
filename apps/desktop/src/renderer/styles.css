@@ -593,7 +593,6 @@ details.block.delegation-details summary .delegation-words { flex: 0 3 auto; }
 .activity-line { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--muted); margin: 0 15px 12px; }
 .activity-line button { padding: 3px 7px; }
 .activity-line-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.activity-line-stop { flex: none; color: var(--accent); }
 /* The transcript fade must not paint over the line either. */
 .activity-line + .compose-dock::before { display: none; }
 .permission-notice { flex: none; width: 100%; padding-top: 6px; overflow: hidden; container-type: inline-size; font-size: 12px; }
