@@ -1,13 +1,14 @@
 import { useEffect, useReducer } from 'react';
-import { forceStopOffered, formatElapsed, formatTokens, groupActivity, runningTasks, taskKind } from '../activity.js';
+import { forceStopOffered, formatElapsed, formatTokens, groupActivity, plural, runningTasks, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
+import { Icon } from './icon.jsx';
 import { Modal } from './modal.jsx';
 
 /** @typedef {import('../activity.js').TaskRecord} TaskRecord */
 
 const WORDS = { running: 'running', completed: 'done', stopped: 'stopped', failed: 'failed' };
 const elapsed = (/** @type {string} */ startedAt, /** @type {string | null} */ endedAt, /** @type {number} */ now) => formatElapsed((endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt));
-/** Unknown usage is left out, never shown as 0 tokens (spec §2). */
-const tokens = (/** @type {number | null} */ count) => count === null ? null : `${formatTokens(count)} tokens`;
+/** Unknown usage is left out, never shown as 0 tokens (spec §2); so is a 0, which says no spend was reported yet. */
+const tokens = (/** @type {number | null} */ count) => !count ? null : `${formatTokens(count)} tokens`;
 const meta = (/** @type {(string | null)[]} */ parts) => parts.filter(Boolean).join(' · ');
 
 /** @param {{ task: TaskRecord, now: number, onStopTask: (taskId: string) => void }} props */
@@ -20,23 +21,36 @@ function TaskRow({ task, now, onStopTask }) {
 }
 
 /**
- * A workflow (D3): ONE task of the process, so its card says what the wire carries, its name, status, elapsed time and
- * tokens, and stops it as any task is stopped. Claude Code reports no agents, phases or agent count for it.
+ * A workflow (D3): ONE task of the process, stopped as any task is. Its card says its name, status, elapsed time and
+ * tokens, and once Claude's progress reported its agents, their count, a dot per phase (its status read against the
+ * workflow's own, see workflowPhaseStatus), a `Large` badge past the threshold, and on request its phases with how many
+ * of their agents are done. Without that report, none of it. The agent the last report named is the dots' tooltip while
+ * the workflow runs, and nothing once it ended.
  * @param {{ task: TaskRecord, now: number, onStopTask: (taskId: string) => void }} props
  */
 function WorkflowCard({ task, now, onStopTask }) {
   const name = task.workflowName ?? task.description;
+  const { agents, phases, current, large } = workflowSummary(task);
   return <section className="workflow-card" data-state={task.status}>
     <header>
       <div className="workflow-head">
         <span className="workflow-title" title={name}>{name}</span>
+        {large && <span className="plan-mark">Large</span>}
         <span className="grow" />
         {task.status === 'running' && <button type="button" onClick={() => onStopTask(task.taskId)}>Stop</button>}
       </div>
       <div className="workflow-line">
-        <span className="workflow-meta">{meta(['Workflow', WORDS[task.status], elapsed(task.startedAt, task.endedAt, now), tokens(task.usage.totalTokens)])}</span>
+        <span className="workflow-meta">{meta(['Workflow', WORDS[task.status], agents === null ? null : plural(agents, 'agent'), elapsed(task.startedAt, task.endedAt, now), tokens(task.usage.totalTokens)])}</span>
+        {phases.length > 0 && <span className="status-dots" title={task.status === 'running' ? current ?? undefined : undefined}>{phases.map((phase, index) => {
+          const status = workflowPhaseStatus(phase, task.status);
+          return <span key={index} data-status={status} title={`${phase.title}: ${status}`} />;
+        })}</span>}
       </div>
     </header>
+    {phases.length > 0 && <details className="block">
+      <summary><span>Phases</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+      <ol className="workflow-phases">{phases.map((phase, index) => <li key={index}>{`${phase.title} · ${phase.done}/${phase.agents}`}</li>)}</ol>
+    </details>}
   </section>;
 }
 

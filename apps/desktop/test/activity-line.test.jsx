@@ -4,9 +4,9 @@ import { ActivityLine } from '../src/renderer/components/activity-line.jsx';
 
 let ids = 0;
 /** @param {Record<string, any>} [options] @returns {import('../src/renderer/activity.js').TaskRecord} */
-const task = ({ status = 'running', backgrounded = true, taskType = null, workflowName = null } = {}) => ({
+const task = ({ status = 'running', backgrounded = true, taskType = null, workflowName = null, tokens = null, workflow = undefined } = {}) => ({
   taskId: `t${++ids}`, runId: `run-${ids}`, toolUseId: null, description: 'A task', subagentType: null, taskType, workflowName, phase: null, backgrounded, status,
-  startedAt: new Date().toISOString(), endedAt: status === 'running' ? null : new Date().toISOString(), usage: { totalTokens: null, toolUses: null, durationMs: null },
+  startedAt: new Date().toISOString(), endedAt: status === 'running' ? null : new Date().toISOString(), usage: { totalTokens: tokens, toolUses: null, durationMs: null }, workflow,
 });
 /** @param {import('../src/renderer/activity.js').TaskRecord[]} tasks @param {import('../src/renderer/activity.js').Activity['state']} [state] @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks, state = 'background') => ({ state, tasks, truncated: false, updatedAt: new Date().toISOString() });
@@ -29,6 +29,12 @@ test('two background commands, each with a run id of its own, are two tasks, not
 test('a running workflow names the line', () => {
   const html = render(activity([task({ taskType: 'local_workflow', workflowName: 'demo' })]));
   expect(html).toMatch(/>Workflow demo · \d\d:\d\d</);
+});
+
+test('a running workflow whose progress reported its agents adds its phase and how many agents are done', () => {
+  const workflow = { phases: [{ title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], agents: { total: 2, running: 1, done: 1, failed: 0 }, current: 'Say: say:1' };
+  const html = render(activity([task({ taskType: 'local_workflow', workflowName: 'demo', tokens: 20_388, workflow })]));
+  expect(html).toMatch(/>Workflow demo: Say 1\/2 · \d\d:\d\d · 20k tokens</);
 });
 
 test('nothing is lit while no background task runs, a foreground subagent during the turn included', () => {

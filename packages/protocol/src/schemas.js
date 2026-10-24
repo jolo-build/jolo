@@ -551,11 +551,23 @@ export const TASK_HISTORY_LIMIT = 200;
 /** The most characters a task's description, phase or workflow name keeps, and an id (its own, its run's, its tool call's), subagent type or task type. */
 export const TASK_TEXT_MAX = 500;
 export const TASK_ID_MAX = 128;
+/** The most phases a workflow's summary lists; agents of a phase past them count in its totals only. */
+export const WORKFLOW_PHASES_MAX = 100;
 const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
 
 const TaskId = z.string().max(TASK_ID_MAX);
 const TaskText = z.string().max(TASK_TEXT_MAX);
 const TaskCount = z.number().int().nonnegative().nullable();
+const WorkflowCount = z.number().int().nonnegative();
+/**
+ * What a workflow's progress last said of its phases and agents, as counts: each phase in index order with its agents
+ * running, done and failed, the totals over every agent, and the agent the last progress report named (`<phase>: <label>`).
+ */
+const WorkflowSummarySchema = z.object({
+  phases: z.array(z.object({ title: TaskText, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
+  agents: z.object({ total: WorkflowCount, running: WorkflowCount, done: WorkflowCount, failed: WorkflowCount }),
+  current: TaskText.nullable(),
+});
 export const TaskRecordSchema = z.object({
   taskId: TaskId.min(1),
   runId: TaskId.nullable(),
@@ -571,6 +583,8 @@ export const TaskRecordSchema = z.object({
   startedAt: IsoTimestamp,
   endedAt: IsoTimestamp.nullable(),
   usage: z.object({ totalTokens: TaskCount, toolUses: TaskCount, durationMs: TaskCount }),
+  // A workflow's phases and agents, null until its progress reports them and for any other task; an older engine sends none.
+  workflow: WorkflowSummarySchema.nullable().optional(),
 });
 
 /** `truncated` says the process had finished tasks left out of these. */

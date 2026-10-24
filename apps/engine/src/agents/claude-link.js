@@ -17,7 +17,7 @@
 import path from 'node:path';
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX } from '@jolo/protocol';
+import { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX } from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
 
 /** How long an idle process is kept. Long on purpose: the point is that background work gets to finish. */
@@ -45,7 +45,7 @@ export const ACTIVITY_COALESCE_MS = 250;
 // A link remembers TASK_HISTORY_LIMIT finished tasks, the most an activity names, forgetting the oldest first; those
 // still running are never forgotten. What Claude says about a task is kept to TASK_TEXT_MAX characters (a description, a
 // phase) and TASK_ID_MAX (an id, a subagent type).
-export { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX };
+export { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX };
 /** @type {Map<string, TaskRecord['status']>} how a task's end is recorded, by the status Claude names; any other is completed */
 const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
 /** The notices that say something about one task, by its id. */
@@ -54,16 +54,64 @@ const TASK_NOTICES = new Set(['task_started', 'task_progress', 'task_updated', '
 const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof value) ? String(value).slice(0, max) : null);
 /** A count Claude sent, as a whole number from 0 to the largest safe integer; null when it is not a number of zero or more. */
 const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER) : null);
+/** @type {Map<unknown, 'running' | 'done'>} a workflow agent's bucket by the state Claude names; any other is failed */
+const AGENT_BUCKETS = new Map([['start', 'running'], ['done', 'done']]);
+
+/**
+ * What a workflow's `task_progress` says of its phases and agents (`workflow_progress`), kept as counts: the raw list grows
+ * with every agent and repeats on every tick. One entry per `workflow_phase`, in index order, at most WORKFLOW_PHASES_MAX;
+ * an agent counts once (by its index, the last entry winning), in its phase's counts and in the totals, or in the totals
+ * only when its phase is not listed. An agent that has started is running, one that is done is done, and one in any
+ * other state failed (Claude Code 2.1.304 was seen to send only `start` and `done`). `current` is the agent the last
+ * progress report named in its description (`<phase>: <label>`); it outlives that agent's work.
+ * @param {any[]} entries
+ * @param {unknown} description
+ * @returns {WorkflowSummary}
+ */
+function summarizeWorkflow(entries, description) {
+  /** @type {Map<number, string>} */
+  const titles = new Map();
+  /** @type {Map<number | string, { phaseIndex: number | null, bucket: 'running' | 'done' | 'failed' }>} */
+  const agents = new Map();
+  entries.forEach((entry, position) => {
+    const index = countOf(entry?.index);
+    if (entry?.type === 'workflow_phase' && index !== null) titles.set(index, textOf(entry.title, TASK_TEXT_MAX) ?? '');
+    else if (entry?.type === 'workflow_agent') {
+      const key = index ?? `#${position}`; // one without an index is told apart by where it is listed
+      agents.delete(key); // the last entry wins
+      agents.set(key, { phaseIndex: countOf(entry.phaseIndex), bucket: AGENT_BUCKETS.get(entry.state) ?? 'failed' });
+    }
+  });
+  const listed = [...titles.keys()].sort((a, b) => a - b).slice(0, WORKFLOW_PHASES_MAX);
+  /** @type {Map<number, WorkflowSummary['phases'][number]>} */
+  const phases = new Map(listed.map((index) => [index, { title: titles.get(index), agents: 0, done: 0, running: 0, failed: 0 }]));
+  const totals = { total: 0, running: 0, done: 0, failed: 0 };
+  for (const { phaseIndex, bucket } of agents.values()) {
+    totals.total += 1;
+    totals[bucket] += 1;
+    const phase = phaseIndex === null ? undefined : phases.get(phaseIndex);
+    if (phase) { phase.agents += 1; phase[bucket] += 1; }
+  }
+  const current = typeof description === 'string' && description.includes(': ') ? textOf(description, TASK_TEXT_MAX) : null;
+  return { phases: [...phases.values()], agents: totals, current };
+}
 
 /**
  * A background task of the process (an agent, a workflow, a command), as its notices describe it. `runId` is the task's
  * own run id (Claude Code gives every task one; it is not a workflow's id). `taskType` is Claude's `task_type`
  * (`local_workflow`, `local_bash`, `local_agent`, ...): a workflow is ONE task of type `local_workflow`, named by
- * `workflowName`; its agents have no tasks of their own.
+ * `workflowName`; its agents have no tasks of their own, and `workflow` is what its progress last said of them (null
+ * until a progress carries `workflow_progress`, and for any other task).
  * @typedef {{ taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType: string | null, workflowName: string | null,
  *   phase: string | null, backgrounded: boolean, status: 'running' | 'completed' | 'stopped' | 'failed', startedAt: string,
- *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null } }} TaskRecord
+ *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
+ *   workflow: WorkflowSummary | null }} TaskRecord
+ */
+/**
+ * A workflow's phases and agents as counts (see summarizeWorkflow).
+ * @typedef {{ phases: { title: string, agents: number, done: number, running: number, failed: number }[],
+ *   agents: { total: number, running: number, done: number, failed: number }, current: string | null }} WorkflowSummary
  */
 /**
  * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing.
@@ -71,7 +119,7 @@ const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math
  */
 /**
  * Why an activity is reported, the strongest change since the last report first: its state changed, a task started or
- * ended (its status changed), or only a task's usage, phase or description did.
+ * ended (its status changed), or only a task's usage, phase, description or workflow summary did.
  * @typedef {'state' | 'tasks' | 'progress'} ActivityReason
  */
 
@@ -278,8 +326,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     try { onActivity(activity, reason); } catch (error) { log.warn('could not report what the agent process is doing', { sessionId, agentId, error: String(error?.message ?? error) }); }
   };
   /**
-   * Its tasks changed (`change`: 'tasks' when one started or ended, 'progress' when only its usage, phase or
-   * description did), or a turn began or ended: report it, at once when its state is a new one.
+   * Its tasks changed (`change`: 'tasks' when one started or ended, 'progress' when only its usage, phase,
+   * description or workflow summary did), or a turn began or ended: report it, at once when its state is a new one.
    * @param {'tasks' | 'progress' | null} [change]
    */
   const activityChanged = (change = null) => {
@@ -302,7 +350,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     taskId, runId: textOf(message.run_id, TASK_ID_MAX), toolUseId: textOf(message.tool_use_id, TASK_ID_MAX), description: textOf(message.description, TASK_TEXT_MAX) ?? '',
     subagentType: textOf(message.subagent_type, TASK_ID_MAX), taskType: textOf(message.task_type, TASK_ID_MAX), workflowName: textOf(message.workflow_name, TASK_TEXT_MAX),
     phase: null, backgrounded: message.is_backgrounded !== false, status: 'running',
-    startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null },
+    startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null }, workflow: null,
   });
   /** A count that is not one leaves what was known. @param {TaskRecord} task @param {any} usage */
   const takeUsage = (task, usage) => {
@@ -353,6 +401,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       tasks.set(taskId, newTask(taskId, message, at));
     } else if (message.subtype === 'task_progress' && task) {
       takeUsage(task, message.usage);
+      // A new summary each time, never changed in place: a snapshot already reported shares it. The description stays the
+      // one the task started with; a workflow's progress names its current agent there.
+      if (Array.isArray(message.workflow_progress)) task.workflow = summarizeWorkflow(message.workflow_progress, message.description);
     } else if (message.subtype === 'task_updated' && task) {
       const patch = message.patch ?? {};
       if (typeof patch.is_backgrounded === 'boolean') task.backgrounded = patch.is_backgrounded; // moved to the background later

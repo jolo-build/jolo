@@ -1,17 +1,27 @@
 import { expect, test } from 'bun:test';
-import { activityLine, backgroundTasks, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, plural, runningTasks, stopFor, taskKind } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, backgroundTasks, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, plural, runningTasks, stopFor, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
 let ids = 0;
 /** @typedef {import('../src/renderer/activity.js').TaskRecord} TaskRecord */
 /** @param {Record<string, any>} [options] @returns {TaskRecord} */
-const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true, taskType = null, workflowName = null, subagentType = null } = {}) => ({
+const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true, taskType = null, workflowName = null, subagentType = null, workflow = undefined } = {}) => ({
   taskId: `t${++ids}`, runId, toolUseId, description, subagentType, taskType, workflowName, phase, backgrounded, status,
-  startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null },
+  startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null }, workflow,
 });
 /** A workflow as Claude Code 2.1.304 reports one: one task of type local_workflow, named. @param {Record<string, any>} [options] */
 const workflow = (options = {}) => task({ taskType: 'local_workflow', workflowName: 'demo', description: 'Workflow demo', ...options });
+/** A phase of a workflow's summary, as the engine keeps it from Claude's progress report. @param {string} title @param {Record<string, number>} [counts] */
+const phase = (title, { agents = 0, done = 0, running = 0, failed = 0 } = {}) => ({ title, agents, done, running, failed });
+/**
+ * A workflow's summary: its phases, the totals over its agents (by default those of the phases), the current agent.
+ * @param {ReturnType<typeof phase>[]} phases @param {{ total: number, running: number, done: number, failed: number } | null} [agents] @param {string | null} [current]
+ */
+const progress = (phases, agents = null, current = null) => ({
+  phases, current,
+  agents: agents ?? phases.reduce((sum, item) => ({ total: sum.total + item.agents, running: sum.running + item.running, done: sum.done + item.done, failed: sum.failed + item.failed }), { total: 0, running: 0, done: 0, failed: 0 }),
+});
 /** @param {TaskRecord[]} tasks @param {import('../src/renderer/activity.js').Activity['state']} [state] @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks, state = 'background') => ({ state, tasks, truncated: false, updatedAt: at(0) });
 
@@ -82,6 +92,58 @@ test('a running workflow names the line, with its own elapsed time and tokens, a
   expect(activityLine(activity([workflow({ workflowName: 'older', started: 0 }), workflow({ workflowName: null, description: 'Review the diff', started: 20 })]), { now: START + 40_000 })?.text).toBe('Workflow Review the diff · 00:20 · 1 other task');
   // A finished workflow names nothing.
   expect(activityLine(activity([workflow({ status: 'completed', ended: 5 }), task({ started: 10 })]), { now: START + 40_000 })?.text).toBe('Background work: 1 task · 00:30');
+});
+
+test('a running workflow whose progress reported its agents names its phase and how many agents are done', () => {
+  const flow = workflow({ started: 10, tokens: 20_388, workflow: progress([phase('Say', { agents: 2, done: 1, running: 1 })], null, 'Say: say:1') });
+  expect(activityLine(activity([flow]), { now: START + 40_000 })).toEqual({ text: 'Workflow demo: Say 1/2 · 00:30 · 20k tokens', running: 1 }); // 20388 tokens read as formatTokens has them
+  expect(activityLine(activity([task({ started: 0 }), flow]), { now: START + 40_000 })).toEqual({ text: 'Workflow demo: Say 1/2 · 00:30 · 20k tokens · 1 other task', running: 2 });
+  const line = (/** @type {ReturnType<typeof progress>} */ summary) => activityLine(activity([workflow({ started: 10, workflow: summary })]), { now: START + 40_000 })?.text;
+  // The phase is the first with running agents, else the last with a done or failed agent, else the first.
+  expect(line(progress([phase('Plan', { agents: 1, done: 1 }), phase('Build', { agents: 2, done: 1, running: 1 }), phase('Verify', { agents: 1, running: 1 })]))).toBe('Workflow demo: Build 2/4 · 00:30');
+  expect(line(progress([phase('Plan', { agents: 1, done: 1 }), phase('Build', { agents: 1, failed: 1 }), phase('Verify')]))).toBe('Workflow demo: Build 1/2 · 00:30');
+  expect(line(progress([phase('Plan'), phase('Build')]))).toBe('Workflow demo: Plan 0/0 · 00:30');
+  // Agents reported without phases: the counts alone.
+  expect(line(progress([], { total: 2, running: 1, done: 1, failed: 0 }))).toBe('Workflow demo: 1/2 · 00:30');
+  // No progress report of its agents (none yet, or an engine from before them): the line says no counts.
+  expect(line(null)).toBe('Workflow demo · 00:30');
+});
+
+test("a workflow phase's status: failed on any failed agent, running while one runs, done when all are, else pending", () => {
+  expect(workflowPhaseStatus(phase('Say'))).toBe('pending');
+  expect(workflowPhaseStatus(phase('Say', { agents: 2 }))).toBe('pending');
+  expect(workflowPhaseStatus(phase('Say', { agents: 2, done: 1, running: 1 }))).toBe('running');
+  expect(workflowPhaseStatus(phase('Say', { agents: 2, done: 2 }))).toBe('done');
+  expect(workflowPhaseStatus(phase('Say', { agents: 3, done: 1, running: 1, failed: 1 }))).toBe('failed');
+});
+
+test("a phase still reported running on a workflow that ended takes the workflow's own end word", () => {
+  const working = phase('Say', { agents: 2, done: 1, running: 1 });
+  expect(workflowPhaseStatus(working, 'running')).toBe('running');
+  expect(workflowPhaseStatus(working, 'stopped')).toBe('stopped');
+  expect(workflowPhaseStatus(working, 'failed')).toBe('failed');
+  expect(workflowPhaseStatus(working, 'completed')).toBe('done');
+  // What the report settled stays what it was: a failed agent, all of them done, none started.
+  expect(workflowPhaseStatus(phase('Say', { agents: 2, done: 1, failed: 1 }), 'stopped')).toBe('failed');
+  expect(workflowPhaseStatus(phase('Say', { agents: 2, done: 2 }), 'stopped')).toBe('done');
+  expect(workflowPhaseStatus(phase('Verify'), 'stopped')).toBe('pending');
+});
+
+test('a token count of 0 is left out of the line: no agent or task has reported spend yet', () => {
+  const flow = workflow({ started: 10, tokens: 0, workflow: progress([phase('Say', { agents: 2, running: 2 })], null, 'Say: say:1') });
+  expect(activityLine(activity([flow]), { now: START + 40_000 })?.text).toBe('Workflow demo: Say 0/2 · 00:30');
+  expect(activityLine(activity([task({ started: 0, tokens: 0 }), task({ started: 10, tokens: 0 })]), { now: START + 30_000 })?.text).toBe('Background work: 2 tasks · 00:30');
+});
+
+test("a workflow's summary is known only once its progress reported its agents, and Large past the threshold", () => {
+  expect(LARGE_RUN_AGENTS).toBe(25);
+  const phases = [phase('Say', { agents: 2, done: 1, running: 1 })];
+  expect(workflowSummary(workflow({ workflow: progress(phases, null, 'Say: say:1') }))).toEqual({ agents: 2, phases, current: 'Say: say:1', large: false });
+  const fanOut = (/** @type {number} */ total) => workflowSummary(workflow({ workflow: progress([phase('Fan out', { agents: total, running: total })]) })).large;
+  expect(fanOut(LARGE_RUN_AGENTS)).toBe(false);
+  expect(fanOut(LARGE_RUN_AGENTS + 1)).toBe(true);
+  expect(workflowSummary(workflow({ workflow: null }))).toEqual({ agents: null, phases: [], current: null, large: false });
+  expect(workflowSummary(workflow())).toEqual({ agents: null, phases: [], current: null, large: false }); // an engine from before it
 });
 
 test('during a turn a foreground subagent is the turn\'s own; once the turn ends, any task still running is background work', () => {

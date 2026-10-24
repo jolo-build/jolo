@@ -7,7 +7,8 @@ import { selectPanel } from './panel-controls.js';
  * Claude's background work and its questions to the person, against the fake Claude: two background tasks are listed
  * in the Activity panel and stopped from it, then an AskUserQuestion and an ExitPlanMode are answered from dialog cards,
  * then two tasks that ignore Stop background work are ended by Force stop (closing the process after a confirmation),
- * and a workflow names the activity line, shows as one card, and is stopped.
+ * and a workflow names the activity line with its phase and agents, shows as one card with its agent count and a dot per
+ * phase, and is stopped.
  */
 export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor, report, results }) {
   const send = async value => {
@@ -76,16 +77,21 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await waitFor(`!document.querySelector('.activity-line') && ${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'failed' && row.querySelector('.activity-task-meta').textContent.includes('failed'))`, 'closing the process ended both tasks, which read failed', 20_000);
   await waitFor('!document.querySelector("dialog.modal[open]")', 'the confirmation closed');
 
-  // A workflow is one task: it names the line, shows as one card titled with its name, and Stop background work ends it.
+  // A workflow is one task: it names the line with its phase and finished agents from Claude's progress report, shows as
+  // one card titled with its name, its two agents and one dot for its one phase, and Stop background work ends it.
   await send('workflow demo 20000');
-  await waitFor(`${line}?.startsWith('Workflow demo · ')`, 'the activity line names the workflow', 20_000);
+  await waitFor(`/^Workflow demo: Say [0-2]\\/2 · /.test(${line} ?? '') && !${line}.includes(' 0 tokens')`, 'the activity line names the workflow, its phase and its finished agents, and no 0 tokens', 20_000);
   await completed('the turn that started the workflow completed');
   await selectPanel(evaluate, waitFor, 'Activity');
   const card = "document.querySelector('.activity-panel .workflow-card')";
   await waitFor(`document.querySelectorAll('.activity-panel .workflow-card').length === 1 && ${card}.querySelector('.workflow-title').textContent === 'demo' && ${card}.querySelector('.workflow-meta').textContent.startsWith('Workflow · running')`, 'the Activity panel shows one workflow card titled demo');
+  await waitFor(`${card}.textContent.includes('2 agents') && !${card}.textContent.includes(' 0 tokens') && ${card}.querySelectorAll('.status-dots span').length === 1`, 'the workflow card shows its two agents, one dot for its one phase, and no 0 tokens');
   await screenshot('workflow.png');
   await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
   await waitFor(`!document.querySelector('.activity-line') && ${card}?.dataset.state === 'stopped' && ${card}.querySelector('.workflow-meta').textContent.startsWith('Workflow · stopped') && !${card}.querySelector('button')`, 'Stop background work ended the workflow', 20_000);
+  // Its last report still lists an agent as started: the phase reads stopped, as the workflow does, never running.
+  assert.equal(await evaluate(`${card}.querySelector('.status-dots span').dataset.status`), 'stopped');
+  assert.equal(await evaluate(`${card}.querySelector('.status-dots span').title`), 'Say: stopped');
 
-  report.checks.push('background work is listed and stopped from the Activity panel; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read failed; a workflow names the activity line, shows as one card titled with its name, and Stop background work ends it');
+  report.checks.push('background work is listed and stopped from the Activity panel; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read failed; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and one phase dot, and Stop background work ends it, its phase dot reading stopped');
 }

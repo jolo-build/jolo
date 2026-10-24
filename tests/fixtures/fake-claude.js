@@ -15,9 +15,10 @@
 // <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
 // that question back <ms> later, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
 // and says whether it was approved or sent back, "workflow <name> <ms>" starts a workflow named <name> as one background
-// task (task_type local_workflow, no is_backgrounded field) that reports 1.2M tokens halfway through <ms>, completes
-// after it unless stop_task ends it first, and is reported a moment later in a turn of its own ("Workflow <name> done."),
-// and anything else just answers in prose. A second control response to one request, or one to a request it took back,
+// task (task_type local_workflow, no is_backgrounded field) whose progress reports carry its phases and agents
+// (workflow_progress): at once both agents of phase "Say" (say:1, say:2) have started (0 tokens, as the real binary's first
+// tick says), halfway through <ms> say:1 is done (20388 tokens), and at <ms> both are done (40776 tokens); it then completes unless stop_task ended it first, and is
+// reported a moment later in a turn of its own ("Workflow <name> done."), and anything else just answers in prose. A second control response to one request, or one to a request it took back,
 // makes the fixture exit 70. The other scenarios are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
@@ -448,15 +449,22 @@ async function turn(prompt, images = [], uuid = null) {
     }
   } else if ((match = prompt.match(/^workflow (\S+) (\d+)$/))) {
     // A workflow named <name>, as Claude Code 2.1.304 reports one: ONE task of type local_workflow carrying its name,
-    // with a run id of its own and no is_backgrounded field (the binary sets that only for agents and commands). It
-    // reports its tokens halfway through <ms> and completes after it, on timers of its own so that stop_task ends it;
-    // a moment after it completes, a turn of its own reports it, as "background" does.
+    // with a run id of its own and no is_backgrounded field (the binary sets that only for agents and commands). Each of
+    // its progress reports lists its phases and agents (workflow_progress) and names the current agent in its
+    // description, with the running sum of the agents' tokens in usage: both agents of phase Say start at once, say:1 is
+    // done halfway through <ms>, both are done at <ms>, when it completes; all on timers of its own so that stop_task
+    // ends it. A moment after it completes, a turn of its own reports it, as "background" does.
     const [name, ms] = [match[1], Number(match[2])];
     say("Workflow started.");
     startTask("wf-1");
     out({ type: "system", subtype: "task_started", task_id: "wf-1", run_id: "wf-1-run", tool_use_id: "toolu_wf_1", task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
-    inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "wf-1", usage: { total_tokens: 1200000, tool_uses: 12, duration_ms: ms / 2 }, session_id: sessionId }), ms / 2, "wf-1");
+    const agent = (index, state, done = {}) => ({ type: "workflow_agent", index, label: `say:${index}`, phaseIndex: 1, phaseTitle: "Say", agentId: `agent-${index}`, model: "fake-fable-5-1", state, attempt: 1, promptPreview: `Reply with exactly: agent ${index} ok`, ...done });
+    const finished = (index) => ({ tokens: 20388, toolCalls: 0, durationMs: ms / 2, resultPreview: `agent ${index} ok` });
+    const progress = (current, usage, agents) => out({ type: "system", subtype: "task_progress", task_id: "wf-1", run_id: "wf-1-run", tool_use_id: "toolu_wf_1", description: `Say: ${current}`, last_tool_name: current, summary: `Workflow ${name}`, usage, workflow_progress: [{ type: "workflow_phase", index: 1, title: "Say" }, ...agents], session_id: sessionId });
+    progress("say:1", { total_tokens: 0, tool_uses: 0, duration_ms: 42 }, [agent(1, "start"), agent(2, "start")]);
+    inBackground(() => progress("say:1", { total_tokens: 20388, tool_uses: 0, duration_ms: ms / 2 }, [agent(1, "done", finished(1)), agent(2, "start")]), ms / 2, "wf-1");
     inBackground(() => {
+      progress("say:2", { total_tokens: 40776, tool_uses: 0, duration_ms: ms }, [agent(1, "done", finished(1)), agent(2, "done", finished(2))]);
       endTask("wf-1", "completed");
       inBackground(() => enqueue(() => selfStartedTurn(`Workflow ${name} done.`, [])), WORKFLOW_REPORT_DELAY_MS);
     }, ms, "wf-1");

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventPayloadSchemas, activityPayload } from '@jolo/protocol';
-import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -552,7 +552,7 @@ test('a workflow is one background task with its type and name, and is work unti
   expect(link.activity.tasks[0]).toMatchObject({ taskId: 'wf-1', runId: 'wf-1-run', toolUseId: 'toolu_wf_1', taskType: 'local_workflow', workflowName: 'x', description: 'Workflow x', backgrounded: true, status: 'running' });
   expect(link.activity.state).toBe('background');
   await waitFor(() => link.activity.tasks[0].status === 'completed', 4000);
-  expect(link.activity.tasks[0].usage.totalTokens).toBe(1_200_000);
+  expect(link.activity.tasks[0].usage.totalTokens).toBe(40_776);
   // Completed, and its report has not begun: the process keeps its work until it does.
   for (const until = Date.now() + 3000; !link.pending; await sleep(10)) {
     expect(link.working).toBe(true);
@@ -561,6 +561,62 @@ test('a workflow is one background task with its type and name, and is work unti
   const seen = [];
   await link.beginTurn({ signal: new AbortController().signal, handle: (message) => { seen.push(message); return message.type === 'result'; } }).done;
   expect(seen.filter((m) => m.type === 'assistant').flatMap((m) => m.message.content).map((b) => b.text)).toEqual(['Workflow x done.']);
+  await registry.closeAll();
+});
+
+test('a workflow keeps a summary of its agents and phases from its progress reports, and the description it started with', async () => {
+  // The fixture's `workflow x 1500` reports the workflow's phases and agents on every progress tick, as Claude Code 2.1.304
+  // does: both agents of phase Say start at once, the first is done halfway, both are done at the end.
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = open(registry);
+  await turn(link, 'workflow x 1500', { init: true });
+  await waitFor(() => link.activity.tasks[0]?.workflow != null);
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 0, running: 2, failed: 0 }], agents: { total: 2, running: 2, done: 0, failed: 0 }, current: 'Say: say:1' });
+  expect(link.activity.tasks[0].usage.totalTokens).toBe(0); // the first tick says 0 tokens, as the real binary does; the engine keeps what it said
+  await waitFor(() => link.activity.tasks[0].workflow.agents.done === 1);
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', usage: { totalTokens: 20388 } });
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], agents: { total: 2, running: 1, done: 1, failed: 0 }, current: 'Say: say:1' });
+  await waitFor(() => link.activity.tasks[0].status === 'completed', 4000);
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', usage: { totalTokens: 40776 } });
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 2, running: 0, failed: 0 }], agents: { total: 2, running: 0, done: 2, failed: 0 }, current: 'Say: say:2' });
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await registry.closeAll();
+});
+
+test('a workflow summary is bounded: an agent in an unknown state counts as failed, a repeated one once, and phases past the cap are cut', async () => {
+  // 150 phases listed last first, the first with a title far too long; agents in a state Claude Code 2.1.304 was not seen
+  // to send, one listed twice, and two whose phase is cut or unknown; a description without a current agent. Then a
+  // progress whose workflow_progress is not a list, and a task that reports none.
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'wf', task_type: 'local_workflow', workflow_name: 'big', description: 'many phases' });
+      const phases = Array.from({ length: 150 }, (_, i) => ({ type: 'workflow_phase', index: 150 - i, title: i === 149 ? 't'.repeat(1000) : 'Phase ' + (150 - i) }));
+      const agent = (index, phaseIndex, state) => ({ type: 'workflow_agent', index, label: 'a' + index, phaseIndex, phaseTitle: 'Phase ' + phaseIndex, model: 'm', state, promptPreview: 'p' });
+      const agents = [agent(1, 1, 'start'), agent(2, 2, 'cancelled'), agent(3, 2, 'start'), agent(4, 120, 'done'), agent(5, 999, 'start'), agent(1, 1, 'done')];
+      out({ type: 'system', subtype: 'task_progress', task_id: 'wf', description: 'working', usage: { total_tokens: 10 }, workflow_progress: [...phases, ...agents] });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'wf', description: 'Phase 1: a1', usage: { total_tokens: 20 }, workflow_progress: { phases: 'not a list' } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'plain', task_type: 'local_bash', description: 'a command', is_backgrounded: true });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'plain', description: 'Build: compile', usage: { total_tokens: 5 } });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = openStub(registry, 'bounded-workflow', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks.find(t => t.taskId === 'plain')?.usage.totalTokens === 5);
+  const [flow, plain] = link.activity.tasks;
+  expect(flow.description).toBe('many phases');
+  expect(flow.usage.totalTokens).toBe(20); // the second progress is read for its usage; its odd workflow_progress leaves the summary
+  expect(flow.workflow.phases).toHaveLength(WORKFLOW_PHASES_MAX);
+  expect(WORKFLOW_PHASES_MAX).toBe(100);
+  expect(flow.workflow.phases.map(p => p.title)).toEqual(['t'.repeat(TASK_TEXT_MAX), ...Array.from({ length: 99 }, (_, i) => `Phase ${i + 2}`)]);
+  expect(flow.workflow.phases.slice(0, 3)).toEqual([
+    { title: 't'.repeat(TASK_TEXT_MAX), agents: 1, done: 1, running: 0, failed: 0 },
+    { title: 'Phase 2', agents: 2, done: 0, running: 1, failed: 1 },
+    { title: 'Phase 3', agents: 0, done: 0, running: 0, failed: 0 },
+  ]);
+  expect(flow.workflow.agents).toEqual({ total: 5, running: 2, done: 2, failed: 1 }); // agents of a cut or unknown phase count here only
+  expect(flow.workflow.current).toBeNull();
+  expect(plain.workflow).toBeNull();
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
   await registry.closeAll();
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, WORKFLOW_PHASES_MAX, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -90,6 +90,20 @@ describe("schemas", () => {
     expect(TaskRecordSchema.safeParse({ ...task, taskType: 't'.repeat(TASK_ID_MAX + 1) }).success).toBe(false);
     expect(TaskRecordSchema.safeParse({ ...task, workflowName: 'w'.repeat(TASK_TEXT_MAX + 1) }).success).toBe(false);
     expect(TaskRecordSchema.safeParse({ ...task, taskType: 7 }).success).toBe(false);
+  });
+  test("a task record may carry a workflow's bounded summary of its phases and agents, which an older payload lacks", () => {
+    const task = { taskId: 'wf-1', runId: 'wf-1-run', toolUseId: null, description: 'two trivial agents', subagentType: null, taskType: 'local_workflow', workflowName: 'probe-two', phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: 20388, toolUses: 0, durationMs: 42 } };
+    const phase = { title: 'Say', agents: 2, done: 1, running: 1, failed: 0 };
+    const workflow = { phases: [phase], agents: { total: 2, running: 1, done: 1, failed: 0 }, current: 'Say: say:1' };
+    expect(TaskRecordSchema.parse({ ...task, workflow }).workflow).toEqual(workflow);
+    expect(TaskRecordSchema.parse({ ...task, workflow: null }).workflow).toBeNull();
+    expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before it
+    const valid = (patch) => TaskRecordSchema.safeParse({ ...task, workflow: { ...workflow, ...patch } }).success;
+    expect(valid({ current: null, phases: Array.from({ length: WORKFLOW_PHASES_MAX }, () => ({ ...phase, title: 't'.repeat(TASK_TEXT_MAX) })) })).toBe(true);
+    expect(valid({ phases: [], agents: { total: 0, running: 0, done: 0, failed: 0 } })).toBe(true);
+    for (const patch of [{ phases: Array.from({ length: WORKFLOW_PHASES_MAX + 1 }, () => phase) }, { phases: [{ ...phase, title: 't'.repeat(TASK_TEXT_MAX + 1) }] },
+      { phases: [{ ...phase, running: null }] }, { phases: [{ ...phase, failed: -1 }] }, { agents: { ...workflow.agents, total: 1.5 } }, { agents: { ...workflow.agents, done: null } },
+      { current: 'c'.repeat(TASK_TEXT_MAX + 1) }, { current: 7 }, { current: undefined }]) expect(valid(patch)).toBe(false);
   });
   test("a dialog's tool and the input its event carries are bounded; the record keeps any input", () => {
     const at = new Date().toISOString();

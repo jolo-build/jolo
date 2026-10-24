@@ -4,9 +4,9 @@ import { ActivityPanel, ForceStopDialog } from '../src/renderer/components/activ
 
 let ids = 0;
 /** @param {Record<string, any>} [options] @returns {import('../src/renderer/activity.js').TaskRecord} */
-const task = ({ status = 'running', runId = null, phase = null, subagentType = null, taskType = null, workflowName = null, description = 'A task', tokens = null, startedAt = new Date().toISOString(), endedAt = status === 'running' ? null : new Date().toISOString() } = {}) => ({
+const task = ({ status = 'running', runId = null, phase = null, subagentType = null, taskType = null, workflowName = null, description = 'A task', tokens = null, startedAt = new Date().toISOString(), endedAt = status === 'running' ? null : new Date().toISOString(), workflow = undefined } = {}) => ({
   taskId: `t${++ids}`, runId, toolUseId: null, description, subagentType, taskType, workflowName, phase, backgrounded: true, status,
-  startedAt, endedAt, usage: { totalTokens: tokens, toolUses: null, durationMs: null },
+  startedAt, endedAt, usage: { totalTokens: tokens, toolUses: null, durationMs: null }, workflow,
 });
 /** A workflow as Claude Code 2.1.304 reports one: one task of type local_workflow. @param {Record<string, any>} [options] */
 const workflow = (options = {}) => task({ taskType: 'local_workflow', ...options });
@@ -24,8 +24,76 @@ test('a workflow is one card with its name, kind, status, elapsed time and token
   expect(html).toContain('api-plan-review');
   expect(html).toMatch(/Workflow · running · \d\d:\d\d · 1\.2M tokens/);
   expect(count(html, /<button[^>]*>Stop<\/button>/g)).toBe(1);
-  // One task on the wire: no agent count, phase dots, Large badge, Stop run or agent rows.
+  // No progress report of its agents yet: no agent count, phase dots, Large badge, Stop run or phase list.
   for (const absent of ['Stop run', 'agent', 'Large', 'data-status=', 'task-row', '<details']) expect(html).not.toContain(absent);
+});
+
+/** A workflow's summary as the engine keeps it from Claude's progress report, its totals summed from its phases. */
+const summary = (/** @type {{ title: string, agents: number, done: number, running: number, failed: number }[]} */ phases, current = null) => ({
+  phases, current,
+  agents: phases.reduce((sum, item) => ({ total: sum.total + item.agents, running: sum.running + item.running, done: sum.done + item.done, failed: sum.failed + item.failed }), { total: 0, running: 0, done: 0, failed: 0 }),
+});
+
+test('a workflow whose progress reported its agents shows their count, a dot per phase, and its phases on request', () => {
+  const html = render(activity([workflow({ workflowName: 'demo', tokens: 20_388, workflow: summary([{ title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], 'Say: say:1') })]));
+  expect(count(html, /class="workflow-card"/g)).toBe(1);
+  expect(html).toMatch(/Workflow · running · 2 agents · \d\d:\d\d · 20k tokens/);
+  expect(count(html, /class="status-dots"/g)).toBe(1);
+  expect([...html.matchAll(/<span data-status="(\w+)"/g)].map(match => match[1])).toEqual(['running']);
+  expect(html).toContain('<span class="status-dots" title="Say: say:1">'); // the agent the last report named, while it runs
+  expect(html).toContain('<details');
+  expect(html).toContain('>Phases<');
+  expect(html).toContain('>Say · 1/2<');
+  expect(html).not.toContain('Large');
+});
+
+test('each phase of a workflow has a dot of its status, in order, and a row in its list', () => {
+  const html = render(activity([workflow({ workflowName: 'release', workflow: summary([
+    { title: 'Plan', agents: 1, done: 1, running: 0, failed: 0 },
+    { title: 'Build', agents: 2, done: 1, running: 1, failed: 0 },
+    { title: 'Verify', agents: 2, done: 1, running: 0, failed: 1 },
+    { title: 'Ship', agents: 0, done: 0, running: 0, failed: 0 },
+  ]) })]));
+  expect([...html.matchAll(/<span data-status="(\w+)"/g)].map(match => match[1])).toEqual(['done', 'running', 'failed', 'pending']);
+  expect(html).toMatch(/Workflow · running · 5 agents · \d\d:\d\d</);
+  for (const row of ['>Plan · 1/1<', '>Build · 1/2<', '>Verify · 1/2<', '>Ship · 0/0<']) expect(html).toContain(row);
+});
+
+test('a workflow that ended names a phase it left running by its own end word, in the dot and its tooltip, and no current agent', () => {
+  const ended = (/** @type {'stopped' | 'failed'} */ status) => render(activity([workflow({ workflowName: 'demo', status, tokens: 20_388, workflow: summary([
+    { title: 'Say', agents: 2, done: 1, running: 1, failed: 0 },
+    { title: 'Check', agents: 0, done: 0, running: 0, failed: 0 },
+  ], 'Say: say:2') })]));
+  const card = (/** @type {string} */ html) => html.slice(html.indexOf('<section class="workflow-card"')); // past the heading's Nothing running
+  const stopped = card(ended('stopped'));
+  expect(stopped).toMatch(/Workflow · stopped · 2 agents · \d\d:\d\d · 20k tokens/);
+  expect([...stopped.matchAll(/<span data-status="(\w+)"/g)].map(match => match[1])).toEqual(['stopped', 'pending']);
+  expect(stopped).toContain('title="Say: stopped"');
+  expect(stopped).not.toContain('running');
+  expect(stopped).not.toContain('Say: say:2');
+  const failed = card(ended('failed'));
+  expect([...failed.matchAll(/<span data-status="(\w+)"/g)].map(match => match[1])).toEqual(['failed', 'pending']);
+  expect(failed).toContain('title="Say: failed"');
+  expect(failed).not.toContain('running');
+  expect(failed).not.toContain('Say: say:2');
+});
+
+test('a workflow whose agents have reported no spend yet, and a task that reported 0, show no token count', () => {
+  const html = render(activity([
+    workflow({ workflowName: 'demo', tokens: 0, workflow: summary([{ title: 'Say', agents: 2, done: 0, running: 2, failed: 0 }], 'Say: say:1') }),
+    task({ description: 'A command', taskType: 'local_bash', tokens: 0 }),
+  ]));
+  expect(html).toMatch(/Workflow · running · 2 agents · \d\d:\d\d</);
+  expect(html).toMatch(/Command · running · \d\d:\d\d</);
+  expect(html).not.toContain('0 tokens');
+});
+
+test('a workflow of more than 25 agents is badged Large; one agent reads in the singular', () => {
+  const fanOut = (/** @type {number} */ agents) => render(activity([workflow({ workflowName: 'fan-out', workflow: summary([{ title: 'Fan out', agents, done: 0, running: agents, failed: 0 }]) })]));
+  expect(fanOut(26)).toContain('>Large<');
+  expect(fanOut(26)).toContain('26 agents');
+  expect(fanOut(25)).not.toContain('Large');
+  expect(fanOut(1)).toMatch(/Workflow · running · 1 agent · /);
 });
 
 test('a finished workflow card falls back to its description, freezes its elapsed time, and offers no Stop', () => {
