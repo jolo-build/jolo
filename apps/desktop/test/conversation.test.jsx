@@ -342,13 +342,13 @@ describe('a text message', () => {
   const rows = (html) => [...html.matchAll(/<div class="message-tools">([\s\S]*?)<\/div>(?=<\/article>)/g)].map(match => match[1]);
   const exact = (/** @type {string} */ iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-  test('yours and the agent’s each end with a copy button and when they were sent, the exact time in its place on hover', () => {
+  test('yours and the agent’s each end with a copy button and when they were sent, the exact time as a tip above it on hover', () => {
     const createdAt = new Date(Date.now() - 3 * 60_000).toISOString();
     const found = rows(render(said({ id: 'asked', role: 'user', text: 'fix app.js', createdAt }), said({ createdAt })));
     expect(found).toHaveLength(2);
     for (const row of found) {
       expect(row).toStartWith('<button type="button" class="message-copy" aria-label="Copy message" title="Copy message">');
-      // No title: the browser's tooltip comes a second late. The exact time is in the element, shown by CSS on hover.
+      // No title: the browser's tooltip comes a second late. The exact time is in the element, shown by CSS as a tip on hover.
       const time = row.match(/<time class="message-time" dateTime="([^"]*)"><span class="message-time-ago">([^<]*)<\/span><span class="message-time-exact" aria-hidden="true">([^<]*)<\/span><\/time>$/);
       expect(time?.[1]).toBe(createdAt);
       expect(time?.[2]).toMatch(/^\d+m ago$/);
