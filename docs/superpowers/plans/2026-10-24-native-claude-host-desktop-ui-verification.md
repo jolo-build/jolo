@@ -39,3 +39,30 @@ Script: a copy of `jolo-delegated-child-guard.e2e/run3.js` (kept outside the rep
 | after the stop | the same three Claude pids alive (the process was not killed); no `sleep 60` left; the child's activity `idle` with the task `stopped`; durable `session.activity` sequence `working, working, background, idle`; `session.page.pendingDialogs` is `[]` |
 
 That is the sequence the Plan 2 UI renders: the task appears as a running row and on the activity line, Stop background work ends it, the line disappears, the delegation line in the parent reads `done`, and the wake reason names why the parent's wait returned. The dialog cards were exercised against the real binary in Plan 1's probe (`claude-dialogs.md`); here they are exercised against the fake Claude in the smoke above, whose protocol shape was taken from that probe.
+
+## Final checks after Tasks 13–26 (2026-10-25, commits 930a635 and 4fe497d)
+
+Twelve tasks followed Plan 2 at the owner's request (workflow agents and phases, the panel laid out like Claude Code's,
+per-agent lines and task detail, a square stop per task and a Workflow card in the chat, copy and time on messages,
+chat titles from the answerer's cheapest model with a shimmer and a typed title, the agent table, child tasks in the
+panel, activity history across processes with migration 0020, agent kind and model, one delegation line per child,
+task output on demand with the MCP line and the away summary, the stop taken off the composer's line). Each was
+reviewed on its own (Opus), with fix rounds where asked; a whole-branch review covered e3ef8a9..930a635 and its two
+Important findings (clients created chats already titled, so the model never named them; a task carried over from an
+earlier process showed Claude's raw error for its output) and eight Minors were fixed in 4fe497d, re-reviewed clean.
+
+- `bun scripts/typecheck.js`: 24 programs clean.
+- Full suite alone (`TMPDIR=/tmp/jt bun run test`): 1515 pass, 4 fail in 479 s on 930a635, and 1521 pass, 4 fail in
+  482 s on 4fe497d after the whole-branch review's fixes; the four are the known ones on this machine (tgrep needs
+  `rg`; packaging needs Bun 1.3.12; guest-credential EPIPE; run-dedup's fake storage).
+- `--background-work` smoke: green from a fresh build at each task (tasks, stop square, dialogs, force stop, workflow
+  card and table, output pane, MCP line, persistence across Force stop, Clear finished); `--delegation` smoke green
+  (child tasks in the panel, one line per child).
+- Default desktop smoke (`bun run desktop:smoke`): the sidebar-drag step passed this time; it stops at the known
+  "queued message removed" step (the queue smoke clicks Remove while the run still has its optimistic id — pre-existing
+  on main, not touched by this branch).
+- Real binary (Claude Code 2.1.304): probed `workflow_progress`, `send_now`, the one-shot title call
+  (`--setting-sources "" --tools "" --strict-mcp-config`, OAuth sign-in works, ≈$0.0002 and ~1 s per title),
+  `get_task_output` and `mcp_status` (docs/superpowers/specs/claude-task-output.md). Not probed: `away_summary`'s
+  payload and timing, a workflow's permission prompt text and reply text, output of agent/workflow tasks.
+- Schema: migration 0020 (`session_activity`) takes a database to version 20; the engine backs up before migrating.
