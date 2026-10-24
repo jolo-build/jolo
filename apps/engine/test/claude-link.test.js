@@ -643,7 +643,7 @@ test('a subagent\'s own command names the subagent as its parent, and the subage
   const registry = createHostedLinks({ log, onUnsolicited: () => false });
   const link = open(registry);
   await turn(link, 'nested-agent 300', { init: true });
-  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].progress !== null);
+  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].progress !== null && link.activity.tasks[0].model !== null);
   const [agent, command] = link.activity.tasks;
   expect(agent).toMatchObject({ taskId: 'agent-1', taskType: 'local_agent', subagentType: 'general-purpose', spawnDepth: 1, parentTaskId: null, backgrounded: true, description: 'Run the checks', progress: 'Running Run the checks', lastTool: 'Bash', model: 'claude-opus-5-5' });
   expect(command).toMatchObject({ taskId: 'cmd-1', taskType: 'local_bash', parentTaskId: 'agent-1', spawnDepth: null, backgrounded: false, description: 'Run the checks command', model: null });
@@ -1072,27 +1072,36 @@ test('a change still waiting to be reported when the process ends is reported be
   expect(reports).toHaveLength(1); // and not again after it
 });
 
-test('a background agent\'s model is learned from its own messages, kept bounded, and stays once it ended', async () => {
+test('a background agent\'s model is learned from its own messages, kept bounded, reported as progress, and stays once it ended', async () => {
   // Claude names a subagent's model only on the subagent's own messages: agent_id and the call it runs under on the envelope.
+  // The messages come a moment after the tasks start, and the end later still, so each is reported on its own.
   const script = `
     out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
     out({ type: 'system', subtype: 'task_started', task_id: 'agent-1', tool_use_id: 'toolu_a', task_type: 'local_agent', subagent_type: 'Explore', description: 'Explore the repo', is_backgrounded: true });
     out({ type: 'system', subtype: 'task_started', task_id: 'agent-2', tool_use_id: 'toolu_b', task_type: 'local_agent', description: 'Long names', is_backgrounded: true });
-    out({ type: 'assistant', agent_id: 'a1', parent_tool_use_id: 'toolu_a', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Looking.' }] } });
-    out({ type: 'assistant', agent_id: 'ax', parent_tool_use_id: 'toolu_unknown', message: { role: 'assistant', model: 'claude-haiku-5-5', content: [] } });
-    out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 7, content: [] } });
-    out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 'm'.repeat(200), content: [] } });
-    out({ type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'completed', summary: 'Explored' });
+    out({ type: 'system', subtype: 'task_started', task_id: 'cmd-1', tool_use_id: 'toolu_c', task_type: 'local_bash', description: 'A command', is_backgrounded: true });
+    setTimeout(() => {
+      out({ type: 'assistant', agent_id: 'a1', parent_tool_use_id: 'toolu_a', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Looking.' }] } });
+      out({ type: 'assistant', agent_id: 'ax', parent_tool_use_id: 'toolu_unknown', message: { role: 'assistant', model: 'claude-haiku-5-5', content: [] } });
+      out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 'm'.repeat(200), content: [] } });
+      out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 7, content: [] } });
+      out({ type: 'assistant', agent_id: 'a1', parent_tool_use_id: 'toolu_a', message: { role: 'assistant', model: '<synthetic>', content: [] } });
+      out({ type: 'assistant', agent_id: 'c1', parent_tool_use_id: 'toolu_c', message: { role: 'assistant', model: 'claude-sonnet-5-5', content: [] } });
+    }, 700); // well past the 250 ms coalesced tasks report, so the model change is a report of its own
+    setTimeout(() => out({ type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'completed', summary: 'Explored' }), 1600);
   `;
   const reports = [];
-  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => reports.push(reason) });
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => reports.push({ activity, reason }) });
   const link = openStub(registry, 'models', script);
   link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
-  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].status === 'completed' && link.activity.tasks[1].model !== null);
-  const [explore, other] = link.activity.tasks;
-  expect(explore).toMatchObject({ taskId: 'agent-1', subagentType: 'Explore', model: 'claude-opus-5-5', status: 'completed' }); // kept past its end
-  expect(other.model).toBe('m'.repeat(64)); // a number is no model; a long one is cut to WORKFLOW_MODEL_MAX
+  await waitFor(() => link.activity.tasks.length === 3 && link.activity.tasks[0].status === 'completed' && link.activity.tasks[1].model !== null);
+  const [explore, other, command] = link.activity.tasks;
+  expect(explore).toMatchObject({ taskId: 'agent-1', subagentType: 'Explore', model: 'claude-opus-5-5', status: 'completed' }); // kept past its end; Claude's synthetic messages name no model
+  expect(other.model).toBe('m'.repeat(64)); // a long one is cut to WORKFLOW_MODEL_MAX, and a number after it is no model
+  expect(command.model).toBeNull(); // only an agent has a model
   expect(link.activity.tasks.some((t) => t.model === 'claude-haiku-5-5')).toBe(false); // a call no task runs under changes nothing
+  // The model went out as progress, on its own, before the agent's end.
+  expect(reports.some(({ activity, reason }) => reason === 'progress' && activity.tasks[0].model === 'claude-opus-5-5' && activity.tasks[0].status === 'running')).toBe(true);
   expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
-  await registry.closeAll();
+  await link.close({ reason: 'test', graceful: false }); // the stub answers no stop_task, so a graceful close would wait out its grace
 });

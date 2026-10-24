@@ -58,6 +58,18 @@ export function parseDelegationCall(message) {
   return { name, args, delegation: readResult(result), error: null };
 }
 
+/**
+ * Which child a delegation call is about: the delegation id its result names, else (a status or cancel call) the id it
+ * was asked about; and the title a start was given, else the title its result names. Either is null when unknown.
+ * @param {NonNullable<ReturnType<typeof parseDelegationCall>>} call
+ * @returns {{ id: string | null, title: string | null }}
+ */
+export function delegationChild(call) {
+  const id = call.delegation?.id ?? (call.name === 'delegate_task' ? undefined : call.args.delegationId);
+  const title = (call.name === 'delegate_task' ? call.args.title : undefined) ?? call.delegation?.title;
+  return { id: typeof id === 'string' && id ? id : null, title: typeof title === 'string' && title ? title : null };
+}
+
 // What a `delegation.list` row says better than a result: it reads no output, so its `partial` is always false.
 const LIVE = ['id', 'sessionId', 'title', 'state', 'activity', 'done'];
 

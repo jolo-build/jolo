@@ -239,6 +239,59 @@ test('a delegation call still waiting for its result spins, names the child from
   expect(guessed).not.toContain('>Open<');
 });
 
+describe('a child Jolo delegated reads as one line, however many calls were about it', () => {
+  /** A delegation call's tool message: its head line, then its result (none while it waits). */
+  const call = (/** @type {string} */ id, /** @type {string} */ text, status = 'complete') => ({ id, role: 'tool', kind: 'tool', runId: 'run', text, status, renderedBytes: 0, committedBytes: 0 });
+  const result = (/** @type {Record<string, any>} */ fields) => JSON.stringify({ delegation: { id: 'del_1', sessionId: 'ses_c', title: 'Greet user', state: 'queued', activity: null, done: false, partial: false, ...fields } });
+  const start = call('start', `mcp__jolo__delegate_task {"modelAlias":"m1","title":"Greet user","prompt":"x"}\n${result({})}\n`);
+  const wait = call('wait', `mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":600000}\n${result({ state: 'completed', activity: 'idle', done: true, wakeReason: 'done' })}\n`);
+  const live = new Map([['del_1', { id: 'del_1', sessionId: 'ses_c', title: 'Greet user', state: 'completed', activity: 'idle', done: true, partial: false }]]);
+  const show = (/** @type {PartialMessage[]} */ messages, delegations = live) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map() }, hasProject: true, delegations }))} />);
+  const blocks = (/** @type {string} */ html) => html.match(/class="delegation-block"/g)?.length ?? 0;
+
+  test('a wait on a child whose line is loaded joins the actions, and the child\'s line takes the reason the wait ended', () => {
+    const html = show([start, wait]);
+    expect(blocks(html)).toBe(1);
+    expect(html).toContain('1 action');
+    expect(html).toContain('mcp__jolo__delegation_status'); // nothing lost: the call is one of the actions
+    expect(html).toContain('<span class="delegation-words" title="Answered · done · woke: finished">Answered · done · woke: finished</span>');
+    // The newest wait's reason wins.
+    const again = call('again', `mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":1000}\n${result({ state: 'completed', activity: 'background', done: false, wakeReason: 'timeout' })}\n`);
+    expect(show([start, again, wait])).toContain('woke: finished');
+    expect(show([start, wait, again])).toContain('woke: wait timed out');
+  });
+
+  test('a wait whose child\'s line is not loaded keeps a line of its own, so the child stays reachable', () => {
+    const html = show([wait]);
+    expect(blocks(html)).toBe(1);
+    expect(html).not.toContain('activity-group');
+    expect(html).toMatch(/<button type="button"[^>]*>Open<\/button>/);
+  });
+
+  test('a cancel after the start joins the actions, and the child\'s line says it stopped, from the live row', () => {
+    const cancel = call('cancel', `mcp__jolo__delegation_cancel {"delegationId":"del_1"}\n${result({ state: 'cancelled', activity: 'idle' })}\n`);
+    const html = show([start, cancel], new Map([['del_1', { id: 'del_1', sessionId: 'ses_c', title: 'Greet user', state: 'cancelled', activity: 'idle', done: false, partial: false }]]));
+    expect(blocks(html)).toBe(1);
+    expect(html).toContain('1 action');
+    expect(html).toContain('<span class="delegation-words" title="Stopped">Stopped</span>');
+  });
+
+  test('a start still waiting for its result is found by its title; another child of the same title is not folded into it', () => {
+    const pending = call('start', 'mcp__jolo__delegate_task {"modelAlias":"m1","title":"Greet user","prompt":"x"}\n', 'streaming');
+    expect(blocks(show([pending, wait]))).toBe(1);
+    const other = call('other', `mcp__jolo__delegation_status {"delegationId":"del_2","waitMs":600000}\n${JSON.stringify({ delegation: { id: 'del_2', sessionId: 'ses_d', title: 'Greet user', state: 'completed', activity: 'idle', done: true, partial: false } })}\n`);
+    expect(blocks(show([start, other]))).toBe(2);
+  });
+
+  test('a start that failed claims no line: a wait for another child of the same title keeps its own', () => {
+    const failed = call('failed', 'mcp__jolo__delegate_task {"modelAlias":"m1","title":"Greet user","prompt":"x"}\nno model is selected for delegation\n');
+    const wait0 = call('wait0', `mcp__jolo__delegation_status {"delegationId":"del_0","waitMs":600000}\n${JSON.stringify({ delegation: { id: 'del_0', sessionId: 'ses_0', title: 'Greet user', state: 'completed', activity: 'idle', done: true, partial: false, wakeReason: 'done' } })}\n`);
+    const html = show([failed, wait0]);
+    expect(blocks(html)).toBe(2);
+    expect(html).toContain('no model is selected for delegation');
+  });
+});
+
 describe('a Workflow call', () => {
   /** The call's tool message: the head line the engine shows for Claude's Workflow tool, then its reply. */
   const workflowTool = (/** @type {string} */ id, /** @type {string} */ name, reply = 'Workflow started in the background (task wf-1).', runId = 'run') => ({

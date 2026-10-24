@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { delegationWords, liveDelegation, parseDelegationCall, refreshOnChildEvents, touchesChild } from '../src/renderer/delegation.js';
+import { delegationChild, delegationWords, liveDelegation, parseDelegationCall, refreshOnChildEvents, touchesChild } from '../src/renderer/delegation.js';
 
 const head = 'mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":600000}';
 // A result cut mid-`output`, as the engine shows it: at most 600 characters, then `…`.
@@ -101,3 +101,14 @@ test('child events refresh the delegations once per burst, and not after the lis
   expect(loads).toBe(1);
 });
 
+
+test('which child a call is about: the delegation id its result names, else its arguments\' id; the title a start was given, else its result\'s', () => {
+  const start = parseDelegationCall('mcp__jolo__delegate_task {"modelAlias":"m1","title":"Greet user","prompt":"x"}\n{"delegation":{"id":"del_1","title":"Greet user","state":"queued"}}\n');
+  expect(delegationChild(start)).toEqual({ id: 'del_1', title: 'Greet user' });
+  const pending = parseDelegationCall('mcp__jolo__delegate_task {"modelAlias":"m1","title":"Greet user","prompt":"x"}\n');
+  expect(delegationChild(pending)).toEqual({ id: null, title: 'Greet user' });
+  const wait = parseDelegationCall('mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":600000}\n');
+  expect(delegationChild(wait)).toEqual({ id: 'del_1', title: null });
+  const answered = parseDelegationCall('jolo/delegation_cancel {"delegationId":"del_1"}\n{"delegation":{"id":"del_1","title":"Greet user","state":"cancelled"}}\n');
+  expect(delegationChild(answered)).toEqual({ id: 'del_1', title: 'Greet user' });
+});

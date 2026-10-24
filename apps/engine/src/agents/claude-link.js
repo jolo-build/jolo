@@ -508,15 +508,18 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   };
   /**
    * A background agent's model: Claude names it only on the agent's own messages (`agent_id` and the call it runs under,
-   * `parent_tool_use_id`, on the envelope), so the task started for that call takes it. It is progress, not a change of
-   * the tasks: it goes out with the next report.
+   * `parent_tool_use_id`, on the envelope), so the agent task started for that call takes it; a command or other task
+   * has none. A model in angle brackets is none either: Claude Code's own synthetic messages say `<synthetic>`. It is
+   * progress, not a change of the tasks: it goes out with the next report.
    */
   const trackModel = (message) => {
     if (message.type !== 'assistant' || !message.agent_id || message.parent_tool_use_id == null || typeof message.message?.model !== 'string') return;
+    if (message.message.model.startsWith('<')) return;
     const taskId = taskOfCall.get(message.parent_tool_use_id);
     const task = taskId ? tasks.get(taskId) : undefined;
+    if (!task || !(task.taskType === 'local_agent' || task.subagentType)) return;
     const model = textOf(message.message.model, WORKFLOW_MODEL_MAX);
-    if (!task || !model || task.model === model) return;
+    if (!model || task.model === model) return;
     task.model = model;
     activityChanged('progress');
   };

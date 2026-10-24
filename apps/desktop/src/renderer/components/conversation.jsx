@@ -7,7 +7,7 @@ import { DiffLines } from './diff-lines.jsx';
 import { JoloLogo } from "./brand.jsx";
 import { basename, runLabel, screenshotArtifactId } from "../presentation.js";
 import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
-import { delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
+import { delegationChild, delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
 import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
 import { parseWorkflowCall, workflowTasksFor } from "../workflow-call.js";
 import { TERMINAL } from "@jolo/client/run-state";
@@ -157,14 +157,16 @@ const SubagentBlock = memo(function SubagentBlock(/** @type {SubagentBlockProps}
 /**
  * One of Jolo's delegation calls, on its own line where the call is: the child it is about and what that child is doing,
  * with a way into the child's conversation, and a spinner while the call itself is still going (a wait, say). The live
- * `delegation.list` row wins over the result, which the engine cuts short; opening it shows the raw call.
- * @typedef {{ text: string, status: string, delegations: Map<string, any>, onOpenSession?: (sessionId: string) => void }} DelegationBlockProps
+ * `delegation.list` row wins over the result, which the engine cuts short; opening it shows the raw call. `wakeReason` is
+ * why the newest later wait on the same child ended, when that wait joined the actions instead of a line of its own.
+ * @typedef {{ text: string, status: string, delegations: Map<string, any>, wakeReason?: string | null, onOpenSession?: (sessionId: string) => void }} DelegationBlockProps
  */
-const DelegationBlock = memo(function DelegationBlock(/** @type {DelegationBlockProps} */ { text, status, delegations, onOpenSession }) {
+const DelegationBlock = memo(function DelegationBlock(/** @type {DelegationBlockProps} */ { text, status, delegations, wakeReason = null, onOpenSession }) {
   const call = useMemo(() => parseDelegationCall(text), [text]);
   const [expanded, setExpanded] = useState(false);
   if (!call) return null;
-  const child = liveDelegation(call, delegations);
+  /** @type {Record<string, any>} */
+  const child = { ...liveDelegation(call, delegations), ...(wakeReason ? { wakeReason } : {}) };
   const title = child.title || call.args.title;
   const words = delegationWords(child) || call.error || '';
   const working = status === "streaming";
@@ -401,15 +403,34 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   const groups = [];
   /** @type {(import('../workflow-call.js').WorkflowCallSlot & { id: string })[]} */
   const workflowCalls = [];
+  // Each child's line is its delegate_task call's: by the delegation id its result names, else, while it has no result,
+  // by its title. A later status or cancel call about a child whose line is here joins the actions instead of repeating
+  // it, and hands the line the reason its wait ended; one whose child's line is not loaded keeps a line of its own.
+  /** @type {{ byId: Map<string, any>, byTitle: Map<string, any> }} */
+  const childLines = { byId: new Map(), byTitle: new Map() };
   for (const message of messages) {
     // A provider may complete a thinking block without a displayable summary.
     // Keep pending artifact loads visible, but never leave an empty disclosure.
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
     const workflowCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
+    const delegationCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseDelegationCall(message.text) : null;
+    let childLine = null;
+    if (delegationCall && delegationCall.name !== "delegate_task") {
+      const { id, title } = delegationChild(delegationCall);
+      childLine = (id && childLines.byId.get(id)) || (title && childLines.byTitle.get(title)) || null;
+      if (childLine && delegationCall.delegation?.wakeReason) childLine.wakeReason = delegationCall.delegation.wakeReason;
+    }
     // The agent's own subagents stand on their own line, so their work shows without opening the activity.
     if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
     // So do Jolo's delegation calls: one line for the child they are about, instead of a raw JSON tool block.
-    else if (message.kind === "tool" && !message.evicted && !message.loadError && parseDelegationCall(message.text)) groups.push({ type: "delegation", id: message.id, runId: message.runId, message });
+    else if (delegationCall && !childLine) {
+      groups.push({ type: "delegation", id: message.id, runId: message.runId, message, wakeReason: null });
+      if (delegationCall.name === "delegate_task") {
+        const { id, title } = delegationChild(delegationCall);
+        if (id) childLines.byId.set(id, groups.at(-1));
+        else if (title && !delegationCall.error) childLines.byTitle.set(title, groups.at(-1)); // a start that failed started nothing
+      }
+    }
     // And Claude's Workflow calls: a compact card for the workflow, with its task when the activity still has it.
     else if (workflowCall) {
       groups.push({ type: "workflow", id: message.id, runId: message.runId, message, call: workflowCall });
@@ -466,7 +487,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         }
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
-        if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} onOpenSession={onOpenSession} />;
+        if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} wakeReason={group.wakeReason} onOpenSession={onOpenSession} />;
         if (group.type === "workflow") return <WorkflowCallBlock key={group.id} call={group.call} task={workflowTasks.get(group.id) ?? null} onOpenActivity={onOpenActivity} />;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} guest={guestFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
