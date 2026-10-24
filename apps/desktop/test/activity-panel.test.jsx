@@ -25,16 +25,20 @@ const squares = (/** @type {string} */ html, /** @type {string} */ title) => {
 };
 /** What a phase's squares say in words, found by its title: their text alternative. */
 const squaresLabel = (/** @type {string} */ html, /** @type {string} */ title) => html.match(new RegExp(`<div class="phase-head"><span>${title}</span><span>[^<]*</span></div><div class="phase-squares" role="img" aria-label="([^"]*)">`))?.[1] ?? null;
+/** A running task's stop control, as a pattern: a square icon button named after the task, holding the stop icon. */
+const stopSquare = (/** @type {string} */ name) => `<button type="button" class="icon-button stop-task" aria-label="Stop ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" title="Stop"><svg[^>]*><path d="M6 6h12v12H6Z"></path></svg></button>`;
+/** Every task's stop control in the markup. */
+const STOP_SQUARES = /<button type="button" class="icon-button stop-task" aria-label="Stop [^"]*" title="Stop"><svg[^>]*><path d="M6 6h12v12H6Z"><\/path><\/svg><\/button>/g;
 /** The part of the panel past its heading (whose `Nothing running` would otherwise count). */
 const card = (/** @type {string} */ html) => html.slice(html.indexOf('<li class="workflow-card"'));
 
-test('a workflow is one card: its name and elapsed time with a Stop while it runs, then Workflow and its status, then its tokens', () => {
+test('a workflow is one card: its name and elapsed time with a stop square while it runs, then Workflow and its status, then its tokens', () => {
   const html = render(activity([workflow({ workflowName: 'api-plan-review', description: 'Workflow api-plan-review', runId: 'wf-1-run', tokens: 1_200_000 })]));
   expect(count(html, /class="workflow-card"/g)).toBe(1);
-  expect(html).toMatch(/<li class="workflow-card" data-state="running"><div class="item-head"><span class="workflow-title" title="api-plan-review">api-plan-review<\/span><span class="activity-elapsed">\d\d:\d\d<\/span><button type="button">Stop<\/button><\/div>/);
+  expect(html).toMatch(new RegExp(`<li class="workflow-card" data-state="running"><div class="item-head"><span class="workflow-title" title="api-plan-review">api-plan-review</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${stopSquare('api-plan-review')}</div>`));
   expect(html).toContain('<div class="card-meta"><span>Workflow</span><span>Running</span></div>');
   expect(html).toContain('<div class="card-meta"><span>1.2M tokens</span></div>');
-  expect(count(html, /<button[^>]*>Stop<\/button>/g)).toBe(1);
+  expect(count(html, STOP_SQUARES)).toBe(1);
   // Claude Code describes a workflow's task `Workflow <name>`, which no paragraph repeats; and with no progress report of
   // its agents yet: no agent count, phases, squares or Large badge.
   for (const absent of ['workflow-description', 'Stop run', 'agent', 'Large', 'data-status=', 'Phases', 'task-row', 'finished-tasks']) expect(html).not.toContain(absent);
@@ -63,7 +67,7 @@ test('a finished workflow card reads as Claude Code’s: Workflow Completed, its
   expect(squares(html, 'Synthesize')).toEqual(['done']);
   expect(squaresLabel(html, 'Read')).toBe('5 done');
   expect(squaresLabel(html, 'Synthesize')).toBe('1 done');
-  expect(html).not.toMatch(/<button[^>]*>Stop<\/button>/);
+  expect(html).not.toContain('stop-task');
   expect(html).not.toContain('Synthesize: synthesize:1'); // the agent the last report named, only while the workflow runs
 });
 
@@ -132,12 +136,12 @@ test('a workflow of more than 25 agents is badged Large beside its status; one a
   expect(fanOut(1)).toContain('<span>1 agent</span>');
 });
 
-test('a finished workflow card falls back to its description, which it does not repeat, freezes its elapsed time, and offers no Stop', () => {
+test('a finished workflow card falls back to its description, which it does not repeat, freezes its elapsed time, and offers no stop', () => {
   const html = render(activity([workflow({ description: 'Workflow review', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:09:41.000Z' })]));
   expect(html).toContain('<span class="workflow-title" title="Workflow review">Workflow review</span><span class="activity-elapsed">09:41</span></div>');
   expect(html).toContain('<div class="card-meta"><span>Workflow</span><span>Completed</span></div>');
   expect(html).not.toContain('workflow-description');
-  expect(html).not.toMatch(/<button[^>]*>Stop<\/button>/);
+  expect(html).not.toContain('stop-task');
   expect(html).not.toContain('tokens');
 });
 
@@ -162,7 +166,7 @@ test('nothing finished leaves the Finished section out', () => {
   expect(html).not.toContain('Finished');
 });
 
-test('a task row says its description and elapsed time, a Stop while it runs, then its kind, status, tokens and tool uses', () => {
+test('a task row says its description and elapsed time, a stop square while it runs, then its kind, status, tokens and tool uses', () => {
   const html = render(activity([
     task({ description: 'Sleep for 60 seconds', runId: '0mvll0x40-1842e72b', taskType: 'local_bash' }),
     task({ description: 'D20: drop the MFA keys from the wire', taskType: 'local_agent', status: 'completed', tokens: 137_500, toolUses: 6, startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:01:57.000Z' }),
@@ -172,14 +176,34 @@ test('a task row says its description and elapsed time, a Stop while it runs, th
   ]));
   expect(count(html, /class="task-row"/g)).toBe(5);
   expect(html).not.toContain('workflow-card');
-  expect(html).toMatch(/<li class="task-row" data-state="running"><div class="item-head"><span class="activity-task-name" title="Sleep for 60 seconds">Sleep for 60 seconds<\/span><span class="activity-elapsed">\d\d:\d\d<\/span><button type="button">Stop<\/button><\/div><div class="activity-task-meta">Command · Running<\/div><\/li>/);
+  expect(html).toMatch(new RegExp(`<li class="task-row" data-state="running"><div class="item-head"><span class="activity-task-name" title="Sleep for 60 seconds">Sleep for 60 seconds</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${stopSquare('Sleep for 60 seconds')}</div><div class="activity-task-meta">Command · Running</div></li>`));
   // formatTokens reads 137.5k as 138k, as the activity line does.
   expect(html).toContain('<span class="activity-elapsed">01:57</span></div><div class="activity-task-meta">Agent · Completed · 138k tokens · 6 tool uses</div>');
   expect(html).toContain('<div class="activity-task-meta">Agent · Running · 950 tokens · 1 tool use</div>');
   expect(html).toContain('<li class="task-row" data-state="stopped">');
   expect(html).toContain('<div class="activity-task-meta">Task · Stopped</div>');
   expect(html).toContain('<div class="activity-task-meta">Task · Failed</div>');
-  expect(count(html, /<button[^>]*>Stop<\/button>/g)).toBe(2);
+  expect(count(html, STOP_SQUARES)).toBe(2);
+});
+
+test('a running task stops by a square at the top right of its row or card, named after the task; a finished one has none', () => {
+  const html = render(activity([
+    task({ description: 'Run the checks', taskType: 'local_bash', startedAt: '2026-10-24T00:00:02.000Z' }),
+    workflow({ workflowName: 'review-changes', description: 'Workflow review-changes', startedAt: '2026-10-24T00:00:01.000Z' }),
+    task({ description: 'Lint', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z' }),
+    workflow({ workflowName: 'kb-check', status: 'stopped', startedAt: '2026-10-24T00:00:00.000Z' }),
+  ]));
+  // The square is the head's last child, after the elapsed time: the row's description, the card's workflow name.
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${stopSquare('Run the checks')}</div><div class="activity-task-meta">`));
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${stopSquare('review-changes')}</div><div class="card-meta">`));
+  expect(count(html, STOP_SQUARES)).toBe(2);
+  // Under Finished: no button at all on the row or the card.
+  const finished = html.slice(html.indexOf('class="finished-tasks"'));
+  expect(finished).toContain('>Lint<');
+  expect(finished).toContain('>kb-check<');
+  expect(finished.replace(/<summary>.*?<\/summary>/, '')).not.toContain('<button');
+  // The heading's Stop background work stays a text button.
+  expect(html).toMatch(/<button type="button">Stop background work<\/button>/);
 });
 
 test('a running task shows what it does now: its progress line under its status, else the tool it last used on the status line', () => {

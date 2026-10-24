@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, agentStatus, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, agentStatus, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, squaresInWords, statusWord, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
@@ -166,6 +166,13 @@ test("an agent still reported running on a workflow that ended takes the workflo
   expect(phaseSquares(working, 'stopped')).toEqual(['done', 'stopped', 'pending']);
   expect(phaseSquares(working, 'failed')).toEqual(['done', 'failed', 'pending']);
   expect(phaseSquares(working, 'completed')).toEqual(['done', 'done', 'pending']);
+});
+
+test("a task's status reads as a word, and squares read as counts of each status they have, in the order they first appear", () => {
+  expect(['running', 'completed', 'stopped', 'failed'].map(status => statusWord(/** @type {TaskRecord['status']} */ (status)))).toEqual(['Running', 'Completed', 'Stopped', 'Failed']);
+  expect(squaresInWords(['done', 'running', 'pending', 'pending'])).toBe('1 done, 1 running, 2 pending');
+  expect(squaresInWords(['stopped', 'stopped'])).toBe('2 stopped');
+  expect(squaresInWords([])).toBe('');
 });
 
 test("a workflow's summary is known only once its progress reported its agents, and Large past the threshold", () => {

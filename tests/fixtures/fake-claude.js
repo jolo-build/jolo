@@ -463,14 +463,19 @@ async function turn(prompt, images = [], uuid = null) {
     // description, with the running sum of the agents' tokens in usage: both agents of phase Say start at once, say:1 is
     // done halfway through <ms>, both are done at <ms>, when it completes with a summary and an output file, as the probe's
     // notice did; all on timers of its own so that stop_task ends it. A moment after it completes, a turn of its own
-    // reports it, as "background" does.
+    // reports it, as "background" does. The turn calls the Workflow tool as Claude Code does, a script run inline whose
+    // meta names the workflow, around the task's start, and the tool answers that it started in the background. The real
+    // binary asks permission for the call first; this scenario does not (the permission path is covered elsewhere and is
+    // not what it is about).
     const [name, ms] = [match[1], Number(match[2])];
     // Every task has an id of its own: the first workflow of a process is wf-1, the next wf-2, and so on.
     const n = ++workflows;
     const [taskId, runId, toolUseId] = [`wf-${n}`, `wf-${n}-run`, `toolu_wf_${n}`];
     say("Workflow started.");
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Workflow", input: { script: `export const meta = {\n  name: '${name}',\n  description: 'Workflow ${name}',\n  phases: [{ title: 'Say' }],\n}\nphase('Say')\nawait parallel([1, 2].map(index => () => agent(\`Reply with exactly: agent \${index} ok\`, { label: \`say:\${index}\` })))\n` } }] }, session_id: sessionId });
     startTask(taskId);
     out({ type: "system", subtype: "task_started", task_id: taskId, run_id: runId, tool_use_id: toolUseId, task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Workflow started in the background (task ${taskId}).` }] }, session_id: sessionId });
     const agent = (index, state, done = {}) => ({ type: "workflow_agent", index, label: `say:${index}`, phaseIndex: 1, phaseTitle: "Say", agentId: `agent-${index}`, model: "claude-fable-5-1", state, attempt: 1, promptPreview: `Reply with exactly: agent ${index} ok`, ...done });
     const finished = (index) => ({ tokens: 20388, toolCalls: 0, durationMs: ms / 2, resultPreview: `agent ${index} ok` });
     const progress = (current, usage, agents) => out({ type: "system", subtype: "task_progress", task_id: taskId, run_id: runId, tool_use_id: toolUseId, description: `Say: ${current}`, last_tool_name: current, summary: `Workflow ${name}`, usage, workflow_progress: [{ type: "workflow_phase", index: 1, title: "Say" }, ...agents], session_id: sessionId });

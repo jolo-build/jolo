@@ -419,6 +419,16 @@ details.block.delegation-details summary .delegation-title { flex: 0 1 auto; col
 details.block.delegation-details summary .delegation-words { flex: 0 3 auto; }
 .delegation-open { flex: none; padding: 0 6px; margin-right: -6px; font-size: 12px; color: var(--muted); }
 .delegation-open:hover, .delegation-open:focus-visible { color: var(--text); }
+/* A Workflow call is a compact card where the call is, as Claude Code's transcript shows one: its name with a chevron
+   into the Activity panel, its kind, agents and elapsed time muted, and a square per agent; plain, nothing lit. */
+.workflow-call { display: flex; flex-direction: column; gap: 6px; max-width: 440px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.workflow-call-head { display: flex; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 0; border-radius: 0; text-align: left; }
+.workflow-call-head:hover { background: transparent; }
+.workflow-call-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text); }
+.workflow-call-head .activity-disclosure { flex: none; }
+.workflow-call-meta { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.workflow-call-meta > span { flex: none; white-space: nowrap; }
+.workflow-call-meta > .workflow-call-reply { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 /* Find in page: a small bar under the header, gone the moment it closes; the matches are highlights, not markup. */
 .find-bar { position: absolute; top: 10px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }
@@ -810,7 +820,8 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 /* The sidebar's task rows carry task-row too: each rule here names the panel or a class only the panel uses. */
 .activity-panel .item-head { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
 .activity-panel .item-head > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-panel .item-head button { font-size: 11px; padding: 2px 7px; }
+/* A running task's stop: a square icon at the head's right end, muted like the heading's Clear finished. */
+.activity-panel .item-head .stop-task { flex: none; padding: 4px; color: var(--muted); }
 .activity-elapsed, .activity-panel .card-meta, .activity-task-meta, .phase-head { color: var(--muted); font-variant-numeric: tabular-nums; }
 .activity-elapsed { flex: none; font-size: 12px; }
 .workflow-card { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }

@@ -1,39 +1,32 @@
 import { useEffect, useReducer, useState } from 'react';
-import { agentStatus, agentsByPhase, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
+import { agentStatus, agentsByPhase, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
 import { modelLabel } from '../model-options.js';
 import { Icon } from './icon.jsx';
 import { Modal } from './modal.jsx';
 
 /** @typedef {import('../activity.js').TaskRecord} TaskRecord */
 
-const WORDS = { running: 'Running', completed: 'Completed', stopped: 'Stopped', failed: 'Failed' };
 /** A workflow agent's status in words (see agentStatus). */
 const AGENT_WORDS = { running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped', pending: 'Pending' };
 const elapsed = (/** @type {string} */ startedAt, /** @type {string | null} */ endedAt, /** @type {number} */ now) => formatElapsed((endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt));
 /** Unknown usage is left out, never shown as 0 tokens (spec §2); so is a 0, which says no spend was reported yet. */
 const tokens = (/** @type {number | null} */ count) => !count ? null : `${formatTokens(count)} tokens`;
 const meta = (/** @type {(string | null)[]} */ parts) => parts.filter(Boolean).join(' · ');
-/** A phase's squares in words, their text alternative: `1 done, 1 running, 2 pending`, leaving out a status none has. */
-const inWords = (/** @type {string[]} */ squares) => {
-  /** @type {Map<string, number>} */
-  const counts = new Map();
-  for (const status of squares) counts.set(status, (counts.get(status) ?? 0) + 1);
-  return [...counts].map(([status, count]) => `${count} ${status}`).join(', ');
-};
 
 /** Which phase of which workflow card is open, as the panel keeps it: the task's id and the phase's position. */
 export const phaseKey = (/** @type {string} */ taskId, /** @type {number} */ index) => `${taskId}\u0000${index}`;
 
 /**
  * A card's or a row's first line: its name (after `↳` when it is drawn under the task that started it), its elapsed time
- * (frozen once it ended), and a Stop while it runs.
+ * (frozen once it ended), and while it runs a square stop at its right end, as Claude Code's own panel has, named after
+ * the task for assistive technology.
  * @param {{ task: TaskRecord, name: string, nested?: boolean, className: string, now: number, onStopTask: (taskId: string) => void }} props
  */
 function ItemHead({ task, name, nested = false, className, now, onStopTask }) {
   return <div className="item-head">
     <span className={className} title={name}>{nested && <span className="activity-nest" aria-hidden="true">↳ </span>}{name}</span>
     <span className="activity-elapsed">{elapsed(task.startedAt, task.endedAt, now)}</span>
-    {task.status === 'running' && <button type="button" onClick={() => onStopTask(task.taskId)}>Stop</button>}
+    {task.status === 'running' && <button type="button" className="icon-button stop-task" aria-label={`Stop ${name}`} title="Stop" onClick={() => onStopTask(task.taskId)}><Icon name="stop" size={14} /></button>}
   </div>;
 }
 
@@ -60,7 +53,7 @@ function TaskRow({ task, nested, now, onStopTask }) {
   const detail = taskDetail(task);
   return <li className="task-row" data-state={task.status} data-nested={nested ? '' : undefined}>
     <ItemHead task={task} name={task.description} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} />
-    <div className="activity-task-meta">{meta([taskKind(task), WORDS[task.status], tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
+    <div className="activity-task-meta">{meta([taskKind(task), statusWord(task.status), tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
     {detail.now && <div className="activity-now" title={detail.now}>{detail.now}</div>}
     <Ending detail={detail} />
   </li>;
@@ -102,7 +95,7 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
   const described = task.description !== name && task.description !== `Workflow ${name}` ? task.description : '';
   return <li className="workflow-card" data-state={task.status} data-nested={nested ? '' : undefined}>
     <ItemHead task={task} name={name} nested={nested} className="workflow-title" now={now} onStopTask={onStopTask} />
-    <div className="card-meta"><span>Workflow</span><span>{WORDS[task.status]}</span>{large && <span className="plan-mark">Large</span>}</div>
+    <div className="card-meta"><span>Workflow</span><span>{statusWord(task.status)}</span>{large && <span className="plan-mark">Large</span>}</div>
     {(agents !== null || spent) && <div className="card-meta">{agents !== null && <span>{plural(agents, 'agent')}</span>}{spent && <span>{spent}</span>}</div>}
     {described && <p className="workflow-description">{described}</p>}
     {phases.length > 0 && <div className="workflow-phases" title={task.status === 'running' ? current ?? undefined : undefined}>
@@ -111,7 +104,7 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
         const squares = phaseSquares(phase, task.status);
         const state = workflowPhaseStatus(phase, task.status);
         const count = `${phase.done}/${phase.agents}`;
-        const blocks = squares.length > 0 && <div className="phase-squares" role="img" aria-label={inWords(squares)}>{squares.map((status, square) => <span key={square} data-status={status} />)}</div>;
+        const blocks = squares.length > 0 && <div className="phase-squares" role="img" aria-label={squaresInWords(squares)}>{squares.map((status, square) => <span key={square} data-status={status} />)}</div>;
         const listed = agentsOf?.(phase);
         if (!listed?.length) return <div key={index} className="workflow-phase" data-state={state}><div className="phase-head"><span>{phase.title}</span><span>{count}</span></div>{blocks}</div>;
         const key = phaseKey(task.taskId, index);
@@ -146,7 +139,7 @@ export function ForceStopDialog({ onConfirm, onClose }) {
 
 /**
  * The conversation's background work (D2), as Claude Code's own panel lists it: the running tasks, then the finished ones
- * under `Finished N`, each newest first, a workflow as a card and any other task as a row, each running one with a Stop,
+ * under `Finished N`, each newest first, a workflow as a card and any other task as a row, each running one with a stop square,
  * and a task started by another of the same list drawn under it (see nestTasks).
  * Clear finished hides the finished tasks listed at that moment (`cleared`, which the pane keeps). A Stop background
  * work that left some of its tasks running offers `Force stop`, which asks the pane to confirm closing the process; tasks

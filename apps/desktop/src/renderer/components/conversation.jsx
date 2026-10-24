@@ -1,5 +1,5 @@
 import { modelLabel } from '../model-options.js';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Markdown } from "./markdown.jsx";
 import { Icon } from "./icon.jsx";
 import { diffSummary } from "../diff-lines.js";
@@ -8,6 +8,9 @@ import { JoloLogo } from "./brand.jsx";
 import { basename, runLabel, screenshotArtifactId } from "../presentation.js";
 import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
 import { delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
+import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
+import { parseWorkflowCall, workflowTasksFor } from "../workflow-call.js";
+import { TERMINAL } from "@jolo/client/run-state";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
@@ -172,6 +175,41 @@ const DelegationBlock = memo(function DelegationBlock(/** @type {DelegationBlock
   </div>;
 });
 
+/**
+ * One of Claude's Workflow calls, as a compact card where the call is, as Claude Code's own transcript shows one: the
+ * workflow's name, then `Workflow`, its agents and elapsed time (and its end word once it ended), then a square per agent
+ * across all its phases in order. The head opens the Activity panel, where the workflow's phases, agents and stop are;
+ * the card has no raw view and no stop of its own. With no task of its name (one of an earlier process, or a call that
+ * failed), it says the first line of the tool's reply instead, the whole of it on hover. The elapsed time moves once a
+ * second while the workflow runs, and nothing ticks otherwise.
+ * @typedef {{ call: { name: string | null, reply: string }, task: import('../activity.js').TaskRecord | null, onOpenActivity?: () => void }} WorkflowCallBlockProps
+ */
+const WorkflowCallBlock = memo(function WorkflowCallBlock(/** @type {WorkflowCallBlockProps} */ { call, task, onOpenActivity }) {
+  const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
+  const running = task?.status === 'running';
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  const name = task?.workflowName ?? call.name ?? 'Workflow';
+  const summary = task ? workflowSummary(task) : null;
+  const squares = task ? summary.phases.flatMap(phase => phaseSquares(phase, task.status)) : [];
+  return <div className="workflow-call" data-state={task?.status ?? 'unknown'}>
+    <button type="button" className="workflow-call-head" aria-label={`Show ${name} in Activity`} onClick={onOpenActivity}>
+      <span className="workflow-call-title">{name}</span><Icon name="chevron" size={12} className="activity-disclosure" />
+    </button>
+    <div className="workflow-call-meta">
+      <span>Workflow</span>
+      {summary && summary.agents !== null && <span>{plural(summary.agents, 'agent')}</span>}
+      {task && <span>{formatElapsed((task.endedAt ? Date.parse(task.endedAt) : Date.now()) - Date.parse(task.startedAt))}</span>}
+      {task && task.status !== 'running' && <span>{statusWord(task.status)}</span>}
+      {!task && call.reply && <span className="workflow-call-reply" title={call.reply}>{call.reply.split('\n', 1)[0]}</span>}
+    </div>
+    {squares.length > 0 && <div className="phase-squares" role="img" aria-label={squaresInWords(squares)}>{squares.map((status, at) => <span key={at} data-status={status} />)}</div>}
+  </div>;
+});
+
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
   const working = status === "streaming";
   if (!text.trim()) return <div className={`reasoning-pending${working ? '' : ' deferred'}`} role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
@@ -226,7 +264,24 @@ function ActivityGroup({ messages, identity, guest, runState, hasRunStatus = fal
 
 const NO_DELEGATIONS = new Map();
 
-export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [], delegations = NO_DELEGATIONS, onOpenSession = undefined }) {
+/** How far a Workflow call's task may have started outside its run's own times: the engine stamps each separately. */
+const RUN_SLACK_MS = 5000;
+
+/**
+ * The window a Workflow call's task can have started in (see workflowTasksFor): its run's, from when it was created to
+ * when it ended, a little either side, and open while it goes on. Null for a run the projection does not know, or knows
+ * without when it was created (one first seen through a usage event).
+ * @param {{ state?: string, createdAt?: string, updatedAt?: string } | undefined} run
+ * @returns {{ from: number, to: number } | null}
+ */
+function runWindow(run) {
+  const created = run?.createdAt ? Date.parse(run.createdAt) : NaN;
+  if (!Number.isFinite(created)) return null;
+  const ended = TERMINAL.has(run.state) && run.updatedAt ? Date.parse(run.updatedAt) : NaN;
+  return { from: created - RUN_SLACK_MS, to: Number.isFinite(ended) ? ended + RUN_SLACK_MS : Infinity };
+}
+
+export function Conversation({ projection, sessionId, history, hasProject, standalone = false, onReview, onOpenFolder, assistantName = "Jolo", assistantAgentId = null, providerModel = null, agents = [], delegations = NO_DELEGATIONS, onOpenSession = undefined, activity = null, onOpenActivity = undefined }) {
   const container = useRef(null);
   const follow = useRef(true);
   const lastScrollTop = useRef(0);
@@ -322,19 +377,30 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   const guestFor = run => guestName(run, { assistantAgentId, agents });
   const lastGuest = guestFor(lastRun);
   const groups = [];
+  /** @type {(import('../workflow-call.js').WorkflowCallSlot & { id: string })[]} */
+  const workflowCalls = [];
   for (const message of messages) {
     // A provider may complete a thinking block without a displayable summary.
     // Keep pending artifact loads visible, but never leave an empty disclosure.
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
+    const workflowCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
     // The agent's own subagents stand on their own line, so their work shows without opening the activity.
     if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
     // So do Jolo's delegation calls: one line for the child they are about, instead of a raw JSON tool block.
     else if (message.kind === "tool" && !message.evicted && !message.loadError && parseDelegationCall(message.text)) groups.push({ type: "delegation", id: message.id, runId: message.runId, message });
+    // And Claude's Workflow calls: a compact card for the workflow, with its task when the activity still has it.
+    else if (workflowCall) {
+      groups.push({ type: "workflow", id: message.id, runId: message.runId, message, call: workflowCall });
+      workflowCalls.push({ id: message.id, name: workflowCall.name, window: runWindow(projection?.runs.get(message.runId)) });
+    }
     else if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
       if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
     } else groups.push({ type: "message", id: message.id, message });
   }
+  // Each Workflow call's card is about the task of its workflow's name that started during its run (see workflowTasksFor).
+  const callTasks = workflowTasksFor(workflowCalls, activity);
+  const workflowTasks = new Map(workflowCalls.map((slot, index) => [slot.id, callTasks[index]]));
   if (lastRun && !["completed", "paused", "cancelled"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
   for (const card of changeCards) {
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
@@ -379,6 +445,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
         if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} onOpenSession={onOpenSession} />;
+        if (group.type === "workflow") return <WorkflowCallBlock key={group.id} call={group.call} task={workflowTasks.get(group.id) ?? null} onOpenActivity={onOpenActivity} />;
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} guest={guestFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;

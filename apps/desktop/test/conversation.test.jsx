@@ -238,3 +238,99 @@ test('a delegation call still waiting for its result spins, names the child from
   expect(guessed).toContain('>Working<');
   expect(guessed).not.toContain('>Open<');
 });
+
+describe('a Workflow call', () => {
+  /** The call's tool message: the head line the engine shows for Claude's Workflow tool, then its reply. */
+  const workflowTool = (/** @type {string} */ id, /** @type {string} */ name, reply = 'Workflow started in the background (task wf-1).', runId = 'run') => ({
+    id, role: 'tool', kind: 'tool', runId, status: 'complete', renderedBytes: 0, committedBytes: 0,
+    text: `Workflow ${JSON.stringify({ script: `export const meta = {\n  name: '${name}',\n  description: 'Workflow ${name}',\n  phases: [{ title: 'Say' }],\n}\nphase('Say')\n` })}\n${reply}\n`,
+  });
+  let ids = 0;
+  /**
+   * A workflow task as `session.activity` carries one, with Claude's progress report of its one phase's agents.
+   * @param {{ name?: string, status?: string, startedAt?: string, endedAt?: string | null, agents?: number, done?: number, running?: number }} [options]
+   */
+  const flow = ({ name = 'demo', status = 'running', startedAt = new Date(Date.now() - 60_000).toISOString(), endedAt = null, agents = 2, done = 0, running = agents } = {}) => ({
+    taskId: `wf-${++ids}`, runId: null, toolUseId: null, description: `Workflow ${name}`, subagentType: null, taskType: 'local_workflow', workflowName: name,
+    phase: null, backgrounded: false, status, startedAt, endedAt, usage: { totalTokens: null, toolUses: null, durationMs: null },
+    workflow: { phases: [{ index: 1, title: 'Say', agents, done, running, failed: 0 }], agents: { total: agents, running, done, failed: 0 }, current: null },
+  });
+  /** @param {PartialMessage[]} messages @param {any[]} tasks @param {Map<string, object>} [runs] the projection's runs */
+  const page = (messages, tasks, runs = new Map()) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({
+    projection: { ordered: () => messages, runs }, hasProject: true,
+    activity: { state: 'background', tasks, truncated: false, updatedAt: new Date().toISOString() },
+  }))} />);
+  const cards = (/** @type {string} */ html) => [...html.matchAll(/<div class="workflow-call"[\s\S]*?<\/div><\/div>(?=<|$)/g)].map(match => match[0]);
+  const meta = (/** @type {string} */ card) => [...(card.match(/<div class="workflow-call-meta">([\s\S]*?)<\/div>/)?.[1] ?? '').matchAll(/<span[^>]*>([^<]*)<\/span>/g)].map(match => match[1]);
+  const squares = (/** @type {string} */ card) => [...card.matchAll(/data-status="(\w+)"/g)].map(match => match[1]);
+
+  test('stands as a card naming the running workflow, its agents and elapsed time, a square per agent, and a way into Activity', () => {
+    const html = page([workflowTool('call', 'demo')], [flow()]);
+    const [card] = cards(html);
+    expect(cards(html)).toHaveLength(1);
+    expect(card).toStartWith('<div class="workflow-call" data-state="running"><button type="button" class="workflow-call-head" aria-label="Show demo in Activity"><span class="workflow-call-title">demo</span><svg');
+    expect(card).toMatch(/<span class="workflow-call-title">demo<\/span><svg[^>]*class="icon activity-disclosure"[^>]*>.*?<\/svg><\/button>/);
+    const words = meta(card);
+    expect(words.slice(0, 2)).toEqual(['Workflow', '2 agents']);
+    expect(words[2]).toMatch(/^\d\d:\d\d$/);
+    expect(words).toHaveLength(3); // no status word while it runs
+    expect(squares(card)).toEqual(['running', 'running']);
+    expect(card).toContain('<div class="phase-squares" role="img" aria-label="2 running">');
+    // No raw view, no stop of its own, nothing of the generic tool block.
+    for (const absent of ['<details', '<pre', 'stop-task', '1 action', 'Workflow {']) expect(html).not.toContain(absent);
+  });
+
+  test('a stopped workflow’s card says Stopped, and its agents read stopped', () => {
+    const [card] = cards(page([workflowTool('call', 'demo')], [flow({ status: 'stopped', startedAt: '2026-10-24T10:00:00.000Z', endedAt: '2026-10-24T10:02:33.000Z' })]));
+    expect(card).toStartWith('<div class="workflow-call" data-state="stopped">');
+    expect(meta(card)).toEqual(['Workflow', '2 agents', '02:33', 'Stopped']);
+    expect(squares(card)).toEqual(['stopped', 'stopped']);
+  });
+
+  test('a call with no task of its name says Workflow and the first line of its reply, the whole on hover, with no squares', () => {
+    const html = page([workflowTool('call', 'demo', 'SyntaxError: Unexpected token (3:4)\n    at line 3')], [flow({ name: 'other' })]);
+    const [card] = cards(html);
+    expect(card).toStartWith('<div class="workflow-call" data-state="unknown"><button type="button" class="workflow-call-head" aria-label="Show demo in Activity"><span class="workflow-call-title">demo</span>');
+    expect(meta(card)).toEqual(['Workflow', 'SyntaxError: Unexpected token (3:4)']);
+    expect(card).toContain('<span class="workflow-call-reply" title="SyntaxError: Unexpected token (3:4)\n    at line 3">SyntaxError: Unexpected token (3:4)</span>');
+    expect(card).not.toContain('phase-squares');
+  });
+
+  test('two calls of one name claim its two tasks in order: the first card shows the older task', () => {
+    const newer = flow({ agents: 3, startedAt: new Date(Date.now() - 10_000).toISOString() });
+    const older = flow({ agents: 2, startedAt: new Date(Date.now() - 60_000).toISOString() });
+    const found = cards(page([workflowTool('first', 'demo'), workflowTool('second', 'demo')], [newer, older]));
+    expect(found.map(card => meta(card)[1])).toEqual(['2 agents', '3 agents']);
+  });
+
+  const at = (/** @type {number} */ seconds) => new Date(Date.parse('2026-10-24T10:00:00.000Z') + seconds * 1000).toISOString();
+
+  test('a card takes only a task that started during its own run: an earlier run’s card leaves a later process’s task to the later card', () => {
+    const runs = new Map([
+      ['early', { id: 'early', state: 'completed', createdAt: at(0), updatedAt: at(20) }],
+      ['late', { id: 'late', state: 'completed', createdAt: at(100), updatedAt: at(130) }],
+    ]);
+    const found = cards(page([workflowTool('a', 'demo', undefined, 'early'), workflowTool('b', 'demo', undefined, 'late')], [flow({ startedAt: at(101) })], runs));
+    expect(found).toHaveLength(2);
+    expect(found[0]).toStartWith('<div class="workflow-call" data-state="unknown">');
+    expect(found[1]).toStartWith('<div class="workflow-call" data-state="running">');
+    // A run still going has no end yet: its card takes a task that started since.
+    const going = new Map([['early', { id: 'early', state: 'tools', createdAt: at(0), updatedAt: at(1) }]]);
+    expect(cards(page([workflowTool('a', 'demo', undefined, 'early')], [flow({ startedAt: at(101) })], going))[0]).toStartWith('<div class="workflow-call" data-state="running">');
+  });
+
+  test('a run known without createdAt (first seen through its usage) counts as unknown: its card takes what is left', () => {
+    const task = flow({ startedAt: at(0) });
+    expect(cards(page([workflowTool('a', 'demo')], [task], new Map([['run', { id: 'run', usage: {} }]])))[0]).toStartWith('<div class="workflow-call" data-state="running">');
+    // Known with its times, the same run's window leaves out a task from long before it.
+    const known = new Map([['run', { id: 'run', state: 'completed', createdAt: at(3600), updatedAt: at(3630) }]]);
+    expect(cards(page([workflowTool('a', 'demo')], [task], known))[0]).toStartWith('<div class="workflow-call" data-state="unknown">');
+  });
+
+  test('any other tool line is still a generic tool block, not a card', () => {
+    const html = page([{ id: 'bash', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\napp.js\n', status: 'complete', renderedBytes: 0, committedBytes: 0 }], [flow()]);
+    expect(html).not.toContain('workflow-call');
+    expect(html).toContain('1 action');
+    expect(html).toContain('Bash {&quot;command&quot;:&quot;ls&quot;}');
+  });
+});

@@ -187,6 +187,11 @@ export function taskKind(task) {
   return task.taskType === 'local_agent' || task.subagentType ? 'Agent' : 'Task';
 }
 
+const STATUS_WORDS = /** @type {const} */ ({ running: 'Running', completed: 'Completed', stopped: 'Stopped', failed: 'Failed' });
+
+/** A task's status in words, as the panel's rows and cards and the chat's workflow cards say it. @param {TaskRecord['status']} status */
+export const statusWord = (status) => STATUS_WORDS[status];
+
 /** What a phase Claude last reported running reads once its workflow has ended: the workflow's own end word. */
 const ENDED_PHASE = /** @type {const} */ ({ completed: 'done', stopped: 'stopped', failed: 'failed' });
 
@@ -220,6 +225,18 @@ export function phaseSquares(phase, taskStatus = 'running') {
     ...repeat(phase.done, 'done'), ...repeat(phase.running, taskStatus === 'running' ? 'running' : ENDED_PHASE[taskStatus]),
     ...repeat(phase.failed, 'failed'), ...repeat(phase.agents - phase.done - phase.running - phase.failed, 'pending'),
   ];
+}
+
+/**
+ * Squares in words, their text alternative: `1 done, 1 running, 2 pending`, each status once in the order it first
+ * appears, leaving out a status none has.
+ * @param {string[]} squares
+ */
+export function squaresInWords(squares) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const status of squares) counts.set(status, (counts.get(status) ?? 0) + 1);
+  return [...counts].map(([status, count]) => `${count} ${status}`).join(', ');
 }
 
 /** Add `item` to the group of `key`. @template K, V @param {Map<K, V[]>} groups @param {K} key @param {V} item */
