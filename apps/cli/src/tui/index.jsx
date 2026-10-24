@@ -20,6 +20,8 @@ import { parseSessionCommand } from "../sessions.js";
 import { sessionLoader } from "./session-loader.js";
 import { applyPermissionEvent, finished, isDialog, requestKey, seedPermissions, touchesPermissions } from "./permission-queue.js";
 import { createDialogAnswer, dialogHint, dialogKey, dialogPlaceholder } from "./dialog-answer.js";
+import { activityLine, backgroundTasks, newerActivity } from "@jolo/client/activity";
+import { backgroundStatus, backgroundStopKey } from "./background-stop.js";
 import { ThemeMenu } from "./themes.jsx";
 import { parseThemeCommand, executeThemeCommand } from "../themes/commands.js";
 import { createThemeStore } from "../themes/store.js";
@@ -61,6 +63,25 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const [dialogState, setDialogState] = useState(null);
   const answering = dialog ? (dialogState?.dialogId === dialog.dialogId ? dialogState : createDialogAnswer(dialog)) : null;
   const [status, setStatus] = useState(initialStatus);
+  // What the conversation's Claude process does in the background (its newest `session.activity` from any source), the
+  // stop of that work in progress, and a clock that keeps the line's elapsed time moving while it shows.
+  const [activity, setActivity] = useState(/** @type {import("@jolo/client/activity").Activity | null} */ (null));
+  const [stop, setStop] = useState(/** @type {import("./background-stop.js").StopState} */ ({ phase: "idle" }));
+  const [clock, setClock] = useState(Date.now());
+  const noteActivity = (next) => setActivity((current) => newerActivity(current, next));
+  const background = backgroundTasks(activity);
+  const backgroundLine = activityLine(activity, { now: clock });
+  useEffect(() => {
+    if (!background.length) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [background.length > 0]);
+  useEffect(() => {
+    // The work a stop was about has ended (or the closed process is gone): the next Ctrl+X starts afresh.
+    if (background.length || stop.phase === "idle" || stop.phase === "stopping") return;
+    if (stop.phase === "closing") setStatus("Claude's process closed; its background work ended.");
+    setStop({ phase: "idle" });
+  }, [background.length, stop.phase]);
   const [showTools, setShowTools] = useState(false);
   const [changes, setChanges] = useState([]);
   const [welcomeOpen, setWelcomeOpen] = useState(!restored);
@@ -105,6 +126,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         setLoadingSession(false);
         if (page.hasOlder) setStatus("Showing the most recent messages in this session.");
         for (const m of page.messages) if (m.committedBytes > 0) void projection.fill(m.id);
+        client.call("session.activity", { sessionId: initialSession.id }).then((result) => { if (!disposed && result.activity) noteActivity(result.activity); }).catch(() => {}); // an engine without the method has no activity to show
         const pending = [...(page.pendingPermissions ?? []), ...(page.pendingDialogs ?? [])];
         if (pending.length) {
           setPermissions((queue) => seedPermissions(queue, pending, settled, (runId) => finished(projection.runs.get(runId)?.state)));
@@ -124,6 +146,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       if (event.type === "permission.resolved" || event.type === "dialog.resolved") settled.add(requestKey(event.payload));
       if (event.type === "permission.requested" || event.type === "dialog.requested") setWelcomeOpen(false);
       if (touchesPermissions(event)) setPermissions((queue) => applyPermissionEvent(queue, event));
+      if (event.type === "session.activity") noteActivity(event.payload);
       if (event.type === "files.changed") setChanges((list) => [...list, ...event.payload.changes].slice(-50));
       if (event.type === "run.verification") setStatus(`verification: ${event.payload.status}`);
     });
@@ -131,6 +154,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       if (!sessionRef.current || preview.sessionId !== sessionRef.current.id) return;
       if (loader) loader.preview(preview); else projection.applyPreview(preview);
     });
+    const offActivity = client.onActivity?.((notification) => { if (sessionRef.current && notification.sessionId === sessionRef.current.id) noteActivity(notification.activity); });
     const offClose = client.onClose(() => { setStatus("engine connection lost"); });
     const offReconnect = client.onReconnect?.(async () => {
       try {
@@ -143,7 +167,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       } catch (error) { setStatus(error.message); }
     });
     if (loader) void loader.load();
-    return () => { disposed = true; loader?.dispose(); offEvent(); offPreview(); offClose(); offReconnect?.(); };
+    return () => { disposed = true; loader?.dispose(); offEvent(); offPreview(); offActivity?.(); offClose(); offReconnect?.(); };
   }, [client, projection, initialSession]);
 
   const activeRun = () => {
@@ -223,6 +247,24 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       const run = activeRun();
       if (run && ctrlC.current === 0) { ctrlC.current = 1; setStatus("cancelling…"); client.call("run.cancel", { runId: run.id }).catch(() => {}); setTimeout(() => { ctrlC.current = 0; }, 3000); return; }
       leave();
+      return;
+    }
+    // Ctrl+X stops the conversation's background work; once a stop left tasks running, it asks before closing the process,
+    // and while it asks the next key is the answer, whatever else is open.
+    if (stop.phase === "asking" || (key.ctrl && chunk === "x")) {
+      const sessionId = sessionRef.current?.id;
+      const stale = stop.phase === "left" && !background.some((task) => stop.taskIds?.includes(task.taskId));
+      const action = backgroundStopKey(stop, { running: background.length, stopping: stop.phase === "stopping" || stop.phase === "closing", newWork: stale }, key.ctrl && chunk === "x" ? "" : chunk);
+      const show = (/** @type {import("./background-stop.js").StopState} */ next) => { setStop(next); const text = backgroundStatus(next); if (text) setStatus(text); };
+      if (action.type === "stop" && sessionId) {
+        show({ phase: "stopping" });
+        client.call("session.stopBackground", { sessionId }).then((result) => show({ phase: "left", result, taskIds: background.map((task) => task.taskId) })).catch((error) => { setStop({ phase: "idle" }); setStatus(error.message); });
+      } else if (action.type === "ask") show({ ...stop, phase: "asking" });
+      else if (action.type === "cancel") show({ ...stop, phase: "left" });
+      else if (action.type === "force" && sessionId) {
+        show({ phase: "closing" });
+        client.call("session.closeProcess", { sessionId }).then(({ closing }) => { if (!closing) { setStop({ phase: "idle" }); setStatus("The conversation has no Claude process."); } }).catch((error) => { setStop({ phase: "idle" }); setStatus(error.message); });
+      }
       return;
     }
     if (key.pageUp || key.pageDown) return;
@@ -326,8 +368,9 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const queueRows = rows >= 16 ? Math.min(3, queuedRuns.length) : 0;
   const commandRows = commands.length ? Math.min(5, commands.length, Math.max(1, rows - 9)) : 0;
   const dialogRows = answering ? 1 : 0; // the live line that says how to answer the dialog shown
-  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows - dialogRows));
-  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0) - dialogRows));
+  const activityRows = backgroundLine && rows >= 16 ? 1 : 0; // the line naming the process's background work
+  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows - dialogRows - activityRows));
+  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0) - dialogRows - activityRows));
   const visible = previewRows > 0 ? live.slice(-previewRows) : [];
   const modelSelected = async (message, target) => {
     const wanted = (target?.id === "jolo" || target?.preset) ? null : target?.id;
@@ -359,6 +402,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       {themeMenu ? <ThemeMenu rows={rows} columns={columns} paused={Boolean(permission)} onClose={() => setThemeMenu(false)} /> : sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
+      {activityRows > 0 && <Text dimColor wrap="truncate-end">{clean(backgroundLine.text)} · Ctrl+X stop</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
       {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}

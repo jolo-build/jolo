@@ -111,3 +111,52 @@ test("a client that opens the conversation while a question waits is asked it at
   } catch (error) { console.error(t.text()); throw error; }
   finally { await t.close(); }
 }, 60_000);
+
+test("background work is shown above the composer while it runs, and Ctrl+X stops it", async () => {
+  const t = await boot();
+  try {
+    await t.ready();
+    await t.prompt("tasks 2 20000");
+    await t.seen("Started 2 tasks.");
+    await t.seen("Background work: 2 tasks · 00:0");
+    await t.seen("Ctrl+X stop");
+    t.type(CTRL_X);
+    await t.seen("Stopped 2 background tasks.");
+    await t.gone("Background work:");
+    const { activity } = await t.client.call("session.activity", { sessionId: t.session.id });
+    expect(activity.tasks.map((task) => task.status)).toEqual(["stopped", "stopped"]);
+    // The process is kept: the next message is answered by it.
+    await t.prompt("hello again");
+    await t.seen("Continuing session"); // the same process answers
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 60_000);
+
+test("tasks that ignore the stop are force-stopped by closing the process, after a confirmation", async () => {
+  const t = await boot();
+  try {
+    await t.ready();
+    await t.prompt("tasks-stubborn 2");
+    await t.seen("Started 2 stubborn tasks.");
+    await t.seen("Background work: 2 tasks");
+    t.type(CTRL_X);
+    await t.seen("Stopping background work…");
+    await t.seen("2 of 2 background tasks did not stop · Ctrl+X again to force stop");
+    t.type(CTRL_X);
+    await t.seen("Force stop? This closes Claude's process");
+    t.type("n");
+    await t.gone("Force stop?");
+    expect(t.text()).toContain("Background work: 2 tasks");
+    t.type(CTRL_X);
+    await t.seen("Force stop?");
+    t.type("y");
+    await t.gone("Background work:");
+    await t.seen("Claude's process closed; its background work ended.");
+    // The process is gone (its activity reads as none), and the last word of it had both stubborn tasks end with it.
+    await waitFor(async () => (await t.client.call("session.activity", { sessionId: t.session.id })).activity === null, { label: "the process ended", timeoutMs: 15000 });
+    const last = t.events.filter((event) => event.type === "session.activity" && event.sessionId === t.session.id).at(-1);
+    expect(last.payload.state).toBe("idle");
+    expect(last.payload.tasks.map((task) => task.status)).toEqual(["failed", "failed"]);
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 60_000);
