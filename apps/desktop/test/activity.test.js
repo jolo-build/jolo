@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, agentStatus, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, squaresInWords, statusWord, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, agentStatus, childRows, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, squaresInWords, statusWord, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
@@ -339,3 +339,50 @@ test('tokens and elapsed time read compactly', () => {
   expect(formatElapsed(3_849_000)).toBe('1:04:09');
 });
 
+
+/** A child task as the board lists it, and its delegation row. @param {Record<string, any>} [options] */
+const child = ({ sessionId = `ses_${++ids}`, title = 'Write the parser tests', state = 'completed', updated = 0, runUpdated = updated, attention = null } = {}) => ({
+  sessionId, title, attention, updatedAt: at(updated), answerer: { displayName: 'Claude Code', model: 'opus' },
+  run: state ? { id: `run_${sessionId}`, state, updatedAt: at(runUpdated), execution: { agentId: 'claude', model: 'opus' } } : null,
+});
+const delegation = (/** @type {string} */ sessionId, /** @type {Record<string, any>} */ fields = {}) => ({ id: `del_${sessionId}`, sessionId, runId: `run_${sessionId}`, state: 'completed', activity: 'idle', done: true, partial: false, wakeReason: null, failure: null, createdAt: at(0), ...fields });
+
+test('child rows: running ones first, then the rest, each newest first; running while its run is live or its process works', () => {
+  const live = child({ title: 'live', state: 'model', updated: 10 });
+  const background = child({ title: 'background', updated: 5 });
+  const older = child({ title: 'older', updated: 1 });
+  const newer = child({ title: 'newer', updated: 20 });
+  const rows = childRows([older, live, newer, background], new Map([[background.sessionId, delegation(background.sessionId, { activity: 'background' })]]), START + 60_000);
+  expect(rows.map(row => [row.task.title, row.running])).toEqual([['live', true], ['background', true], ['newer', false], ['older', false]]);
+});
+
+test('a child\'s elapsed time runs from its delegation\'s start, stops with its run, and is blank without a delegation row', () => {
+  const running = child({ state: 'tools', updated: 30 });
+  const ended = child({ state: 'completed', updated: 50, runUpdated: 190 });
+  const unknown = child({ state: 'model' });
+  const delegations = new Map([[running.sessionId, delegation(running.sessionId, { state: 'running', activity: 'working', createdAt: at(18) })], [ended.sessionId, delegation(ended.sessionId)]]);
+  const [first, second, third] = childRows([running, ended, unknown], delegations, START + 60_000);
+  expect([first.task, first.elapsed]).toEqual([running, '00:42']);
+  expect([third.task, third.elapsed]).toEqual([ended, '03:10']);
+  expect([second.task, second.elapsed, second.delegation]).toEqual([unknown, '', null]);
+});
+
+test('a child is stopped through its live run, else through the delegation\'s run while its process works; one that ended has no stop', () => {
+  const live = child({ state: 'model' });
+  const working = child({ state: 'completed' });
+  const background = child({ state: 'completed' });
+  const ended = child({ state: 'completed' });
+  const delegations = new Map([[working.sessionId, delegation(working.sessionId, { runId: 'run_delegated', activity: 'working' })], [background.sessionId, delegation(background.sessionId, { activity: 'background' })], [ended.sessionId, delegation(ended.sessionId)]]);
+  const stops = Object.fromEntries(childRows([live, working, background, ended], delegations, START).map(row => [row.task.sessionId, row.stopRunId]));
+  expect(stops).toEqual({ [live.sessionId]: live.run.id, [working.sessionId]: 'run_delegated', [background.sessionId]: null, [ended.sessionId]: null });
+});
+
+test('the activity line counts working child tasks: alone, after the background work, or not at all', () => {
+  expect(activityLine(activity([]), { now: START + 42_000, children: 1, childrenSince: START })).toEqual({ text: '1 child task working · 00:42', running: 0 });
+  expect(activityLine(null, { now: START + 42_000, children: 2, childrenSince: START })?.text).toBe('2 child tasks working · 00:42');
+  expect(activityLine(activity([]), { now: START, children: 1 })?.text).toBe('1 child task working');
+  expect(activityLine(activity([task({ started: 0 })]), { now: START + 30_000, children: 1, childrenSince: START })).toEqual({ text: 'Background work: 1 task · 00:30 · 1 child task', running: 1 });
+  expect(activityLine(activity([workflow({ started: 10 })]), { now: START + 40_000, children: 2 })?.text).toBe('Workflow demo · 00:30 · 2 child tasks');
+  expect(activityLine(activity([]), { now: START, children: 0 })).toBeNull();
+  expect(activityLine(activity([]), { now: START })).toBeNull();
+});

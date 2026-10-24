@@ -15,8 +15,9 @@ const workflow = (options = {}) => task({ taskType: 'local_workflow', ...options
 const activity = (tasks, truncated = false) => ({ state: 'background', tasks, truncated, updatedAt: new Date().toISOString() });
 const noop = () => {};
 /** @param {import('../src/renderer/activity.js').Activity | null} value @param {Record<string, any>} [props] */
-const render = (value, { stopResult = null, stopping = false, cleared = {} } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
-  stopResult={stopResult} stopping={stopping} visible cleared={cleared} onStopAll={noop} onStopTask={noop} onForceStop={noop} onClear={noop} />);
+const render = (value, { stopResult = null, stopping = false, cleared = {}, childTasks = undefined, delegations = undefined } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
+  stopResult={stopResult} stopping={stopping} visible cleared={cleared} onStopAll={noop} onStopTask={noop} onForceStop={noop} onClear={noop}
+  childTasks={childTasks} delegations={delegations} onOpenTask={noop} onStopChild={noop} />);
 const count = (/** @type {string} */ html, /** @type {RegExp} */ pattern) => html.match(pattern)?.length ?? 0;
 /** The statuses of a phase's squares, in order, found by its title. */
 const squares = (/** @type {string} */ html, /** @type {string} */ title) => {
@@ -432,4 +433,43 @@ test('a task Claude reports without a start is named by its summary, not repeate
   expect(html).toContain('Output: left.output'); // the output file still shows when the summary is the name
   expect(html).toContain('<span class="activity-task-name" title="Command b8q2">Command b8q2</span>');
   expect(html).not.toMatch(/<span class="activity-task-name" title="">/);
+});
+
+/** A child task as the board lists it. @param {Record<string, any>} [options] */
+const childTask = ({ sessionId = `ses_${++ids}`, title = 'Write the parser tests', state = 'completed', updatedAt = '2026-10-24T00:01:00.000Z', attention = null, model = 'claude-opus-5-5' } = {}) => ({
+  sessionId, title, attention, updatedAt, answerer: { displayName: 'Claude Code', model },
+  run: state ? { id: `run_${sessionId}`, state, updatedAt, execution: { agentId: 'claude', model } } : null,
+});
+/** Its delegation row. */
+const delegationOf = (/** @type {string} */ sessionId, /** @type {Record<string, any>} */ fields = {}) => ({ id: `del_${sessionId}`, sessionId, runId: `run_${sessionId}`, state: 'completed', activity: 'idle', done: true, partial: false, wakeReason: null, failure: null, createdAt: new Date(Date.now() - 42_000).toISOString(), ...fields });
+
+test('child tasks are listed under their own heading: the title opens the child, its elapsed time, a stop while it runs, then Child, its answerer and what it is doing', () => {
+  const working = childTask({ sessionId: 'ses_w', title: 'Write the parser tests', state: 'model' });
+  const done = childTask({ sessionId: 'ses_d', title: 'Fix the login bug', model: 'claude-sonnet-5-5' });
+  const html = render(activity([]), { childTasks: [done, working], delegations: new Map([['ses_w', delegationOf('ses_w', { state: 'model', activity: 'working', done: false })], ['ses_d', delegationOf('ses_d')]]) });
+  expect(html).toContain('<section class="child-tasks" aria-label="Child tasks"><h3 class="activity-section-label">Child tasks</h3><ol class="activity-list">');
+  // Running first, with a square stop named after it, as a task row has.
+  expect(html).toMatch(new RegExp(`<li class="task-row child-task-row" data-state="running" data-session-id="ses_w"><div class="item-head"><button type="button" class="child-task-open" title="Open Write the parser tests">Write the parser tests</button><span class="activity-elapsed">00:4\\d</span>${stopSquare('Write the parser tests')}</div><div class="activity-task-meta">Child · Claude Code · Opus 5.5 · Working</div></li>`));
+  expect(html).toContain('<li class="task-row child-task-row" data-state="done" data-session-id="ses_d"><div class="item-head"><button type="button" class="child-task-open" title="Open Fix the login bug">Fix the login bug</button><span class="activity-elapsed">');
+  expect(html).toContain('<div class="activity-task-meta">Child · Claude Code · Sonnet 5.5 · Answered · done</div></li>');
+  expect(html.indexOf('ses_w')).toBeLessThan(html.indexOf('ses_d'));
+  expect(count(html, STOP_SQUARES)).toBe(1);
+  // Children are not the process's tasks: the heading offers no Stop background work and does not say Nothing running.
+  for (const absent of ['Stop background work', 'Nothing running', 'Clear finished']) expect(html).not.toContain(absent);
+});
+
+test('a child that needs the user says so with the alert mark; one without a delegation row says only who answers it', () => {
+  const html = render(activity([]), { childTasks: [childTask({ sessionId: 'ses_n', attention: 'needs_you', state: 'awaiting_permission' }), childTask({ sessionId: 'ses_x', title: 'Grandchild' })] });
+  expect(html).toMatch(/<div class="activity-task-meta">Child · Claude Code · Opus 5\.5 · <span class="child-needs"><svg[^>]*>.*?<\/svg>Needs you<\/span><\/div>/);
+  expect(html).toContain('<div class="activity-task-meta">Child · Claude Code · Opus 5.5</div>');
+  expect(html).toMatch(/data-session-id="ses_n"><div class="item-head"><button type="button" class="child-task-open" title="Open Write the parser tests">Write the parser tests<\/button><span class="activity-elapsed"><\/span>/); // no delegation row: no elapsed time
+});
+
+test('without children there is no child-task section; Clear finished leaves the children listed', () => {
+  expect(render(activity([task({ status: 'completed' })]))).not.toContain('child-task');
+  const finished = task({ status: 'completed', description: 'Old command' });
+  const children = [childTask({ sessionId: 'ses_k' })];
+  const html = render(activity([finished]), { childTasks: children, cleared: clearFinished(activity([finished]), {}) });
+  expect(html).not.toContain('Old command');
+  expect(html).toContain('data-session-id="ses_k"');
 });

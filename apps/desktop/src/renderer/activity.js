@@ -1,4 +1,7 @@
-// What a conversation's Claude process is doing in the background, read from its `session.activity` snapshot (D1, D3).
+// What a conversation's Claude process is doing in the background, read from its `session.activity` snapshot (D1, D3),
+// and the child tasks Jolo delegated from it, listed beside that work.
+import { RUNNING } from '@jolo/client/board';
+import { TERMINAL } from '@jolo/client/run-state';
 
 /**
  * One task of the process, as `session.activity` carries it. `runId` is the task's own run id (Claude Code gives every
@@ -327,16 +330,26 @@ export function backgroundTasks(activity) {
 }
 
 /**
- * The line above the composer while the process has background work (D1); null when none runs. A running workflow names
- * it, with its phase and finished agents once Claude reported them, its own elapsed time and tokens, and a count of the
- * other background tasks; otherwise it counts the tasks.
+ * The line above the composer while the process has background work (D1) or a child task works; null when neither does.
+ * A running workflow names it, with its phase and finished agents once Claude reported them, its own elapsed time and
+ * tokens, and a count of the other background tasks; otherwise it counts the tasks. Working child tasks (`children`,
+ * since the oldest of them started, `childrenSince`) are counted after that, or alone name the line.
  * @param {Activity | null} activity
- * @param {{ now: number }} options
+ * @param {{ now: number, children?: number, childrenSince?: number | null }} options
  * @returns {{ text: string, running: number } | null}
  */
-export function activityLine(activity, { now }) {
+export function activityLine(activity, { now, children = 0, childrenSince = null }) {
   const running = backgroundTasks(activity);
-  if (!running.length) return null;
+  if (!running.length) {
+    if (!children) return null;
+    return { text: `${plural(children, 'child task')} working${childrenSince === null ? '' : ` · ${formatElapsed(now - childrenSince)}`}`, running: 0 };
+  }
+  const line = processLine(running, now);
+  return children ? { ...line, text: `${line.text} · ${plural(children, 'child task')}` } : line;
+}
+
+/** The background-work part of the line (see activityLine). @param {TaskRecord[]} running @param {number} now */
+function processLine(running, now) {
   // Unknown usage, and a 0 (no agent or task has reported spend yet), are left out (spec §2).
   const tokens = (/** @type {number | null} */ count) => !count ? '' : ` · ${formatTokens(count)} tokens`;
   const workflow = running.filter(isWorkflow).reduce((newest, task) => !newest || started(task) > started(newest) ? task : newest, /** @type {TaskRecord | null} */ (null));
@@ -349,4 +362,35 @@ export function activityLine(activity, { now }) {
   }
   const since = Math.min(...running.map(started));
   return { text: `Background work: ${plural(running.length, 'task')}${tokens(tokensOf(running))} · ${formatElapsed(now - since)}`, running: running.length };
+}
+
+/**
+ * A child task as the board lists it (the parts the panel reads), and its delegation row as `delegation.list` returns it.
+ * @typedef {{ sessionId: string, title: string, updatedAt: string, attention?: string | null, answerer?: { displayName?: string, model?: string | null } | null,
+ *   run: { id: string, state: string, updatedAt: string, execution?: { model?: string | null } | null } | null }} ChildTask
+ * @typedef {{ sessionId: string, runId: string, state: string, activity: string | null, createdAt: string } & Record<string, any>} DelegationRow
+ *   `activity` is `idle`, `working` or `background` (null before the engine knows).
+ */
+
+/**
+ * The conversation's child tasks as the Activity panel lists them: running ones first (a run of theirs is live, or their
+ * process still works), then the rest, each newest first. A row's elapsed time runs from its delegation's start, and
+ * stops when its run ended; it is blank without a delegation row (a child its own child started). A running child is
+ * stopped by cancelling its live run, or the delegation's run while its process works; one that ended has no stop.
+ * @param {ChildTask[]} children
+ * @param {Map<string, DelegationRow>} delegations by session
+ * @param {number} now
+ */
+export function childRows(children, delegations, now) {
+  return children.map(task => {
+    const delegation = delegations.get(task.sessionId) ?? null;
+    const live = RUNNING.has(task.run?.state);
+    const running = live || delegation?.activity === 'working' || delegation?.activity === 'background';
+    const since = delegation ? Date.parse(delegation.createdAt) : NaN;
+    const until = running ? now : Date.parse(task.run?.updatedAt ?? task.updatedAt);
+    const elapsed = Number.isFinite(since) && Number.isFinite(until) ? formatElapsed(until - since) : '';
+    // The run to cancel: the board's run while it has not ended (awaiting permission or paused count), else the delegation's while it works.
+    const stopRunId = task.run && !TERMINAL.has(task.run.state) ? task.run.id : delegation?.activity === 'working' ? delegation.runId ?? null : null;
+    return { task, delegation, running, elapsed, since: running && Number.isFinite(since) ? since : null, stopRunId };
+  }).sort((a, b) => Number(b.running) - Number(a.running) || (a.task.updatedAt < b.task.updatedAt ? 1 : a.task.updatedAt > b.task.updatedAt ? -1 : 0));
 }

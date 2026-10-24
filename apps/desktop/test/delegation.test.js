@@ -1,8 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { delegationWords, liveDelegation, parseDelegationCall, refreshOnChildEvents, touchesChild } from '../src/renderer/delegation.js';
-import { ChildTasksMenu } from '../src/renderer/components/child-tasks-menu.jsx';
 
 const head = 'mcp__jolo__delegation_status {"delegationId":"del_1","waitMs":600000}';
 // A result cut mid-`output`, as the engine shows it: at most 600 characters, then `…`.
@@ -104,10 +101,3 @@ test('child events refresh the delegations once per burst, and not after the lis
   expect(loads).toBe(1);
 });
 
-test('each child row in the child-tasks list says what that child is doing', () => {
-  const tasks = [{ sessionId: 'ses_c', title: 'bg child', run: { state: 'completed' } }, { sessionId: 'ses_g', title: 'grandchild', run: null }];
-  const html = renderToStaticMarkup(createElement(ChildTasksMenu, { tasks, delegations: new Map([['ses_c', { id: 'del_1', sessionId: 'ses_c', state: 'completed', activity: 'background', done: false, partial: false }]]), onOpen: () => {} }));
-  expect(html).toContain('<small>Answered · background work</small>');
-  // A child with no delegation row (one its own child started) shows no words.
-  expect(html.match(/<small>/g)).toHaveLength(1);
-});

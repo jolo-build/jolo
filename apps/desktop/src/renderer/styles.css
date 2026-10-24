@@ -348,16 +348,10 @@ strong { font-weight: 550; }
 .main { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
 .task-header { display: flex; align-items: center; gap: 12px; padding: 12px 28px 0; }
 .task-header .task-meta { flex: 1; min-width: 0; }
-/* The header's right end: a conversation's child tasks, or a child's way back to the task that started it. */
-.child-tasks-toggle, .parent-task-link { flex: none; gap: 5px; padding: 3px 6px; margin: -3px -6px -3px 0; color: var(--muted); font-size: 11px; line-height: 18px; }
-.child-tasks-toggle:hover, .parent-task-link:hover, .child-tasks-toggle[aria-expanded="true"] { color: var(--text); }
-.child-tasks-toggle.needs { color: var(--red); }
+/* The header's right end: a child's way back to the task that started it. */
+.parent-task-link { flex: none; gap: 5px; padding: 3px 6px; margin: -3px -6px -3px 0; color: var(--muted); font-size: 11px; line-height: 18px; }
+.parent-task-link:hover { color: var(--text); }
 .parent-task-link > span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.child-tasks-menu { width: 292px; max-height: min(420px, calc(100vh - 120px)); }
-.child-tasks-menu button { min-height: 40px; }
-.child-task-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.child-task-text > :is(span, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.child-tasks-menu .icon.needs { color: var(--red); }
 .task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; color: var(--muted); font-size: 11px; line-height: 18px; }
 .task-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
 .task-worktree > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -874,6 +868,13 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .activity-panel .activity-now { font: 11px/1.6 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-panel :is(.activity-summary, .activity-output) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-list > [data-nested] { margin-left: 16px; }
+/* The conversation's child tasks, under a muted heading like Finished N: rows as the task rows are, the title a plain
+   button that opens the child, its Needs you marked in red as the sidebar marks it. */
+.activity-panel .activity-section-label { padding: 2px 0; color: var(--muted); font-size: inherit; font-weight: inherit; }
+.activity-panel .child-task-open { display: block; min-width: 0; padding: 0; border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.activity-panel .child-task-open:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .child-task-open:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .child-needs { display: inline-flex; align-items: center; gap: 4px; color: var(--red); }
 .activity-panel .activity-nest { color: var(--muted); }
 /* A phase whose agents are listed: its head and squares are the summary, its chevron turns as it opens to a table of
    its agents (see below). */

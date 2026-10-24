@@ -10,7 +10,9 @@ const task = ({ status = 'running', backgrounded = true, taskType = null, workfl
 });
 /** @param {import('../src/renderer/activity.js').TaskRecord[]} tasks @param {import('../src/renderer/activity.js').Activity['state']} [state] @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks, state = 'background') => ({ state, tasks, truncated: false, updatedAt: new Date().toISOString() });
-const render = (value) => renderToStaticMarkup(<ActivityLine activity={value} onOpenPanel={() => {}} />);
+const render = (value, childTasks = undefined, delegations = undefined) => renderToStaticMarkup(<ActivityLine activity={value} childTasks={childTasks} delegations={delegations} onOpenPanel={() => {}} />);
+/** A child task as the board lists it. */
+const child = (/** @type {string} */ sessionId, /** @type {string} */ state) => ({ sessionId, title: sessionId, run: { id: `run_${sessionId}`, state, updatedAt: new Date().toISOString() }, updatedAt: new Date().toISOString() });
 
 test('two background tasks read as one line that opens the Activity panel, with no stop of its own', () => {
   const html = render(activity([task(), task()]));
@@ -46,3 +48,13 @@ test('nothing is lit while no background task runs, a foreground subagent during
   expect(render(activity([task({ backgrounded: false })], 'background'))).toContain('Background work: 1 task');
 });
 
+
+test('working child tasks show the line too: alone, or after the background work; finished ones do not', () => {
+  const since = new Date(Date.now() - 42_000).toISOString();
+  const delegations = new Map([['ses_a', { sessionId: 'ses_a', runId: 'run_ses_a', activity: 'working', createdAt: since }]]);
+  const alone = render(activity([]), [child('ses_a', 'model'), child('ses_b', 'completed')], delegations);
+  expect(alone).toMatch(/aria-label="Show child tasks">1 child task working · 00:4\d</);
+  expect(render(activity([task()]), [child('ses_a', 'model'), child('ses_c', 'tools')], delegations)).toMatch(/>Background work: 1 task · \d\d:\d\d · 2 child tasks</);
+  expect(render(activity([]), [child('ses_b', 'completed')], new Map())).toBe('');
+  expect(render(activity([]))).toBe('');
+});

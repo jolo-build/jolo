@@ -1,11 +1,15 @@
 import { useEffect, useReducer, useState } from 'react';
-import { agentStatus, agentsByPhase, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
+import { agentStatus, agentsByPhase, childRows, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
 import { modelLabel } from '../model-options.js';
+import { delegationWords } from '../delegation.js';
 import { Icon } from './icon.jsx';
 import { Modal } from './modal.jsx';
 
 /** @typedef {import('../activity.js').TaskRecord} TaskRecord */
 
+const noop = () => {};
+const NO_CHILDREN = /** @type {import('../activity.js').ChildTask[]} */ ([]);
+const NO_DELEGATIONS = /** @type {Map<string, import('../activity.js').DelegationRow>} */ (new Map());
 /** A workflow agent's status in words (see agentStatus). */
 const AGENT_WORDS = { running: 'Running', done: 'Done', failed: 'Failed', stopped: 'Stopped', pending: 'Pending' };
 const elapsed = (/** @type {string} */ startedAt, /** @type {string | null} */ endedAt, /** @type {number} */ now) => formatElapsed((endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt));
@@ -156,6 +160,27 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
 }
 
 /**
+ * One of the conversation's child tasks (a Jolo delegation): its title, which opens the child's conversation, the time
+ * since its delegation started (frozen once its run ended; blank without a delegation row), and while it runs a square
+ * stop as a task row has, which cancels its run; then `Child`, who answers it and what it is doing (see delegationWords),
+ * and `Needs you` with the alert mark when it waits on the user.
+ * @param {{ row: ReturnType<typeof childRows>[number], onOpenTask: (sessionId: string) => void, onStopChild: (runId: string) => void }} props
+ */
+function ChildRow({ row, onOpenTask, onStopChild }) {
+  const { task, delegation, running, elapsed, stopRunId } = row;
+  const title = task.title || 'Child task';
+  const identity = [task.answerer?.displayName, modelLabel(task.answerer?.model ?? task.run?.execution?.model)].filter(Boolean).join(' · ');
+  return <li className="task-row child-task-row" data-state={running ? 'running' : 'done'} data-session-id={task.sessionId}>
+    <div className="item-head">
+      <button type="button" className="child-task-open" title={`Open ${title}`} onClick={() => onOpenTask(task.sessionId)}>{title}</button>
+      <span className="activity-elapsed">{elapsed}</span>
+      {running && stopRunId && <button type="button" className="icon-button stop-task" aria-label={`Stop ${title}`} title="Stop" onClick={() => onStopChild(stopRunId)}><Icon name="stop" size={14} /></button>}
+    </div>
+    <div className="activity-task-meta">{meta(['Child', identity, delegation ? delegationWords(delegation) : null])}{task.attention === 'needs_you' && <>{' · '}<span className="child-needs"><Icon name="alert" size={12} />Needs you</span></>}</div>
+  </li>;
+}
+
+/**
  * The confirmation before closing the process whose tasks ignored their stop (D11). The pane shows it at its root, with
  * its other modals, so it counts as a host dialog and no panel switch can hide it.
  * @param {{ onConfirm: () => void, onClose: () => void }} props
@@ -173,7 +198,10 @@ export function ForceStopDialog({ onConfirm, onClose }) {
 /**
  * The conversation's background work (D2), as Claude Code's own panel lists it: the running tasks, then the finished ones
  * under `Finished N`, each newest first, a workflow as a card and any other task as a row, each running one with a stop square,
- * and a task started by another of the same list drawn under it (see nestTasks).
+ * and a task started by another of the same list drawn under it (see nestTasks). Between the running and the finished
+ * ones, the conversation's child tasks (Jolo delegations) under `Child tasks` (see childRows and ChildRow), loaded by the
+ * pane with their delegation rows; their stops cancel their runs, and Stop background work and Clear finished, which are
+ * the process's, leave them be.
  * Clear finished hides the finished tasks listed at that moment (`cleared`, which the pane keeps). A Stop background
  * work that left some of its tasks running offers `Force stop`, which asks the pane to confirm closing the process; tasks
  * that end with it are recorded `failed` by the engine and read so here. Everything comes from the activity snapshot: no
@@ -188,9 +216,13 @@ export function ForceStopDialog({ onConfirm, onClose }) {
  *   onStopTask: (taskId: string) => void,
  *   onForceStop: () => void,
  *   onClear: (cleared: import('../activity.js').ClearedTasks) => void,
+ *   childTasks?: import('../activity.js').ChildTask[],
+ *   delegations?: Map<string, import('../activity.js').DelegationRow>,
+ *   onOpenTask?: (sessionId: string) => void,
+ *   onStopChild?: (runId: string) => void,
  * }} props `stopping` while a Stop background work waits for its reply; `visible` while the panel is on screen.
  */
-export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear }) {
+export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear, childTasks = NO_CHILDREN, delegations = NO_DELEGATIONS, onOpenTask = noop, onStopChild = noop }) {
   const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
   const [openPhases, setOpenPhases] = useState(() => /** @type {Set<string>} */ (new Set()));
   const onPhaseToggle = (/** @type {string} */ key, /** @type {boolean} */ open) => setOpenPhases(current => {
@@ -201,7 +233,9 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
     return next;
   });
   const { running, finished } = groupActivity(activity, cleared);
-  const ticking = visible && running.length > 0;
+  const now = Date.now();
+  const children = childRows(childTasks, delegations, now);
+  const ticking = visible && (running.length > 0 || children.some(row => row.running));
   // Elapsed times move once a second while something runs and the panel is shown; nothing ticks otherwise, and showing
   // the panel again renders it with the current time.
   useEffect(() => {
@@ -209,7 +243,6 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [ticking]);
-  const now = Date.now();
   // A task is drawn under the task in the same list that started it (see nestTasks).
   const item = (/** @type {{ task: TaskRecord, nested: boolean }} */ { task, nested }) => taskKind(task) === 'Workflow'
     ? <WorkflowCard key={task.taskId} task={task} nested={nested} now={now} onStopTask={onStopTask} openPhases={openPhases} onPhaseToggle={onPhaseToggle} />
@@ -220,11 +253,16 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
       <span className="activity-actions">
         {running.length > 0 && <button type="button" disabled={stopping} onClick={onStopAll}>{stopping ? 'Stopping…' : 'Stop background work'}</button>}
         {finished.length > 0 && <button type="button" className="icon-button" aria-label="Clear finished" title="Clear finished" onClick={() => onClear(clearFinished(activity, cleared))}><Icon name="trash" size={14} /></button>}
-        {!running.length && !finished.length && <span className="muted">Nothing running</span>}
+        {!running.length && !finished.length && !children.length && <span className="muted">Nothing running</span>}
       </span>
     </div>
     {forceStopOffered(activity, stopResult) && <p className="panel-note" role="status"><span>Some tasks did not stop</span><button type="button" onClick={onForceStop}>Force stop</button></p>}
     {running.length > 0 && <ol className="activity-list">{nestTasks(running).map(item)}</ol>}
+    {/* Conversations of their own, not the process's tasks: Stop background work and Clear finished leave them be. */}
+    {children.length > 0 && <section className="child-tasks" aria-label="Child tasks">
+      <h3 className="activity-section-label">Child tasks</h3>
+      <ol className="activity-list">{children.map(row => <ChildRow key={row.task.sessionId} row={row} onOpenTask={onOpenTask} onStopChild={onStopChild} />)}</ol>
+    </section>}
     {finished.length > 0 && <details open className="finished-tasks">
       <summary><span>{`Finished ${finished.length}`}</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
       <ol className="activity-list">{nestTasks(finished).map(item)}</ol>

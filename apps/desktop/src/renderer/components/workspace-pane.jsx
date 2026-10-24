@@ -20,7 +20,7 @@ import { PermissionNotice } from "./permission-notice.jsx";
 import { DialogModal, dialogSummary } from "./dialog-modal.jsx";
 import { ActivityLine } from "./activity-line.jsx";
 import { ActivityPanel, ForceStopDialog } from "./activity-panel.jsx";
-import { backgroundTasks, forceStopOffered, plural, runningTasks, stopFor } from "../activity.js";
+import { backgroundTasks, childRows, forceStopOffered, plural, runningTasks, stopFor } from "../activity.js";
 import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
@@ -398,9 +398,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   // Child tasks live in the same folder (or among the chats) as the conversation that started them.
   const familyList = useWorkspaceTasks({ call: state.call, revision: state.board?.generatedAt, ...(project?.standalone ? { standalone: true } : { workspaceId: session?.workspaceId ?? project?.workspaceId }) });
   const family = taskFamily(familyList.result?.tasks ?? [], sessionId);
-  // The children's delegation rows, for the transcript's delegation lines and the child-tasks list. They load when the
-  // conversation and its children are shown, when the list opens, and 400 ms after a burst of changes to a child's run or
-  // process; a reply for a conversation no longer shown, or for an older request, is dropped.
+  // The children's delegation rows, for the transcript's delegation lines and the Activity panel's child tasks. They load
+  // when the conversation and its children are shown, when the Activity panel opens, and 400 ms after a burst of changes
+  // to a child's run or process; a reply for a conversation no longer shown, or for an older request, is dropped.
   const [delegationRows, setDelegationRows] = useState(/** @type {{ sessionId: string | null, rows: any[] }} */ ({ sessionId: null, rows: NO_DELEGATIONS }));
   const delegationRequest = useRef(0);
   const loadDelegations = () => {
@@ -417,9 +417,12 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
     const off = subscribePaneEvents(() => null, refresh.receive);
     return () => { off(); refresh.cancel(); };
   }, [sessionId, childIds]);
+  const activityShown = context === 'activity';
+  useEffect(() => { if (activityShown && childIds) loadDelegations(); }, [activityShown]);
   const shownDelegations = delegationRows.sessionId === sessionId ? delegationRows.rows : NO_DELEGATIONS;
   const delegations = useMemo(() => new Map(shownDelegations.map(row => [row.id, row])), [shownDelegations]);
   const delegationsBySession = useMemo(() => new Map(shownDelegations.map(row => [row.sessionId, row])), [shownDelegations]);
+  const workingChildren = childRows(family.children, delegationsBySession, Date.now()).filter(row => row.running).length;
   const branch = session && session.workspaceId !== project?.workspaceId ? workspace ? workspace.branch || "worktree" : "worktree removed" : null;
   const chosenAgentId = answerer === null ? (session ? sessionAgentId : newSessionModelChoice(hostedAgents, settings?.model).agentId ?? null) : answerer === "jolo" ? null : answerer;
   // Claude Code and Codex compact their own context when asked; the usage panel offers it for the agent answering here.
@@ -491,7 +494,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div className="header-actions">
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
-            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules', 'activity'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null, activity: background.length ? plural(background.length, 'task') : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
+            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules', 'activity'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null, activity: [background.length ? plural(background.length, 'task') : null, workingChildren ? plural(workingChildren, 'child task') : null].filter(Boolean).join(' · ') || null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
               extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
             </>}
           </div>
@@ -517,11 +520,10 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           <FindBar open={Boolean(finding)} onClose={() => onFindClose?.()} />
           {error && <div className="error" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => state.setError(null)}><Icon name="close" size={14} /></button></div>}
           {pane.id === 'pane-1' && onboarding === 'active' && !sessionId ? <Onboarding connected={engine.connected} active={active && visible && !showSettings} settings={settings} project={project} call={state.call} onSettings={setShowSettings} onOpenFolder={openOnboardingFolder} onFinish={finishOnboarding} onDismiss={() => updateOnboarding('dismissed')} /> : <>
-          {(branch || family.children.length > 0 || family.parent) && <TaskHeader branch={branch} branchPath={workspace?.path}
-            childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} delegations={delegationsBySession} onShowChildTasks={loadDelegations} />}
+          {(branch || family.parent) && <TaskHeader branch={branch} branchPath={workspace?.path} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={path => { if (typeof path === 'string') setChangesFocus({ path, at: Date.now() }); selectContext("changes"); }} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} delegations={delegations} onOpenSession={id => reportError(() => state.selectSession(id))} activity={state.activity} onOpenActivity={() => selectContext('activity')} />
-          <ActivityLine activity={state.activity} onOpenPanel={() => selectContext('activity')} />
+          <ActivityLine activity={state.activity} childTasks={family.children} delegations={delegationsBySession} onOpenPanel={() => selectContext('activity')} />
           <PermissionNotice request={pendingPermission} active={active} onReview={() => onFocus(pane.id)} />
           {!pendingPermission && <PermissionNotice request={pendingDialog && { summary: dialogSummary(pendingDialog) }} title="Claude has a question" icon="chat" active={active} onReview={() => onFocus(pane.id)} />}
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
@@ -559,7 +561,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
             <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
             <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
-              cleared={clearedTasks} onClear={setClearedTasks} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)} />}</div>
+              cleared={clearedTasks} onClear={setClearedTasks} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)}
+              childTasks={family.children} delegations={delegationsBySession} onOpenTask={id => reportError(() => state.selectSession(id))} onStopChild={runId => reportError(() => state.call('run.cancel', { runId }))} />}</div>
           </div>
         </aside>
       </ContextSplit>
