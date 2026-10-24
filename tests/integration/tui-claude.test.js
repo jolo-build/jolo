@@ -12,7 +12,11 @@ const ESC = "\x1b", ENTER = "\r", CTRL_X = "\x18";
 const FAKE = path.join(ROOT, "tests", "fixtures", "fake-claude.js");
 const interactiveCommand = process.env.JOLO_TEST_CLI ? [process.env.JOLO_TEST_CLI] : [process.execPath, "run", "jolo"];
 
-/** An engine whose "claude" is the fixture, a Claude conversation in it, and the terminal client opened on that conversation. */
+/**
+ * An engine whose "claude" is the fixture, a Claude conversation in it, and the terminal client opened on that conversation.
+ * `before` runs against the conversation before the client opens, for what a late-joining client must find.
+ * @param {{ before?: (booted: { client: any, events: any[], session: any }) => Promise<void> }} [options]
+ */
 async function boot({ before = async () => {} } = {}) {
   const home = tempHome();
   const repo = path.join(home, "repo"); mkdirSync(repo);
