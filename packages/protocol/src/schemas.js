@@ -628,6 +628,9 @@ export const TaskRecordSchema = z.object({
   progress: TaskText.nullable().optional(),
   summary: TaskText.nullable().optional(),
   outputFile: z.string().max(TASK_PATH_MAX).nullable().optional(),
+  // The model a background agent answers with, as its own messages name it: null until one does, and for any other
+  // task; an older engine sends none.
+  model: z.string().max(WORKFLOW_MODEL_MAX).nullable().optional(),
 });
 
 /** `truncated` says the process had finished tasks left out of these. */

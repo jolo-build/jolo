@@ -48,22 +48,33 @@ function Ending({ detail }) {
   </>;
 }
 
+/** A subagent type that names no kind of its own, as the transcript's subagent block decides. */
+const GENERIC_AGENT = /^(agent|task|general-purpose)$/i;
 /**
- * A task that is not a workflow: its description (else its summary, else its kind and id), then its kind, status, tokens and tool uses, those it reported, and while
+ * What an agent's row says after `Agent`: its kind when it is a named one (`Explore`), and its model once its own messages
+ * named one; nothing for a command, a workflow (whose agents each have a model, in its table) or a task.
+ * @param {TaskRecord} task @returns {string[]}
+ */
+const agentOf = (task) => taskKind(task) !== 'Agent' ? [] : [task.subagentType && !GENERIC_AGENT.test(task.subagentType) ? task.subagentType : null, modelLabel(task.model) || null].filter(Boolean);
+
+/**
+ * A task that is not a workflow: its description (else its summary, else its kind and id), then its kind (an agent's own
+ * kind and model after it, see agentOf), status, tokens and tool uses, those it reported, and while
  * it runs what it does now (its progress line under the status, else the tool it last used on the status line); once it
  * ended, how (see Ending).
  * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void }} props
  */
 function TaskRow({ task, nested, now, onStopTask }) {
   const uses = task.usage.toolUses;
+  const kind = taskKind(task);
   // A task Claude reported only by its end (a background command a previous process left) has no description: it is
   // named by its summary, which is then not repeated below, else by its kind and id.
-  const name = task.description || task.summary || `${taskKind(task)} ${task.taskId}`;
+  const name = task.description || task.summary || `${kind} ${task.taskId}`;
   const found = taskDetail(task);
   const detail = !task.description && name === task.summary ? { ...found, summary: null } : found;
   return <li className="task-row" data-state={task.status} data-nested={nested ? '' : undefined}>
     <ItemHead task={task} name={name} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} />
-    <div className="activity-task-meta">{meta([taskKind(task), statusWord(task.status), tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
+    <div className="activity-task-meta">{meta([kind, ...agentOf(task), statusWord(task.status), tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
     {detail.now && <div className="activity-now" title={detail.now}>{detail.now}</div>}
     <Ending detail={detail} />
   </li>;

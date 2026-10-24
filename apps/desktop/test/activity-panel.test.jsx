@@ -482,3 +482,16 @@ test('with no process, what its last one left is listed: an idle activity of fin
   expect(html).not.toContain('Stop background work');
   expect(html).toContain('aria-label="Clear finished"');
 });
+
+test('a background agent\'s row names its kind and model after Agent; a generic agent with no model reads as before, and so does a command', () => {
+  const html = render(activity([
+    task({ description: 'Explore the repo', taskType: 'local_agent', subagentType: 'Explore', model: 'claude-opus-5-5', tokens: 12_000, toolUses: 3, startedAt: '2026-10-24T00:00:03.000Z' }),
+    task({ description: 'Generic helper', taskType: 'local_agent', subagentType: 'general-purpose', startedAt: '2026-10-24T00:00:02.000Z' }),
+    task({ description: 'Plain agent', taskType: 'local_agent', subagentType: 'Agent', model: 'claude-sonnet-5-5', startedAt: '2026-10-24T00:00:01.500Z' }),
+    task({ description: 'Watch the build', taskType: 'local_bash', startedAt: '2026-10-24T00:00:01.000Z' }),
+  ]));
+  expect(html).toContain('<div class="activity-task-meta">Agent · Explore · Opus 5.5 · Running · 12k tokens · 3 tool uses</div>');
+  expect(html).toContain('<div class="activity-task-meta">Agent · Running</div>');
+  expect(html).toContain('<div class="activity-task-meta">Agent · Sonnet 5.5 · Running</div>'); // a generic kind is left out, its model is not
+  expect(html).toContain('<div class="activity-task-meta">Command · Running</div>');
+});

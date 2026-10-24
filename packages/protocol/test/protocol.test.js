@@ -102,6 +102,16 @@ describe("schemas", () => {
     expect(TaskRecordSchema.safeParse({ ...task, workflowName: 'w'.repeat(TASK_TEXT_MAX + 1) }).success).toBe(false);
     expect(TaskRecordSchema.safeParse({ ...task, taskType: 7 }).success).toBe(false);
   });
+  test("a task record may carry the model its agent answers with, bounded, which an older payload lacks", () => {
+    const task = { taskId: 'agent-1', runId: null, toolUseId: 'toolu_a', description: 'Explore the repo', subagentType: 'Explore', phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null } };
+    expect(TaskRecordSchema.parse({ ...task, model: 'claude-opus-5-5' }).model).toBe('claude-opus-5-5');
+    expect(TaskRecordSchema.parse({ ...task, model: null }).model).toBeNull();
+    expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before it
+    expect(TaskRecordSchema.safeParse({ ...task, model: 'm'.repeat(WORKFLOW_MODEL_MAX) }).success).toBe(true);
+    expect(TaskRecordSchema.safeParse({ ...task, model: 'm'.repeat(WORKFLOW_MODEL_MAX + 1) }).success).toBe(false);
+    expect(TaskRecordSchema.safeParse({ ...task, model: 7 }).success).toBe(false);
+    expect(activityPayload({ state: 'background', tasks: [{ ...task, model: 'claude-opus-5-5' }], updatedAt: task.startedAt }).tasks[0].model).toBe('claude-opus-5-5');
+  });
   test("a task record may carry a workflow's bounded summary of its phases and agents, which an older payload lacks", () => {
     const task = { taskId: 'wf-1', runId: 'wf-1-run', toolUseId: null, description: 'two trivial agents', subagentType: null, taskType: 'local_workflow', workflowName: 'probe-two', phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: 20388, toolUses: 0, durationMs: 42 } };
     const phase = { title: 'Say', agents: 2, done: 1, running: 1, failed: 0 };

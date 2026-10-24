@@ -21,7 +21,8 @@
 // 8000 tokens, one tool call), and at <ms> both are done (40776 tokens); it then
 // completes with the summary 'Dynamic workflow "Workflow <name>" completed' and the output file /tmp/<name>.output unless stop_task ended it first, and is
 // reported a moment later in a turn of its own ("Workflow <name> done."), "nested-agent <ms>" runs a background subagent agent-1 and the command cmd-1
-// it owns (parent_task_id agent-1), which end at <ms>, the command first, and stop_task on the subagent kills it (task_updated status "killed"), and
+// it owns (parent_task_id agent-1), the subagent's own message naming its model claude-opus-5-5, which end at <ms>, the command first, and
+// stop_task on the subagent kills it (task_updated status "killed"), and
 // anything else just answers in prose. A second control response to one request, or one to a request it took back,
 // makes the fixture exit 70. The other scenarios are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
@@ -513,6 +514,8 @@ async function turn(prompt, images = [], uuid = null) {
     out({ type: "system", subtype: "task_started", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", task_type: "local_agent", subagent_type: "general-purpose", description: "Run the checks", is_backgrounded: true, spawn_depth: 1, prompt: "Run the checks with Bash, then reply: done", session_id: sessionId });
     out({ type: "system", subtype: "task_progress", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", subagent_type: "general-purpose", description: "Running Run the checks", last_tool_name: "Bash", usage: { total_tokens: 22304, tool_uses: 1, duration_ms: 4659 }, session_id: sessionId });
     out({ type: "system", subtype: "task_started", task_id: "cmd-1", run_id: "cmd-1-run", tool_use_id: "toolu_cmd_1", task_type: "local_bash", description: "Run the checks command", is_backgrounded: false, parent_task_id: "agent-1", owned_by_subagent: true, session_id: sessionId });
+    // The subagent's own message, which alone names its model (agent_id and the call it runs under on the envelope).
+    out({ type: "assistant", agent_id: "agent-1-agent", parent_tool_use_id: "toolu_agent_1", message: { id: "msg_agent_1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_cmd_1", name: "Bash", input: { command: "bun test" } }] }, session_id: sessionId });
     inBackground(() => { ended("completed"); enqueue(() => selfStartedTurn("Agent agent-1 done.", [])); }, ms, "agent-1");
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.

@@ -645,8 +645,8 @@ test('a subagent\'s own command names the subagent as its parent, and the subage
   await turn(link, 'nested-agent 300', { init: true });
   await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].progress !== null);
   const [agent, command] = link.activity.tasks;
-  expect(agent).toMatchObject({ taskId: 'agent-1', taskType: 'local_agent', subagentType: 'general-purpose', spawnDepth: 1, parentTaskId: null, backgrounded: true, description: 'Run the checks', progress: 'Running Run the checks', lastTool: 'Bash' });
-  expect(command).toMatchObject({ taskId: 'cmd-1', taskType: 'local_bash', parentTaskId: 'agent-1', spawnDepth: null, backgrounded: false, description: 'Run the checks command' });
+  expect(agent).toMatchObject({ taskId: 'agent-1', taskType: 'local_agent', subagentType: 'general-purpose', spawnDepth: 1, parentTaskId: null, backgrounded: true, description: 'Run the checks', progress: 'Running Run the checks', lastTool: 'Bash', model: 'claude-opus-5-5' });
+  expect(command).toMatchObject({ taskId: 'cmd-1', taskType: 'local_bash', parentTaskId: 'agent-1', spawnDepth: null, backgrounded: false, description: 'Run the checks command', model: null });
   await waitFor(() => link.activity.tasks.every(t => t.status === 'completed'), 4000);
   // Claude Code 2.1.304 summed each up with its description; the command wrote no output file (its notice says "").
   expect(link.activity.tasks.map(t => [t.taskId, t.summary, t.outputFile])).toEqual([['agent-1', 'Run the checks', '/tmp/agent-1.output'], ['cmd-1', 'Run the checks command', null]]);
@@ -1070,4 +1070,29 @@ test('a change still waiting to be reported when the process ends is reported be
   expect(reports[0].activity.tasks.map((t) => [t.taskId, t.status])).toEqual([['old', 'completed']]);
   await sleep(400);
   expect(reports).toHaveLength(1); // and not again after it
+});
+
+test('a background agent\'s model is learned from its own messages, kept bounded, and stays once it ended', async () => {
+  // Claude names a subagent's model only on the subagent's own messages: agent_id and the call it runs under on the envelope.
+  const script = `
+    out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+    out({ type: 'system', subtype: 'task_started', task_id: 'agent-1', tool_use_id: 'toolu_a', task_type: 'local_agent', subagent_type: 'Explore', description: 'Explore the repo', is_backgrounded: true });
+    out({ type: 'system', subtype: 'task_started', task_id: 'agent-2', tool_use_id: 'toolu_b', task_type: 'local_agent', description: 'Long names', is_backgrounded: true });
+    out({ type: 'assistant', agent_id: 'a1', parent_tool_use_id: 'toolu_a', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Looking.' }] } });
+    out({ type: 'assistant', agent_id: 'ax', parent_tool_use_id: 'toolu_unknown', message: { role: 'assistant', model: 'claude-haiku-5-5', content: [] } });
+    out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 7, content: [] } });
+    out({ type: 'assistant', agent_id: 'a2', parent_tool_use_id: 'toolu_b', message: { role: 'assistant', model: 'm'.repeat(200), content: [] } });
+    out({ type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'completed', summary: 'Explored' });
+  `;
+  const reports = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => reports.push(reason) });
+  const link = openStub(registry, 'models', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].status === 'completed' && link.activity.tasks[1].model !== null);
+  const [explore, other] = link.activity.tasks;
+  expect(explore).toMatchObject({ taskId: 'agent-1', subagentType: 'Explore', model: 'claude-opus-5-5', status: 'completed' }); // kept past its end
+  expect(other.model).toBe('m'.repeat(64)); // a number is no model; a long one is cut to WORKFLOW_MODEL_MAX
+  expect(link.activity.tasks.some((t) => t.model === 'claude-haiku-5-5')).toBe(false); // a call no task runs under changes nothing
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await registry.closeAll();
 });

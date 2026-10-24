@@ -148,13 +148,14 @@ function summarizeWorkflow(entries, description) {
  * until a progress carries `workflow_progress`, and for any other task). `parentTaskId` is the task that started it (a
  * subagent's own command names the subagent) and `spawnDepth` how deep a subagent it is; `progress` is its latest progress
  * line (`Running …`, a workflow's `<phase>: <label>`) and `lastTool` the tool it last used, neither ever its description;
- * `summary` and `outputFile` are what its notification said of its end. Each is null until Claude says it.
+ * `summary` and `outputFile` are what its notification said of its end, and `model` the model a background agent answers
+ * with, from its own messages. Each is null until Claude says it (a task an earlier process started has no `model`).
  * @typedef {{ taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType: string | null, workflowName: string | null,
  *   phase: string | null, backgrounded: boolean, status: 'running' | 'completed' | 'stopped' | 'failed', startedAt: string,
  *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
  *   workflow: WorkflowSummary | null, parentTaskId: string | null, spawnDepth: number | null, lastTool: string | null,
- *   progress: string | null, summary: string | null, outputFile: string | null }} TaskRecord
+ *   progress: string | null, summary: string | null, outputFile: string | null, model?: string | null }} TaskRecord
  */
 /**
  * A workflow's phases and agents as counts, and its latest agents (see summarizeWorkflow).
@@ -356,6 +357,14 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   // client. The finished ones are kept as its recent history.
   /** @type {Map<string, TaskRecord>} taskId -> its record, in the order they started */
   const tasks = new Map();
+  /** @type {Map<string, string>} the call a task runs under -> the task, for the tasks this process started */
+  const taskOfCall = new Map();
+  /** Forget a task, and the call it ran under. @param {string} taskId */
+  const dropTask = (taskId) => {
+    const call = tasks.get(taskId)?.toolUseId;
+    if (call && taskOfCall.get(call) === taskId) taskOfCall.delete(call);
+    tasks.delete(taskId);
+  };
   const running = () => { let count = 0; for (const task of tasks.values()) if (task.status === 'running') count += 1; return count; };
   /** Told whenever a running task ends, with the process's end too: what stopping background work waits on. */
   const endWatchers = new Set();
@@ -406,7 +415,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     phase: null, backgrounded: message.is_backgrounded !== false, status: 'running',
     startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null }, workflow: null,
     parentTaskId: textOf(message.parent_task_id, TASK_ID_MAX), spawnDepth: countOf(message.spawn_depth),
-    lastTool: null, progress: null, summary: null, outputFile: null,
+    lastTool: null, progress: null, summary: null, outputFile: null, model: null,
   });
   /** A count that is not one leaves what was known. @param {TaskRecord} task @param {any} usage */
   const takeUsage = (task, usage) => {
@@ -437,7 +446,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     let excess = tasks.size - running() - TASK_HISTORY_LIMIT;
     for (const [taskId, task] of tasks) {
       if (excess <= 0) break;
-      if (task.status !== 'running') { tasks.delete(taskId); excess -= 1; }
+      if (task.status !== 'running') { dropTask(taskId); excess -= 1; }
     }
   };
   // The conversation's earlier tasks, as its stored activity last had them: the history the panel shows outlives the
@@ -462,8 +471,10 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     const was = task?.status ?? null;
     if (message.subtype === 'task_started') {
       if (!running()) onBackground(true);
-      tasks.delete(taskId); // one started again is listed anew, as the newest
-      tasks.set(taskId, newTask(taskId, message, at));
+      dropTask(taskId); // one started again is listed anew, as the newest
+      const started = newTask(taskId, message, at);
+      tasks.set(taskId, started);
+      if (started.toolUseId) taskOfCall.set(started.toolUseId, taskId);
     } else if (message.subtype === 'task_progress' && task) {
       takeUsage(task, message.usage);
       // The description stays the one the task started with: what a progress report says there is what the task does now
@@ -495,9 +506,24 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     // A task listed anew, or one whose status changed, is a change of its tasks; anything else is their progress.
     activityChanged(message.subtype === 'task_started' || task.status !== was ? 'tasks' : 'progress');
   };
+  /**
+   * A background agent's model: Claude names it only on the agent's own messages (`agent_id` and the call it runs under,
+   * `parent_tool_use_id`, on the envelope), so the task started for that call takes it. It is progress, not a change of
+   * the tasks: it goes out with the next report.
+   */
+  const trackModel = (message) => {
+    if (message.type !== 'assistant' || !message.agent_id || message.parent_tool_use_id == null || typeof message.message?.model !== 'string') return;
+    const taskId = taskOfCall.get(message.parent_tool_use_id);
+    const task = taskId ? tasks.get(taskId) : undefined;
+    const model = textOf(message.message.model, WORKFLOW_MODEL_MAX);
+    if (!task || !model || task.model === model) return;
+    task.model = model;
+    activityChanged('progress');
+  };
   const follow = (message) => {
     trackTasks(message);
     traceAgents(message);
+    trackModel(message);
     if (message.parent_tool_use_id != null) return;
     if (message.type === 'system' && message.subtype === 'init') {
       settleEmpty();
@@ -764,7 +790,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
      */
     clearFinished() {
       let cleared = 0;
-      for (const [taskId, task] of tasks) if (task.status !== 'running') { tasks.delete(taskId); cleared += 1; }
+      for (const [taskId, task] of tasks) if (task.status !== 'running') { dropTask(taskId); cleared += 1; }
       if (cleared) { activityAt = new Date().toISOString(); tasksChange = 'tasks'; reportActivity(); }
       return cleared;
     },

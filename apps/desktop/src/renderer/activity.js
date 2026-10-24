@@ -10,7 +10,8 @@ import { TERMINAL } from '@jolo/client/run-state';
  * `workflow` is what a workflow's progress last said of its phases and agents (D3): null until Claude reports them, and
  * absent from an engine from before it. `parentTaskId` names the task that started it (a subagent's own command names
  * the subagent), `progress` is its latest progress line and `lastTool` the tool it last used, and `summary` and
- * `outputFile` are what its notification said of its end: each null until Claude says it, absent from an older engine.
+ * `outputFile` are what its notification said of its end, and `model` the model a background agent answers with, from its
+ * own messages: each null until Claude says it, absent from an older engine.
  * @typedef {{
  *   taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType?: string | null, workflowName?: string | null,
@@ -19,7 +20,7 @@ import { TERMINAL } from '@jolo/client/run-state';
  *   usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
  *   workflow?: WorkflowProgress | null,
  *   parentTaskId?: string | null, spawnDepth?: number | null, lastTool?: string | null, progress?: string | null,
- *   summary?: string | null, outputFile?: string | null,
+ *   summary?: string | null, outputFile?: string | null, model?: string | null,
  * }} TaskRecord
  * @typedef {{ index?: number, title: string, agents: number, done: number, running: number, failed: number }} WorkflowPhase
  * @typedef {{ label: string, phase: string | null, phaseIndex?: number | null, state: 'running' | 'done' | 'failed', model: string | null,
