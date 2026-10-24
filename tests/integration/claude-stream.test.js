@@ -419,6 +419,47 @@ describe("one Claude process per conversation", () => {
     expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: false });
   }, 30_000);
 
+  test('a conversation\'s finished tasks outlive its process, are there for the next one, and Clear finished deletes them for good', async () => {
+    const { engine, client, events, session, runTo, starts } = await boot();
+    const activity = async () => (await client.call('session.activity', { sessionId: session.id })).activity;
+    const listed = async () => (await activity())?.tasks.map(t => [t.taskId, t.status]);
+    const lastEvent = () => events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).at(-1)?.payload;
+    const stopAndClose = async (process) => {
+      await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background' && e.payload.tasks.some(t => t.status === 'running')));
+      expect(await client.call('session.stopBackground', { sessionId: session.id })).toMatchObject({ requested: 1, stopped: 1 });
+      expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+      await waitFor(() => !alive(starts()[process]), { timeoutMs: 15_000 });
+      await waitFor(async () => (await activity())?.state === 'idle', { label: 'the process gone' });
+    };
+    await runTo('bg', 'tasks 1 20000');
+    await stopAndClose(0);
+    // With no process, the stored activity answers: idle, the task stopped.
+    expect(await activity()).toMatchObject({ state: 'idle' });
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    // The next turn starts a new process, which still lists it.
+    await runTo('again', 'hello');
+    expect(starts()).toHaveLength(2);
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    // Clear finished with a process: its ledger drops the task and reports it, which stores it.
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 1 });
+    expect(await listed()).toEqual([]);
+    await waitFor(() => lastEvent()?.tasks.length === 0, { label: 'the cleared activity reported' });
+    // Without a process: the stored row is rewritten, and an event says so.
+    await runTo('bg2', 'tasks 1 20000'); // on the second process, still alive
+    await stopAndClose(1);
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    const before = events.length;
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 1 });
+    await waitFor(() => events.slice(before).some(e => e.type === 'session.activity' && e.sessionId === session.id && e.payload.tasks.length === 0), { label: 'the cleared stored activity announced' });
+    expect(await listed()).toEqual([]);
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 0 });
+    // Deleting finished tasks is the person's: only an interactive client may ask.
+    const headless = await engine.connect({ clientKind: 'headless' });
+    await expect(headless.call('session.clearFinished', { sessionId: session.id })).rejects.toMatchObject({ code: 'permission_denied' });
+    await expect(client.call('session.clearFinished', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    await headless.close();
+  }, 60_000);
+
   test('stopping one background task ends only that task, and Claude\'s reason comes back when it will not', async () => {
     const { client, events, session, runTo } = await boot();
     await runTo('bg', 'tasks 2 20000');

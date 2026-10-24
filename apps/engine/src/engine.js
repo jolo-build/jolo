@@ -48,6 +48,24 @@ export { OwnershipError, SchemaError } from "./storage/index.js";
 
 
 /**
+ * What a conversation's process is doing, as it changes. A new state or a task started or ended is kept for replay, and
+ * stored as the conversation's activity so its finished tasks outlive the process and the engine; progress alone is only
+ * sent to those listening now. A conversation deleted meanwhile has no one to tell and nothing to keep.
+ * @param {import('./storage/index.js').Storage} storage
+ * @param {import('node:events').EventEmitter | undefined} previews
+ * @param {string} sessionId @param {any} activity @param {string} reason
+ */
+export function recordActivity(storage, previews, sessionId, activity, reason) {
+  if (!storage.getSession(sessionId)) return;
+  const payload = activityPayload(activity);
+  if (reason === 'progress') { previews?.emit('activity', { sessionId, activity: payload }); return; }
+  storage.transaction(() => {
+    storage.appendEvent({ sessionId, type: 'session.activity', payload });
+    storage.saveSessionActivity(sessionId, payload);
+  });
+}
+
+/**
  * The account options are separate from `fetchImpl` because tests and the desktop stub the account
  * server without touching model traffic.
  * @param {{ paths: any, build?: string, idleMs?: number, migrationsDir?: string, env?: Record<string, string | undefined>, fetchImpl?: import('./providers/transport.js').FetchLike, accountFetchImpl?: import('./providers/transport.js').FetchLike, accountSecrets?: any, log?: any }} options
@@ -142,13 +160,9 @@ export function createEngine(options) {
     // One Claude process per conversation, kept between turns so the background work it started gets to finish.
     const emptyResultGraceMs = Number((options.env ?? process.env).JOLO_EMPTY_RESULT_GRACE_MS ?? EMPTY_RESULT_GRACE_MS);
     hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId),
-      // What a conversation's process is doing goes to clients as it changes; a conversation deleted meanwhile has no one to tell.
-      // A new state or a task started or ended is kept for replay; progress alone is only sent to those listening now.
-      onActivity: (sessionId, activity, reason) => {
-        if (!storage.getSession(sessionId)) return;
-        if (reason === 'progress') runs?.previews.emit('activity', { sessionId, activity: activityPayload(activity) });
-        else storage.appendEvent({ sessionId, type: 'session.activity', payload: activityPayload(activity) });
-      } });
+      onActivity: (sessionId, activity, reason) => recordActivity(storage, runs?.previews, sessionId, activity, reason),
+      // A new process starts from the tasks the conversation's last one left (see recordActivity).
+      history: sessionId => storage.getSessionActivity(sessionId) });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
       mcpConfig, links: hostedLinks, emptyResultGraceMs, dialogs,
       providerFactory, settings: settingsService, native: jolo,

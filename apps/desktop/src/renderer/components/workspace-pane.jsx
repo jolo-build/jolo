@@ -20,7 +20,7 @@ import { PermissionNotice } from "./permission-notice.jsx";
 import { DialogModal, dialogSummary } from "./dialog-modal.jsx";
 import { ActivityLine } from "./activity-line.jsx";
 import { ActivityPanel, ForceStopDialog } from "./activity-panel.jsx";
-import { backgroundTasks, childRows, forceStopOffered, plural, runningTasks, stopFor } from "../activity.js";
+import { backgroundTasks, childRows, clearFinishedTasks, forceStopOffered, plural, runningTasks, stopFor } from "../activity.js";
 import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
@@ -121,7 +121,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const [stop, setStop] = useState(/** @type {import('../activity.js').StopState | null} */ (null)); // the last Stop background work, for the conversation that sent it
   const [forceStop, setForceStop] = useState(/** @type {import('../activity.js').StopResult | null} */ (null)); // the stop whose force-stop the person is confirming
-  const [clearedTasks, setClearedTasks] = useState(/** @type {import('../activity.js').ClearedTasks} */ ({})); // the finished tasks the Activity panel's Clear finished hid
+  const [clearedTasks, setClearedTasks] = useState(/** @type {import('../activity.js').ClearedTasks} */ ({})); // the finished tasks the Activity panel's Clear finished hid at once, and still hides should the engine not delete them
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, pendingDialog, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
   const panelTabs = usePanelTabs(panelScope, (file, remaining) => {
@@ -561,7 +561,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
             <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
             <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
-              cleared={clearedTasks} onClear={setClearedTasks} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)}
+              cleared={clearedTasks} onClear={next => clearFinishedTasks(next, { hide: setClearedTasks, remove: state.clearFinished })} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)}
               childTasks={family.children} delegations={delegationsBySession} onOpenTask={id => reportError(() => state.selectSession(id))} onStopChild={runId => reportError(() => state.call('run.cancel', { runId }))} />}</div>
           </div>
         </aside>

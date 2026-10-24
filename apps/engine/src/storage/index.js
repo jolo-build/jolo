@@ -419,6 +419,35 @@ export class Storage {
     });
   }
 
+  // ---- what a conversation's agent process did ----------------------------------------------
+  // The latest activity snapshot of a conversation (activityPayload: its running tasks and finished ones, bounded to a
+  // frame), kept so that its finished tasks outlive the process and the engine.
+
+  /** Keep a conversation's latest activity snapshot in place of the one before. */
+  saveSessionActivity(sessionId, payload) {
+    this.db.query("INSERT INTO session_activity (session_id, payload, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(session_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at")
+      .run(sessionId, JSON.stringify(payload), now());
+  }
+
+  /** A conversation's latest activity snapshot, or null when it never had one. */
+  getSessionActivity(sessionId) {
+    const row = this.db.query("SELECT payload FROM session_activity WHERE session_id = ?1").get(sessionId);
+    return row ? JSON.parse(row.payload) : null;
+  }
+
+  /** Delete a conversation's finished tasks from its stored snapshot; how many went (0 without a snapshot). */
+  clearFinishedActivity(sessionId) {
+    return this.transaction(() => {
+      const payload = this.getSessionActivity(sessionId);
+      if (!payload) return 0;
+      const kept = payload.tasks.filter(task => task.status === 'running');
+      const cleared = payload.tasks.length - kept.length;
+      // Nothing finished is left, so none is left out either.
+      if (cleared) this.saveSessionActivity(sessionId, { ...payload, tasks: kept, truncated: false });
+      return cleared;
+    });
+  }
+
   /** Older workspace tasks missed automatic naming; recover only genuinely empty names. */
   repairUntitledSessions() {
     const rows = this.db.query(`SELECT s.id, r.prompt FROM sessions s JOIN runs r ON r.id = (

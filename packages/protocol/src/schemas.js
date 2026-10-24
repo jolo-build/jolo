@@ -929,7 +929,7 @@ export const MethodSchemas = {
     params: z.object({ sessionId: Id, beforeOrdinal: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).default(100) }),
     result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), pendingDialogs: z.array(EventPayloadSchemas['dialog.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
   },
-  /** What the conversation's agent process is doing now; null when it has none. */
+  /** What the conversation's agent process is doing now; with none, what its last one left (idle); null when it never had one. */
   "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },
   /**
    * Stop the background work of the conversation's agent process, leaving its turn alone: every running task. `stopped`
@@ -940,6 +940,11 @@ export const MethodSchemas = {
     params: z.object({ sessionId: Id }),
     result: z.object({ requested: z.number().int().nonnegative(), stopped: z.number().int().nonnegative(), escalated: z.boolean() }),
   },
+  /**
+   * Delete the conversation's finished tasks for good (Clear finished): from its process's tasks, or from its stored
+   * activity when it has no process. `cleared` is how many went. For interactive clients.
+   */
+  "session.clearFinished": { params: z.object({ sessionId: Id }), result: z.object({ cleared: z.number().int().nonnegative() }) },
   /** Stop one background task of the conversation's agent process; `error` says why not ('no process' when it has none). */
   "session.stopTask": { params: z.object({ sessionId: Id, taskId: Id }), result: z.object({ ok: z.boolean(), error: z.string().nullable() }) },
   /**

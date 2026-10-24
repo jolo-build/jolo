@@ -381,6 +381,8 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const stopBackground = useCallback(async () => call("session.stopBackground", { sessionId: sessionRef.current }), []);
   const stopTask = useCallback(async (taskId) => call("session.stopTask", { sessionId: sessionRef.current, taskId }), []);
   const closeProcess = useCallback(async () => call("session.closeProcess", { sessionId: sessionRef.current }), []);
+  // Deletes the conversation's finished tasks in the engine; an older engine rejects (unknown method), and the caller keeps its own hide.
+  const clearFinished = useCallback(async () => call("session.clearFinished", { sessionId: sessionRef.current }), []);
   const resolveDialog = useCallback(async (dialogId, response) => {
     const open = dialogs.current;
     await call("dialog.resolve", { dialogId, response });
@@ -534,7 +536,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     plans, refreshPlans,
     schedules, refreshSchedules,
     openProject, selectSession, newSession, newChat, send, sendNow, removeQueued, cancel, refreshSettings, resolvePermission, resumeRun, loadDiff, loadFile, revertChange,
-    stopBackground, stopTask, closeProcess, resolveDialog, dismissDialog, delegationList,
+    stopBackground, stopTask, closeProcess, clearFinished, resolveDialog, dismissDialog, delegationList,
     call,
   };
 }

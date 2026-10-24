@@ -13,6 +13,7 @@ import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { CONTINUATION_PREFIX, isContinuation } from "../agents/claude-stream.js";
 import { withTaskChoice } from "../agents/hosted.js";
+import { endedActivity } from "../agents/claude-link.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
@@ -277,11 +278,32 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const pendingDialogs = dialogs?.pendingForSession(sessionId) ?? [];
       return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, pendingDialogs, hasOlder, cursor: storage.maxSeq() };
     }),
-    // What the conversation's agent process is doing now, for a client that joins while its work runs.
+    // What the conversation's agent process is doing now, for a client that joins while its work runs. With no process,
+    // what its last one left, as it reads now that it is gone (see endedActivity); the read stores nothing, and the next
+    // process starts from it and stores the change. Null when it never had a process.
     "session.activity": ({ sessionId }) => {
       if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const activity = hostedLinks?.get(sessionId)?.activity;
-      return { activity: activity ? activityPayload(activity) : null };
+      if (activity) return { activity: activityPayload(activity) };
+      const stored = storage.getSessionActivity(sessionId);
+      return { activity: stored ? activityPayload(endedActivity(stored)) : null };
+    },
+    // Delete the conversation's finished tasks for good (the panel's Clear finished): from its process's ledger, which
+    // reports and so stores the change, or with no process from its stored activity, announced here.
+    "session.clearFinished": ({ sessionId }, conn) => {
+      requireInteractive(conn, "only an interactive client can clear a conversation's finished tasks");
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      if (link) return { cleared: link.clearFinished() };
+      return storage.transaction(() => {
+        const stored = storage.getSessionActivity(sessionId);
+        if (!stored) return { cleared: 0 };
+        // A task its gone process left running reads stopped, and goes with the other finished ones.
+        if (stored.tasks.some(task => task.status === "running")) storage.saveSessionActivity(sessionId, endedActivity(stored));
+        const cleared = storage.clearFinishedActivity(sessionId);
+        if (cleared) storage.appendEvent({ sessionId, type: "session.activity", payload: activityPayload(endedActivity(storage.getSessionActivity(sessionId))) });
+        return { cleared };
+      });
     },
     // Stop the background work of the conversation's agent process, or one task of it; the turn under way goes on.
     "session.stopBackground": async ({ sessionId }) => {

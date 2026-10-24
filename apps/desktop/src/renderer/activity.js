@@ -365,6 +365,17 @@ function processLine(running, now) {
 }
 
 /**
+ * Clear finished: the finished tasks listed now are hidden at once (`hide`, with what clearFinished worked out), then the
+ * engine is asked to delete them for good (`remove`). An engine that cannot (an older one, without session.clearFinished)
+ * leaves the local hide in place. Resolves whether the engine deleted them.
+ * @param {ClearedTasks} next @param {{ hide: (cleared: ClearedTasks) => void, remove: () => Promise<unknown> }} actions
+ */
+export function clearFinishedTasks(next, { hide, remove }) {
+  hide(next);
+  return Promise.resolve().then(remove).then(() => true, () => false);
+}
+
+/**
  * A child task as the board lists it (the parts the panel reads), and its delegation row as `delegation.list` returns it.
  * @typedef {{ sessionId: string, title: string, updatedAt: string, attention?: string | null, answerer?: { displayName?: string, model?: string | null } | null,
  *   run: { id: string, state: string, updatedAt: string, execution?: { model?: string | null } | null } | null }} ChildTask

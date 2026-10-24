@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, agentStatus, childRows, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, squaresInWords, statusWord, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, agentStatus, childRows, clearFinishedTasks, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, squaresInWords, statusWord, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
@@ -385,4 +385,15 @@ test('the activity line counts working child tasks: alone, after the background 
   expect(activityLine(activity([workflow({ started: 10 })]), { now: START + 40_000, children: 2 })?.text).toBe('Workflow demo · 00:30 · 2 child tasks');
   expect(activityLine(activity([]), { now: START, children: 0 })).toBeNull();
   expect(activityLine(activity([]), { now: START })).toBeNull();
+});
+
+test('Clear finished hides the finished tasks at once, then asks the engine to delete them; an engine that cannot leaves the hide', async () => {
+  const hidden = [];
+  let asked = 0;
+  const next = { t1: '2026-10-24T10:01:00.000Z' };
+  expect(await clearFinishedTasks(next, { hide: (value) => hidden.push(value), remove: async () => { asked += 1; return { cleared: 1 }; } })).toBe(true);
+  expect([hidden, asked]).toEqual([[next], 1]);
+  // An older engine has no session.clearFinished: the local hide stays, and nothing is thrown.
+  expect(await clearFinishedTasks(next, { hide: (value) => hidden.push(value), remove: async () => { throw Object.assign(new Error('unknown method session.clearFinished'), { code: 'method_not_found' }); } })).toBe(false);
+  expect(hidden).toEqual([next, next]);
 });

@@ -157,8 +157,9 @@ test("tasks that ignore the stop are force-stopped by closing the process, after
     t.type("y");
     await t.gone("Background work:");
     await t.seen("Claude's process closed; its background work ended.");
-    // The process is gone (its activity reads as none), and the last word of it had both stubborn tasks end with it.
-    await waitFor(async () => (await t.client.call("session.activity", { sessionId: t.session.id })).activity === null, { label: "the process ended", timeoutMs: 15000 });
+    // The process is gone, and the last word of it had both stubborn tasks end with it; its activity still lists them as it
+    // left them (idle, both failed), from the conversation's stored activity.
+    await waitFor(async () => { const { activity } = await t.client.call("session.activity", { sessionId: t.session.id }); return activity?.state === "idle" && activity.tasks.length === 2 && activity.tasks.every((task) => task.status === "failed"); }, { label: "the process ended, its tasks kept as it left them", timeoutMs: 15000 });
     const last = t.events.filter((event) => event.type === "session.activity" && event.sessionId === t.session.id).at(-1);
     expect(last.payload.state).toBe("idle");
     expect(last.payload.tasks.map((task) => task.status)).toEqual(["failed", "failed"]);

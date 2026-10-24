@@ -473,3 +473,12 @@ test('without children there is no child-task section; Clear finished leaves the
   expect(html).not.toContain('Old command');
   expect(html).toContain('data-session-id="ses_k"');
 });
+
+test('with no process, what its last one left is listed: an idle activity of finished tasks reads Finished N, not Nothing running', () => {
+  const html = render({ ...activity([task({ status: 'stopped', description: 'Earlier command', summary: 'The process ended before it finished' }), task({ status: 'completed', description: 'Earlier agent' })]), state: 'idle' });
+  expect(html).toContain('<summary><span>Finished 2</span>');
+  expect(html).toContain('The process ended before it finished');
+  expect(html).not.toContain('Nothing running');
+  expect(html).not.toContain('Stop background work');
+  expect(html).toContain('aria-label="Clear finished"');
+});

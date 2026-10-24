@@ -97,6 +97,18 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await evaluate(`[...${confirm}.querySelectorAll('button')].find(item => item.textContent === 'Close process').click()`);
   await waitFor(`!document.querySelector('.activity-line') && ${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'failed' && row.querySelector('.activity-task-meta').textContent.includes('Failed'))`, 'closing the process ended both tasks, which read failed', 20_000);
   await waitFor('!document.querySelector("dialog.modal[open]")', 'the confirmation closed');
+  // The process is gone, and its tasks outlive it: the engine answers them from the conversation's stored activity.
+  const stored = async () => (await bridge.rawCall('session.activity', { sessionId: await evaluate('window.__joloSmoke.state().sessionId') })).activity;
+  const deadline = Date.now() + 15_000;
+  let kept = await stored();
+  while (!(kept?.state === 'idle' && kept.tasks.length === 2 && kept.tasks.every(task => task.status === 'failed')) && Date.now() < deadline) { await new Promise(resolve => setTimeout(resolve, 100)); kept = await stored(); }
+  assert.deepEqual([kept?.state, kept?.tasks.map(task => task.status)], ['idle', ['failed', 'failed']], 'the closed process\'s tasks are still listed by the engine');
+  // Clear finished deletes them for good: from the panel at once, and from the engine, so the next process does not bring them back.
+  await evaluate("document.querySelector('.activity-panel .activity-heading button[aria-label=\"Clear finished\"]').click()");
+  await waitFor(`${rows}.length === 0`, 'Clear finished removed the failed tasks from the panel');
+  const clearedBy = Date.now() + 10_000;
+  while ((await stored())?.tasks.length && Date.now() < clearedBy) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual((await stored())?.tasks, [], 'Clear finished deleted the tasks in the engine');
 
   // A workflow is one task: it names the line with its phase and finished agents from Claude's progress report, shows as
   // one card titled with its name, its two agents and its one phase with a square per agent, whose chevron opens a line per
@@ -122,6 +134,8 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   const squares = `[...${phase}.querySelectorAll('.phase-squares span')].map(item => item.dataset.status)`;
   await waitFor(`document.querySelectorAll('.activity-panel .workflow-card').length === 1 && !${card}.closest('.finished-tasks') && ${card}.querySelector('.workflow-title').textContent === 'demo' && ${words(`${metas}[0]`)} === 'Workflow Running'`, 'the Activity panel shows one running workflow card titled demo');
   await waitFor(`${metas}[1]?.firstChild.textContent === '2 agents' && !${card}.textContent.includes(' 0 tokens') && ${card}.querySelectorAll('.workflow-phase').length === 1 && ${words(`${phase}.querySelector('.phase-head')`)} === 'Say 0/2' && ${squares}.join() === 'running,running'`, 'the workflow card shows its two agents, its phase Say 0/2 with two running squares, and no 0 tokens');
+  // This turn started a new process, and the tasks Clear finished deleted stayed gone.
+  assert.equal(await evaluate(`${rows}.length`), 0, 'the cleared tasks did not come back with the new process');
   // The phase is closed until its chevron is clicked; open, it is a table of its agents: a header row (Agent, Model,
   // Tokens, Time), then a row per agent with its status square, its label and its model, the columns lined up.
   const agentCells = scope => `[...${scope}.querySelectorAll('.phase-agent')].map(row => [...row.querySelectorAll('[role=cell]')].slice(0, 4).map(cell => cell.textContent))`;
@@ -169,7 +183,7 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await waitFor("window.__joloSmoke.state().assistantText.includes('Workflow quick done.')", 'Claude reported the completed workflow', 20_000);
   await completed('the report of the completed workflow completed');
 
-  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a table of its agents (Agent, Model, Tokens, Time, the columns lined up, a status square per row), and Stop background work ends it, its squares reading stopped; a workflow that completes shows Claude\'s summary and its output file set apart below its phases, and an agent\'s preview opens whole from its row');
+  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed, are still listed once the process is gone, and Clear finished deletes them for good, past the next process; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a table of its agents (Agent, Model, Tokens, Time, the columns lined up, a status square per row), and Stop background work ends it, its squares reading stopped; a workflow that completes shows Claude\'s summary and its output file set apart below its phases, and an agent\'s preview opens whole from its row');
   report.checks.push('a running task stops alone by the square at the top right of its row, named Stop <its description>, and moves under Finished while the other runs on');
   report.checks.push('a Workflow call shows in the chat as a compact card titled with the workflow\'s name, reading Workflow 2 agents and its elapsed time with a running square per agent, whose head opens the Activity panel; it reads Stopped with its squares as the panel\'s once stopped, and a workflow that completes reads Completed with two done squares');
 }

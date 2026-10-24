@@ -41,6 +41,22 @@ export const EMPTY_RESULT_GRACE_MS = 20_000;
 const BUFFER_LIMIT = 20_000;
 /** The calls that run a subagent (a skill run in a fork does too), whose subagents are traced. */
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task', 'Skill']);
+/** What a task its process left running says of its end, when the process is gone without a word about it. */
+export const ENDED_SUMMARY = 'The process ended before it finished';
+
+/**
+ * A conversation's stored activity as it reads once its process is gone: idle, and each task the snapshot still had
+ * running stopped, at the snapshot's time, with ENDED_SUMMARY unless it had a summary of its own. The stored snapshot is
+ * left as it was.
+ * @param {{ state: string, tasks: TaskRecord[], updatedAt: string, truncated?: boolean }} activity
+ */
+export function endedActivity(activity) {
+  return {
+    ...activity, state: 'idle',
+    tasks: activity.tasks.map((task) => (task.status === 'running' ? { ...task, status: /** @type {const} */ ('stopped'), endedAt: activity.updatedAt, summary: task.summary ?? ENDED_SUMMARY } : task)),
+  };
+}
+
 /** How long the turn reporting finished background work may take to begin, while it still counts as work. */
 export const REPORT_GRACE_MS = 3_000;
 /** How often a link reports its activity at most while its tasks progress; a change of its state is reported at once. */
@@ -202,12 +218,14 @@ export function removeScratch(dir, log, context = {}) {
 /**
  * The links of this engine, one per conversation at most.
  * `lifetime` is told while a process has background work running, which keeps the engine up for it with no client.
- * `onActivity` is told what a process is doing as that changes (see `link.activity`), and why.
+ * `onActivity` is told what a process is doing as that changes (see `link.activity`), and why. `history` answers a
+ * conversation's stored activity, which a new process starts from (see endedActivity), or null.
  * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, scratchRoot?: string, lifetime?: any,
- *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity, reason: ActivityReason) => void }} options
+ *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity, reason: ActivityReason) => void,
+ *   history?: (sessionId: string) => { state: string, tasks: TaskRecord[], updatedAt: string } | null }} options
  * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
-export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {} }) {
+export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {}, history = () => null }) {
   /** @type {Map<string, any>} sessionId -> link */
   const links = new Map();
   return {
@@ -223,8 +241,10 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
      */
     open({ sessionId, workspaceId, agentId, identity, cwd, prepare, onClosed = null }) {
       if (links.get(sessionId)?.alive) throw new Error('this conversation already has an agent process');
+      let seed = null;
+      try { seed = history(sessionId); } catch (error) { log.warn('could not read the conversation\'s earlier tasks', { sessionId, error: String(error?.message ?? error) }); }
       const link = createLink({
-        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited,
+        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, seed,
         onBackground: (running) => { if (running) lifetime?.workStarted(); else lifetime?.workFinished(); },
         onActivity: (activity, reason) => onActivity(sessionId, activity, reason),
         // Forgotten the moment the process is gone, before anything waiting on the link is told.
@@ -248,7 +268,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
   };
 }
 
-function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity, /** @type {ActivityReason} */ _reason) => {}, onEnded }) {
+function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, seed = null, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity, /** @type {ActivityReason} */ _reason) => {}, onEnded }) {
   // One private scratch directory per process. Never grant access to all of /tmp.
   const scratchDir = realpathSync(mkdtempSync(path.join(scratchRoot, 'jolo-agent-')));
   const { argv, env } = prepare(scratchDir);
@@ -420,6 +440,15 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       if (task.status !== 'running') { tasks.delete(taskId); excess -= 1; }
     }
   };
+  // The conversation's earlier tasks, as its stored activity last had them: the history the panel shows outlives the
+  // process. Each keeps its id, so a later notice about one (Claude re-reports a previous process's command on resume)
+  // updates it in place. One the earlier process left running ended with it; that is reported, so it is stored so.
+  if (Array.isArray(seed?.tasks)) {
+    const settled = endedActivity(seed).tasks;
+    for (const task of settled) if (typeof task?.taskId === 'string') tasks.set(task.taskId, task);
+    trimTasks();
+    if (seed.tasks.some((task) => task?.status === 'running')) activityChanged('tasks');
+  }
   const trackTasks = (message) => {
     if (message.type !== 'system' || !TASK_NOTICES.has(message.subtype)) return;
     const taskId = textOf(message.task_id, TASK_ID_MAX);
@@ -629,6 +658,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
         onBackground(false);
         activityChanged('tasks');
       }
+      // A change still waiting out the coalescing is reported now, before anything awaits: once the link is forgotten a
+      // new process may start from the stored record, which a late report would then overwrite with this one's.
+      if (activityTimer) reportActivity();
       for (const answered of [...taskStops.values()]) answered({ ok: false, error: 'process ended' }); // no answer comes now
       tasksEnded();
       settleReport();
@@ -726,6 +758,16 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     get working() { return alive && (current !== null || buffer !== null || running() > 0 || reportDue !== null); },
     /** What the process is doing, with the tasks it runs and its recently finished ones; told to `onActivity` as it changes. */
     get activity() { return snapshotActivity(); },
+    /**
+     * Forget the finished tasks (Clear finished): how many went; the running ones stay. The change is reported at once,
+     * not coalesced, so that it is stored before the process could end and a new one start from the old record.
+     */
+    clearFinished() {
+      let cleared = 0;
+      for (const [taskId, task] of tasks) if (task.status !== 'running') { tasks.delete(taskId); cleared += 1; }
+      if (cleared) { activityAt = new Date().toISOString(); tasksChange = 'tasks'; reportActivity(); }
+      return cleared;
+    },
     /** Whether what waits for a run is only a background subagent's question, with the main thread idle. */
     get pendingQuestionOnly() {
       return buffer !== null && buffer.length > 0 && buffer[0].type === 'control_request' && mainIdle()

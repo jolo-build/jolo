@@ -969,3 +969,105 @@ test('closing a process with background work stops the tasks first, then the pro
   expect(link.activity.tasks.map(t => t.status)).toEqual(['stopped', 'stopped']);
   expect(link.alive).toBe(false);
 });
+
+/** A finished or running task as a stored activity carries it. */
+const storedTask = (taskId, status, fields = {}) => ({
+  taskId, runId: null, toolUseId: null, description: `task ${taskId}`, subagentType: null, taskType: 'local_bash', workflowName: null, phase: null, backgrounded: true, status,
+  startedAt: '2026-10-24T10:00:00.000Z', endedAt: status === 'running' ? null : '2026-10-24T10:01:00.000Z', usage: { totalTokens: null, toolUses: null, durationMs: null },
+  workflow: null, parentTaskId: null, spawnDepth: null, lastTool: null, progress: null, summary: null, outputFile: null, ...fields,
+});
+const stored = (tasks) => ({ state: 'background', tasks, truncated: false, updatedAt: '2026-10-24T10:02:00.000Z' });
+
+test('a new process starts from the conversation\'s stored tasks: finished ones as they were, one left running stopped, and says so', async () => {
+  const reports = [];
+  const registry = createHostedLinks({ log, history: (sessionId) => (sessionId === 'session' ? stored([storedTask('a', 'completed', { summary: 'done' }), storedTask('b', 'running')]) : null), onActivity: (sessionId, activity, reason) => reports.push({ sessionId, activity, reason }) });
+  const link = open(registry);
+  expect(link.activity.state).toBe('idle');
+  expect(link.activity.tasks.map((t) => [t.taskId, t.status, t.endedAt, t.summary])).toEqual([
+    ['a', 'completed', '2026-10-24T10:01:00.000Z', 'done'],
+    ['b', 'stopped', '2026-10-24T10:02:00.000Z', 'The process ended before it finished'],
+  ]);
+  // The stopped task is reported, so the conversation's stored activity no longer has it running.
+  await waitFor(() => reports.length > 0);
+  expect(reports[0]).toMatchObject({ sessionId: 'session', reason: 'tasks' });
+  expect(reports[0].activity.tasks.map((t) => t.status)).toEqual(['completed', 'stopped']);
+  // One with no history, or only finished tasks, starts as before and reports nothing.
+  const quiet = [];
+  const other = createHostedLinks({ log, history: () => stored([storedTask('a', 'completed')]), onActivity: (...args) => quiet.push(args) });
+  const plain = open(other, 'plain');
+  expect(plain.activity.tasks.map((t) => t.taskId)).toEqual(['a']);
+  await sleep(400);
+  expect(quiet).toEqual([]);
+  const none = createHostedLinks({ log });
+  expect(open(none, 'bare').activity.tasks).toEqual([]);
+  await registry.closeAll(); await other.closeAll(); await none.closeAll();
+});
+
+test('a seeded history keeps the newest finished tasks within the limit, and a later notice about one updates it in place', async () => {
+  const many = Array.from({ length: TASK_HISTORY_LIMIT + 5 }, (_, i) => storedTask(`old-${i}`, 'completed'));
+  const capped = open(createHostedLinks({ log, history: () => stored(many) }), 'capped');
+  expect(capped.activity.tasks).toHaveLength(TASK_HISTORY_LIMIT);
+  expect(capped.activity.tasks[0].taskId).toBe('old-5');
+  // Claude re-reports a task of an earlier process (the fixture's `notify-unknown` ends "ghost" it never started here).
+  const registry = createHostedLinks({ log, history: () => stored([storedTask('ghost', 'running')]) });
+  const link = open(registry);
+  await turn(link, 'notify-unknown', { init: true });
+  expect(link.activity.tasks.map((t) => [t.taskId, t.status])).toEqual([['ghost', 'failed']]);
+  // The row is the seeded one, updated: what the earlier process knew of it is still there.
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'task ghost', startedAt: '2026-10-24T10:00:00.000Z', endedAt: '2026-10-24T10:02:00.000Z', summary: 'The process ended before it finished' });
+  await capped.close({ reason: 'test' }); await registry.closeAll();
+});
+
+test('clearing a live process\'s finished tasks drops them from its ledger, keeps the running ones, and reports it', async () => {
+  const reports = [];
+  const registry = createHostedLinks({ log, history: () => stored([storedTask('a', 'completed'), storedTask('b', 'failed')]), onActivity: (sessionId, activity, reason) => reports.push({ activity, reason }) });
+  const link = open(registry);
+  await turn(link, 'tasks 1 20000', { init: true });
+  await waitFor(() => link.activity.tasks.some((t) => t.taskId === 'task-1' && t.status === 'running'));
+  const before = reports.length;
+  expect(link.clearFinished()).toBe(2);
+  expect(link.activity.tasks.map((t) => [t.taskId, t.status])).toEqual([['task-1', 'running']]);
+  await waitFor(() => reports.length > before);
+  expect(reports.at(-1).activity.tasks.map((t) => t.taskId)).toEqual(['task-1']);
+  expect(link.clearFinished()).toBe(0);
+  await registry.closeAll();
+});
+
+test('a clear is stored at once, so a process that ends right after cannot leave the cleared tasks for the next one', async () => {
+  const store = new Map();
+  const registry = createHostedLinks({ log, history: (sessionId) => store.get(sessionId) ?? null, onActivity: (sessionId, activity, reason) => { if (reason !== 'progress') store.set(sessionId, activityPayload(activity)); } });
+  store.set('session', stored([storedTask('a', 'completed'), storedTask('b', 'failed')]));
+  const link = open(registry);
+  await turn(link, 'hello', { init: true });
+  expect(link.clearFinished()).toBe(2);
+  expect(store.get('session').tasks).toEqual([]); // stored before anything else can happen
+  await link.close({ reason: 'test', graceful: false });
+  const next = open(registry);
+  expect(next.activity.tasks).toEqual([]);
+  await sleep(400); // past the coalescing: no late report of the old process brings them back
+  expect(store.get('session').tasks).toEqual([]);
+  await registry.closeAll();
+});
+
+test('a change still waiting to be reported when the process ends is reported before the link is forgotten', async () => {
+  // A process that, once initialized, reports a task of an earlier process as ended and leaves at once.
+  const script = `
+    process.stdin.setEncoding('utf8');
+    let pending = '';
+    process.stdin.on('data', (chunk) => {
+      pending += chunk;
+      if (!pending.includes('\\n')) return;
+      process.stdout.write(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'old', status: 'completed', summary: 'done before' }) + '\\n', () => process.exit(0));
+    });
+  `;
+  const reports = [];
+  let reportsWhenClosed = null;
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => reports.push({ activity, reason }) });
+  const link = registry.open({ sessionId: 'leaving', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', script], env: { PATH: process.env.PATH } }), onClosed: () => { reportsWhenClosed = reports.length; } });
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await link.closed;
+  expect(reportsWhenClosed).toBe(1);
+  expect(reports[0].activity.tasks.map((t) => [t.taskId, t.status])).toEqual([['old', 'completed']]);
+  await sleep(400);
+  expect(reports).toHaveLength(1); // and not again after it
+});
