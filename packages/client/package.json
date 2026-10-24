@@ -7,7 +7,9 @@
     ".": "./src/index.js",
     "./projection": "./src/projection.js",
     "./board": "./src/board.js",
-    "./run-state": "./src/run-state.js"
+    "./run-state": "./src/run-state.js",
+    "./dialogs": "./src/dialogs.js",
+    "./activity": "./src/activity.js"
   },
   "dependencies": {
     "@jolo/protocol": "workspace:*"
