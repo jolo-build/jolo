@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { clearFinished } from '../src/renderer/activity.js';
-import { ActivityPanel, ForceStopDialog, WorkflowCard, phaseKey } from '../src/renderer/components/activity-panel.jsx';
+import { ActivityPanel, ForceStopDialog, WorkflowCard, agentKey, phaseKey } from '../src/renderer/components/activity-panel.jsx';
 
 let ids = 0;
 /** @param {Record<string, any>} [options] @returns {import('../src/renderer/activity.js').TaskRecord} */
@@ -252,9 +252,9 @@ test('a task started by a listed task is drawn under it with ↳, one level deep
 const agentOf = ({ label = 'say:1', phase = 'Say', phaseIndex = 1, state = 'running', model = 'claude-fable-5-1', tokens = null, toolCalls = null, durationMs = null, resultPreview = null } = {}) => ({ label, phase, phaseIndex, state, model, tokens, toolCalls, durationMs, resultPreview });
 /** A workflow summary carrying its agent list, its phases numbered from 1 as the engine numbers them. */
 const listed = (/** @type {ReturnType<typeof summary>} */ value, /** @type {ReturnType<typeof agentOf>[]} */ list) => ({ ...value, phases: value.phases.map((item, i) => ({ ...item, index: i + 1 })), agents: { ...value.agents, list } });
-/** A workflow card alone, with the phases of `open` (their positions) open. */
-const renderCard = (/** @type {import('../src/renderer/activity.js').TaskRecord} */ item, /** @type {number[]} */ open = []) => renderToStaticMarkup(<ol>
-  <WorkflowCard task={item} nested={false} now={Date.now()} onStopTask={noop} openPhases={new Set(open.map(index => phaseKey(item.taskId, index)))} onPhaseToggle={noop} />
+/** A workflow card alone, with the phases of `open` (their positions) open, and the agents of `expanded` ([phase, agent]) expanded. */
+const renderCard = (/** @type {import('../src/renderer/activity.js').TaskRecord} */ item, /** @type {number[]} */ open = [], /** @type {[number, number][]} */ expanded = []) => renderToStaticMarkup(<ol>
+  <WorkflowCard task={item} nested={false} now={Date.now()} onStopTask={noop} openPhases={new Set([...open.map(index => phaseKey(item.taskId, index)), ...expanded.map(([index, at]) => agentKey(item.taskId, index, at))])} onPhaseToggle={noop} />
 </ol>);
 
 test('each phase of a workflow whose agents are listed has a chevron, and lists nothing until it is opened', () => {
@@ -264,17 +264,23 @@ test('each phase of a workflow whose agents are listed has a chevron, and lists 
   ]) });
   const closed = render(activity([flow]));
   expect(closed).toMatch(/<details class="workflow-phase" data-state="running"><summary><div class="phase-head"><span class="phase-title"><span>Say<\/span><svg[^>]*class="icon activity-disclosure"[^>]*>.*?<\/svg><\/span><span>1\/2<\/span><\/div><div class="phase-squares" role="img" aria-label="1 done, 1 running">.*?<\/div><\/summary><\/details>/);
-  for (const absent of ['phase-agents', 'phase-agent-line', 'agent 1 ok']) expect(closed).not.toContain(absent);
+  for (const absent of ['phase-agents', 'role="table"', 'agent 1 ok']) expect(closed).not.toContain(absent);
   // A phase none of whose agents is listed has nothing to open: no chevron.
   expect(closed).toContain('<div class="workflow-phase" data-state="pending"><div class="phase-head"><span>Check</span><span>0/0</span></div></div>');
   expect(count(closed, /<details class="workflow-phase"/g)).toBe(1);
-  // Opened, it lists one line per agent and its result.
+  // Opened, it is a table: a header row once (Agent, Model, Tokens, Time), then a row per agent with a status square
+  // (its state in words for assistive technology, and in the row's tooltip, never as a word in the row) and the agent's
+  // result preview as a last cell of its row, set on a line of its own by the stylesheet, only when there is one.
   const open = renderCard(flow, [0]);
   expect(open).toMatch(/<details class="workflow-phase" data-state="running" open="">/);
-  expect(open).toContain('<ol class="phase-agents"><li class="phase-agent" data-state="done"><div class="phase-agent-line" title="say:1 · Fable 5.1 · 20k tokens · 00:03 · Done"><span class="phase-agent-label">say:1</span> · Fable 5.1 · 20k tokens · 00:03 · Done</div><div class="phase-agent-result" title="agent 1 ok">agent 1 ok</div></li>');
-  // An agent that reported no spend yet, and no duration or result: its model and state alone, no 0 tokens.
-  expect(open).toContain('<li class="phase-agent" data-state="running"><div class="phase-agent-line" title="say:2 · Fable 5.1 · Running"><span class="phase-agent-label">say:2</span> · Fable 5.1 · Running</div></li></ol></details>');
-  expect(open).not.toMatch(/\b0 tokens/);
+  expect(open).toContain('<div class="phase-agents" role="table" aria-label="Say agents"><div class="phase-agents-head" role="row"><span role="columnheader">Agent</span><span role="columnheader">Model</span><span role="columnheader" class="num">Tokens</span><span role="columnheader" class="num">Time</span></div>');
+  expect(open).toContain('<div class="phase-agent" role="row" data-state="done" title="say:1 · Fable 5.1 · 20k tokens · 00:03 · Done"><span role="cell" class="phase-agent-label"><button type="button" class="agent-toggle" aria-expanded="false"><span class="agent-square" role="img" aria-label="Done" data-status="done"></span>say:1</button></span><span role="cell">Fable 5.1</span><span role="cell" class="num">20k</span><span role="cell" class="num">00:03</span><span role="cell" class="phase-agent-result" title="agent 1 ok">agent 1 ok</span></div>');
+  // An agent that reported no spend yet, and no duration or result: blank tokens and time, no 0, no preview.
+  expect(open).toContain('<div class="phase-agent" role="row" data-state="running" title="say:2 · Fable 5.1 · Running"><span role="cell" class="phase-agent-label"><span class="agent-square" role="img" aria-label="Running" data-status="running"></span>say:2</span><span role="cell">Fable 5.1</span><span role="cell" class="num"></span><span role="cell" class="num"></span></div></div></details>');
+  expect(count(open, /class="phase-agents-head"/g)).toBe(1);
+  expect(count(open, /class="phase-agent-result"/g)).toBe(1);
+  const table = open.slice(open.indexOf('class="phase-agents"'));
+  expect(table).not.toMatch(/\b0 tokens|>0<|>Done<|>Running</);
 });
 
 test('two phases with one title each list their own agents, matched by index', () => {
@@ -283,7 +289,7 @@ test('two phases with one title each list their own agents, matched by index', (
     agentOf({ label: 'second:1', phase: 'Review', phaseIndex: 2 }),
   ]) });
   const html = renderCard(flow, [0, 1]);
-  const lists = [...html.matchAll(/<ol class="phase-agents">(.*?)<\/ol>/g)].map(match => [...match[1].matchAll(/<span class="phase-agent-label">([^<]*)<\/span>/g)].map(label => label[1]));
+  const lists = [...html.matchAll(/<div class="phase-agents" role="table" aria-label="Review agents">(.*?)<\/details>/g)].map(match => [...match[1].matchAll(/<span role="cell" class="phase-agent-label"><span[^>]*><\/span>([^<]*)<\/span>/g)].map(label => label[1]));
   expect(lists).toEqual([['first:1'], ['second:1']]);
 });
 
@@ -292,8 +298,9 @@ test('an agent still running on a workflow that ended reads with the workflow’
     agentOf({ label: 'say:1', state: 'done', durationMs: 10_000, resultPreview: 'agent 1 ok' }),
     agentOf({ label: 'say:2', model: null }),
   ]) }), [0]));
-  expect(html).toContain('<div class="phase-agent-line" title="say:1 · Fable 5.1 · 00:10 · Done">');
-  expect(html).toContain('<li class="phase-agent" data-state="stopped"><div class="phase-agent-line" title="say:2 · Stopped"><span class="phase-agent-label">say:2</span> · Stopped</div></li>');
+  expect(html).toContain('<div class="phase-agent" role="row" data-state="done" title="say:1 · Fable 5.1 · 00:10 · Done">');
+  // No model either: an empty model cell, so the columns still line up.
+  expect(html).toContain('<div class="phase-agent" role="row" data-state="stopped" title="say:2 · Stopped"><span role="cell" class="phase-agent-label"><span class="agent-square" role="img" aria-label="Stopped" data-status="stopped"></span>say:2</span><span role="cell"></span><span role="cell" class="num"></span><span role="cell" class="num"></span></div>');
   expect(html).not.toMatch(/running/i);
 });
 
@@ -305,9 +312,12 @@ test('a workflow from an engine before the agent list keeps its phases as they w
 
 test('a finished workflow card shows its notification’s summary and its output file; a running one neither', () => {
   const done = card(render(activity([workflow({ workflowName: 'demo', description: 'Workflow demo', status: 'completed', summary: 'Dynamic workflow "Workflow demo" completed', outputFile: '/tmp/demo.output', progress: 'Say: say:2', lastTool: 'say:2' })])));
-  expect(done).toContain('<div class="card-meta"><span>Workflow</span><span>Completed</span></div><div class="activity-summary" title="Dynamic workflow &quot;Workflow demo&quot; completed">Dynamic workflow &quot;Workflow demo&quot; completed</div><div class="activity-output" title="/tmp/demo.output">Output: demo.output</div></li>');
+  // Set apart below the phases, in a group of their own.
+  expect(done).toContain('<div class="card-meta"><span>Workflow</span><span>Completed</span></div><div class="workflow-ending"><div class="activity-summary" title="Dynamic workflow &quot;Workflow demo&quot; completed">Dynamic workflow &quot;Workflow demo&quot; completed</div><div class="activity-output" title="/tmp/demo.output">Output: demo.output</div></div></li>');
+  const phased = card(render(activity([workflow({ workflowName: 'demo', status: 'completed', summary: 'All said', workflow: summary([{ title: 'Say', agents: 1, done: 1, running: 0, failed: 0 }]) })])));
+  expect(phased.indexOf('class="workflow-ending"')).toBeGreaterThan(phased.indexOf('class="workflow-phases"'));
   const running = card(render(activity([workflow({ workflowName: 'demo', progress: 'Say: say:1', lastTool: 'say:1' })])));
-  for (const absent of ['activity-summary', 'activity-output', 'activity-now', 'say:1']) expect(running).not.toContain(absent);
+  for (const absent of ['workflow-ending', 'activity-summary', 'activity-output', 'activity-now', 'say:1']) expect(running).not.toContain(absent);
 });
 
 const CLEAR = '<button type="button" class="icon-button" aria-label="Clear finished" title="Clear finished"><svg';
@@ -390,4 +400,36 @@ test('two hundred tasks, sixteen of them workflows, render in one static pass', 
   expect(count(html, /class="workflow-card"/g)).toBe(16);
   expect(count(html, /class="task-row"/g)).toBe(184);
   expect(html).toContain('<span>Finished 36</span>');
+});
+
+test('an agent with a result preview opens it in full from its row, its label a button that says so; one without has nothing to open', () => {
+  const preview = 'Mars, the fourth planet from the Sun, is a cold, dusty desert world with a thin atmosphere.\nIt has two moons.';
+  const flow = workflow({ workflowName: 'planets', workflow: listed(summary([{ title: 'Write', agents: 2, done: 1, running: 1, failed: 0 }]), [
+    agentOf({ label: 'sentence:Mars', phase: 'Write', state: 'done', resultPreview: preview }),
+    agentOf({ label: 'sentence:Jupiter', phase: 'Write' }),
+  ]) });
+  const closed = renderCard(flow, [0]);
+  expect(closed).toContain('<div class="phase-agent" role="row" data-state="done" title="sentence:Mars · Fable 5.1 · Done"><span role="cell" class="phase-agent-label"><button type="button" class="agent-toggle" aria-expanded="false">');
+  const opened = renderCard(flow, [0], [[0, 0]]);
+  expect(opened).toContain('<div class="phase-agent" role="row" data-state="done" data-expanded="" title="sentence:Mars · Fable 5.1 · Done"><span role="cell" class="phase-agent-label"><button type="button" class="agent-toggle" aria-expanded="true">');
+  expect(opened).toContain(`<span role="cell" class="phase-agent-result" title="${preview}">${preview}</span>`);
+  // The agent without a preview has no button and no expanded state, whichever agents are open.
+  expect(opened).toContain('<div class="phase-agent" role="row" data-state="running" title="sentence:Jupiter · Fable 5.1 · Running"><span role="cell" class="phase-agent-label"><span class="agent-square"');
+  expect(count(opened, /class="agent-toggle"/g)).toBe(1);
+  expect(count(opened, /data-expanded/g)).toBe(1);
+  // Agent keys are their own: opening an agent opens no phase.
+  expect(renderCard(flow, [], [[0, 0]])).not.toContain('phase-agents');
+});
+
+test('a task Claude reports without a start is named by its summary, not repeated below, else by its kind and id; never a blank line', () => {
+  const html = render(activity([
+    task({ description: '', taskType: 'local_bash', status: 'stopped', summary: "Background shell command didn't finish before the previous session ended", outputFile: '/tmp/left.output', startedAt: '2026-10-24T00:00:02.000Z' }),
+    task({ taskId: 'b8q2', description: '', taskType: 'local_bash', status: 'stopped', startedAt: '2026-10-24T00:00:01.000Z' }),
+  ]));
+  expect(html).toContain('<span class="activity-task-name" title="Background shell command didn&#x27;t finish before the previous session ended">Background shell command didn&#x27;t finish before the previous session ended</span>');
+  expect(count(html, /Background shell command didn&#x27;t finish/g)).toBe(2); // its text and its tooltip, once
+  expect(html).not.toContain('activity-summary');
+  expect(html).toContain('Output: left.output'); // the output file still shows when the summary is the name
+  expect(html).toContain('<span class="activity-task-name" title="Command b8q2">Command b8q2</span>');
+  expect(html).not.toMatch(/<span class="activity-task-name" title="">/);
 });

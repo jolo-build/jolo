@@ -15,6 +15,8 @@ const meta = (/** @type {(string | null)[]} */ parts) => parts.filter(Boolean).j
 
 /** Which phase of which workflow card is open, as the panel keeps it: the task's id and the phase's position. */
 export const phaseKey = (/** @type {string} */ taskId, /** @type {number} */ index) => `${taskId}\u0000${index}`;
+/** Which agent of an open phase shows its result preview in full, kept in the same set: its phase's key and its position. */
+export const agentKey = (/** @type {string} */ taskId, /** @type {number} */ index, /** @type {number} */ at) => `${phaseKey(taskId, index)}\u0000${at}`;
 
 /**
  * A card's or a row's first line: its name (after `↳` when it is drawn under the task that started it), its elapsed time
@@ -43,16 +45,20 @@ function Ending({ detail }) {
 }
 
 /**
- * A task that is not a workflow: its description, then its kind, status, tokens and tool uses, those it reported, and while
+ * A task that is not a workflow: its description (else its summary, else its kind and id), then its kind, status, tokens and tool uses, those it reported, and while
  * it runs what it does now (its progress line under the status, else the tool it last used on the status line); once it
  * ended, how (see Ending).
  * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void }} props
  */
 function TaskRow({ task, nested, now, onStopTask }) {
   const uses = task.usage.toolUses;
-  const detail = taskDetail(task);
+  // A task Claude reported only by its end (a background command a previous process left) has no description: it is
+  // named by its summary, which is then not repeated below, else by its kind and id.
+  const name = task.description || task.summary || `${taskKind(task)} ${task.taskId}`;
+  const found = taskDetail(task);
+  const detail = !task.description && name === task.summary ? { ...found, summary: null } : found;
   return <li className="task-row" data-state={task.status} data-nested={nested ? '' : undefined}>
-    <ItemHead task={task} name={task.description} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} />
+    <ItemHead task={task} name={name} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} />
     <div className="activity-task-meta">{meta([taskKind(task), statusWord(task.status), tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
     {detail.now && <div className="activity-now" title={detail.now}>{detail.now}</div>}
     <Ending detail={detail} />
@@ -60,17 +66,43 @@ function TaskRow({ task, nested, now, onStopTask }) {
 }
 
 /**
- * One agent of a workflow phase, as Claude's progress last listed it: its label, model, tokens (none while it reported no
- * spend), duration and status in one line, and a preview of its result below, each in full on hover.
- * @param {{ agent: import('../activity.js').WorkflowAgent, taskStatus: TaskRecord['status'] }} props
+ * An open phase's agents as Claude Code's panel shows them: a table of Agent, Model, Tokens and Time with its header row
+ * once, then a row per agent (see AgentRow). A grid of `display: contents` rows, so the columns line up across agents.
+ * Which agents show their preview in full the panel keeps with its open phases (`open`, by agentKey).
+ * @param {{ agents: import('../activity.js').WorkflowAgent[], taskStatus: TaskRecord['status'], keyOf: (at: number) => string, label: string,
+ *   open: Set<string>, onToggle: (key: string, open: boolean) => void }} props
  */
-function AgentLine({ agent, taskStatus }) {
+function AgentTable({ agents, taskStatus, keyOf, open, onToggle, label }) {
+  return <div className="phase-agents" role="table" aria-label={label}>
+    <div className="phase-agents-head" role="row"><span role="columnheader">Agent</span><span role="columnheader">Model</span><span role="columnheader" className="num">Tokens</span><span role="columnheader" className="num">Time</span></div>
+    {agents.map((agent, at) => <AgentRow key={at} agent={agent} taskStatus={taskStatus} expanded={open.has(keyOf(at))} onToggle={expand => onToggle(keyOf(at), expand)} />)}
+  </div>;
+}
+
+/**
+ * One agent of a workflow phase, as Claude's progress last listed it: a square for its status (in words for assistive
+ * technology and in the row's tooltip, never as a word in the row), its label, model, tokens (blank while it reported no
+ * spend) and duration (blank until it has one), and a preview of its result, which the stylesheet sets on a line of its
+ * own under the row, cut to one line, in full on hover. Clicking the row, or its label's button from the keyboard, shows
+ * that preview in full and wrapped, and again cuts it. Nothing else opens: the stream carries no agent's full output,
+ * only this preview (and the workflow's output file, once it ended).
+ * @param {{ agent: import('../activity.js').WorkflowAgent, taskStatus: TaskRecord['status'], expanded: boolean, onToggle: (expand: boolean) => void }} props
+ */
+function AgentRow({ agent, taskStatus, expanded, onToggle }) {
   const status = agentStatus(agent, taskStatus);
-  const rest = meta([modelLabel(agent.model) || null, tokens(agent.tokens), agent.durationMs === null ? null : formatElapsed(agent.durationMs), AGENT_WORDS[status]]);
-  return <li className="phase-agent" data-state={status}>
-    <div className="phase-agent-line" title={meta([agent.label, rest])}>{agent.label && <span className="phase-agent-label">{agent.label}</span>}{agent.label ? ` · ${rest}` : rest}</div>
-    {agent.resultPreview && <div className="phase-agent-result" title={agent.resultPreview}>{agent.resultPreview}</div>}
-  </li>;
+  const model = modelLabel(agent.model) || '';
+  const time = agent.durationMs === null ? '' : formatElapsed(agent.durationMs);
+  const square = <span className="agent-square" role="img" aria-label={AGENT_WORDS[status]} data-status={status} />;
+  const preview = Boolean(agent.resultPreview);
+  // A click toggles the preview; a drag that selected some of its text is not a click (the selection stays).
+  return <div className="phase-agent" role="row" data-state={status} data-expanded={preview && expanded ? '' : undefined} title={meta([agent.label, model, tokens(agent.tokens), time, AGENT_WORDS[status]])}
+    onClick={preview ? () => { if (getSelection()?.isCollapsed !== false) onToggle(!expanded); } : undefined}>
+    <span role="cell" className="phase-agent-label">{preview ? <button type="button" className="agent-toggle" aria-expanded={expanded}>{square}{agent.label}</button> : <>{square}{agent.label}</>}</span>
+    <span role="cell">{model}</span>
+    <span role="cell" className="num">{agent.tokens ? formatTokens(agent.tokens) : ''}</span>
+    <span role="cell" className="num">{time}</span>
+    {agent.resultPreview && <span role="cell" className="phase-agent-result" title={agent.resultPreview}>{agent.resultPreview}</span>}
+  </div>;
 }
 
 /**
@@ -79,8 +111,8 @@ function AgentLine({ agent, taskStatus }) {
  * description, and its phases, each with how many of its agents are done and a square per agent (see phaseSquares). The
  * agents and phases come from Claude's progress report; without it, none of them. The agent the last report named is
  * the phases' tooltip while the workflow runs, and nothing once it ended. A phase whose agents Claude listed opens, by its
- * chevron, to one line per agent (see AgentLine); one with none listed, or from an engine before the list, has no chevron.
- * Once the workflow ended, the card says how (see Ending). Which phases are open the panel keeps (`openPhases`, by
+ * chevron, to a table of its agents (see AgentTable); one with none listed, or from an engine before the list, has no
+ * chevron. Once the workflow ended, the card says how (see Ending), set apart below the phases. Which phases are open the panel keeps (`openPhases`, by
  * phaseKey), so a phase stays open when its card moves under Finished; a closed phase renders none of its agent lines, so
  * a large workflow does not redraw hundreds of them every second.
  * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void, openPhases: Set<string>,
@@ -93,6 +125,7 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
   const spent = tokens(task.usage.totalTokens);
   // Claude Code describes a workflow's task `Workflow <name>`, which says nothing the card's first two lines do not.
   const described = task.description !== name && task.description !== `Workflow ${name}` ? task.description : '';
+  const ending = taskDetail(task);
   return <li className="workflow-card" data-state={task.status} data-nested={nested ? '' : undefined}>
     <ItemHead task={task} name={name} nested={nested} className="workflow-title" now={now} onStopTask={onStopTask} />
     <div className="card-meta"><span>Workflow</span><span>{statusWord(task.status)}</span>{large && <span className="plan-mark">Large</span>}</div>
@@ -114,11 +147,11 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
             <div className="phase-head"><span className="phase-title"><span>{phase.title}</span><Icon name="chevron" size={12} className="activity-disclosure" /></span><span>{count}</span></div>
             {blocks}
           </summary>
-          {open && <ol className="phase-agents">{listed.map((agent, at) => <AgentLine key={at} agent={agent} taskStatus={task.status} />)}</ol>}
+          {open && <AgentTable agents={listed} taskStatus={task.status} keyOf={at => agentKey(task.taskId, index, at)} open={openPhases} onToggle={onPhaseToggle} label={`${phase.title} agents`} />}
         </details>;
       })}
     </div>}
-    <Ending detail={taskDetail(task)} />
+    {(ending.summary || ending.output) && <div className="workflow-ending"><Ending detail={ending} /></div>}
   </li>;
 }
 

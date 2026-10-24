@@ -857,11 +857,12 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .phase-head { display: flex; justify-content: space-between; gap: 10px; }
 .phase-head > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .phase-squares { display: flex; flex-wrap: wrap; gap: 4px; }
-/* One square per agent: done muted, running highlighted, failed red; pending (and stopped) only outlined. */
-.phase-squares span { width: 6px; height: 6px; border-radius: 2px; border: 1px solid var(--muted); }
-.phase-squares span[data-status="done"] { background: var(--muted); }
-.phase-squares span[data-status="running"] { background: var(--highlight); border-color: var(--highlight); }
-.phase-squares span[data-status="failed"] { background: var(--red); border-color: var(--red); }
+/* One square per agent, in a phase's row of squares and leading each agent's row of its table: done muted, running
+   highlighted, failed red; pending (and stopped) only outlined. */
+:is(.phase-squares span, .agent-square) { width: 6px; height: 6px; border-radius: 2px; border: 1px solid var(--muted); }
+:is(.phase-squares span, .agent-square)[data-status="done"] { background: var(--muted); }
+:is(.phase-squares span, .agent-square)[data-status="running"] { background: var(--highlight); border-color: var(--highlight); }
+:is(.phase-squares span, .agent-square)[data-status="failed"] { background: var(--red); border-color: var(--red); }
 .activity-list > .task-row { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .activity-list > .task-row:last-child { border-bottom: 0; }
 .activity-task-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -874,18 +875,32 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .activity-panel :is(.activity-summary, .activity-output) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-list > [data-nested] { margin-left: 16px; }
 .activity-panel .activity-nest { color: var(--muted); }
-/* A phase whose agents are listed: its head and squares are the summary, its chevron turns as it opens to one line per
-   agent (its label, then model, tokens, duration and state muted) and the agent's result below in mono. */
+/* A phase whose agents are listed: its head and squares are the summary, its chevron turns as it opens to a table of
+   its agents (see below). */
 .activity-panel details.workflow-phase { display: block; }
 .activity-panel details.workflow-phase > summary { display: flex; flex-direction: column; gap: 5px; list-style: none; cursor: default; }
 .activity-panel details.workflow-phase > summary::-webkit-details-marker { display: none; }
 .activity-panel .phase-title { display: flex; align-items: center; gap: 4px; }
 .activity-panel .phase-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-panel details.workflow-phase[open] .activity-disclosure { transform: rotate(90deg); }
-.activity-panel .phase-agents { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 8px 0 2px; padding: 0; }
-.activity-panel :is(.phase-agent-line, .phase-agent-result) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.activity-panel .phase-agent-label { color: var(--text); }
-.activity-panel .phase-agent-result { font: 11px/1.6 var(--mono); }
+/* An open phase's agents, as Claude Code's panel lists them: one grid whose header and rows are `display: contents`, so
+   Agent, Model, Tokens and Time line up across agents, Tokens and Time right-aligned in tabular figures. A row leads
+   with its status square; its result preview takes a quiet line of its own under it, indented to the label, cut to
+   one line until the row is clicked, then shown whole. Nothing lit, no stripes, no rules between rows. */
+.activity-panel .phase-agents { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; column-gap: 12px; row-gap: 4px; align-items: baseline; margin: 8px 0 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.activity-panel :is(.phase-agents-head, .phase-agent) { display: contents; }
+.activity-panel .phase-agents-head > * { color: var(--muted); font-size: 11px; }
+.activity-panel .phase-agents .num { text-align: right; }
+.activity-panel .phase-agent > * { color: var(--muted); white-space: nowrap; }
+.activity-panel .phase-agent > .phase-agent-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.activity-panel .agent-square { display: inline-block; vertical-align: middle; margin: -2px 6px 0 0; }
+.activity-panel .agent-toggle { display: block; width: 100%; padding: 0; border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.activity-panel .agent-toggle:hover { background: none; }
+.activity-panel .agent-toggle:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .phase-agent > .phase-agent-result { grid-column: 1 / -1; min-width: 0; padding-left: 12px; overflow: hidden; text-overflow: ellipsis; font: 11px/1.6 var(--mono); }
+.activity-panel .phase-agent[data-expanded] > .phase-agent-result { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* How a workflow ended, its summary and output file, set apart below its phases. */
+.activity-panel .workflow-ending { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
 .terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* xterm's fit reads the host's computed width, so its padding must sit outside it or the last columns are cut off. */

@@ -86,7 +86,8 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await completed('the turn that started the stubborn tasks completed');
   await selectPanel(evaluate, waitFor, 'Activity');
   await waitFor(`${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'running')`, 'the Activity panel lists both stubborn tasks running');
-  await evaluate(`${button('.activity-line', 'Stop background work')}.click()`);
+  // The activity line no longer carries a stop (76df83c): Stop background work is the Activity panel's.
+  await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
   const forceStop = button('.activity-panel .panel-note', 'Force stop');
   await waitFor(`document.querySelector('.activity-panel .panel-note')?.textContent.includes('Some tasks did not stop') && Boolean(${forceStop})`, 'a stop the tasks ignored offers Force stop', 20_000);
   await evaluate(`${forceStop}.click()`);
@@ -121,14 +122,18 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   const squares = `[...${phase}.querySelectorAll('.phase-squares span')].map(item => item.dataset.status)`;
   await waitFor(`document.querySelectorAll('.activity-panel .workflow-card').length === 1 && !${card}.closest('.finished-tasks') && ${card}.querySelector('.workflow-title').textContent === 'demo' && ${words(`${metas}[0]`)} === 'Workflow Running'`, 'the Activity panel shows one running workflow card titled demo');
   await waitFor(`${metas}[1]?.firstChild.textContent === '2 agents' && !${card}.textContent.includes(' 0 tokens') && ${card}.querySelectorAll('.workflow-phase').length === 1 && ${words(`${phase}.querySelector('.phase-head')`)} === 'Say 0/2' && ${squares}.join() === 'running,running'`, 'the workflow card shows its two agents, its phase Say 0/2 with two running squares, and no 0 tokens');
-  // The phase is closed until its chevron is clicked; open, it lists each agent with its model and state.
-  const agentLines = `[...${phase}.querySelectorAll('.phase-agent-line')].map(item => item.textContent)`;
+  // The phase is closed until its chevron is clicked; open, it is a table of its agents: a header row (Agent, Model,
+  // Tokens, Time), then a row per agent with its status square, its label and its model, the columns lined up.
+  const agentCells = scope => `[...${scope}.querySelectorAll('.phase-agent')].map(row => [...row.querySelectorAll('[role=cell]')].slice(0, 4).map(cell => cell.textContent))`;
+  const agentSquares = scope => `[...${scope}.querySelectorAll('.phase-agent .agent-square')].map(square => square.getAttribute('aria-label'))`;
+  const aligned = scope => `(() => { const head = [...${scope}.querySelectorAll('.phase-agents-head > *')]; const rows = [...${scope}.querySelectorAll('.phase-agent')]; const edge = (cell, side) => cell.getBoundingClientRect()[side]; return head.map(cell => cell.textContent).join() === 'Agent,Model,Tokens,Time' && rows.length > 0 && rows.every(row => { const cells = row.querySelectorAll('[role=cell]'); return Math.abs(edge(cells[1], 'left') - edge(head[1], 'left')) < 1 && Math.abs(edge(cells[2], 'right') - edge(head[2], 'right')) < 1 && Math.abs(edge(cells[3], 'right') - edge(head[3], 'right')) < 1; }); })()`;
   assert.equal(await evaluate(`${phase}.tagName === 'DETAILS' && !${phase}.open && Boolean(${phase}.querySelector('summary .activity-disclosure'))`), true);
   await evaluate(`${phase}.querySelector('summary').click()`);
-  await waitFor(`${phase}.open && ${agentLines}.length === 2 && /^say:1 · Fable 5\\.1 · /.test(${agentLines}[0]) && /^say:2 · Fable 5\\.1 · /.test(${agentLines}[1])`, 'the Say phase opens to a line per agent, say:1 first, with its model');
+  await waitFor(`${phase}.open && ${agentCells(phase)}.length === 2 && ${agentCells(phase)}[0][0] === 'say:1' && ${agentCells(phase)}[0][1] === 'Fable 5.1' && ${agentCells(phase)}[1][0] === 'say:2' && ${agentCells(phase)}[1][1] === 'Fable 5.1'`, 'the Say phase opens to a table with a row per agent, say:1 first, with its model');
+  assert.equal(await evaluate(aligned(phase)), true, 'the agent table’s Model, Tokens and Time columns line up under their headers');
   await screenshot('workflow.png');
   await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
-  await waitFor(`!document.querySelector('.activity-line') && ${card}?.dataset.state === 'stopped' && ${words(`${metas}[0]`)} === 'Workflow Stopped' && !${card}.querySelector('button') && Boolean(${card}.closest('.finished-tasks'))`, 'Stop background work ended the workflow, listed among the finished', 20_000);
+  await waitFor(`!document.querySelector('.activity-line') && ${card}?.dataset.state === 'stopped' && ${words(`${metas}[0]`)} === 'Workflow Stopped' && !${card}.querySelector('.stop-task') && Boolean(${card}.closest('.finished-tasks'))`, 'Stop background work ended the workflow, listed among the finished', 20_000);
   // Its last report still lists its agents as started: their squares read stopped, as the workflow does, never running
   // (one that finished before the stop reads done).
   const done = Number(await evaluate(`${phase}.querySelector('.phase-head').lastChild.textContent.split('/')[0]`));
@@ -137,8 +142,8 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   // The chat card reads the same: Stopped, its squares as the panel's.
   await waitFor(`${chatCard('demo')}?.dataset.state === 'stopped' && /^Workflow 2 agents \\d\\d:\\d\\d Stopped$/.test(${chatWords('demo')})`, 'the chat card of the stopped workflow reads Stopped');
   assert.deepEqual(await evaluate(chatSquares('demo')), [...Array(done).fill('done'), ...Array(2 - done).fill('stopped')]);
-  // Its agent lines read the same, and the phase stayed open through the stop.
-  assert.equal(await evaluate(`${phase}.open && ${agentLines}.at(-1).endsWith(' · Stopped') && !${phase}.textContent.includes('Running')`), true);
+  // Its agents' squares read the same, and the phase stayed open through the stop.
+  assert.equal(await evaluate(`${phase}.open && ${agentSquares(phase)}.at(-1) === 'Stopped' && !${agentSquares(phase)}.includes('Running') && !${phase}.textContent.includes('Running')`), true);
 
   // A workflow that completes shows how it ended: Claude's summary, and its output file by name with the path on hover.
   await send('workflow quick 1500');
@@ -147,12 +152,24 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   const quick = "[...document.querySelectorAll('.activity-panel .workflow-card')].find(item => item.querySelector('.workflow-title').textContent === 'quick')";
   await waitFor(`${quick}?.dataset.state === 'completed' && Boolean(${quick}.closest('.finished-tasks')) && ${quick}.querySelector('.activity-summary')?.textContent === 'Dynamic workflow "Workflow quick" completed'`, 'the completed workflow card shows its summary', 20_000);
   assert.deepEqual(await evaluate(`(() => { const output = ${quick}.querySelector('.activity-output'); return [output.textContent, output.title]; })()`), ['Output: quick.output', '/tmp/quick.output']);
+  // Its summary and output sit apart below its phases; its phase opens to its two finished agents, each with a preview
+  // of its result on one line, which a click on the agent's row shows whole.
+  assert.equal(await evaluate(`(() => { const ending = ${quick}.querySelector('.workflow-ending'); const phases = ${quick}.querySelector('.workflow-phases'); return Boolean(ending && ending.contains(${quick}.querySelector('.activity-summary'))) && ending.getBoundingClientRect().top >= phases.getBoundingClientRect().bottom && getComputedStyle(ending).borderTopWidth === '1px'; })()`), true, 'the completed workflow’s summary and output are set apart below its phases');
+  const quickPhase = `${quick}.querySelector('.workflow-phase')`;
+  await evaluate(`${quickPhase}.querySelector('summary').click()`);
+  await waitFor(`${quickPhase}.open && ${agentCells(quickPhase)}.length === 2 && ${agentSquares(quickPhase)}.join() === 'Done,Done' && ${quickPhase}.querySelectorAll('.phase-agent-result').length === 2`, 'the completed workflow’s phase lists its two done agents with their result previews');
+  assert.equal(await evaluate(aligned(quickPhase)), true, 'the completed workflow’s agent columns line up under their headers');
+  const firstAgent = `${quickPhase}.querySelector('.phase-agent')`;
+  await evaluate(`${firstAgent}.querySelector('.phase-agent-result').click()`);
+  await waitFor(`${firstAgent}.hasAttribute('data-expanded') && ${firstAgent}.querySelector('.agent-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(${firstAgent}.querySelector('.phase-agent-result')).whiteSpace === 'pre-wrap'`, 'a click on an agent’s preview shows its result whole');
   await screenshot('workflow-finished.png');
+  await evaluate(`${firstAgent}.querySelector('.agent-toggle').click()`);
+  await waitFor(`!${firstAgent}.hasAttribute('data-expanded') && ${firstAgent}.querySelector('.agent-toggle').getAttribute('aria-expanded') === 'false'`, 'its label’s button cuts the preview to one line again');
   await waitFor(`${chatCards}.length === 2 && ${chatCard('quick')}?.dataset.state === 'completed' && /^Workflow 2 agents \\d\\d:\\d\\d Completed$/.test(${chatWords('quick')}) && ${chatSquares('quick')}.join() === 'done,done'`, 'the chat card of the completed workflow reads Completed with two done squares');
   await waitFor("window.__joloSmoke.state().assistantText.includes('Workflow quick done.')", 'Claude reported the completed workflow', 20_000);
   await completed('the report of the completed workflow completed');
 
-  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a line per agent with its model, and Stop background work ends it, its squares and agent lines reading stopped; a workflow that completes shows Claude\'s summary and its output file');
+  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a table of its agents (Agent, Model, Tokens, Time, the columns lined up, a status square per row), and Stop background work ends it, its squares reading stopped; a workflow that completes shows Claude\'s summary and its output file set apart below its phases, and an agent\'s preview opens whole from its row');
   report.checks.push('a running task stops alone by the square at the top right of its row, named Stop <its description>, and moves under Finished while the other runs on');
   report.checks.push('a Workflow call shows in the chat as a compact card titled with the workflow\'s name, reading Workflow 2 agents and its elapsed time with a running square per agent, whose head opens the Activity panel; it reads Stopped with its squares as the panel\'s once stopped, and a workflow that completes reads Completed with two done squares');
 }
