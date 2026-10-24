@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { answerFor, answersFor, dialogKind, dialogSummary, dismissMessage, readQuestions } from "../src/dialogs.js";
 
 const question = { question: "tea or coffee?", header: "Drink", options: [{ label: "tea", description: "hot leaves" }, { label: "coffee", description: "" }], multiSelect: false };
-const multi = { ...question, question: "toppings?", options: [{ label: "milk" }, { label: "sugar" }, { label: "honey" }], multiSelect: true };
+const multi = { ...question, question: "toppings?", options: ["milk", "sugar", "honey"].map((label) => ({ label, description: "" })), multiSelect: true };
 
 test("questions are read so that no shape throws: text-less questions and label-less options are left out", () => {
   expect(readQuestions({ questions: [question, { header: "no text", options: [] }, { question: "bare?", options: [{ description: "no label" }, { label: "ok" }] }] })).toEqual([
