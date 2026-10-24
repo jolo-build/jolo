@@ -1,9 +1,10 @@
 // A task's title from whoever answers it, the way Claude Code and Codex name their chats.
 //
-// The first prompt names a task at once (its first 80 characters, Storage.assignSessionTitle). In the background the
-// task's answerer is then asked, on the cheapest model it has, for a short title, which takes the automatic one's place
-// unless the person renamed the task meanwhile. Anything that goes wrong leaves the automatic title and is only logged.
-import { automaticTitle } from "./storage/records.js";
+// A task this service claims keeps a blank title while its first prompt goes to the task's answerer, on the cheapest
+// model it has, for a short title; clients show a blank title on a task with a run as being named. The title is written
+// only while it is still blank, so a rename by the person meanwhile wins. Anything that goes wrong names the task after
+// the prompt's first 80 characters instead (Storage.assignSessionTitle), as a task the service does not claim is named
+// at once, and is only logged. A crash mid-naming is recovered at startup by Storage.repairUntitledSessions.
 import { collectSummary } from "./providers/retry.js";
 import { probeAgent } from "./agents/models.js";
 
@@ -107,15 +108,20 @@ const reasonOf = (error) => String(error?.message ?? error).slice(0, 300);
 const effortFor = (model) => (model?.thinkingMode === "adaptive" && EFFORT_PREFERENCE.find((effort) => Array.isArray(model.efforts) && model.efforts.includes(effort))) || null;
 
 /**
- * `suggest(session, prompt)` asks the session's answerer for a title for its first prompt, once per session, and writes
- * it in place of the automatic title. It never throws: its promise settles with the title written, or null.
+ * `claims(session)` says, cheaply and synchronously, whether the service names this task: its answerer is a configured
+ * Jolo provider (not the demo provider, not a local Ollama listing) or Claude Code. It stays true while the task is
+ * being named, so a second prompt in that time does not write its own first characters over the blank title.
+ * `suggest(session, prompt)` asks the answerer for a title for the first prompt and writes it while the title is blank;
+ * when that fails it names the task after the prompt's first characters. One attempt per task at a time: a second call
+ * while one is under way does nothing. It never throws: its promise settles with the title written, or null.
  * `JOLO_AUTO_TITLE=0` (or `off`) turns the service off, and then there is none.
  * @param {{ storage: any, providerFactory?: any, catalog?: any, agentModels?: any, supervisor?: any, log?: any, env?: Record<string, string | undefined>, timeoutMs?: number }} deps
- * @returns {{ suggest: (session: any, prompt: string) => Promise<string | null> } | null}
+ * @returns {{ claims: (session: any) => boolean, suggest: (session: any, prompt: string) => Promise<string | null> } | null}
  */
 export function createTitleService({ storage, providerFactory, catalog, agentModels, supervisor, log, env = process.env, timeoutMs = TIMEOUT_MS }) {
   if (/^(?:0|off)$/i.test(String(env?.JOLO_AUTO_TITLE ?? "").trim())) return null;
-  const asked = new Set();
+  /** Tasks being named now; an entry leaves when its attempt ends, whichever way. */
+  const naming = new Set();
   // The engine's log has no debug level; there a failed title is an info line, never anything the person sees.
   const note = (message, fields) => (log?.debug ?? log?.info)?.call(log, message, fields);
 
@@ -183,37 +189,56 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
     throw new Error(answer.failure ?? answer.note ?? `${manifest.displayName} did not answer`);
   };
 
+  /** The prompt's first characters, while the title is still blank: a task is never left unnamed. */
+  const fallBack = (sessionId, prompt) => {
+    try { storage.transaction(() => storage.assignSessionTitle(sessionId, prompt)); }
+    catch (error) { note("task not named after its prompt either", { sessionId, reason: reasonOf(error) }); }
+  };
+
   return {
+    claims(session) {
+      try {
+        if (!session?.id) return false;
+        // Codex, ACP agents and Antigravity are not asked yet: their tasks are named after the prompt at once.
+        if (session.agentId) return catalog?.get(session.agentId)?.transport === "claude-stream";
+        const captured = providerFactory?.capture(session, null);
+        return Boolean(captured) && captured.endpoint?.protocol !== "fake" && captured.endpoint?.listing !== "ollama";
+      } catch {
+        return false;
+      }
+    },
+
     async suggest(session, prompt) {
       const sessionId = session?.id ?? null;
+      if (!sessionId || naming.has(sessionId)) return null; // the attempt under way names it, or falls back
+      try { if (String(storage.getSession(sessionId)?.title ?? "x").trim()) return null; } // named meanwhile, or gone
+      catch (error) { note("task title not suggested", { sessionId, reason: reasonOf(error) }); return null; }
+      naming.add(sessionId);
       const controller = new AbortController();
       const deadline = Date.now() + timeoutMs;
       const timer = setTimeout(() => controller.abort(new Error(`no answer within ${timeoutMs / 1000} s`)), timeoutMs);
       try {
-        if (!sessionId || asked.has(sessionId)) return null;
-        asked.add(sessionId);
-        const automatic = automaticTitle(prompt);
-        if (!automatic) return null;
-        const text = Array.from(String(prompt).trim()).slice(0, PROMPT_MAX).join("");
+        const text = Array.from(String(prompt ?? "").trim()).slice(0, PROMPT_MAX).join("");
+        if (!text) return null;
         let answer;
         if (!session.agentId) answer = await fromProvider(session, text, controller.signal);
         else {
           const manifest = catalog.get(session.agentId);
-          // Codex, ACP agents and Antigravity are not asked yet: their tasks keep the automatic title.
-          if (manifest.transport !== "claude-stream") return null;
+          if (manifest.transport !== "claude-stream") throw new Error(`${manifest.displayName} is not asked for titles`);
           answer = await fromClaude(session, manifest, text, deadline);
         }
-        if (answer === null) return null;
+        if (answer === null) throw new Error("this task's provider is not asked for titles");
         if (controller.signal.aborted) throw controller.signal.reason;
         const title = titleFromAnswer(answer);
         if (!title) throw new Error("the answer held no title");
-        if (title === automatic) return null;
-        return storage.replaceAutomaticTitle(sessionId, automatic, title) ? title : null;
+        return storage.replaceBlankTitle(sessionId, title) ? title : null; // false: renamed or deleted meanwhile
       } catch (error) {
         note("task title not suggested", { sessionId, reason: reasonOf(error) });
+        fallBack(sessionId, prompt);
         return null;
       } finally {
         clearTimeout(timer);
+        naming.delete(sessionId);
       }
     },
   };

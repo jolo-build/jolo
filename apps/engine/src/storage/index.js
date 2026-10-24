@@ -408,12 +408,12 @@ export class Storage {
   }
 
   /**
-   * Put a suggested title in place of the automatic one, only while that is still the title: a rename by the person
+   * Put a task's generated title in place while its title is still blank (it is being named): a rename by the person
    * in the meantime wins, and a deleted task stays as it was. True when the title changed.
    */
-  replaceAutomaticTitle(id, automatic, title) {
+  replaceBlankTitle(id, title) {
     return this.transaction(() => {
-      const result = this.db.query("UPDATE sessions SET title = ?3, revision = revision + 1, updated_at = ?4 WHERE id = ?1 AND title = ?2 AND deleted_at IS NULL").run(id, automatic, title, now());
+      const result = this.db.query("UPDATE sessions SET title = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1 AND TRIM(title) = '' AND deleted_at IS NULL").run(id, title, now());
       if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
       return result.changes > 0;
     });

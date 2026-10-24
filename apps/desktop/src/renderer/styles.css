@@ -304,6 +304,15 @@ strong { font-weight: 550; }
 .sidebar .sidebar-chat { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 28px; padding: 4px 30px 4px 13px; margin: 0; text-align: left; font-size: 12px; line-height: 20px; background: transparent; }
 .sidebar .sidebar-chat:is(:hover, :focus-visible) { background: transparent; }
 .sidebar-chat :is(.task-title, .recent-chat-title) { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A task being named: a muted bar with a soft sweep where its title will be, until the title arrives. Its colors are
+   mixed from the muted text, not --subtle and --hover: those are the header's and a selected row's own backgrounds. */
+.title-shimmer { position: relative; display: inline-block; vertical-align: middle; width: 160px; max-width: 70%; height: 10px; border-radius: 5px; overflow: hidden; background: color-mix(in srgb, var(--muted) 16%, transparent); }
+.title-shimmer > span { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--muted) 18%, transparent), transparent); background-size: 200% 100%; animation: title-shimmer 1.4s ease-in-out infinite; }
+:is(.header-task-title, .pane-task-name) .title-shimmer { height: 12px; border-radius: 6px; }
+/* The window header's title sizes itself to its content, so a percentage there would be 70% of the bar's own width. */
+.header-task-title .title-shimmer { max-width: 100%; }
+@keyframes title-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .title-shimmer > span { animation: none; background: none; } }
 .sidebar-task-progress { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; justify-content: center; align-items: center; width: 26px; height: 26px; color: var(--muted); }
 /* A row's state sits where its options button appears; hovering swaps it for the button. */
 .sidebar-chat-row:has(.task-more):is(:hover, :has(:focus-visible)) .sidebar-task-progress { opacity: 0; }

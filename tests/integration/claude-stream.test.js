@@ -82,6 +82,8 @@ describe("Claude Code through its structured stream", () => {
     const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'named', prompt: 'summarise the release notes for me' });
     const named = await waitFor(() => events.find((e) => e.type === 'session.updated' && e.payload.session.id === session.id && e.payload.session.title.startsWith('Fixture title:')), { label: 'the suggested title', timeoutMs: 20_000 });
     expect(named.payload.session.title).toBe('Fixture title: summarise the release');
+    // Blank while it was being named: the prompt's first characters were never the title.
+    expect(events.filter((e) => e.type === 'session.updated' && e.payload.session.id === session.id).map((e) => e.payload.session.title)).toEqual(['Fixture title: summarise the release']);
     await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run finished', timeoutMs: 20_000 });
     expect((await client.call('session.page', { sessionId: session.id })).session.title).toBe('Fixture title: summarise the release');
   }, 30_000);

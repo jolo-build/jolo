@@ -3,6 +3,7 @@ import { readLastModelChoice, rememberModelChoice, newSessionModelChoice } from 
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useEngine } from "../use-engine.js";
 import { Sidebar } from "./sidebar.jsx";
+import { TitleShimmer } from "./sidebar-chat-row.jsx";
 import { Conversation } from "./conversation.jsx";
 import { ModelControls } from "./model-controls.jsx";
 import { Composer } from "./composer.jsx";
@@ -208,6 +209,9 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const agentName = (id) => agentCatalog.find((entry) => entry.id === id)?.displayName ?? id;
   const lastRun = projection ? [...projection.runs.values()].at(-1) : null;
   const session = sessions.find((item) => item.id === sessionId);
+  // A blank title on a conversation that has a run means it is being named: a shimmer stands in until the title lands.
+  const naming = !session?.title && Boolean(lastRun);
+  const taskTitle = naming ? "Naming…" : session?.title || (project?.standalone ? "New chat" : "New task");
   useEffect(() => { setAnswerer(null); setForceStop(null); }, [sessionId, project?.projectId]);
   const needsFolder = workspace?.needsFolder ?? project?.needsFolder ?? false;
   const linkFolder = () => reportError(async () => {
@@ -480,7 +484,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             {showSettings ? <span className="settings-window-title">Settings</span> : multi ? <span className="header-task-title">Workspace</span> : <>
             <button className="workspace-title" onClick={() => setPickerOpen(true)} title={project?.standalone ? 'Choose a workspace' : project?.rootPath} aria-label="Open project"><Icon name={project?.standalone ? 'chat' : 'folder'} size={14} /><span>{projectLabel}</span><Icon name="down" size={12} /></button>
             <span className="header-separator">/</span>
-            <h1 className="header-task-title" title={session?.title || (project?.standalone ? "New chat" : "New task")}>{session?.title || (project?.standalone ? "New chat" : "New task")}</h1>
+            <h1 className="header-task-title" title={taskTitle}>{naming ? <TitleShimmer /> : taskTitle}</h1>
             </>}
           </div>
           <div className="header-actions">
@@ -499,7 +503,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
       {multi && <div className="pane-heading">
         <span className={`pane-indicator ${pendingPermission || pendingDialog ? "needs-attention" : activeRun ? "is-running" : ""}`} title={pendingPermission ? "Needs your approval" : pendingDialog ? "Needs your answer" : runLabel(lastRun)} />
         <button className="pane-project" onClick={() => setPickerOpen(true)} title={project?.standalone ? 'Choose a workspace' : project?.rootPath ?? "Choose project and task"} aria-label="Choose project and task"><span>{projectLabel}</span><Icon name="down" size={11} /></button>
-        <span className="pane-heading-separator">/</span><h1 className="pane-task-name" title={session?.title || (project?.standalone ? "New chat" : "New task")}>{session?.title || (project?.standalone ? "New chat" : "New task")}</h1>
+        <span className="pane-heading-separator">/</span><h1 className="pane-task-name" title={taskTitle}>{naming ? <TitleShimmer /> : taskTitle}</h1>
         <div className="pane-actions">
           <button disabled={!canSplit} onClick={() => onSplit(pane.id, "x")} aria-label="Split right" title="Split right"><Icon name="splitRight" size={14} /></button>
           <button disabled={!canSplit} onClick={() => onSplit(pane.id, "y")} aria-label="Split below" title="Split below"><Icon name="splitBelow" size={14} /></button>

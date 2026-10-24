@@ -11,6 +11,11 @@ const progress = {
   completed: [null, 'Done'], failed: ['alert', 'Failed'], interrupted: ['alert', 'Interrupted'], cancelled: [null, 'Stopped'],
 };
 
+/** What stands for a title while a task is being named (its title is blank but it has a run): a muted, sweeping bar. */
+export function TitleShimmer() {
+  return <span className="title-shimmer" role="img" aria-label="Naming…"><span /></span>;
+}
+
 /**
  * One navigation row for both workspace tasks and standalone conversations: its state and title on one line, with the
  * agent, model, branch and folder in its tooltip. Child tasks are listed in their parent's conversation header, not
@@ -19,7 +24,9 @@ const progress = {
 export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentName = id => id, standalone = false, childTasks = [] }) {
   const drag = useTaskDrag();
   const childNeeds = childTasks.some(child => child.attention === 'needs_you');
-  const title = task.title || (standalone ? 'New chat' : 'New task');
+  // A blank title on a task that has a run means it is being named; a blank one without a run is new.
+  const naming = !task.title && Boolean(task.run);
+  const title = naming ? 'Naming…' : task.title || (standalone ? 'New chat' : 'New task');
   const own = progress[task.run?.state] ?? (task.attention === 'needs_you' ? ['alert', 'Needs you'] : [null, 'Ready']);
   const asks = ['alert', 'shield'].includes(own[0]);
   const needs = task.attention === 'needs_you' || childNeeds;
@@ -38,7 +45,7 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
     onKeyDown={onMenu ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); onMenu(task); } } : undefined}>
     <button className={`sidebar-chat ${standalone ? 'recent-chat' : 'task'}`} {...drag(target)} data-session-id={task.sessionId}
       aria-current={selected ? 'page' : undefined} title={`${title}\n${details}`} onClick={onOpen}>
-      <span className={standalone ? 'recent-chat-title' : 'task-title'}>{title}</span>
+      <span className={standalone ? 'recent-chat-title' : 'task-title'}>{naming ? <TitleShimmer /> : title}</span>
       {worktree && <span className="sidebar-task-worktree" role="img" aria-label="Worktree" title={workspacePath ? `Worktree: ${workspacePath}` : 'Worktree'}><Icon name="worktree" size={12} /></span>}
       {icon && <span className={`sidebar-task-progress${needs ? ' needs' : ''}${icon === 'spinner' ? ' working' : ''}`} role="img" aria-label={status}>
         <Icon name={icon} size={14} className={icon === 'spinner' ? 'activity-spin' : ''} />

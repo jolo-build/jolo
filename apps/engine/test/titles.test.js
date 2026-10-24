@@ -54,7 +54,7 @@ function runFixture(deps = {}) {
   const f = storageFixture();
   const service = createTitleService({ storage: f.storage, log: quiet, env: {}, ...deps });
   const asked = [];
-  const titles = service && { suggest: (session, prompt) => { const promise = service.suggest(session, prompt); asked.push(promise); return promise; } };
+  const titles = service && { claims: (session) => service.claims(session), suggest: (session, prompt) => { const promise = service.suggest(session, prompt); asked.push(promise); return promise; } };
   const runs = new RunService({ storage: f.storage, log: quiet, titles, lifetime: { workStarted() {}, workFinished() {} }, executor: { execute: async () => ({ outcome: 'completed' }) } });
   let sequence = 0;
   return {
@@ -152,23 +152,24 @@ describe('a title from what the model answered', () => {
   });
 });
 
-describe('a suggested title replaces only the automatic one', () => {
-  test('it is written, with session.updated, while the title is still the automatic one', () => {
+describe('a suggested title is written only on a blank title', () => {
+  test('it is written, with session.updated, while the title is blank; the prefix is written only while blank too', () => {
     const f = storageFixture();
     try {
       const session = f.chat();
-      const prompt = '  Count from 1 to 200\n slowly  ';
-      expect(f.storage.assignSessionTitle(session.id, '   ')).toBe(false);
-      expect(f.storage.assignSessionTitle(session.id, prompt)).toBe(true);
-      expect(f.storage.assignSessionTitle(session.id, 'a later prompt')).toBe(false);
-      const automatic = automaticTitle(prompt);
-      expect(automatic).toBe('Count from 1 to 200 slowly');
-      expect(f.storage.getSession(session.id).title).toBe(automatic);
       const before = f.storage.getSession(session.id);
       f.events.length = 0;
-      expect(f.storage.replaceAutomaticTitle(session.id, automatic, 'Counting to 200')).toBe(true);
+      expect(f.storage.replaceBlankTitle(session.id, 'Counting to 200')).toBe(true);
       expect(f.storage.getSession(session.id)).toMatchObject({ title: 'Counting to 200', revision: before.revision + 1 });
       expect(f.titlesOf(session.id)).toEqual(['Counting to 200']);
+      expect(f.storage.replaceBlankTitle(session.id, 'Counting again')).toBe(false);
+      const prompt = '  Count from 1 to 200\n slowly  ';
+      expect(automaticTitle(prompt)).toBe('Count from 1 to 200 slowly');
+      expect(f.storage.assignSessionTitle(session.id, prompt)).toBe(false);
+      const other = f.chat();
+      expect(f.storage.assignSessionTitle(other.id, '   ')).toBe(false);
+      expect(f.storage.assignSessionTitle(other.id, prompt)).toBe(true);
+      expect(f.storage.getSession(other.id).title).toBe('Count from 1 to 200 slowly');
     } finally { f.close(); }
   });
 
@@ -176,12 +177,11 @@ describe('a suggested title replaces only the automatic one', () => {
     const f = storageFixture();
     try {
       const session = f.chat();
-      f.storage.assignSessionTitle(session.id, 'Count from 1 to 200');
       const append = f.storage.appendEvent;
       f.storage.appendEvent = () => { throw new Error('event refused'); };
-      try { expect(() => f.storage.replaceAutomaticTitle(session.id, 'Count from 1 to 200', 'Counting to 200')).toThrow('event refused'); }
+      try { expect(() => f.storage.replaceBlankTitle(session.id, 'Counting to 200')).toThrow('event refused'); }
       finally { f.storage.appendEvent = append; }
-      expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200');
+      expect(f.storage.getSession(session.id).title).toBe('');
     } finally { f.close(); }
   });
 
@@ -189,43 +189,60 @@ describe('a suggested title replaces only the automatic one', () => {
     const f = storageFixture();
     try {
       const session = f.chat();
-      f.storage.assignSessionTitle(session.id, 'Count from 1 to 200');
       f.storage.updateSession(session.id, { title: 'My counting task' });
       f.events.length = 0;
-      expect(f.storage.replaceAutomaticTitle(session.id, automaticTitle('Count from 1 to 200'), 'Counting to 200')).toBe(false);
+      expect(f.storage.replaceBlankTitle(session.id, 'Counting to 200')).toBe(false);
       expect(f.storage.getSession(session.id).title).toBe('My counting task');
       const gone = f.chat();
-      f.storage.assignSessionTitle(gone.id, 'Count from 1 to 200');
       f.storage.updateSession(gone.id, { deleted: true });
       f.events.length = 0;
-      expect(f.storage.replaceAutomaticTitle(gone.id, automaticTitle('Count from 1 to 200'), 'Counting to 200')).toBe(false);
-      expect(f.storage.db.query('SELECT title FROM sessions WHERE id = ?1').get(gone.id).title).toBe('Count from 1 to 200'); // getSession hides it
+      expect(f.storage.replaceBlankTitle(gone.id, 'Counting to 200')).toBe(false);
+      expect(f.storage.db.query('SELECT title FROM sessions WHERE id = ?1').get(gone.id).title).toBe(''); // getSession hides it
       expect(f.events).toEqual([]);
     } finally { f.close(); }
   });
 });
 
+describe('whether the service will name a task', () => {
+  const claude = { get: (id) => ({ id, displayName: id, transport: id === 'claude' ? 'claude-stream' : 'codex-app-server' }) };
+  test('yes for a configured provider and for Claude Code; no for the demo provider, a local Ollama listing, no provider, Codex or an unknown agent', () => {
+    const f = storageFixture();
+    try {
+      const chat = f.chat(), claudeChat = f.chat({ agentId: 'claude' }), codexChat = f.chat({ agentId: 'codex' });
+      const claims = (providerFactory, session = chat, catalog = claude) => createTitleService({ storage: f.storage, log: quiet, env: {}, providerFactory, catalog }).claims(session);
+      expect(claims(fakeFactory())).toBe(true);
+      expect(claims(fakeFactory(), claudeChat)).toBe(true);
+      expect(claims(fakeFactory({ protocol: 'fake' }))).toBe(false);
+      expect(claims(fakeFactory({ protocol: 'openai-chat', listing: 'ollama' }))).toBe(false);
+      expect(claims(fakeFactory({ configured: false }))).toBe(false);
+      expect(claims(fakeFactory(), codexChat)).toBe(false);
+      expect(claims(fakeFactory(), f.chat({ agentId: 'gone' }), { get: () => { throw new Error('no manifest for agent gone'); } })).toBe(false);
+      expect(claims({ capture: () => { throw new Error('bad settings'); } })).toBe(false);
+    } finally { f.close(); }
+  });
+});
+
 describe('a chat Jolo answers is named by its provider\'s cheapest model', () => {
-  test('after the first run starts, with one request to the small model; the second run asks nothing', async () => {
+  test('the first run writes no prefix; the title lands on the blank title with one request to the small model, and the second run asks nothing', async () => {
     const providerFactory = fakeFactory({ answer: 'Title: "Counting to two hundred."' });
     const f = runFixture({ providerFactory });
     try {
       const session = f.chat();
       const prompt = '  Count from 1 to 200 slowly, one number per line  ';
       f.start(session, prompt);
-      expect(f.storage.getSession(session.id).title).toBe(automaticTitle(prompt));
+      expect(f.storage.getSession(session.id).title).toBe(''); // being named: no prefix in the meantime
+      expect(f.titlesOf(session.id)).toEqual([]);
       expect(f.asked).toHaveLength(0); // asked once the run is queued, not inside start
       await f.settle();
       expect(f.asked).toHaveLength(1);
       expect(f.storage.getSession(session.id).title).toBe('Counting to two hundred');
-      expect(f.titlesOf(session.id).at(-1)).toBe('Counting to two hundred');
+      expect(f.titlesOf(session.id)).toEqual(['Counting to two hundred']); // one session.updated, with the title
       expect(providerFactory.listed).toEqual(['acme']);
       expect(providerFactory.created).toEqual([{ preset: 'acme', model: 'acme-mini', effort: null }]); // it lists no efforts: none chosen, as a plain run
       expect(providerFactory.requests).toEqual([{ sessionId: session.id, runId: null, purpose: 'title', instructions: TITLE_INSTRUCTIONS, items: [{ kind: 'user_message', groupId: 'title', payload: { text: prompt.trim() } }], tools: [], maxOutputTokens: 1024 }]);
       f.start(session, 'now count backwards');
       await f.settle();
       expect(f.asked).toHaveLength(1);
-      expect(await f.service.suggest(f.storage.getSession(session.id), prompt)).toBeNull(); // one call per session
       expect(providerFactory.created).toHaveLength(1);
       expect(f.storage.getSession(session.id).title).toBe('Counting to two hundred');
     } finally { await f.close(); }
@@ -272,15 +289,44 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
     try {
       const session = f.chat();
       f.start(session, 'Count from 1 to 200 slowly');
+      expect(f.storage.getSession(session.id).title).toBe('');
+      await new Promise((resolve) => setTimeout(resolve, 0)); // the suggestion is under way
       f.storage.updateSession(session.id, { title: 'My own name' });
       release();
-      await f.settle();
+      expect(await f.settle()).toEqual([null]);
       expect(providerFactory.requests).toHaveLength(1);
       expect(f.storage.getSession(session.id).title).toBe('My own name');
+      // A rename before the suggestion begins asks nothing at all.
+      const early = f.chat();
+      f.start(early, 'Count from 1 to 200 slowly');
+      f.storage.updateSession(early.id, { title: 'Named first' });
+      await f.settle();
+      expect(providerFactory.requests).toHaveLength(1);
+      expect(f.storage.getSession(early.id).title).toBe('Named first');
     } finally { await f.close(); }
   });
 
-  test('a small model that cannot be made falls back to the chat\'s own; when that fails too, nothing happens', async () => {
+  test('a second prompt while the first is being named writes no prefix of its own, and asks nothing more', async () => {
+    /** @type {(value?: unknown) => void} */
+    let release = () => {};
+    const providerFactory = fakeFactory({ gate: new Promise((resolve) => { release = resolve; }) });
+    const f = runFixture({ providerFactory });
+    try {
+      const session = f.chat();
+      f.start(session, 'Count from 1 to 200 slowly');
+      await new Promise((resolve) => setTimeout(resolve, 0)); // the first suggestion is under way
+      f.start(session, 'and then backwards');
+      expect(f.storage.getSession(session.id).title).toBe('');
+      await new Promise((resolve) => setTimeout(resolve, 0)); // the second suggestion has started too, while the first still waits
+      release();
+      expect(await f.settle()).toEqual(['Counting to two hundred', null]);
+      expect(providerFactory.created).toHaveLength(1);
+      expect(f.storage.getSession(session.id).title).toBe('Counting to two hundred');
+      expect(f.titlesOf(session.id)).toEqual(['Counting to two hundred']);
+    } finally { await f.close(); }
+  });
+
+  test('a small model that cannot be made falls back to the chat\'s own; when that fails too, the prefix is the title', async () => {
     const fallback = fakeFactory({ refuse: ['acme-mini'], models: [{ id: 'acme-large', thinkingMode: 'adaptive', efforts: ['high', 'low'] }, { id: 'acme-mini', thinkingMode: 'adaptive', efforts: ['minimal'] }] });
     const f = runFixture({ providerFactory: fallback });
     try {
@@ -296,6 +342,7 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
     try {
       const session = g.chat();
       const run = g.start(session, 'Count from 1 to 200 slowly');
+      expect(g.storage.getSession(session.id).title).toBe('');
       expect(await g.settle()).toEqual([null]);
       expect(refused.created).toHaveLength(2);
       expect(g.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly');
@@ -304,7 +351,7 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
     } finally { await g.close(); }
   });
 
-  test('an answer that never ends is given up when the time runs out', async () => {
+  test('an answer that never ends is given up when the time runs out, and the prefix is the title', async () => {
     const providerFactory = fakeFactory({ stream: async function* (_request, signal) {
       await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
       yield { type: 'text_delta', itemId: 'title', text: 'Too late' };
@@ -321,7 +368,7 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
   test('the title is asked for once the run is queued and started, never ahead of it', async () => {
     const f = storageFixture();
     const order = [];
-    const titles = { suggest: async () => { order.push('title asked'); return null; } };
+    const titles = { claims: () => true, suggest: async () => { order.push('title asked'); return null; } };
     const runs = new RunService({ storage: f.storage, log: quiet, titles, lifetime: { workStarted() {}, workFinished() {} }, executor: { execute: async () => { order.push('run started'); return { outcome: 'completed' }; } } });
     try {
       runs.start({ sessionId: f.chat().id, requestId: 'first', prompt: 'Count from 1 to 200 slowly' });
@@ -337,18 +384,21 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
     try {
       const session = f.chat();
       f.start(session, 'Count from 1 to 200 slowly');
-      expect(await f.settle()).toEqual([null]);
+      expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly'); // not claimed: the prefix at once
+      expect(await f.settle()).toEqual([]);
       expect([providerFactory.listed, providerFactory.created]).toEqual([[], []]);
       expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly');
     } finally { await f.close(); }
   });
 
-  test('the demo provider, an unconfigured engine and answerers other than Claude are not asked', async () => {
+  test('the demo provider, an unconfigured engine and answerers other than Claude are not asked: the prefix at once, as before', async () => {
     for (const providerFactory of [fakeFactory({ protocol: 'fake' }), fakeFactory({ configured: false })]) {
       const f = runFixture({ providerFactory });
       try {
-        f.start(f.chat(), 'Count from 1 to 200 slowly');
-        expect(await f.settle()).toEqual([null]);
+        const session = f.chat();
+        f.start(session, 'Count from 1 to 200 slowly');
+        expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly');
+        expect(await f.settle()).toEqual([]);
         expect(providerFactory.created).toEqual([]);
       } finally { await f.close(); }
     }
@@ -360,7 +410,8 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
     try {
       const session = f.chat({ agentId: 'codex' });
       f.start(session, 'Count from 1 to 200 slowly');
-      expect(await f.settle()).toEqual([null]);
+      expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly');
+      expect(await f.settle()).toEqual([]);
       expect(providerFactory.created).toEqual([]);
       expect([listed, commands]).toEqual([[], []]);
       expect(f.storage.getSession(session.id).title).toBe('Count from 1 to 200 slowly');
@@ -407,6 +458,7 @@ describe('a chat Claude Code answers is named by one Claude process on its cheap
     try {
       const session = f.chat({ agentId: 'claude' });
       f.start(session, '  summarise the release notes for me  ');
+      expect(f.storage.getSession(session.id).title).toBe('');
       expect(await f.settle()).toEqual(['Fixture title: summarise the release']);
       expect(f.storage.getSession(session.id).title).toBe('Fixture title: summarise the release');
       expect(d.listed).toEqual(['claude']);
@@ -421,7 +473,7 @@ describe('a chat Claude Code answers is named by one Claude process on its cheap
     } finally { await f.close(); rmSync(dir, { recursive: true, force: true }); }
   }, 15_000);
 
-  test('a result that is an error, such as a sign-in Claude cannot use, leaves the title alone', async () => {
+  test('a result that is an error, such as a sign-in Claude cannot use, leaves the prefix as the title', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'jolo-titles-claude-'));
     const launcher = launcherIn(dir, `echo '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}'`);
     const d = deps(launcher, { models: [] });
