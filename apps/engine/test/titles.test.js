@@ -426,14 +426,15 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
 
 describe('a chat Claude Code answers is named by one Claude process on its cheapest model', () => {
   /**
-   * A `claude` that records its argv, the guardian grace it was given and what its stdin held as JSON, then runs `body`
-   * (default: the protocol fixture). Reading stdin to its end blocks until it is closed, as Claude's own read waits.
+   * A `claude` that records its argv, the guardian grace it was given and what its stdin held as JSON, then hands that
+   * stdin to `body` (default: the protocol fixture). Reading stdin to its end blocks until it is closed, as Claude's own
+   * read waits.
    */
   function launcherIn(dir, body = null) {
     const file = path.join(dir, 'claude');
     const log = path.join(dir, 'launch.json');
-    const record = `"${process.execPath}" -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), grace: process.env.JOLO_GUARDIAN_EOF_GRACE_MS ?? null, stdin: fs.readFileSync(0, "utf8") }))' "${log}" "$@"`;
-    writeFileSync(file, `#!/bin/sh\n${record}\n${body ?? `exec "${process.execPath}" "${FAKE_CLAUDE}" "$@"`}\n`);
+    const record = `"${process.execPath}" -e 'const fs = require("node:fs"); const stdin = fs.readFileSync(0, "utf8"); fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), grace: process.env.JOLO_GUARDIAN_EOF_GRACE_MS ?? null, stdin })); process.stdout.write(stdin)' "${log}" "$@"`;
+    writeFileSync(file, `#!/bin/sh\n${record} | ${body ?? `"${process.execPath}" "${FAKE_CLAUDE}" "$@"`}\n`);
     chmodSync(file, 0o755);
     const launch = () => JSON.parse(readFileSync(log, 'utf8'));
     return { file, argv: () => launch().argv, launch };
@@ -463,10 +464,10 @@ describe('a chat Claude Code answers is named by one Claude process on its cheap
       expect(f.storage.getSession(session.id).title).toBe('Fixture title: summarise the release');
       expect(d.listed).toEqual(['claude']);
       expect(d.commands).toEqual([{ model: null, effort: null, fast: null }]);
-      expect(launcher.argv()).toEqual(['--settings', '{}', '--print', '--output-format', 'json', '--model', 'haiku', '--no-session-persistence', '--setting-sources', '', '--tools', '', '--strict-mcp-config', '--max-turns', '1', '--system-prompt', TITLE_INSTRUCTIONS, '\nsummarise the release notes for me']);
+      expect(launcher.argv()).toEqual(['--settings', '{}', '--print', '--output-format', 'json', '--model', 'haiku', '--no-session-persistence', '--setting-sources', '', '--tools', '', '--strict-mcp-config', '--max-turns', '1', '--system-prompt', TITLE_INSTRUCTIONS]); // the prompt is not on the command line, where ps would show it
       // Stdin is closed at once, so Claude does not wait for input, and the guardian leaves it the rest of the deadline.
       const { grace, stdin } = launcher.launch();
-      expect(stdin).toBe('');
+      expect(stdin).toBe('summarise the release notes for me'); // on stdin, which is closed after it
       expect(Number(grace)).toBeGreaterThan(0);
       expect(Number(grace)).toBeLessThanOrEqual(20_000);
       expect(d.providerFactory.created).toEqual([]);
@@ -475,7 +476,7 @@ describe('a chat Claude Code answers is named by one Claude process on its cheap
 
   test('a result that is an error, such as a sign-in Claude cannot use, leaves the prefix as the title', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'jolo-titles-claude-'));
-    const launcher = launcherIn(dir, `echo '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}'`);
+    const launcher = launcherIn(dir, `{ cat >/dev/null; echo '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}'; }`); // reads its prompt first, as Claude does
     const d = deps(launcher, { models: [] });
     const f = runFixture(d);
     try {

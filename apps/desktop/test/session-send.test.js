@@ -45,10 +45,10 @@ test('an unfinished-run conflict propagates without creating a replacement sessi
   } })).rejects.toThrow('Finish or stop');
 });
 
-test('a new draft creates exactly one session with its selected answerer', async () => {
+test('a new draft creates exactly one session with its selected answerer, untitled so that its answerer can name it', async () => {
   let created = 0;
   const result = await sessionForSend({ sessionId: null, agentId: 'codex', prompt: 'start here', call() { throw new Error('unexpected call'); }, newSession(title, options) {
-    created++; expect(title).toBe('start here'); expect(options.agentId).toBe('codex'); return { id: 'new' };
+    created++; expect(title).toBe(''); expect(options.agentId).toBe('codex'); return { id: 'new' };
   } });
   expect(result.id).toBe('new');
   expect(created).toBe(1);

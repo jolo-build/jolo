@@ -45,13 +45,16 @@ const OUTPUT_REFRESH_MS = 2000;
 /**
  * What a task's output pane shows (see TaskOutput): `Loading output…` until the first answer; the output, after `… earlier
  * output left out` when its start was cut; with the process gone, that it has ended and, for a task that wrote one, its
- * output file by name (the full path on hover); any other error in its own words.
+ * output file by name (the full path on hover); with an engine from before the method, that it is not available; any
+ * other error in its own words.
  * @param {{ task: TaskRecord, state: { status: 'loading' } | { status: 'ready', result: { output: string, totalBytes: number, truncated: boolean } } | { status: 'error', error: { code?: string, message?: string } } }} props
  */
 export function TaskOutputView({ task, state }) {
   const note = (/** @type {string} */ text, /** @type {string | undefined} */ title = undefined) => <p className="task-output-note" title={title}>{text}</p>;
   if (state.status === 'loading') return <div className="task-output-pane">{note('Loading output…')}</div>;
   if (state.status === 'error') {
+    // An engine from before session.taskOutput, as the client reports one (Clear finished falls back the same way).
+    if (state.error?.code === 'unknown_method') return <div className="task-output-pane">{note('Not available with this engine')}</div>;
     if (state.error?.code !== 'no_process') { const message = state.error?.message || 'Could not read the output'; return <div className="task-output-pane">{note(message, message)}</div>; }
     const file = task.outputFile ? { name: task.outputFile.split('/').pop() || task.outputFile, path: task.outputFile } : null;
     return <div className="task-output-pane">{note('The process that ran it has ended')}{file && note(`Output file: ${file.name}`, file.path)}</div>;

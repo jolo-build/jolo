@@ -180,7 +180,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const send = async (prompt) => {
     let current = sessionRef.current;
     if (!current) {
-      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: prompt.slice(0, 80), ...(agentId ? { agentId } : {}) });
+      // Untitled: the engine names it, from its answerer's title or the prompt's first characters.
+      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "", ...(agentId ? { agentId } : {}) });
       current = created.session;
       sessionRef.current = current;
       setSession(current);

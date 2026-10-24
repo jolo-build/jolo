@@ -35,10 +35,10 @@
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
-// One-shot print mode, how Jolo asks for a task's title: the prompt is the last argument, and the one JSON result line
+// One-shot print mode, how Jolo asks for a task's title: the prompt is stdin, read to its end, and the one JSON result line
 // names it after the prompt's first three words.
 if (flags.has("--print") && flags.has("--output-format") && argv[argv.indexOf("--output-format") + 1] === "json" && !flags.has("--input-format")) {
-  const words = (argv.at(-1) ?? "").trim().split(/\s+/).slice(0, 3).join(" ");
+  const words = require("node:fs").readFileSync(0, "utf8").trim().split(/\s+/).slice(0, 3).join(" ");
   require("node:fs").writeSync(1, `${JSON.stringify({ type: "result", subtype: "success", result: `Fixture title: ${words}`, is_error: false })}\n`); // whole before the exit
   process.exit(0);
 }

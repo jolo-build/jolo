@@ -151,7 +151,8 @@ export class ChatSync {
         const artifact = this.storage.createArtifact({sessionId:session.id,kind:'text'}), bytes = Buffer.from(m.text);
         this.storage.artifacts.writeChunk(artifact.storageKey,0,bytes);
         this.storage.finalizeArtifact(artifact.id,bytes.length,createHash('sha256').update(bytes).digest('hex'));
-        const message = this.storage.insertMessage({sessionId:session.id,runId:null,role:m.role,artifactId:artifact.id,ordinal});
+        // A synced chat carries no times: its messages are not stamped with the moment they arrived here.
+        const message = this.storage.insertMessage({sessionId:session.id,runId:null,role:m.role,artifactId:artifact.id,ordinal,createdAt:null});
         this.storage.finishMessage(message.id,'complete',bytes.length);
         this.storage.insertItem({sessionId:session.id,kind:`${m.role}_message`,groupId:randomUUID(),payload:{text:m.text},messageId:message.id});
       }

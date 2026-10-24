@@ -606,7 +606,8 @@ const WorkflowAgentSchema = z.object({
  * each with its phase's index and title; an older engine sends none.
  */
 const WorkflowSummarySchema = z.object({
-  phases: z.array(z.object({ index: WorkflowCount.optional(), title: WorkflowTitle, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
+  // The engine cuts a phase's title to WORKFLOW_TITLE_MAX; the schema keeps taking the TASK_TEXT_MAX it once allowed.
+  phases: z.array(z.object({ index: WorkflowCount.optional(), title: TaskText, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
   agents: z.object({ total: WorkflowCount, running: WorkflowCount, done: WorkflowCount, failed: WorkflowCount, list: z.array(WorkflowAgentSchema).max(WORKFLOW_AGENTS_MAX).optional() }),
   current: TaskText.nullable(),
 });

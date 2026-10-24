@@ -522,6 +522,8 @@ test('the output pane shows the output, a note when earlier output was left out,
   expect(view({ task: { ...command, outputFile: null }, state: { status: 'error', error: { code: 'no_process', message: 'x' } } })).toBe('<div class="task-output-pane"><p class="task-output-note">The process that ran it has ended</p></div>');
   expect(view({ task: command, state: { status: 'error', error: { code: 'not_found', message: 'no such task' } } })).toBe('<div class="task-output-pane"><p class="task-output-note" title="no such task">no such task</p></div>'); // a long error is readable in full on hover
   expect(view({ task: command, state: { status: 'ready', result: { output: '', totalBytes: 0, truncated: false } } })).toBe('<div class="task-output-pane"><p class="task-output-note">No output yet</p></div>');
+  // An engine from before session.taskOutput: said plainly, not as the raw unknown method.
+  expect(view({ task: command, state: { status: 'error', error: { code: 'unknown_method', message: 'unknown method session.taskOutput' } } })).toBe('<div class="task-output-pane"><p class="task-output-note">Not available with this engine</p></div>');
 });
 
 test('the MCP servers\' status is one muted line at the bottom: the non-zero counts, the failed and unsigned ones by name on hover', () => {

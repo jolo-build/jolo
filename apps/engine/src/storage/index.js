@@ -558,9 +558,10 @@ export class Storage {
     return this.statements.nextMessageOrdinal.get(sessionId).ordinal;
   }
 
-  insertMessage({ sessionId, runId, role, kind = "text", artifactId, ordinal }) {
+  /** `createdAt: null` records a message whose time is not known (a synced one): it is read back with none. */
+  insertMessage({ sessionId, runId, role, kind = "text", artifactId, ordinal, createdAt = undefined }) {
     const id = newId("msg");
-    this.statements.insertMessage.run(id, sessionId, runId, ordinal, role, kind, artifactId, now());
+    this.statements.insertMessage.run(id, sessionId, runId, ordinal, role, kind, artifactId, createdAt === null ? "" : createdAt ?? now());
     return this.getMessage(id);
   }
 

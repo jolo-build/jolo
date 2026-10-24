@@ -470,6 +470,10 @@ describe("one Claude process per conversation", () => {
     expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
     await waitFor(() => !alive(starts()[0]), { timeoutMs: 15_000 });
     await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
+    // The next process lists the task from the stored history, but never ran it: its output is gone with the old one.
+    await runTo('again', 'hello');
+    expect(starts()).toHaveLength(2);
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
   }, 30_000);
 
   test('the MCP servers\' status comes from the process, and none without one', async () => {

@@ -82,17 +82,33 @@ const TASK_NOTICES = new Set(['task_started', 'task_progress', 'task_updated', '
 /** Text Claude sent, cut to `max` characters: a number or a boolean as written, anything else (an object, nothing) null. */
 const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof value) ? String(value).slice(0, max) : null);
 
+/** What one character costs once escaped in JSON and encoded in UTF-8: the wire's measure, not the text's. @param {number} code */
+const wireBytes = (code) => {
+  if (code === 0x22 || code === 0x5c) return 2; // \" and \\
+  if (code < 0x20) return [0x08, 0x09, 0x0a, 0x0c, 0x0d].includes(code) ? 2 : 6; // \n and kin, else \u00XX
+  if (code < 0x80) return 1;
+  if (code < 0x800) return 2;
+  if (code >= 0xd800 && code <= 0xdfff) return 6; // a lone surrogate (a pair is read as one character): \uXXXX
+  return code > 0xffff ? 4 : 3;
+};
+
 /**
- * The end of a task's output, at most TASK_OUTPUT_MAX bytes of UTF-8 (whole characters): the end of a log is what is
- * looked for. `cut` says whether anything was left out here.
+ * The end of a task's output, at most TASK_OUTPUT_MAX bytes once escaped for the wire (JSON, UTF-8) and in whole
+ * characters: the end of a log is what is looked for, and control characters (a terminal's escapes) take up to six bytes
+ * each in the frame that carries it. `cut` says whether anything was left out here.
  * @param {string} output @returns {{ text: string, cut: boolean }}
  */
 export function outputTail(output) {
-  const bytes = Buffer.from(output, 'utf8');
-  if (bytes.length <= TASK_OUTPUT_MAX) return { text: output, cut: false };
-  let start = bytes.length - TASK_OUTPUT_MAX;
-  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1; // not in the middle of a character
-  return { text: bytes.subarray(start).toString('utf8'), cut: true };
+  let size = 0, start = output.length;
+  while (start > 0) {
+    const low = output.charCodeAt(start - 1);
+    const pair = low >= 0xdc00 && low <= 0xdfff && start > 1 && (output.charCodeAt(start - 2) & 0xfc00) === 0xd800;
+    const cost = pair ? 4 : wireBytes(low);
+    if (size + cost > TASK_OUTPUT_MAX) return { text: output.slice(start), cut: true };
+    size += cost;
+    start -= pair ? 2 : 1;
+  }
+  return { text: output, cut: false };
 }
 
 /**
@@ -505,9 +521,11 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   // The conversation's earlier tasks, as its stored activity last had them: the history the panel shows outlives the
   // process. Each keeps its id, so a later notice about one (Claude re-reports a previous process's command on resume)
   // updates it in place. One the earlier process left running ended with it; that is reported, so it is stored so.
+  /** The tasks an earlier process ran, which this one never heard start: their output is not this process's to read. */
+  const seeded = new Set();
   if (Array.isArray(seed?.tasks)) {
     const settled = endedActivity(seed).tasks;
-    for (const task of settled) if (typeof task?.taskId === 'string') tasks.set(task.taskId, task);
+    for (const task of settled) if (typeof task?.taskId === 'string') { tasks.set(task.taskId, task); seeded.add(task.taskId); }
     trimTasks();
     if (seed.tasks.some((task) => task?.status === 'running')) activityChanged('tasks');
   }
@@ -525,6 +543,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     if (message.subtype === 'task_started') {
       if (!running()) onBackground(true);
       dropTask(taskId); // one started again is listed anew, as the newest
+      seeded.delete(taskId); // and is this process's own now
       const started = newTask(taskId, message, at);
       tasks.set(taskId, started);
       if (started.toolUseId) taskOfCall.set(started.toolUseId, taskId);
@@ -556,8 +575,10 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       task.outputFile = textOf(message.output_file, TASK_PATH_MAX) || task.outputFile;
     } else return;
     trimTasks();
-    // A task listed anew, or one whose status changed, is a change of its tasks; anything else is their progress.
-    activityChanged(message.subtype === 'task_started' || task.status !== was ? 'tasks' : 'progress');
+    // A task listed anew, one whose status changed, or a notice of how one ended (which may come after a stop already
+    // ended it, with the summary and output file the stored history keeps) is a change of its tasks; anything else is
+    // their progress.
+    activityChanged(message.subtype === 'task_started' || message.subtype === 'task_notification' || task.status !== was ? 'tasks' : 'progress');
   };
   /**
    * A background agent's model: Claude names it only on the agent's own messages (`agent_id` and the call it runs under,
@@ -922,6 +943,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
      * @param {string} taskId @returns {Promise<{ output: string, totalBytes: number, truncated: boolean }>}
      */
     async taskOutput(taskId) {
+      // A task of an earlier process: the process that ran it, and its output with it, has ended.
+      if (seeded.has(taskId)) throw Object.assign(new Error('the process that ran this task has ended'), { code: 'no_process' });
       const answer = await question('get_task_output', { task_id: taskId });
       const { text, cut } = outputTail(typeof answer.output === 'string' ? answer.output : '');
       return { output: text, totalBytes: countOf(answer.total_bytes) ?? Buffer.byteLength(text), truncated: cut || answer.truncated === true };

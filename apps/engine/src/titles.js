@@ -154,10 +154,10 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
   };
 
   /**
-   * A task Claude Code answers: one print-mode process, one answer, as model discovery asks it. The prompt is the last
-   * argument, after a newline, so it can never be read as an option or as a subcommand such as `update`. Stdin is closed
-   * at once, so Claude does not wait for input (it reads a piped stdin for up to 3 s first), and the guardian's grace
-   * after that EOF, 1.5 s by default, is raised to this process's deadline; the timeout still ends a process that hangs.
+   * A task Claude Code answers: one print-mode process, one answer, as model discovery asks it. The prompt goes on stdin,
+   * which is closed right after it, so it never shows on the command line (where `ps` would show it, and where it could be
+   * read as an option or a subcommand) and Claude reads it at once; the guardian's grace after that EOF, 1.5 s by
+   * default, is raised to this process's deadline, and the timeout still ends a process that hangs.
    * Not `--bare`: it reads only an API key, never the OAuth sign-in a subscription uses, and the hosted environment
    * carries no key. Empty setting sources keep the user's, project's and local settings out, and with them their hooks
    * and plugins, and the strict MCP configuration with none given keeps the user's MCP servers from starting; no tools
@@ -173,11 +173,11 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
     const pick = cheapestModel(listed?.models, chosen).id;
     const model = smallChat(pick) ? pick : CLAUDE_SMALL_ALIAS;
     const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null, fast: null });
-    const argv = [binary, ...extraArgs, "--print", "--output-format", "json", "--model", model, "--no-session-persistence", "--setting-sources", "", "--tools", "", "--strict-mcp-config", "--max-turns", "1", "--system-prompt", TITLE_INSTRUCTIONS, `\n${text}`];
+    const argv = [binary, ...extraArgs, "--print", "--output-format", "json", "--model", model, "--no-session-persistence", "--setting-sources", "", "--tools", "", "--strict-mcp-config", "--max-turns", "1", "--system-prompt", TITLE_INSTRUCTIONS];
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(`no answer within ${timeoutMs / 1000} s`);
     const answer = await probeAgent({ supervisor, log }, manifest, argv, remaining, {
-      open: () => {}, closeStdin: true, env: { JOLO_GUARDIAN_EOF_GRACE_MS: String(remaining) },
+      open: () => {}, input: text, closeStdin: true, env: { JOLO_GUARDIAN_EOF_GRACE_MS: String(remaining) },
       ask: (message) => {
         if (message?.type !== "result") return null;
         // An error is a result too, and with subtype "success" when it is the sign-in that failed.

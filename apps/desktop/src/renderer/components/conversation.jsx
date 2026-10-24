@@ -284,6 +284,59 @@ const NO_DELEGATIONS = new Map();
 const RUN_SLACK_MS = 5000;
 
 /**
+ * The transcript's lines from its messages: a subagent, a delegated child, a Workflow call each on a line of their own (a
+ * later call about a child whose line is shown joins the actions instead), the other tool calls and reasoning of a run
+ * together in one collapsed group, and every other message as itself. `workflowCalls` names each Workflow call's card for
+ * workflowTasksFor. Pure: the same messages and runs give the same lines.
+ * @param {any[]} messages @param {Map<string, any> | undefined} runs
+ */
+export function groupMessages(messages, runs) {
+  /** @type {any[]} */
+  const groups = [];
+  /** @type {(import('../workflow-call.js').WorkflowCallSlot & { id: string })[]} */
+  const workflowCalls = [];
+  // Each child's line is its delegate_task call's: by the delegation id its result names, else, while it has no result,
+  // by its title. A later status or cancel call about a child whose line is here joins the actions instead of repeating
+  // it, and hands the line the reason its wait ended; one whose child's line is not loaded keeps a line of its own.
+  /** @type {{ byId: Map<string, any>, byTitle: Map<string, any> }} */
+  const childLines = { byId: new Map(), byTitle: new Map() };
+  for (const message of messages) {
+    // A provider may complete a thinking block without a displayable summary.
+    // Keep pending artifact loads visible, but never leave an empty disclosure.
+    if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
+    const workflowCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
+    const delegationCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseDelegationCall(message.text) : null;
+    let childLine = null;
+    if (delegationCall && delegationCall.name !== "delegate_task") {
+      const { id, title } = delegationChild(delegationCall);
+      childLine = (id && childLines.byId.get(id)) || (title && childLines.byTitle.get(title)) || null;
+      if (childLine && delegationCall.delegation?.wakeReason) childLine.wakeReason = delegationCall.delegation.wakeReason;
+    }
+    // The agent's own subagents stand on their own line, so their work shows without opening the activity.
+    if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
+    // So do Jolo's delegation calls: one line for the child they are about, instead of a raw JSON tool block.
+    else if (delegationCall && !childLine) {
+      groups.push({ type: "delegation", id: message.id, runId: message.runId, message, wakeReason: null });
+      if (delegationCall.name === "delegate_task") {
+        const { id, title } = delegationChild(delegationCall);
+        if (id) childLines.byId.set(id, groups.at(-1));
+        else if (title && !delegationCall.error) childLines.byTitle.set(title, groups.at(-1)); // a start that failed started nothing
+      }
+    }
+    // And Claude's Workflow calls: a compact card for the workflow, with its task when the activity still has it.
+    else if (workflowCall) {
+      groups.push({ type: "workflow", id: message.id, runId: message.runId, message, call: workflowCall });
+      workflowCalls.push({ id: message.id, name: workflowCall.name, window: runWindow(runs?.get(message.runId)) });
+    }
+    else if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
+      if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
+      else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
+    } else groups.push({ type: "message", id: message.id, message });
+  }
+  return { groups, workflowCalls };
+}
+
+/**
  * The window a Workflow call's task can have started in (see workflowTasksFor): its run's, from when it was created to
  * when it ended, a little either side, and open while it goes on. Null for a run the projection does not know, or knows
  * without when it was created (one first seen through a usage event).
@@ -400,50 +453,17 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   const identityFor = run => activityIdentity(run, { assistantName, assistantAgentId, providerModel, agents });
   const guestFor = run => guestName(run, { assistantAgentId, agents });
   const lastGuest = guestFor(lastRun);
-  const groups = [];
-  /** @type {(import('../workflow-call.js').WorkflowCallSlot & { id: string })[]} */
-  const workflowCalls = [];
-  // Each child's line is its delegate_task call's: by the delegation id its result names, else, while it has no result,
-  // by its title. A later status or cancel call about a child whose line is here joins the actions instead of repeating
-  // it, and hands the line the reason its wait ended; one whose child's line is not loaded keeps a line of its own.
-  /** @type {{ byId: Map<string, any>, byTitle: Map<string, any> }} */
-  const childLines = { byId: new Map(), byTitle: new Map() };
-  for (const message of messages) {
-    // A provider may complete a thinking block without a displayable summary.
-    // Keep pending artifact loads visible, but never leave an empty disclosure.
-    if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
-    const workflowCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
-    const delegationCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseDelegationCall(message.text) : null;
-    let childLine = null;
-    if (delegationCall && delegationCall.name !== "delegate_task") {
-      const { id, title } = delegationChild(delegationCall);
-      childLine = (id && childLines.byId.get(id)) || (title && childLines.byTitle.get(title)) || null;
-      if (childLine && delegationCall.delegation?.wakeReason) childLine.wakeReason = delegationCall.delegation.wakeReason;
-    }
-    // The agent's own subagents stand on their own line, so their work shows without opening the activity.
-    if (message.kind === "tool" && !message.evicted && !message.loadError && parseSubagent(message.text)) groups.push({ type: "subagent", id: message.id, runId: message.runId, message });
-    // So do Jolo's delegation calls: one line for the child they are about, instead of a raw JSON tool block.
-    else if (delegationCall && !childLine) {
-      groups.push({ type: "delegation", id: message.id, runId: message.runId, message, wakeReason: null });
-      if (delegationCall.name === "delegate_task") {
-        const { id, title } = delegationChild(delegationCall);
-        if (id) childLines.byId.set(id, groups.at(-1));
-        else if (title && !delegationCall.error) childLines.byTitle.set(title, groups.at(-1)); // a start that failed started nothing
-      }
-    }
-    // And Claude's Workflow calls: a compact card for the workflow, with its task when the activity still has it.
-    else if (workflowCall) {
-      groups.push({ type: "workflow", id: message.id, runId: message.runId, message, call: workflowCall });
-      workflowCalls.push({ id: message.id, name: workflowCall.name, window: runWindow(projection?.runs.get(message.runId)) });
-    }
-    else if (!message.evicted && !message.loadError && ["tool", "reasoning"].includes(message.kind)) {
-      if (groups.at(-1)?.type === "activity" && groups.at(-1).runId === message.runId) groups.at(-1).messages.push(message);
-      else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
-    } else groups.push({ type: "message", id: message.id, message });
-  }
+  // The lines depend on the messages (their text, by how much of it is in, and their state) and the runs' windows, not on
+  // the activity: an activity snapshot alone, up to four a second during background work, reuses them and every call
+  // parsed in them, so only the Workflow cards, whose tasks it carries, render again.
+  const groupingKey = `${messages.map(m => `${m.id}\u0001${m.status}\u0001${m.renderedBytes ?? 0}\u0001${m.committedBytes ?? 0}\u0001${m.evicted ? 1 : 0}\u0001${m.loadError ? 1 : 0}`).join('\u0002')}\u0003${runs.map(run => `${run.id}\u0001${run.state ?? ''}\u0001${run.createdAt ?? ''}\u0001${run.updatedAt ?? ''}`).join('\u0002')}`;
+  const grouped = useMemo(() => groupMessages(messages, projection?.runs), [groupingKey]);
+  const groups = [...grouped.groups];
   // Each Workflow call's card is about the task of its workflow's name that started during its run (see workflowTasksFor).
-  const callTasks = workflowTasksFor(workflowCalls, activity);
-  const workflowTasks = new Map(workflowCalls.map((slot, index) => [slot.id, callTasks[index]]));
+  const workflowTasks = useMemo(() => {
+    const callTasks = workflowTasksFor(grouped.workflowCalls, activity);
+    return new Map(grouped.workflowCalls.map((slot, index) => [slot.id, callTasks[index]]));
+  }, [grouped, activity]);
   if (lastRun && !["completed", "paused", "cancelled"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
   for (const card of changeCards) {
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);

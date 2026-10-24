@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Conversation } from '../src/renderer/components/conversation.jsx';
+import { Conversation, groupMessages } from '../src/renderer/components/conversation.jsx';
 
 /**
  * A message as the projection holds one, with only the fields a test cares about. The projection
@@ -425,4 +425,23 @@ describe('a text message', () => {
       said({ text: '', renderedBytes: 0, createdAt }),
     ]) expect(render(message)).not.toContain('message-tools');
   });
+});
+
+test('the transcript\'s lines come from its messages and runs alone, so an activity snapshot does not regroup them', () => {
+  // The grouping takes no activity: Conversation keeps its result while only the activity changes (useMemo on the
+  // messages and runs), so each Workflow card keeps the same parsed call and only its task is new. A re-render cannot be
+  // observed in static markup, so this checks what the memo relies on: the lines are a function of messages and runs.
+  const text = `Workflow ${JSON.stringify({ script: "export const meta = {\n  name: 'demo',\n  description: 'Workflow demo',\n  phases: [{ title: 'Say' }],\n}\nphase('Say')\n" })}\nWorkflow started in the background (task wf-1).\n`;
+  const messages = [
+    { id: 'u', role: 'user', kind: 'text', runId: 'run', text: 'go', status: 'complete', renderedBytes: 2, committedBytes: 2 },
+    { id: 'wf', role: 'tool', kind: 'tool', runId: 'run', text, status: 'complete', renderedBytes: 0, committedBytes: 0 },
+    { id: 'ls', role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 },
+  ];
+  const runs = new Map([['run', { id: 'run', state: 'model', createdAt: '2026-10-24T10:00:00.000Z' }]]);
+  expect(groupMessages.length).toBe(2);
+  const { groups, workflowCalls } = groupMessages(messages, runs);
+  expect(groups.map((group) => group.type)).toEqual(['message', 'workflow', 'activity']);
+  expect(groups[1].call).toMatchObject({ name: 'demo' });
+  expect(workflowCalls).toEqual([{ id: 'wf', name: 'demo', window: { from: Date.parse('2026-10-24T10:00:00.000Z') - 5000, to: Infinity } }]);
+  expect(groupMessages(messages, runs)).toEqual({ groups, workflowCalls });
 });

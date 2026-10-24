@@ -4,9 +4,10 @@
 // and a question with nobody to answer it pauses the run, which is said with how to resume it. The "claude" of these
 // profiles is the protocol fixture, so nothing reaches the real CLI.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { discover, resolvePaths } from "@jolo/launcher";
+import { connect } from "@jolo/client";
 import { CLI_ENTRY, ROOT, tempHome, waitFor, removeHome } from "./helpers.js";
 
 const FAKE = path.join(ROOT, "tests", "fixtures", "fake-claude.js");
@@ -62,6 +63,20 @@ function followAtTerminal(args, home) {
 const records = (stdout) => stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 
 describe("the headless CLI with a hosted Claude", () => {
+  test("a conversation jolo run starts is untitled, so Claude names it", async () => {
+    const { home, repo } = boot();
+    const { stdout, code } = await jolo(["run", "summarise the release notes for me", "--agent", "claude", "--path", repo, "--json"], home);
+    expect(code).toBe(0);
+    const started = records(stdout).find((record) => record.type === "run.started");
+    const paths = resolvePaths({ home, profile: "default" });
+    const client = await connect({ socketPath: paths.socketPath, token: readFileSync(paths.tokenPath, "utf8").trim(), clientKind: "test", build: "test" });
+    try {
+      const title = async () => (await client.call("session.page", { sessionId: started.sessionId })).session.title;
+      await waitFor(async () => (await title()).startsWith("Fixture title:"), { label: "the title Claude gave", timeoutMs: 15_000 });
+      expect(await title()).toBe("Fixture title: summarise the release");
+    } finally { await client.close(); }
+  }, 30_000);
+
   test("at a terminal, a question Claude asks is printed with how to answer it and the run waits; jolo dialog answer sends the chosen option back", async () => {
     const { home, repo } = boot();
     const run = followAtTerminal(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo], home);

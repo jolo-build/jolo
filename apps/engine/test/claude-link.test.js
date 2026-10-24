@@ -1132,7 +1132,7 @@ test('a task\'s output keeps its last 200 KiB, says so, and a process that does 
   const registry = createHostedLinks({ log, requestTimeoutMs: 300 });
   const link = registry.open({ sessionId: 'big', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', `const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n'); ${script} setInterval(() => {}, 1000);`], env: { PATH: process.env.PATH } }) });
   const read = await link.taskOutput('big');
-  expect(Buffer.byteLength(read.output)).toBe(200 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(read.output)) - 2).toBe(200 * 1024); // its size on the wire: the final newline is two bytes there
   expect(read.output.endsWith('b'.repeat(10) + 'END\n')).toBe(true);
   expect(read).toMatchObject({ totalBytes: Buffer.byteLength(big), truncated: true });
   const asked = Date.now();
@@ -1193,4 +1193,52 @@ test('session.mcpStatus falls back to the latest init\'s list when the process d
   link.write({ type: 'leave' });
   expect(await asking).toEqual({ servers: null });
   expect(await handlers['session.mcpStatus']({ sessionId: 'mcp' })).toEqual({ servers: null });
+});
+
+test('a task of an earlier process has no output to read from this one: no_process, without asking; one started again here is read', async () => {
+  const registry = createHostedLinks({ log, history: () => stored([storedTask('old', 'completed', { outputFile: '/tmp/old.output' }), storedTask('task-1', 'completed')]) });
+  const link = open(registry);
+  await turn(link, 'hello', { init: true });
+  await expect(link.taskOutput('old')).rejects.toMatchObject({ code: 'no_process' }); // the fixture would say "no such task" if asked
+  await turn(link, 'tasks 1 20000');
+  expect((await link.taskOutput('task-1')).output).toBe('task 1\nline 1\nline 2\n'); // started again in this process
+  await registry.closeAll();
+});
+
+test('a notice that ends a task already ended, with its summary and output file, is a change of the tasks, so it is stored', async () => {
+  // A subagent an interrupt killed (task_updated) whose notice, with how it ended, comes past the coalescing.
+  const script = `
+    out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+    out({ type: 'system', subtype: 'task_started', task_id: 'sub', task_type: 'local_agent', description: 'a subagent', is_backgrounded: true });
+    setTimeout(() => out({ type: 'system', subtype: 'task_updated', task_id: 'sub', patch: { status: 'killed' } }), 50);
+    setTimeout(() => out({ type: 'system', subtype: 'task_notification', task_id: 'sub', status: 'stopped', summary: 'Checked half', output_file: '/tmp/sub.output' }), 500);
+  `;
+  const stores = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => { if (reason !== 'progress') stores.push(activity); } });
+  const link = openStub(registry, 'killed-notice', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks[0]?.summary === 'Checked half');
+  await waitFor(() => stores.at(-1)?.tasks[0]?.summary === 'Checked half', 1000);
+  expect(stores.at(-1).tasks[0]).toMatchObject({ status: 'stopped', summary: 'Checked half', outputFile: '/tmp/sub.output' });
+  await link.close({ reason: 'test', graceful: false });
+});
+
+test('a task\'s output is cut by its size once escaped for the wire, so output full of control characters still fits', async () => {
+  const big = '\x1b[0m'.repeat(100_000) + 'done\n';
+  const script = `
+    process.stdin.on('data', (chunk) => {
+      for (const line of String(chunk).split('\\n').filter(Boolean)) {
+        const m = JSON.parse(line);
+        if (m.request?.subtype === 'get_task_output') out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { output: ${JSON.stringify(big)}, total_bytes: ${Buffer.byteLength(big)}, truncated: false } } });
+      }
+    });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = registry.open({ sessionId: 'escapes', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', `const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n'); ${script} setInterval(() => {}, 1000);`], env: { PATH: process.env.PATH } }) });
+  const read = await link.taskOutput('any');
+  expect(Buffer.byteLength(JSON.stringify(read.output)) - 2).toBeLessThanOrEqual(200 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(read.output)) - 2).toBeGreaterThan(200 * 1024 - 16);
+  expect(read.output.endsWith('\x1b[0mdone\n')).toBe(true);
+  expect(read.truncated).toBe(true);
+  await link.close({ reason: 'test', graceful: false });
 });

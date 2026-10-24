@@ -145,7 +145,8 @@ async function commandRun({ positional, flags }) {
       if (!json) err(`worktree ${workspace.branch} at ${workspace.path}`);
     }
     // --agent hands the task to a hosted agent; Jolo relays the prompt and routes its permission requests here.
-    const { session, cursor } = await client.call("session.create", { projectId: project.projectId, workspaceId, title: prompt.slice(0, 80), ...(flags.agent ? { agentId: flags.agent } : {}) });
+    // Untitled: the engine names it, from its answerer's title or the prompt's first characters.
+    const { session, cursor } = await client.call("session.create", { projectId: project.projectId, workspaceId, title: "", ...(flags.agent ? { agentId: flags.agent } : {}) });
     if (flags.agent && !json) err(`task answered by ${flags.agent}`);
     if (everyMs) {
       const { schedule } = await client.call("schedule.create", { sessionId: session.id, prompt: flags["every-prompt"] ?? prompt, everyMs });

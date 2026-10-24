@@ -120,12 +120,14 @@ describe("schemas", () => {
     expect(TaskRecordSchema.parse({ ...task, workflow: null }).workflow).toBeNull();
     expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before it
     const valid = (patch) => TaskRecordSchema.safeParse({ ...task, workflow: { ...workflow, ...patch } }).success;
-    // A phase's title is cut to WORKFLOW_TITLE_MAX, as its agents' phase is (the renderer matches them by it when an agent
-    // names no phase index); its index, which an older payload lacks, is a count.
+    // The engine cuts a phase's title to WORKFLOW_TITLE_MAX, as its agents' phase (the renderer matches them by it when an
+    // agent names no phase index); the schema still takes the TASK_TEXT_MAX a payload from before that cut could carry. Its
+    // index, which an older payload lacks, is a count.
     expect(WORKFLOW_TITLE_MAX).toBe(80);
     expect(valid({ current: null, phases: Array.from({ length: WORKFLOW_PHASES_MAX }, (_, i) => ({ ...phase, index: i + 1, title: 't'.repeat(WORKFLOW_TITLE_MAX) })) })).toBe(true);
+    expect(valid({ phases: [{ ...phase, title: 't'.repeat(TASK_TEXT_MAX) }] })).toBe(true);
     expect(valid({ phases: [], agents: { total: 0, running: 0, done: 0, failed: 0 } })).toBe(true);
-    for (const patch of [{ phases: Array.from({ length: WORKFLOW_PHASES_MAX + 1 }, () => phase) }, { phases: [{ ...phase, title: 't'.repeat(WORKFLOW_TITLE_MAX + 1) }] },
+    for (const patch of [{ phases: Array.from({ length: WORKFLOW_PHASES_MAX + 1 }, () => phase) }, { phases: [{ ...phase, title: 't'.repeat(TASK_TEXT_MAX + 1) }] },
       { phases: [{ ...phase, index: -1 }] }, { phases: [{ ...phase, index: null }] },
       { phases: [{ ...phase, running: null }] }, { phases: [{ ...phase, failed: -1 }] }, { agents: { ...workflow.agents, total: 1.5 } }, { agents: { ...workflow.agents, done: null } },
       { current: 'c'.repeat(TASK_TEXT_MAX + 1) }, { current: 7 }, { current: undefined }]) expect(valid(patch)).toBe(false);
