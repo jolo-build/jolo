@@ -11,10 +11,12 @@ import { delegationWords, liveDelegation, parseDelegationCall } from "../delegat
 import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
 import { parseWorkflowCall, workflowTasksFor } from "../workflow-call.js";
 import { TERMINAL } from "@jolo/client/run-state";
+import { relativeTime } from "@jolo/client/board";
 import { ChangeSummary } from './change-summary.jsx';
 import { fileDiffSections, readChangeCards, saveChangeCards, updateChangeCards } from '../change-cards.js';
 import { ImageAttachment } from './image-attachment.jsx';
 import { TextAttachment } from './text-attachment.jsx';
+import { CopyButton } from './copy-button.jsx';
 
 const CHUNK = 65535; // divisible by 3 so base64 chunks concatenate cleanly
 
@@ -221,27 +223,39 @@ const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, s
   );
 });
 
+/** The exact date and time of `iso`, as a message's time says it on hover: `Oct 24, 2026, 3:42 PM`. */
+const exactTime = (/** @type {string} */ iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
 /**
  * One turn of the transcript. Its text grows in place, so what grows is passed beside it for memo to compare.
+ * A text message with text ends with a row, shown on hover, to copy it and say when it was sent (`5m ago` against
+ * `now`, which moves once a minute); `createdAt` is absent for a message from an engine that sends no time.
  * @typedef {{
  *   message: import('@jolo/client/projection').ProjectedMessage,
  *   text: string,
  *   status: string,
  *   committedBytes: number,
  *   renderedBytes: number,
+ *   createdAt?: string,
+ *   now: number,
  *   run: any,
  *   guestName: string | null,
  *   assistantName: string,
  *   sessionId?: string | null,
  * }} MessageArticleProps
  */
-const MessageArticle = memo(function MessageArticle(/** @type {MessageArticleProps} */ { message, text, status, committedBytes, renderedBytes, run, guestName, assistantName, sessionId }) {
+const MessageArticle = memo(function MessageArticle(/** @type {MessageArticleProps} */ { message, text, status, committedBytes, renderedBytes, createdAt, now, run, guestName, assistantName, sessionId }) {
   const assistant = message.role === "assistant";
+  const tools = message.kind === "text" && Boolean(text) && !message.evicted && !message.loadError;
   return <article data-message-id={message.id} className={`message ${message.role} ${message.kind}${status === "streaming" ? " streaming" : ""}`} aria-label={message.role === "user" ? "Your message" : undefined}>
     {message.role === 'user' && run?.attachments?.length > 0 && <div className="message-attachments">{run.attachments.map((attachment, index) => !attachment.mimeType.startsWith('image/') ? <TextAttachment key={attachment.artifactId} attachment={attachment} /> : <ImageAttachment key={`${attachment.artifactId}:${index}`} attachment={attachment} />)}</div>}
     {message.role === 'user' && run?.taskReferences?.length > 0 && <div className="message-task-references" aria-label="Referenced web tasks">{run.taskReferences.map(task => <button type="button" key={task.url} title={`${task.team?.name ?? 'Personal'} · ${task.title} · revision ${task.revision}`} onClick={() => window.jolo.openExternal(task.url).catch(() => {})}><strong>#{task.key}</strong> {task.title}<span>{task.team?.name ?? 'Personal'} · r{task.revision} ↗</span></button>)}</div>}
     {message.role !== "user" && (assistant && !guestName ? <div className="message-label sr-only">{assistantName}</div> : <div className="message-label" title={guestName ? 'Called in for this message' : undefined}>{assistant ? guestName : message.role}</div>)}
     {!text && committedBytes > renderedBytes ? <p className="hint deferred" role="status">Loading message…</p> : assistant && message.kind === "text" ? <Markdown text={text} cacheKey={message.id} sessionId={run?.sessionId ?? sessionId} streaming={status === "streaming"} /> : <div className="message-text">{text}</div>}
+    {tools && <div className="message-tools">
+      <CopyButton className="message-copy" label="Copy message" title="Copy message" text={text} />
+      {createdAt && <time className="message-time" dateTime={createdAt} title={exactTime(createdAt)}>{relativeTime(createdAt, now)}</time>}
+    </div>}
   </article>;
 });
 
@@ -289,6 +303,14 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   const historyAnchor = useRef(null);
   const adjustedTop = useRef(null);
   const [changeCards, setChangeCards] = useState(() => readChangeCards(sessionId));
+  // One clock for every message's `5m ago`: it moves once a minute, and `now` changes only then, so a streaming tick
+  // still leaves a finished message's memo alone.
+  const [minute, nextMinute] = useReducer((/** @type {number} */ count) => count + 1, 0);
+  useEffect(() => {
+    const timer = setInterval(nextMinute, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const now = useMemo(() => Date.now(), [minute]);
   const recordCounts = useCallback((runId, counts) => setChangeCards(cards => cards.map(card => card.runId === runId ? { ...card, counts } : card)), []);
   const loadRunDiff = useCallback(async (path, file) => {
     if (!file?.diffArtifactIds?.length) return { source: 'none', diff: '', truncated: false };
@@ -452,7 +474,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         if (message.loadError) return <div key={message.id} className="message" role="alert"><p>Couldn’t load saved {message.kind === "tool" ? "tool output" : message.kind === "reasoning" ? "reasoning" : "message"}.</p><button onClick={() => { void projection.fill(message.id).catch(() => {}); }}>Retry loading</button></div>;
         // A turn someone else was called into says so, so a reply is never read as the usual answerer's (§6.5).
         const run = projection?.runs.get(message.runId);
-        return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} run={run} guestName={guestFor(run)} assistantName={assistantName} sessionId={sessionId} />;
+        return <MessageArticle key={message.id} message={message} text={message.text} status={message.status} committedBytes={message.committedBytes} renderedBytes={message.renderedBytes} createdAt={message.createdAt} now={now} run={run} guestName={guestFor(run)} assistantName={assistantName} sessionId={sessionId} />;
       })}
     </div>
   </div>;

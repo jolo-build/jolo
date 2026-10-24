@@ -91,5 +91,7 @@ test('stored handoffs find a review beyond tool and reasoning pages without chan
     expect(page.messages).toHaveLength(100);
     expect(page.hasOlder).toBe(true);
     expect(page.messages.some(message => message.kind === 'reasoning')).toBe(true);
+    // A listed message says when it was created, which the chat shows beside it.
+    expect(page.messages.at(-1).createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   } finally { storage.close(); rmSync(root, { recursive: true, force: true }); }
 });

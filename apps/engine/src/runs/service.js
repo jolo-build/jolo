@@ -389,7 +389,7 @@ export class RunService {
           const artifact = storage.createArtifact({ sessionId: run.sessionId, kind: "message" });
           writer = storage.openArtifactWriter(artifact);
           const created = storage.insertMessage({ sessionId: run.sessionId, runId: run.id, role, kind, artifactId: artifact.id, ordinal: storage.nextMessageOrdinal(run.sessionId) });
-          storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "message.started", payload: { messageId: created.id, role, kind, artifactId: artifact.id, ordinal: created.ordinal } });
+          storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "message.started", payload: { messageId: created.id, role, kind, artifactId: artifact.id, ordinal: created.ordinal, createdAt: created.createdAt } });
           return { message: created, artifact };
         }); } catch (error) { try { writer?.close(); } catch {} throw error; }
         streams.set(message.message.id, { writer, artifact: message.artifact, pending: [], pendingBytes: 0, offset: 0, timer: null, hash: createHash("sha256") });

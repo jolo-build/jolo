@@ -173,6 +173,8 @@ strong { font-weight: 550; }
 .compact-pane .task-meta { font-size: 10px; }
 .compact-pane .transcript, .compact-pane .compose-column { padding-inline: 14px; }
 .compact-pane .transcript { padding-block: 18px 30px; gap: 18px; }
+.compact-pane .message-tools { height: 18px; line-height: 18px; }
+.compact-pane .message-tools .message-copy { width: 18px; height: 18px; padding: 2px; }
 .compact-pane .compose-wrap { padding-block: 8px 10px; }
 .compact-pane .composer { padding: 10px 12px; border-radius: 14px; }
 .compact-pane .composer textarea { min-height: 44px; max-height: min(160px, 25vh); font-size: 13px; }
@@ -377,12 +379,20 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .empty-transcript .empty-state { padding: 0 0 2px; }
 .empty-state p.empty-tagline { font-size: 14px; line-height: 22px; }
 .empty-transcript .empty-state button { margin: 14px auto 0; }
-.message { min-width: 0; overflow-wrap: anywhere; }
+.message { position: relative; min-width: 0; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; max-width: 92%; background: var(--hover); border-radius: 9px; padding: 8px 16px; font-size: 14px; line-height: 22px; }
 .message-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-bottom: 9px; text-transform: capitalize; }
 .message-text { white-space: pre-wrap; }
 .message.assistant { line-height: 1.6; font-size: 14px; }
 .message.evicted { font-size: 12px; color: var(--muted); font-style: italic; }
+/* A message's copy button and time sit in the transcript's gap below it, so nothing moves when they show: on hover or keyboard focus, always on a touch screen.
+   One line whatever the message's width (a short bubble's row would otherwise wrap over it), and left out of a selection, so copying across messages copies only what was said. */
+.message-tools { position: absolute; top: 100%; left: 0; display: flex; align-items: center; gap: 6px; height: 22px; color: var(--muted); font-size: 11px; line-height: 22px; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: none; }
+.message.user .message-tools { left: auto; right: 0; }
+.message-tools .message-copy { width: 22px; height: 22px; padding: 4px; color: var(--muted); }
+.message-tools .message-copy:hover { color: var(--text); }
+.message-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .message:not(:hover, :has(:focus-visible)) .message-tools { opacity: 0; } }
 .activity-group > summary { list-style: none; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: default; padding: 3px 0; }
 .activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-pending { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--muted); }

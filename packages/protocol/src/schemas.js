@@ -177,6 +177,7 @@ export const MessageSchema = z.object({
   artifactId: Id,
   committedBytes: z.number().int().nonnegative(),
   status: z.enum(["streaming", "complete", "interrupted"]),
+  createdAt: IsoTimestamp.optional(), // an older engine leaves it out
 });
 
 // ---- JSON-RPC envelopes -------------------------------------------------------------------
@@ -775,7 +776,7 @@ export const EventPayloadSchemas = Object.freeze({
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
   "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
   "run.verification": z.object({ status: z.enum(["passed", "failed", "not_run", "interrupted", "stale"]), checks: z.array(z.object({ invocationId: Id, argv: z.array(z.string()), exitCode: z.number().int().nullable(), signal: z.string().nullable(), at: IsoTimestamp })) }),
-  "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative() }),
+  "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative(), createdAt: IsoTimestamp.optional() }),
   "run.usage": UsageSchema,
   "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), preset: PresetId.optional(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
   "tool.started": z.object({ invocationId: Id, callId: z.string(), name: z.string(), argumentDigest: z.string(), preview: z.string().max(200) }),

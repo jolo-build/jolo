@@ -39,6 +39,7 @@ All notable changes to Jolo are documented here. This project uses [semantic ver
 - Claude's questions (AskUserQuestion) and plan approvals (ExitPlanMode) open in the desktop app as cards beside the permission card, and the answer goes back as Claude expects it: `answers` keyed by question, a multi-select's labels joined by `, `, free text through Other; a plan is approved with Approve plan or sent back with Send back and optional feedback. A client that joins while one is open gets it from `session.page`'s new `pendingDialogs`, and the app notifies about a question or plan as it does about an approval (`<project> needs your answer`).
 - In the desktop app, each of Jolo's delegation calls shows in the parent's transcript as one line for the child it is about, saying what that child is doing (its state, whether its process is working or running background work, a partial answer, why a wait ended) with an Open button into its conversation; the child-tasks list says the same for each child.
 - `delegation_status` now reports `wakeReason`, why its wait ended: `done`, `answer` (a newer answer), `asking` (the child waits on you), `parent_stopped`, `stopped` (the call itself was stopped) or `timeout`.
+- Messages in the desktop chat have a copy button and say when they were sent (`5m ago`, the exact date and time on hover), shown when you hover or focus a message (always on a touch screen) without moving anything. `session.page` messages and the `message.started` event carry `createdAt`, which an older engine leaves out.
 
 ## [0.2.5] — 2026-09-14
 

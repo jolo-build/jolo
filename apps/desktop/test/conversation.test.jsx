@@ -334,3 +334,40 @@ describe('a Workflow call', () => {
     expect(html).toContain('Bash {&quot;command&quot;:&quot;ls&quot;}');
   });
 });
+
+describe('a text message', () => {
+  /** A finished text message of `role`, its text all loaded. @param {PartialMessage} [overrides] */
+  const said = (overrides = {}) => ({ id: 'said', runId: 'run', role: 'assistant', kind: 'text', text: 'Done: **app.js** is fixed.', status: 'complete', renderedBytes: 26, committedBytes: 26, ...overrides });
+  /** Each message's row of tools, which closes its article. @param {string} html */
+  const rows = (html) => [...html.matchAll(/<div class="message-tools">([\s\S]*?)<\/div>(?=<\/article>)/g)].map(match => match[1]);
+  const exact = (/** @type {string} */ iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+  test('yours and the agent’s each end with a copy button and when they were sent, the exact time on hover', () => {
+    const createdAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    const found = rows(render(said({ id: 'asked', role: 'user', text: 'fix app.js', createdAt }), said({ createdAt })));
+    expect(found).toHaveLength(2);
+    for (const row of found) {
+      expect(row).toStartWith('<button type="button" class="message-copy" aria-label="Copy message" title="Copy message">');
+      const time = row.match(/<time class="message-time" dateTime="([^"]*)" title="([^"]*)">([^<]*)<\/time>$/);
+      expect(time?.slice(1, 3)).toEqual([createdAt, exact(createdAt)]);
+      expect(time?.[3]).toMatch(/^\d+m ago$/);
+    }
+  });
+
+  test('without a time (from an older engine) it has the copy button alone', () => {
+    const [row] = rows(render(said()));
+    expect(row).toContain('class="message-copy"');
+    expect(row).not.toContain('<time');
+  });
+
+  test('reasoning, a tool, a released or failed message, and one still loading its text have no row', () => {
+    const createdAt = new Date().toISOString();
+    for (const message of [
+      reasoning({ text: 'Checking the layout.', createdAt }),
+      { id: 'tool', runId: 'run', role: 'tool', kind: 'tool', text: 'read_file\napp.js', status: 'complete', createdAt },
+      said({ evicted: true, createdAt }),
+      said({ loadError: 'connection closed', createdAt }),
+      said({ text: '', renderedBytes: 0, createdAt }),
+    ]) expect(render(message)).not.toContain('message-tools');
+  });
+});

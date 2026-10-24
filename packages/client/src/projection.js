@@ -34,6 +34,7 @@ const RETRYABLE_READ_ERRORS = new Set(["unavailable", "limit_exceeded", "ECONNRE
 /**
  * One message as the projection holds it. Everything after `status` is filled in later by a
  * subsequent event, a fill, or eviction, so those fields are absent on a freshly started message.
+ * `createdAt` is when it was created; only a message from an engine that sends no time lacks it.
  * @typedef {{
  *   id: string,
  *   runId: string,
@@ -41,6 +42,7 @@ const RETRYABLE_READ_ERRORS = new Set(["unavailable", "limit_exceeded", "ECONNRE
  *   kind: string,
  *   artifactId: string,
  *   ordinal: number,
+ *   createdAt?: string,
  *   text: string,
  *   renderedBytes: number,
  *   committedBytes: number,
@@ -130,7 +132,8 @@ export class SessionProjection {
     switch (event.type) {
       case "message.started":
         this.orderedMessages = null;
-        this.messages.set(p.messageId, { id: p.messageId, runId: event.runId, role: p.role, kind: p.kind ?? "text", artifactId: p.artifactId, ordinal: p.ordinal, text: "", renderedBytes: 0, committedBytes: 0, status: "streaming" });
+        // An engine from before `createdAt` still gives a live message a time: its event's own.
+        this.messages.set(p.messageId, { id: p.messageId, runId: event.runId, role: p.role, kind: p.kind ?? "text", artifactId: p.artifactId, ordinal: p.ordinal, createdAt: p.createdAt ?? event.at, text: "", renderedBytes: 0, committedBytes: 0, status: "streaming" });
         break;
       case "message.committed":
       case "message.finished": {

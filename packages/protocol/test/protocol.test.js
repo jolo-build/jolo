@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, TASK_PATH_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_TITLE_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX, ACTIVITY_PAYLOAD_MAX_BYTES, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, TASK_PATH_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_TITLE_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX, ACTIVITY_PAYLOAD_MAX_BYTES, DialogSchema, MessageSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -61,6 +61,17 @@ describe("schemas", () => {
   test("defaults are applied", () => {
     const parsed = parseParams("events.subscribe", {});
     expect(parsed.ok && parsed.value.after).toBe("0");
+  });
+  test("a message and its message.started event may carry when it was created, which an older engine leaves out", () => {
+    const createdAt = "2026-10-24T11:42:00.000Z";
+    const message = { id: "msg_1", sessionId: "ses_1", runId: "run_1", ordinal: 3, role: "assistant", kind: "text", artifactId: "art_1", committedBytes: 12, status: "complete" };
+    expect(MessageSchema.parse({ ...message, createdAt })).toMatchObject({ createdAt });
+    expect(MessageSchema.safeParse(message).success).toBe(true);
+    expect(MessageSchema.safeParse({ ...message, createdAt: "yesterday" }).success).toBe(false);
+    const started = { messageId: "msg_1", role: "assistant", kind: "text", artifactId: "art_1", ordinal: 3 };
+    expect(EventPayloadSchemas["message.started"].parse({ ...started, createdAt })).toMatchObject({ createdAt });
+    expect(EventPayloadSchemas["message.started"].safeParse(started).success).toBe(true);
+    expect(EventPayloadSchemas["message.started"].safeParse({ ...started, createdAt: 42 }).success).toBe(false);
   });
   test("sequence comparison avoids precision loss", () => {
     expect(compareSeq("9007199254740993", "9007199254740992")).toBe(1);
