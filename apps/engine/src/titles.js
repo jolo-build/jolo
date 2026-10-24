@@ -149,8 +149,9 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
 
   /**
    * A task Claude Code answers: one print-mode process, one answer, as model discovery asks it. The prompt is the last
-   * argument rather than stdin: Jolo's process guardian stops a vendor shortly after its stdin ends, sooner than a model
-   * answers. It follows a newline, so a prompt can never be read as an option or as a subcommand such as `update`.
+   * argument, after a newline, so it can never be read as an option or as a subcommand such as `update`. Stdin is closed
+   * at once, so Claude does not wait for input (it reads a piped stdin for up to 3 s first), and the guardian's grace
+   * after that EOF, 1.5 s by default, is raised to this process's deadline; the timeout still ends a process that hangs.
    * Not `--bare`: it reads only an API key, never the OAuth sign-in a subscription uses, and the hosted environment
    * carries no key. Empty setting sources keep the user's, project's and local settings out, and with them their hooks
    * and plugins, and the strict MCP configuration with none given keeps the user's MCP servers from starting; no tools
@@ -170,7 +171,7 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(`no answer within ${timeoutMs / 1000} s`);
     const answer = await probeAgent({ supervisor, log }, manifest, argv, remaining, {
-      open: () => {},
+      open: () => {}, closeStdin: true, env: { JOLO_GUARDIAN_EOF_GRACE_MS: String(remaining) },
       ask: (message) => {
         if (message?.type !== "result") return null;
         // An error is a result too, and with subtype "success" when it is the sign-in that failed.

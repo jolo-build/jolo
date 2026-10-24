@@ -374,14 +374,18 @@ describe('a chat Jolo answers is named by its provider\'s cheapest model', () =>
 });
 
 describe('a chat Claude Code answers is named by one Claude process on its cheapest model', () => {
-  /** A `claude` that records its argv as JSON, then runs `body` (default: the protocol fixture). */
+  /**
+   * A `claude` that records its argv, the guardian grace it was given and what its stdin held as JSON, then runs `body`
+   * (default: the protocol fixture). Reading stdin to its end blocks until it is closed, as Claude's own read waits.
+   */
   function launcherIn(dir, body = null) {
     const file = path.join(dir, 'claude');
-    const argvLog = path.join(dir, 'argv.json');
-    const record = `"${process.execPath}" -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))' "${argvLog}" "$@"`;
+    const log = path.join(dir, 'launch.json');
+    const record = `"${process.execPath}" -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), grace: process.env.JOLO_GUARDIAN_EOF_GRACE_MS ?? null, stdin: fs.readFileSync(0, "utf8") }))' "${log}" "$@"`;
     writeFileSync(file, `#!/bin/sh\n${record}\n${body ?? `exec "${process.execPath}" "${FAKE_CLAUDE}" "$@"`}\n`);
     chmodSync(file, 0o755);
-    return { file, argv: () => JSON.parse(readFileSync(argvLog, 'utf8')) };
+    const launch = () => JSON.parse(readFileSync(log, 'utf8'));
+    return { file, argv: () => launch().argv, launch };
   }
   /** `chosen` is the model Claude is set to run with; without one there is nothing to list. */
   const deps = (launcher, { models = [{ id: 'default' }, { id: 'fable' }, { id: 'haiku' }], chosen = null } = {}) => {
@@ -408,6 +412,11 @@ describe('a chat Claude Code answers is named by one Claude process on its cheap
       expect(d.listed).toEqual(['claude']);
       expect(d.commands).toEqual([{ model: null, effort: null, fast: null }]);
       expect(launcher.argv()).toEqual(['--settings', '{}', '--print', '--output-format', 'json', '--model', 'haiku', '--no-session-persistence', '--setting-sources', '', '--tools', '', '--strict-mcp-config', '--max-turns', '1', '--system-prompt', TITLE_INSTRUCTIONS, '\nsummarise the release notes for me']);
+      // Stdin is closed at once, so Claude does not wait for input, and the guardian leaves it the rest of the deadline.
+      const { grace, stdin } = launcher.launch();
+      expect(stdin).toBe('');
+      expect(Number(grace)).toBeGreaterThan(0);
+      expect(Number(grace)).toBeLessThanOrEqual(20_000);
       expect(d.providerFactory.created).toEqual([]);
     } finally { await f.close(); rmSync(dir, { recursive: true, force: true }); }
   }, 15_000);
