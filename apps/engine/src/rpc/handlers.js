@@ -27,12 +27,12 @@ import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '
  *   account: any, tasks: any, permissions: any, dialogs: any, dispatcher: any, browser: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   hostedLinks?: any, paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
- *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
+ *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any, log?: any,
  * }} RpcDependencies
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv, log = null }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -310,6 +310,30 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const link = hostedLinks?.get(sessionId);
       return link?.alive ? link.stopBackground() : { requested: 0, stopped: 0, escalated: false };
+    },
+    // A task's whole output, read from the conversation's process, which holds it during the task and after it.
+    "session.taskOutput": async ({ sessionId, taskId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      if (!link?.alive) throw new ProtocolError("no_process", "the process that ran this task has ended");
+      try { return await link.taskOutput(taskId); }
+      catch (error) {
+        if (error?.code === "no_process") throw new ProtocolError("no_process", "the process that ran this task has ended");
+        if (error?.timedOut) throw new ProtocolError("unavailable", "Claude did not answer with the task's output");
+        throw new ProtocolError("not_found", String(error?.message ?? error)); // Claude's own words: it knows no such task
+      }
+    },
+    // The MCP servers of the conversation's process and how each is: asked now, else as its latest turn's init listed them.
+    "session.mcpStatus": async ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      if (!link?.alive) return { servers: null };
+      try { return await link.mcpStatus(); }
+      catch (error) {
+        if (error?.code === "no_process") return { servers: null }; // it ended meanwhile: it has no servers now
+        log?.info?.("MCP status had no answer; using the process's latest init list", { sessionId, reason: String(error?.message ?? error) });
+        return { servers: link.state.mcpServers ?? null };
+      }
     },
     "session.stopTask": async ({ sessionId, taskId }) => {
       if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);

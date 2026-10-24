@@ -1105,3 +1105,92 @@ test('a background agent\'s model is learned from its own messages, kept bounded
   expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
   await link.close({ reason: 'test', graceful: false }); // the stub answers no stop_task, so a graceful close would wait out its grace
 });
+
+test('a task\'s output is read from the process while it runs and after it ended; a task it does not know is refused', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  await turn(link, 'tasks 2 300', { init: true });
+  expect(await link.taskOutput('task-1')).toEqual({ output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false });
+  await waitFor(() => link.activity.tasks.every((t) => t.status === 'completed'));
+  expect((await link.taskOutput('task-2')).output).toBe('task 2\nline 1\nline 2\n[exited with code 0]\n');
+  await expect(link.taskOutput('nope')).rejects.toThrow('no such task');
+  await link.close({ reason: 'test' });
+  await expect(link.taskOutput('task-1')).rejects.toMatchObject({ code: 'no_process' });
+});
+
+test('a task\'s output keeps its last 200 KiB, says so, and a process that does not answer is given up on', async () => {
+  const big = 'a'.repeat(100 * 1024) + 'b'.repeat(250 * 1024) + 'END\n';
+  const script = `
+    process.stdin.on('data', (chunk) => {
+      for (const line of String(chunk).split('\\n').filter(Boolean)) {
+        const m = JSON.parse(line);
+        if (m.request?.subtype === 'get_task_output' && m.request.task_id === 'big') out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { output: ${JSON.stringify(big)}, total_bytes: ${Buffer.byteLength(big)}, truncated: false } } });
+        // 'silent' is never answered
+      }
+    });
+  `;
+  const registry = createHostedLinks({ log, requestTimeoutMs: 300 });
+  const link = registry.open({ sessionId: 'big', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', `const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n'); ${script} setInterval(() => {}, 1000);`], env: { PATH: process.env.PATH } }) });
+  const read = await link.taskOutput('big');
+  expect(Buffer.byteLength(read.output)).toBe(200 * 1024);
+  expect(read.output.endsWith('b'.repeat(10) + 'END\n')).toBe(true);
+  expect(read).toMatchObject({ totalBytes: Buffer.byteLength(big), truncated: true });
+  const asked = Date.now();
+  await expect(link.taskOutput('silent')).rejects.toMatchObject({ timedOut: true });
+  expect(Date.now() - asked).toBeLessThan(2000);
+  await link.close({ reason: 'test', graceful: false });
+});
+
+test('the MCP servers\' status is asked of the process, and the latest init\'s list is kept without asking', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  expect(link.state.mcpServers ?? null).toBeNull();
+  await turn(link, 'hello', { init: true });
+  expect(link.state.mcpServers).toEqual([
+    { name: 'probe', status: 'connected', source: 'user', error: null },
+    { name: 'pencil', status: 'failed', source: 'user', error: null },
+    { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
+  ]);
+  expect(await link.mcpStatus()).toEqual({ servers: [
+    { name: 'probe', status: 'connected', source: 'user', error: null },
+    { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' },
+    { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
+  ] });
+  await registry.closeAll();
+});
+
+test('a question pending when the process exits is answered no_process at once, not after its time runs out', async () => {
+  // A process that leaves as soon as it is asked anything.
+  const script = `process.stdin.on('data', () => setTimeout(() => process.exit(0), 50));`;
+  const registry = createHostedLinks({ log, requestTimeoutMs: 5000 });
+  const link = registry.open({ sessionId: 'leaves', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', `${script} setInterval(() => {}, 1000);`], env: { PATH: process.env.PATH } }) });
+  const asked = Date.now();
+  await expect(link.taskOutput('task-1')).rejects.toMatchObject({ code: 'no_process' });
+  expect(Date.now() - asked).toBeLessThan(2000);
+});
+
+test('session.mcpStatus falls back to the latest init\'s list when the process does not answer, and is null once it has ended', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  // A process whose turn opens with an init listing its MCP servers, which never answers mcp_status, and leaves on demand.
+  const script = `
+    out({ type: 'system', subtype: 'init', session_id: 'stub', mcp_servers: [{ name: 'probe', status: 'connected', source: 'user' }, { name: 'pencil', status: 'failed', source: 'user' }] });
+    process.stdin.on('data', (chunk) => { if (String(chunk).includes('"leave"')) process.exit(0); });
+  `;
+  const infos = [];
+  const quietLog = { ...log, info: (message) => infos.push(message) };
+  const hostedLinks = createHostedLinks({ log: quietLog, requestTimeoutMs: 200 });
+  const link = openStub(hostedLinks, 'mcp', script);
+  link.write({ type: 'hello' });
+  await waitFor(() => link.state.mcpServers !== null);
+  const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => (id === 'mcp' ? { id } : null) }, hostedLinks, log: quietLog }));
+  expect(await handlers['session.mcpStatus']({ sessionId: 'mcp' })).toEqual({ servers: [
+    { name: 'probe', status: 'connected', source: 'user', error: null },
+    { name: 'pencil', status: 'failed', source: 'user', error: null },
+  ] });
+  expect(infos.some((message) => /MCP/.test(message))).toBe(true); // the fallback is logged
+  // A process that ends while asked has no servers to report, not its old list.
+  const asking = handlers['session.mcpStatus']({ sessionId: 'mcp' });
+  link.write({ type: 'leave' });
+  expect(await asking).toEqual({ servers: null });
+  expect(await handlers['session.mcpStatus']({ sessionId: 'mcp' })).toEqual({ servers: null });
+});

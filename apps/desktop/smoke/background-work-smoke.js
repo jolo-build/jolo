@@ -38,6 +38,14 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await selectPanel(evaluate, waitFor, 'Activity');
   await waitFor(`${rows}.length === 2`, 'the Activity panel lists both tasks');
   assert.deepEqual(await evaluate(`${rows}.map(row => row.dataset.state)`), ['running', 'running']);
+  // The process's MCP servers, asked as the panel was shown: one muted line at its foot.
+  await waitFor("document.querySelector('.activity-panel .mcp-status')?.textContent === 'MCP: 1 connected · 1 failed · 1 needs sign-in'", 'the panel says how the MCP servers are');
+  assert.match(await evaluate("document.querySelector('.activity-panel .mcp-status').title"), /Failed: pencil \(ENOENT\)\nNeeds sign-in: claude\.ai Gmail/);
+  // A task's output opens under its row from the chevron after its time, read from the process.
+  await evaluate(`${rows}[0].querySelector('.task-output-toggle').click()`);
+  await waitFor(`${rows}[0].querySelector('.task-output-toggle').getAttribute('aria-expanded') === 'true' && /line 1/.test(${rows}[0].querySelector('.task-output')?.textContent ?? '')`, 'the first task\'s output opens under it, with its lines');
+  await evaluate(`${rows}[0].querySelector('.task-output-toggle').click()`);
+  await waitFor(`!${rows}[0].querySelector('.task-output-pane')`, 'the chevron closes it again');
   // The panel's rows leave the sidebar's own task rows, which share the task-row class, as they were: one line, no divider.
   const sidebarRow = "document.querySelector('.sidebar-chat-row.task-row')";
   await waitFor(`Boolean(${sidebarRow})`, 'the sidebar lists the conversation as a task row');
@@ -49,7 +57,7 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   const rowOf = name => `${rows}.find(row => row.querySelector('.activity-task-name').textContent === ${JSON.stringify(name)})`;
   assert.equal(await evaluate(`${rows}[0].querySelector('button[aria-label^="Stop "]').getAttribute('aria-label')`), `Stop ${first}`);
   await evaluate(`${rows}[0].querySelector('button[aria-label^="Stop "]').click()`);
-  await waitFor(`${rows}.length === 2 && ${rowOf(first)}?.dataset.state === 'stopped' && Boolean(${rowOf(first)}.closest('.finished-tasks')) && !${rowOf(first)}.querySelector('button') && ${rows}.filter(row => row.dataset.state === 'running' && !row.closest('.finished-tasks')).length === 1`, 'the first task’s stop square stopped it alone, listed under Finished while the other runs', 20_000);
+  await waitFor(`${rows}.length === 2 && ${rowOf(first)}?.dataset.state === 'stopped' && Boolean(${rowOf(first)}.closest('.finished-tasks')) && !${rowOf(first)}.querySelector('.stop-task') && ${rows}.filter(row => row.dataset.state === 'running' && !row.closest('.finished-tasks')).length === 1`, 'the first task’s stop square stopped it alone, listed under Finished while the other runs', 20_000);
   await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
   await waitFor(`!document.querySelector('.activity-line') && ${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'stopped' && row.querySelector('.activity-task-meta').textContent.includes('Stopped') && row.closest('.finished-tasks'))`, 'Stop background work stopped both tasks, listed under Finished 2', 20_000);
   assert.equal(await evaluate("document.querySelector('.activity-panel .finished-tasks > summary').textContent"), 'Finished 2');
@@ -86,6 +94,9 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await completed('the turn that started the stubborn tasks completed');
   await selectPanel(evaluate, waitFor, 'Activity');
   await waitFor(`${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'running')`, 'the Activity panel lists both stubborn tasks running');
+  // Its output is open while it runs; once the process is gone, the pane says so.
+  await evaluate(`${rows}[0].querySelector('.task-output-toggle').click()`);
+  await waitFor(`/line 1/.test(${rows}[0].querySelector('.task-output')?.textContent ?? '')`, 'the stubborn task\'s output is open while it runs');
   // The activity line no longer carries a stop (76df83c): Stop background work is the Activity panel's.
   await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
   const forceStop = button('.activity-panel .panel-note', 'Force stop');
@@ -97,6 +108,8 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await evaluate(`[...${confirm}.querySelectorAll('button')].find(item => item.textContent === 'Close process').click()`);
   await waitFor(`!document.querySelector('.activity-line') && ${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'failed' && row.querySelector('.activity-task-meta').textContent.includes('Failed'))`, 'closing the process ended both tasks, which read failed', 20_000);
   await waitFor('!document.querySelector("dialog.modal[open]")', 'the confirmation closed');
+  await waitFor(`${rows}[0].querySelector('.task-output-note')?.textContent === 'The process that ran it has ended'`, 'the open output says the process that ran it has ended', 10_000);
+  await screenshot('task-output-ended.png');
   // The process is gone, and its tasks outlive it: the engine answers them from the conversation's stored activity.
   const stored = async () => (await bridge.rawCall('session.activity', { sessionId: await evaluate('window.__joloSmoke.state().sessionId') })).activity;
   const deadline = Date.now() + 15_000;
@@ -183,7 +196,7 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await waitFor("window.__joloSmoke.state().assistantText.includes('Workflow quick done.')", 'Claude reported the completed workflow', 20_000);
   await completed('the report of the completed workflow completed');
 
-  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed, are still listed once the process is gone, and Clear finished deletes them for good, past the next process; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a table of its agents (Agent, Model, Tokens, Time, the columns lined up, a status square per row), and Stop background work ends it, its squares reading stopped; a workflow that completes shows Claude\'s summary and its output file set apart below its phases, and an agent\'s preview opens whole from its row');
+  report.checks.push('background work is listed and stopped from the Activity panel, the stopped tasks under Finished 2, which Clear finished hides, the task rows of the sidebar left as they were; AskUserQuestion and ExitPlanMode are answered from dialog cards; a task\'s output opens under its row and, once Force stop closed the process, says the process has ended; the MCP servers\' status is one line; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read Failed, are still listed once the process is gone, and Clear finished deletes them for good, past the next process; a workflow names the activity line with its phase and finished agents, shows as one card titled with its name, its two agents and its phase Say 0/2 with a square per agent, whose chevron opens a table of its agents (Agent, Model, Tokens, Time, the columns lined up, a status square per row), and Stop background work ends it, its squares reading stopped; a workflow that completes shows Claude\'s summary and its output file set apart below its phases, and an agent\'s preview opens whole from its row');
   report.checks.push('a running task stops alone by the square at the top right of its row, named Stop <its description>, and moves under Finished while the other runs on');
   report.checks.push('a Workflow call shows in the chat as a compact card titled with the workflow\'s name, reading Workflow 2 agents and its elapsed time with a running square per agent, whose head opens the Activity panel; it reads Stopped with its squares as the panel\'s once stopped, and a workflow that completes reads Completed with two done squares');
 }

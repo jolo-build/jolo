@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { clearFinished } from '../src/renderer/activity.js';
-import { ActivityPanel, ForceStopDialog, WorkflowCard, agentKey, phaseKey } from '../src/renderer/components/activity-panel.jsx';
+import { ActivityPanel, ForceStopDialog, TaskOutputView, TaskRow, WorkflowCard, agentKey, phaseKey } from '../src/renderer/components/activity-panel.jsx';
 
 let ids = 0;
 /** @param {Record<string, any>} [options] @returns {import('../src/renderer/activity.js').TaskRecord} */
@@ -15,9 +15,11 @@ const workflow = (options = {}) => task({ taskType: 'local_workflow', ...options
 const activity = (tasks, truncated = false) => ({ state: 'background', tasks, truncated, updatedAt: new Date().toISOString() });
 const noop = () => {};
 /** @param {import('../src/renderer/activity.js').Activity | null} value @param {Record<string, any>} [props] */
-const render = (value, { stopResult = null, stopping = false, cleared = {}, childTasks = undefined, delegations = undefined } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
+const render = (value, { stopResult = null, stopping = false, cleared = {}, childTasks = undefined, delegations = undefined, mcpServers = undefined } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
   stopResult={stopResult} stopping={stopping} visible cleared={cleared} onStopAll={noop} onStopTask={noop} onForceStop={noop} onClear={noop}
-  childTasks={childTasks} delegations={delegations} onOpenTask={noop} onStopChild={noop} />);
+  childTasks={childTasks} delegations={delegations} onOpenTask={noop} onStopChild={noop} mcpServers={mcpServers} loadTaskOutput={async () => ({ output: '', totalBytes: 0, truncated: false })} />);
+/** The chevron that opens a task's output, as a pattern; `open` says whether it reads open. */
+const outputToggle = (open = false) => `<button type="button" class="icon-button task-output-toggle" aria-label="Show output" aria-expanded="${open}" title="Output"><svg[^>]*class="icon activity-disclosure"[^>]*>.*?</svg></button>`;
 const count = (/** @type {string} */ html, /** @type {RegExp} */ pattern) => html.match(pattern)?.length ?? 0;
 /** The statuses of a phase's squares, in order, found by its title. */
 const squares = (/** @type {string} */ html, /** @type {string} */ title) => {
@@ -36,7 +38,7 @@ const card = (/** @type {string} */ html) => html.slice(html.indexOf('<li class=
 test('a workflow is one card: its name and elapsed time with a stop square while it runs, then Workflow and its status, then its tokens', () => {
   const html = render(activity([workflow({ workflowName: 'api-plan-review', description: 'Workflow api-plan-review', runId: 'wf-1-run', tokens: 1_200_000 })]));
   expect(count(html, /class="workflow-card"/g)).toBe(1);
-  expect(html).toMatch(new RegExp(`<li class="workflow-card" data-state="running"><div class="item-head"><span class="workflow-title" title="api-plan-review">api-plan-review</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${stopSquare('api-plan-review')}</div>`));
+  expect(html).toMatch(new RegExp(`<li class="workflow-card" data-state="running"><div class="item-head"><span class="workflow-title" title="api-plan-review">api-plan-review</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${outputToggle()}${stopSquare('api-plan-review')}</div>`));
   expect(html).toContain('<div class="card-meta"><span>Workflow</span><span>Running</span></div>');
   expect(html).toContain('<div class="card-meta"><span>1.2M tokens</span></div>');
   expect(count(html, STOP_SQUARES)).toBe(1);
@@ -57,7 +59,7 @@ test('a finished workflow card reads as Claude Code’s: Workflow Completed, its
     startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:17:18.000Z',
     workflow: summary([{ title: 'Read', agents: 5, done: 5, running: 0, failed: 0 }, { title: 'Synthesize', agents: 1, done: 1, running: 0, failed: 0 }], 'Synthesize: synthesize:1'),
   })]));
-  expect(html).toContain('<span class="workflow-title" title="kb-as-is-analysis">kb-as-is-analysis</span><span class="activity-elapsed">17:18</span></div>');
+  expect(html).toMatch(new RegExp(`<span class="workflow-title" title="kb-as-is-analysis">kb-as-is-analysis</span><span class="activity-elapsed">17:18</span>${outputToggle()}</div>`));
   expect(html).toContain('<div class="card-meta"><span>Workflow</span><span>Completed</span></div>');
   expect(html).toContain('<div class="card-meta"><span>6 agents</span><span>1.3M tokens</span></div>');
   expect(html).toContain('<p class="workflow-description">As-is analysis of the old knowledge base: five readers and one synthesis</p>');
@@ -139,7 +141,7 @@ test('a workflow of more than 25 agents is badged Large beside its status; one a
 
 test('a finished workflow card falls back to its description, which it does not repeat, freezes its elapsed time, and offers no stop', () => {
   const html = render(activity([workflow({ description: 'Workflow review', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:09:41.000Z' })]));
-  expect(html).toContain('<span class="workflow-title" title="Workflow review">Workflow review</span><span class="activity-elapsed">09:41</span></div>');
+  expect(html).toMatch(new RegExp(`<span class="workflow-title" title="Workflow review">Workflow review</span><span class="activity-elapsed">09:41</span>${outputToggle()}</div>`));
   expect(html).toContain('<div class="card-meta"><span>Workflow</span><span>Completed</span></div>');
   expect(html).not.toContain('workflow-description');
   expect(html).not.toContain('stop-task');
@@ -177,9 +179,9 @@ test('a task row says its description and elapsed time, a stop square while it r
   ]));
   expect(count(html, /class="task-row"/g)).toBe(5);
   expect(html).not.toContain('workflow-card');
-  expect(html).toMatch(new RegExp(`<li class="task-row" data-state="running"><div class="item-head"><span class="activity-task-name" title="Sleep for 60 seconds">Sleep for 60 seconds</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${stopSquare('Sleep for 60 seconds')}</div><div class="activity-task-meta">Command · Running</div></li>`));
+  expect(html).toMatch(new RegExp(`<li class="task-row" data-state="running"><div class="item-head"><span class="activity-task-name" title="Sleep for 60 seconds">Sleep for 60 seconds</span><span class="activity-elapsed">\\d\\d:\\d\\d</span>${outputToggle()}${stopSquare('Sleep for 60 seconds')}</div><div class="activity-task-meta">Command · Running</div></li>`));
   // formatTokens reads 137.5k as 138k, as the activity line does.
-  expect(html).toContain('<span class="activity-elapsed">01:57</span></div><div class="activity-task-meta">Agent · Completed · 138k tokens · 6 tool uses</div>');
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">01:57</span>${outputToggle()}</div><div class="activity-task-meta">Agent · Completed · 138k tokens · 6 tool uses</div>`));
   expect(html).toContain('<div class="activity-task-meta">Agent · Running · 950 tokens · 1 tool use</div>');
   expect(html).toContain('<li class="task-row" data-state="stopped">');
   expect(html).toContain('<div class="activity-task-meta">Task · Stopped</div>');
@@ -195,14 +197,14 @@ test('a running task stops by a square at the top right of its row or card, name
     workflow({ workflowName: 'kb-check', status: 'stopped', startedAt: '2026-10-24T00:00:00.000Z' }),
   ]));
   // The square is the head's last child, after the elapsed time: the row's description, the card's workflow name.
-  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${stopSquare('Run the checks')}</div><div class="activity-task-meta">`));
-  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${stopSquare('review-changes')}</div><div class="card-meta">`));
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${outputToggle()}${stopSquare('Run the checks')}</div><div class="activity-task-meta">`));
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">[\\d:]+</span>${outputToggle()}${stopSquare('review-changes')}</div><div class="card-meta">`));
   expect(count(html, STOP_SQUARES)).toBe(2);
-  // Under Finished: no button at all on the row or the card.
+  // Under Finished: no stop on the row or the card.
   const finished = html.slice(html.indexOf('class="finished-tasks"'));
   expect(finished).toContain('>Lint<');
   expect(finished).toContain('>kb-check<');
-  expect(finished.replace(/<summary>.*?<\/summary>/, '')).not.toContain('<button');
+  expect(finished.replace(/<summary>.*?<\/summary>/, '')).not.toContain('stop-task'); // its output chevron is its only button
   // The heading's Stop background work stays a text button.
   expect(html).toMatch(/<button type="button">Stop background work<\/button>/);
 });
@@ -308,7 +310,8 @@ test('an agent still running on a workflow that ended reads with the workflow’
 test('a workflow from an engine before the agent list keeps its phases as they were, with no chevron', () => {
   const html = render(activity([workflow({ workflowName: 'demo', workflow: summary([{ title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], 'Say: say:1') })]));
   expect(html).toContain('<div class="workflow-phase" data-state="running"><div class="phase-head"><span>Say</span><span>1/2</span></div><div class="phase-squares"');
-  for (const absent of ['<details class="workflow-phase"', 'activity-disclosure', 'phase-agents']) expect(html).not.toContain(absent);
+  const phases = html.slice(html.indexOf('class="workflow-phases"'));
+  for (const absent of ['<details class="workflow-phase"', 'activity-disclosure', 'phase-agents']) expect(phases).not.toContain(absent);
 });
 
 test('a finished workflow card shows its notification’s summary and its output file; a running one neither', () => {
@@ -494,4 +497,41 @@ test('a background agent\'s row names its kind and model after Agent; a generic 
   expect(html).toContain('<div class="activity-task-meta">Agent · Running</div>');
   expect(html).toContain('<div class="activity-task-meta">Agent · Sonnet 5.5 · Running</div>'); // a generic kind is left out, its model is not
   expect(html).toContain('<div class="activity-task-meta">Command · Running</div>');
+});
+
+test('a task\'s output opens under its row from a chevron after its time, on rows and workflow cards of the process, never on child tasks', () => {
+  const html = render(activity([task({ description: 'Watch the build', taskType: 'local_bash' })]), { childTasks: [childTask({ sessionId: 'ses_o', state: 'model' })] });
+  expect(html).toMatch(new RegExp(`<span class="activity-elapsed">\\d\\d:\\d\\d</span>${outputToggle()}${stopSquare('Watch the build')}</div>`));
+  expect(count(html, /task-output-toggle/g)).toBe(1); // the child row has none
+  expect(html).not.toContain('task-output-pane');
+  // Open, the pane is under the row, and reads Loading output… until the first answer.
+  const row = renderToStaticMarkup(<ol><TaskRow task={task({ description: 'Watch the build', taskType: 'local_bash' })} nested={false} now={Date.now()} onStopTask={noop} outputOpen onOutputToggle={noop} loadOutput={async () => ({ output: 'x', totalBytes: 1, truncated: false })} /></ol>);
+  expect(row).toMatch(new RegExp(outputToggle(true)));
+  expect(row).toContain('<div class="task-output-pane"><p class="task-output-note">Loading output…</p></div></li>');
+  const card = renderToStaticMarkup(<ol><WorkflowCard task={workflow({ workflowName: 'demo' })} nested={false} now={Date.now()} onStopTask={noop} openPhases={new Set()} onPhaseToggle={noop} outputOpen onOutputToggle={noop} loadOutput={async () => ({ output: 'x', totalBytes: 1, truncated: false })} /></ol>);
+  expect(card).toContain('task-output-pane');
+});
+
+test('the output pane shows the output, a note when earlier output was left out, why it cannot when the process has ended, or the error', () => {
+  const view = (props) => renderToStaticMarkup(<TaskOutputView {...props} />);
+  const command = task({ description: 'Run the tests', taskType: 'local_bash', status: 'completed', outputFile: '/private/tmp/claude-501/s/tasks/b7x.output' });
+  expect(view({ task: command, state: { status: 'ready', result: { output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false } } })).toBe('<div class="task-output-pane"><pre class="task-output">task 1\nline 1\nline 2\n</pre></div>');
+  expect(view({ task: command, state: { status: 'ready', result: { output: 'the end\n', totalBytes: 900000, truncated: true } } })).toBe('<div class="task-output-pane"><pre class="task-output">… earlier output left out\nthe end\n</pre></div>');
+  expect(view({ task: command, state: { status: 'error', error: { code: 'no_process', message: 'the process that ran this task has ended' } } }))
+    .toBe('<div class="task-output-pane"><p class="task-output-note">The process that ran it has ended</p><p class="task-output-note" title="/private/tmp/claude-501/s/tasks/b7x.output">Output file: b7x.output</p></div>');
+  expect(view({ task: { ...command, outputFile: null }, state: { status: 'error', error: { code: 'no_process', message: 'x' } } })).toBe('<div class="task-output-pane"><p class="task-output-note">The process that ran it has ended</p></div>');
+  expect(view({ task: command, state: { status: 'error', error: { code: 'not_found', message: 'no such task' } } })).toBe('<div class="task-output-pane"><p class="task-output-note" title="no such task">no such task</p></div>'); // a long error is readable in full on hover
+  expect(view({ task: command, state: { status: 'ready', result: { output: '', totalBytes: 0, truncated: false } } })).toBe('<div class="task-output-pane"><p class="task-output-note">No output yet</p></div>');
+});
+
+test('the MCP servers\' status is one muted line at the bottom: the non-zero counts, the failed and unsigned ones by name on hover', () => {
+  const servers = [
+    { name: 'probe', status: 'connected', source: 'user', error: null },
+    { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' },
+    { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
+  ];
+  const html = render(activity([]), { mcpServers: servers });
+  expect(html).toContain('<p class="panel-note mcp-status" title="Failed: pencil (ENOENT)\nNeeds sign-in: claude.ai Gmail">MCP: 1 connected · 1 failed · 1 needs sign-in</p>');
+  expect(render(activity([]), { mcpServers: [servers[0], { ...servers[0], name: 'other' }] })).toContain('<p class="panel-note mcp-status">MCP: 2 connected</p>');
+  for (const none of [null, [], undefined]) expect(render(activity([]), { mcpServers: none })).not.toContain('mcp-status');
 });

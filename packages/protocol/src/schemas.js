@@ -22,6 +22,8 @@ export const ERROR_CODES = Object.freeze([
   "interrupted",
   "resync_required",
   "not_found",
+  // The conversation's agent process that a request needs has ended (a task's output, read from the process).
+  "no_process",
   "internal",
 ]);
 
@@ -549,6 +551,12 @@ export const ScheduleSchema = z.object({
  * ones fill the room left, the newest kept.
  */
 export const TASK_HISTORY_LIMIT = 200;
+/** The most bytes (UTF-8) of a task's output the engine passes on: the last ones, since the end of a log is what is looked for. */
+export const TASK_OUTPUT_MAX = 200 * 1024;
+/** The most MCP servers a status names, and how long each field may be. */
+export const MCP_SERVERS_MAX = 100;
+/** One MCP server of an agent process: its name, status (`connected`, `failed`, `needs-auth`, `pending`), where it is configured, and why it failed. */
+export const McpServerSchema = z.object({ name: z.string().max(200), status: z.string().max(40), source: z.string().max(40).nullable(), error: z.string().max(500).nullable() });
 /**
  * The most characters a task's description, phase, workflow name, progress line or summary keeps (and a workflow agent's
  * label, phase or result preview), and an id (its own, its run's, its tool call's, its parent's), subagent type, task
@@ -948,6 +956,17 @@ export const MethodSchemas = {
    * activity when it has no process. `cleared` is how many went. For interactive clients.
    */
   "session.clearFinished": { params: z.object({ sessionId: Id }), result: z.object({ cleared: z.number().int().nonnegative() }) },
+  /**
+   * A task's whole output, as the conversation's agent process holds it (during the task and after it, while the process
+   * lives): the last TASK_OUTPUT_MAX bytes of it, `truncated` when earlier output was left out (by the process or here).
+   * `no_process` when the process has ended, `not_found` when the process knows no such task.
+   */
+  "session.taskOutput": {
+    params: z.object({ sessionId: Id, taskId: TaskId.min(1) }),
+    result: z.object({ output: z.string().max(TASK_OUTPUT_MAX), totalBytes: z.number().int().nonnegative(), truncated: z.boolean() }),
+  },
+  /** The MCP servers of the conversation's agent process and how each is (connected, failed, needs-auth, pending); null with no process. */
+  "session.mcpStatus": { params: z.object({ sessionId: Id }), result: z.object({ servers: z.array(McpServerSchema).max(MCP_SERVERS_MAX).nullable() }) },
   /** Stop one background task of the conversation's agent process; `error` says why not ('no process' when it has none). */
   "session.stopTask": { params: z.object({ sessionId: Id, taskId: Id }), result: z.object({ ok: z.boolean(), error: z.string().nullable() }) },
   /**

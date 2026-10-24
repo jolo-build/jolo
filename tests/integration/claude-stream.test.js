@@ -460,6 +460,37 @@ describe("one Claude process per conversation", () => {
     await headless.close();
   }, 60_000);
 
+  test('a task\'s output is read from its process; with the process gone, or for a task it does not know, the client is told why', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('bg', 'tasks 1 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).toEqual({ output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false });
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'nope' })).rejects.toMatchObject({ code: 'not_found', message: 'no such task' });
+    await expect(client.call('session.taskOutput', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+    await waitFor(() => !alive(starts()[0]), { timeoutMs: 15_000 });
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
+  }, 30_000);
+
+  test('the MCP servers\' status comes from the process, and none without one', async () => {
+    const { client, session, runTo } = await boot();
+    expect(await client.call('session.mcpStatus', { sessionId: session.id })).toEqual({ servers: null });
+    await runTo('hello', 'hello');
+    expect(await client.call('session.mcpStatus', { sessionId: session.id })).toEqual({ servers: [
+      { name: 'probe', status: 'connected', source: 'user', error: null },
+      { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' },
+      { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
+    ] });
+    await expect(client.call('session.mcpStatus', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+  }, 30_000);
+
+  test('Claude\'s away summary is a note in the conversation', async () => {
+    const { runTo, messagesOf, text } = await boot();
+    const run = await runTo('away', 'away-summary While you were away, the build passed.');
+    const texts = await Promise.all((await messagesOf(run.id)).filter(m => m.role === 'assistant' && m.kind === 'text').map(text));
+    expect(texts).toEqual(['While you were away, the build passed.', 'Welcome back.']);
+  }, 30_000);
+
   test('stopping one background task ends only that task, and Claude\'s reason comes back when it will not', async () => {
     const { client, events, session, runTo } = await boot();
     await runTo('bg', 'tasks 2 20000');

@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from 'react';
-import { agentStatus, agentsByPhase, childRows, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
+import { agentStatus, agentsByPhase, childRows, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, mcpLine, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
 import { modelLabel } from '../model-options.js';
 import { delegationWords } from '../delegation.js';
 import { Icon } from './icon.jsx';
@@ -8,6 +8,7 @@ import { Modal } from './modal.jsx';
 /** @typedef {import('../activity.js').TaskRecord} TaskRecord */
 
 const noop = () => {};
+const noOutput = async () => ({ output: '', totalBytes: 0, truncated: false });
 const NO_CHILDREN = /** @type {import('../activity.js').ChildTask[]} */ ([]);
 const NO_DELEGATIONS = /** @type {Map<string, import('../activity.js').DelegationRow>} */ (new Map());
 /** A workflow agent's status in words (see agentStatus). */
@@ -24,16 +25,64 @@ export const agentKey = (/** @type {string} */ taskId, /** @type {number} */ ind
 
 /**
  * A card's or a row's first line: its name (after `↳` when it is drawn under the task that started it), its elapsed time
- * (frozen once it ended), and while it runs a square stop at its right end, as Claude Code's own panel has, named after
- * the task for assistive technology.
- * @param {{ task: TaskRecord, name: string, nested?: boolean, className: string, now: number, onStopTask: (taskId: string) => void }} props
+ * (frozen once it ended), a chevron that opens its output under it (see TaskOutput), and while it runs a square stop at
+ * its right end, as Claude Code's own panel has, named after the task for assistive technology.
+ * @param {{ task: TaskRecord, name: string, nested?: boolean, className: string, now: number, onStopTask: (taskId: string) => void,
+ *   output?: { open: boolean, onToggle: () => void } | null }} props
  */
-function ItemHead({ task, name, nested = false, className, now, onStopTask }) {
+function ItemHead({ task, name, nested = false, className, now, onStopTask, output = null }) {
   return <div className="item-head">
     <span className={className} title={name}>{nested && <span className="activity-nest" aria-hidden="true">↳ </span>}{name}</span>
     <span className="activity-elapsed">{elapsed(task.startedAt, task.endedAt, now)}</span>
+    {output && <button type="button" className="icon-button task-output-toggle" aria-label="Show output" aria-expanded={output.open} title="Output" onClick={output.onToggle}><Icon name="chevron" size={14} className="activity-disclosure" /></button>}
     {task.status === 'running' && <button type="button" className="icon-button stop-task" aria-label={`Stop ${name}`} title="Stop" onClick={() => onStopTask(task.taskId)}><Icon name="stop" size={14} /></button>}
   </div>;
+}
+
+/** How often an open output is read again while its task runs. */
+const OUTPUT_REFRESH_MS = 2000;
+
+/**
+ * What a task's output pane shows (see TaskOutput): `Loading output…` until the first answer; the output, after `… earlier
+ * output left out` when its start was cut; with the process gone, that it has ended and, for a task that wrote one, its
+ * output file by name (the full path on hover); any other error in its own words.
+ * @param {{ task: TaskRecord, state: { status: 'loading' } | { status: 'ready', result: { output: string, totalBytes: number, truncated: boolean } } | { status: 'error', error: { code?: string, message?: string } } }} props
+ */
+export function TaskOutputView({ task, state }) {
+  const note = (/** @type {string} */ text, /** @type {string | undefined} */ title = undefined) => <p className="task-output-note" title={title}>{text}</p>;
+  if (state.status === 'loading') return <div className="task-output-pane">{note('Loading output…')}</div>;
+  if (state.status === 'error') {
+    if (state.error?.code !== 'no_process') { const message = state.error?.message || 'Could not read the output'; return <div className="task-output-pane">{note(message, message)}</div>; }
+    const file = task.outputFile ? { name: task.outputFile.split('/').pop() || task.outputFile, path: task.outputFile } : null;
+    return <div className="task-output-pane">{note('The process that ran it has ended')}{file && note(`Output file: ${file.name}`, file.path)}</div>;
+  }
+  const { output, truncated } = state.result;
+  if (!output) return <div className="task-output-pane">{note('No output yet')}</div>;
+  return <div className="task-output-pane"><pre className="task-output">{truncated ? `… earlier output left out\n${output}` : output}</pre></div>;
+}
+
+/**
+ * A task's output, read from the conversation's process (`load`) while the panel is on screen (`visible`): when the pane
+ * opens or the panel is shown again, then, while the task runs, OUTPUT_REFRESH_MS after each read has settled (one at a
+ * time, so a slow answer never piles reads up or lands out of order), and once more when it ends. Nothing is read while
+ * the panel is hidden: each read is a question to Claude and up to TASK_OUTPUT_MAX through the bridge.
+ * @param {{ task: TaskRecord, load: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>, visible: boolean }} props
+ */
+function TaskOutput({ task, load, visible }) {
+  const [state, setState] = useState(/** @type {Parameters<typeof TaskOutputView>[0]['state']} */ ({ status: 'loading' }));
+  const running = task.status === 'running';
+  useEffect(() => {
+    if (!visible) return;
+    let current = true;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let timer = null;
+    const read = () => load(task.taskId)
+      .then(result => { if (current) setState({ status: 'ready', result }); }, error => { if (current) setState({ status: 'error', error: { code: error?.code, message: error?.message } }); })
+      .finally(() => { if (current && running) timer = setTimeout(read, OUTPUT_REFRESH_MS); });
+    void read();
+    return () => { current = false; if (timer) clearTimeout(timer); };
+  }, [task.taskId, running, visible]);
+  return <TaskOutputView task={task} state={state} />;
 }
 
 /**
@@ -61,10 +110,11 @@ const agentOf = (task) => taskKind(task) !== 'Agent' ? [] : [task.subagentType &
  * A task that is not a workflow: its description (else its summary, else its kind and id), then its kind (an agent's own
  * kind and model after it, see agentOf), status, tokens and tool uses, those it reported, and while
  * it runs what it does now (its progress line under the status, else the tool it last used on the status line); once it
- * ended, how (see Ending).
- * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void }} props
+ * ended, how (see Ending); its output under it while that is open (see TaskOutput).
+ * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void, outputOpen?: boolean,
+ *   onOutputToggle?: (taskId: string, open: boolean) => void, loadOutput?: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>, visible?: boolean }} props
  */
-function TaskRow({ task, nested, now, onStopTask }) {
+export function TaskRow({ task, nested, now, onStopTask, outputOpen = false, onOutputToggle = noop, loadOutput = noOutput, visible = true }) {
   const uses = task.usage.toolUses;
   const kind = taskKind(task);
   // A task Claude reported only by its end (a background command a previous process left) has no description: it is
@@ -73,10 +123,11 @@ function TaskRow({ task, nested, now, onStopTask }) {
   const found = taskDetail(task);
   const detail = !task.description && name === task.summary ? { ...found, summary: null } : found;
   return <li className="task-row" data-state={task.status} data-nested={nested ? '' : undefined}>
-    <ItemHead task={task} name={name} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} />
+    <ItemHead task={task} name={name} nested={nested} className="activity-task-name" now={now} onStopTask={onStopTask} output={{ open: outputOpen, onToggle: () => onOutputToggle(task.taskId, !outputOpen) }} />
     <div className="activity-task-meta">{meta([kind, ...agentOf(task), statusWord(task.status), tokens(task.usage.totalTokens), uses ? plural(uses, 'tool use') : null, detail.tool])}</div>
     {detail.now && <div className="activity-now" title={detail.now}>{detail.now}</div>}
     <Ending detail={detail} />
+    {outputOpen && <TaskOutput task={task} load={loadOutput} visible={visible} />}
   </li>;
 }
 
@@ -130,10 +181,12 @@ function AgentRow({ agent, taskStatus, expanded, onToggle }) {
  * chevron. Once the workflow ended, the card says how (see Ending), set apart below the phases. Which phases are open the panel keeps (`openPhases`, by
  * phaseKey), so a phase stays open when its card moves under Finished; a closed phase renders none of its agent lines, so
  * a large workflow does not redraw hundreds of them every second.
+ * Its chevron opens the workflow's own output under the card (see TaskOutput).
  * @param {{ task: TaskRecord, nested: boolean, now: number, onStopTask: (taskId: string) => void, openPhases: Set<string>,
- *   onPhaseToggle: (key: string, open: boolean) => void }} props
+ *   onPhaseToggle: (key: string, open: boolean) => void, outputOpen?: boolean, onOutputToggle?: (taskId: string, open: boolean) => void,
+ *   loadOutput?: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>, visible?: boolean }} props
  */
-export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhaseToggle }) {
+export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhaseToggle, outputOpen = false, onOutputToggle = noop, loadOutput = noOutput, visible = true }) {
   const name = task.workflowName ?? task.description;
   const { agents, phases, current, large } = workflowSummary(task);
   const agentsOf = agentsByPhase(task);
@@ -142,7 +195,7 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
   const described = task.description !== name && task.description !== `Workflow ${name}` ? task.description : '';
   const ending = taskDetail(task);
   return <li className="workflow-card" data-state={task.status} data-nested={nested ? '' : undefined}>
-    <ItemHead task={task} name={name} nested={nested} className="workflow-title" now={now} onStopTask={onStopTask} />
+    <ItemHead task={task} name={name} nested={nested} className="workflow-title" now={now} onStopTask={onStopTask} output={{ open: outputOpen, onToggle: () => onOutputToggle(task.taskId, !outputOpen) }} />
     <div className="card-meta"><span>Workflow</span><span>{statusWord(task.status)}</span>{large && <span className="plan-mark">Large</span>}</div>
     {(agents !== null || spent) && <div className="card-meta">{agents !== null && <span>{plural(agents, 'agent')}</span>}{spent && <span>{spent}</span>}</div>}
     {described && <p className="workflow-description">{described}</p>}
@@ -167,6 +220,7 @@ export function WorkflowCard({ task, nested, now, onStopTask, openPhases, onPhas
       })}
     </div>}
     {(ending.summary || ending.output) && <div className="workflow-ending"><Ending detail={ending} /></div>}
+    {outputOpen && <TaskOutput task={task} load={loadOutput} visible={visible} />}
   </li>;
 }
 
@@ -231,9 +285,13 @@ export function ForceStopDialog({ onConfirm, onClose }) {
  *   delegations?: Map<string, import('../activity.js').DelegationRow>,
  *   onOpenTask?: (sessionId: string) => void,
  *   onStopChild?: (runId: string) => void,
- * }} props `stopping` while a Stop background work waits for its reply; `visible` while the panel is on screen.
+ *   loadTaskOutput?: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>,
+ *   mcpServers?: { name: string, status: string, source: string | null, error: string | null }[] | null,
+ * }} props `stopping` while a Stop background work waits for its reply; `visible` while the panel is on screen;
+ * `loadTaskOutput` reads a task's output from the process; `mcpServers` is the process's MCP servers as the pane last
+ * asked them, said in one muted line at the bottom (see mcpLine).
  */
-export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear, childTasks = NO_CHILDREN, delegations = NO_DELEGATIONS, onOpenTask = noop, onStopChild = noop }) {
+export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear, childTasks = NO_CHILDREN, delegations = NO_DELEGATIONS, onOpenTask = noop, onStopChild = noop, loadTaskOutput = noOutput, mcpServers = null }) {
   const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
   const [openPhases, setOpenPhases] = useState(() => /** @type {Set<string>} */ (new Set()));
   const onPhaseToggle = (/** @type {string} */ key, /** @type {boolean} */ open) => setOpenPhases(current => {
@@ -243,8 +301,18 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
     else next.delete(key);
     return next;
   });
+  // Which tasks show their output, kept here as the open phases are, so a pane stays open when its task moves under Finished.
+  const [openOutputs, setOpenOutputs] = useState(() => /** @type {Set<string>} */ (new Set()));
+  const onOutputToggle = (/** @type {string} */ taskId, /** @type {boolean} */ open) => setOpenOutputs(current => {
+    if (current.has(taskId) === open) return current;
+    const next = new Set(current);
+    if (open) next.add(taskId);
+    else next.delete(taskId);
+    return next;
+  });
   const { running, finished } = groupActivity(activity, cleared);
   const now = Date.now();
+  const mcp = mcpLine(mcpServers);
   const children = childRows(childTasks, delegations, now);
   const ticking = visible && (running.length > 0 || children.some(row => row.running));
   // Elapsed times move once a second while something runs and the panel is shown; nothing ticks otherwise, and showing
@@ -256,8 +324,8 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
   }, [ticking]);
   // A task is drawn under the task in the same list that started it (see nestTasks).
   const item = (/** @type {{ task: TaskRecord, nested: boolean }} */ { task, nested }) => taskKind(task) === 'Workflow'
-    ? <WorkflowCard key={task.taskId} task={task} nested={nested} now={now} onStopTask={onStopTask} openPhases={openPhases} onPhaseToggle={onPhaseToggle} />
-    : <TaskRow key={task.taskId} task={task} nested={nested} now={now} onStopTask={onStopTask} />;
+    ? <WorkflowCard key={task.taskId} task={task} nested={nested} now={now} onStopTask={onStopTask} openPhases={openPhases} onPhaseToggle={onPhaseToggle} outputOpen={openOutputs.has(task.taskId)} onOutputToggle={onOutputToggle} loadOutput={loadTaskOutput} visible={visible} />
+    : <TaskRow key={task.taskId} task={task} nested={nested} now={now} onStopTask={onStopTask} outputOpen={openOutputs.has(task.taskId)} onOutputToggle={onOutputToggle} loadOutput={loadTaskOutput} visible={visible} />;
   return <div className="activity-panel">
     <div className="activity-heading">
       <strong>Activity</strong>
@@ -279,5 +347,6 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
       <ol className="activity-list">{nestTasks(finished).map(item)}</ol>
     </details>}
     {activity?.truncated && <p className="panel-note">Older finished tasks are not listed</p>}
+    {mcp && <p className="panel-note mcp-status" title={mcp.title ?? undefined}>{mcp.text}</p>}
   </div>;
 }

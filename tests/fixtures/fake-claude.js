@@ -24,7 +24,10 @@
 // it owns (parent_task_id agent-1), the subagent's own message naming its model claude-opus-5-5, which end at <ms>, the command first, and
 // stop_task on the subagent kills it (task_updated status "killed"), and
 // anything else just answers in prose. A second control response to one request, or one to a request it took back,
-// makes the fixture exit 70. The other scenarios are described where they are played.
+// makes the fixture exit 70. "away-summary <text>" sends a system away_summary with <text> as its summary, then a reply. It answers
+// get_task_output for a task it started (its description, two lines, and the exit line once it ended; an unknown task is an
+// error) and mcp_status with three servers (connected, failed, needs-auth), which every init lists too. The other scenarios
+// are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
 // --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
@@ -88,11 +91,32 @@ const COMMANDS = [
   { name: "deploy", description: "Ship the current branch to an environment", argumentHint: "<environment>" },
 ];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
+// The MCP servers this Claude has, as mcp_status answers (with the config it also sends) and each turn's init lists them.
+const MCP_SERVERS = [
+  { name: "probe", status: "connected", config: { type: "stdio", command: "probe" }, scope: "user", source: "user" },
+  { name: "pencil", status: "failed", config: { type: "stdio", command: "pencil" }, scope: "user", source: "user", error: "ENOENT" },
+  { name: "claude.ai Gmail", status: "needs-auth", config: { type: "claudeai-proxy" }, scope: "claudeai", source: "claudeai" },
+];
+const INIT_MCP = MCP_SERVERS.map(({ name, status, source }) => ({ name, status, source }));
+/** The tasks this process started, and whether each ended: get_task_output answers for them, by what went out. */
+const startedTasks = new Map();
+const noteTask = (message) => {
+  if (message?.type !== "system") return;
+  if (message.subtype === "task_started") startedTasks.set(message.task_id, { description: message.description ?? "", ended: false });
+  else if (message.subtype === "task_notification" && startedTasks.has(message.task_id)) startedTasks.get(message.task_id).ended = true;
+};
+/** get_task_output: its description and two lines, then the exit line once it ended, as Claude Code 2.1.304 answers for a command. */
+const answerTaskOutput = (requestId, taskId) => {
+  const task = startedTasks.get(taskId);
+  if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "no such task" } });
+  const output = `${task.description}\nline 1\nline 2\n${task.ended ? "[exited with code 0]\n" : ""}`;
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { output, total_bytes: Buffer.byteLength(output), truncated: false } } });
+};
 /** The last local command's output, which the binary replays after a compaction. */
 let lastLocalOutput = null;
 /** Lines held back to go out in one write, as the real binary's output often arrives: several messages in one read. */
 let batch = null;
-const out = (message) => { const line = `${JSON.stringify(message)}\n`; if (batch) batch.push(line); else process.stdout.write(line); };
+const out = (message) => { noteTask(message); const line = `${JSON.stringify(message)}\n`; if (batch) batch.push(line); else process.stdout.write(line); };
 const flush = () => { const lines = batch ?? []; batch = null; if (lines.length) process.stdout.write(lines.join("")); };
 const pending = new Map();
 let counter = 0;
@@ -228,7 +252,7 @@ const selfStartedTurn = async (text, taskIds = ["fake-task"]) => {
   for (const taskId of taskIds) out({ type: "system", subtype: "task_notification", task_id: taskId, status: "completed", session_id: sessionId });
   const state = { interrupted: false, child: null };
   current = state;
-  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
+  out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
   say(text);
   if (state.interrupted) return;
   current = null;
@@ -263,7 +287,7 @@ async function turn(prompt, images = [], uuid = null) {
   current = state;
   turnsAnswered += 1;
   const continuing = resumed || turnsAnswered > 1; // this process, or a resumed one, already holds the conversation
-  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: uuid ? [uuid] : [] });
+  out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: uuid ? [uuid] : [] });
   const ownTags = /<(task-notification|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|tick)>/;
   if (replay && uuid && !ownTags.test(received)) out({ type: "user", message: { role: "user", content: received }, uuid, isReplay: true, parent_tool_use_id: null, session_id: sessionId });
   const tool = async (name, input, produce) => {
@@ -517,6 +541,10 @@ async function turn(prompt, images = [], uuid = null) {
     // The subagent's own message, which alone names its model (agent_id and the call it runs under on the envelope).
     out({ type: "assistant", agent_id: "agent-1-agent", parent_tool_use_id: "toolu_agent_1", message: { id: "msg_agent_1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_cmd_1", name: "Bash", input: { command: "bun test" } }] }, session_id: sessionId });
     inBackground(() => { ended("completed"); enqueue(() => selfStartedTurn("Agent agent-1 done.", [])); }, ms, "agent-1");
+  } else if ((match = prompt.match(/^away-summary (.+)$/s))) {
+    // The summary Claude Code gives when the person comes back after being away (its field unprobed; `summary` here), then a reply.
+    out({ type: "system", subtype: "away_summary", summary: match[1], session_id: sessionId });
+    say("Welcome back.");
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
@@ -549,7 +577,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       await sleep(Number(ms));
       if (self.interrupted) return;
@@ -646,7 +674,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Report part one, " } }, session_id: sessionId });
       await sleep(Number(match[1]));
@@ -696,7 +724,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "task-a", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       for (let waited = 0; waited < 2000 && !self.interrupted; waited += 50) await sleep(50);
       if (self.interrupted) return;
@@ -709,7 +737,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "task-b", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       say("report B");
       current = null;
       result(1);
@@ -719,7 +747,7 @@ async function turn(prompt, images = [], uuid = null) {
     say("Background work started.");
     setTimeout(() => enqueue(async () => {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Agent"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Agent"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Check it", subagent_type: "Explore", prompt: "Check it" } }] }, session_id: sessionId });
       out({ type: "assistant", parent_tool_use_id: "toolu_fg", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "child-read", name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
       out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "checked" }] }, session_id: sessionId });
@@ -754,7 +782,7 @@ async function turn(prompt, images = [], uuid = null) {
     say("Background work started.");
     setTimeout(() => enqueue(async () => {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       for (let i = 0; i < Number(match[1]); i++) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }, session_id: sessionId });
@@ -919,7 +947,7 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(() => enqueue(async () => {
       batch = [];
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Read"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Read"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       for (let call = 0; call < 3; call++) {
         out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
         out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_m${call}`, name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
@@ -952,7 +980,7 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(() => enqueue(async () => {
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_own", name: "Bash", input: { command: "echo own" } }] }, session_id: sessionId });
       const decision = await ask("Bash", { command: "echo own" }, { toolUseId: "toolu_own" });
       if (self.interrupted) return;
@@ -1011,7 +1039,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }, session_id: sessionId });
       for (let waited = 0; waited < 4000 && !self.interrupted; waited += 50) await sleep(50);
       if (self.interrupted) return;
@@ -1043,7 +1071,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       const decision = await ask("Bash", { command: "echo later" });
       if (self.interrupted) return;
       say(`Background step: ${decision.behavior}`);
@@ -1142,6 +1170,8 @@ for await (const chunk of Bun.stdin.stream()) {
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_request" && message.request?.subtype === "interrupt") interrupt(message.request_id, message.request.cancel_queued === true, message.request.for_user_message_uuids ?? null);
     else if (message.type === "control_request" && message.request?.subtype === "stop_task") stopTask(message.request_id, message.request.task_id);
+    else if (message.type === "control_request" && message.request?.subtype === "get_task_output") answerTaskOutput(message.request_id, message.request.task_id);
+    else if (message.type === "control_request" && message.request?.subtype === "mcp_status") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { mcpServers: MCP_SERVERS } } });
     else if (message.type === "control_request" && message.request?.subtype === "cancel_async_message") {
       // Withdraw one queued message by its id; one already taken up is not withdrawn.
       const entry = waiting.find((candidate) => candidate.uuid === message.request.message_uuid && !candidate.cancelled);

@@ -839,6 +839,15 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .activity-panel .item-head > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A running task's stop: a square icon at the head's right end, muted like the heading's Clear finished. */
 .activity-panel .item-head .stop-task { flex: none; padding: 4px; color: var(--muted); }
+/* A task's output: a chevron after the elapsed time turns as its pane opens under the row, the output in mono, scrolling
+   past a few lines; notes about it (loading, the process gone, its file) muted. */
+.activity-panel .item-head .task-output-toggle { flex: none; padding: 4px; color: var(--muted); }
+.activity-panel .task-output-toggle[aria-expanded="true"] .activity-disclosure { transform: rotate(90deg); }
+.activity-panel .task-output-pane { margin-top: 4px; }
+.activity-panel .task-output { margin: 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--subtle); color: var(--text); font: 11px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-panel .task-output-note { margin: 2px 0 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The process's MCP servers, one muted line at the panel's foot. */
+.activity-panel .mcp-status { margin-top: 10px; color: var(--muted); font-size: 11px; }
 .activity-elapsed, .activity-panel .card-meta, .activity-task-meta, .phase-head { color: var(--muted); font-variant-numeric: tabular-nums; }
 .activity-elapsed { flex: none; font-size: 12px; }
 .workflow-card { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }

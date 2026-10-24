@@ -19,7 +19,7 @@ import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import {
   TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
-  WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX,
+  WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX, TASK_OUTPUT_MAX, MCP_SERVERS_MAX,
 } from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
 
@@ -35,6 +35,8 @@ const MAX_QUEUE_BYTES = 128 * 1024 * 1024;
 export const INTERRUPT_GRACE_MS = 5_000;
 /** How long stopping a task waits for Claude's answer, and stopping background work for its tasks to end. */
 export const STOP_TASK_GRACE_MS = 3_000;
+/** How long a question to the process (a task's output, the MCP servers' status) waits for its answer. */
+export const CONTROL_REQUEST_TIMEOUT_MS = 10_000;
 /** How long an empty result is taken as possibly ahead of an answer in the same turn (see claude-stream). */
 export const EMPTY_RESULT_GRACE_MS = 20_000;
 /** Messages kept from a turn the process started by itself, while no run is listening. */
@@ -79,6 +81,31 @@ const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped']
 const TASK_NOTICES = new Set(['task_started', 'task_progress', 'task_updated', 'task_notification']);
 /** Text Claude sent, cut to `max` characters: a number or a boolean as written, anything else (an object, nothing) null. */
 const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof value) ? String(value).slice(0, max) : null);
+
+/**
+ * The end of a task's output, at most TASK_OUTPUT_MAX bytes of UTF-8 (whole characters): the end of a log is what is
+ * looked for. `cut` says whether anything was left out here.
+ * @param {string} output @returns {{ text: string, cut: boolean }}
+ */
+export function outputTail(output) {
+  const bytes = Buffer.from(output, 'utf8');
+  if (bytes.length <= TASK_OUTPUT_MAX) return { text: output, cut: false };
+  let start = bytes.length - TASK_OUTPUT_MAX;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1; // not in the middle of a character
+  return { text: bytes.subarray(start).toString('utf8'), cut: true };
+}
+
+/**
+ * MCP servers as the process names them (mcp_status's `mcpServers`, or an init's `mcp_servers`): name, status, where
+ * each is configured and why it failed, bounded; the config is left out. Null when the list is not one.
+ * @param {unknown} list @returns {{ name: string, status: string, source: string | null, error: string | null }[] | null}
+ */
+export function mcpServersOf(list) {
+  if (!Array.isArray(list)) return null;
+  return list.filter((server) => typeof server?.name === 'string' && server.name).slice(0, MCP_SERVERS_MAX).map((server) => ({
+    name: server.name.slice(0, 200), status: textOf(server.status, 40) ?? 'pending', source: textOf(server.source, 40), error: textOf(server.error, 500),
+  }));
+}
 /** A count Claude sent, as a whole number from 0 to the largest safe integer; null when it is not a number of zero or more. */
 const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER) : null);
 /**
@@ -220,13 +247,14 @@ export function removeScratch(dir, log, context = {}) {
  * The links of this engine, one per conversation at most.
  * `lifetime` is told while a process has background work running, which keeps the engine up for it with no client.
  * `onActivity` is told what a process is doing as that changes (see `link.activity`), and why. `history` answers a
- * conversation's stored activity, which a new process starts from (see endedActivity), or null.
- * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, scratchRoot?: string, lifetime?: any,
+ * conversation's stored activity, which a new process starts from (see endedActivity), or null. `requestTimeoutMs` is how
+ * long a question to a process (a task's output, the MCP servers' status) waits for its answer.
+ * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, requestTimeoutMs?: number, scratchRoot?: string, lifetime?: any,
  *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity, reason: ActivityReason) => void,
  *   history?: (sessionId: string) => { state: string, tasks: TaskRecord[], updatedAt: string } | null }} options
  * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
-export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {}, history = () => null }) {
+export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, requestTimeoutMs = CONTROL_REQUEST_TIMEOUT_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {}, history = () => null }) {
   /** @type {Map<string, any>} sessionId -> link */
   const links = new Map();
   return {
@@ -245,7 +273,7 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
       let seed = null;
       try { seed = history(sessionId); } catch (error) { log.warn('could not read the conversation\'s earlier tasks', { sessionId, error: String(error?.message ?? error) }); }
       const link = createLink({
-        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, seed,
+        sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, requestTimeoutMs, scratchRoot, onUnsolicited, seed,
         onBackground: (running) => { if (running) lifetime?.workStarted(); else lifetime?.workFinished(); },
         onActivity: (activity, reason) => onActivity(sessionId, activity, reason),
         // Forgotten the moment the process is gone, before anything waiting on the link is told.
@@ -269,15 +297,19 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
   };
 }
 
-function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, scratchRoot, onUnsolicited, seed = null, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity, /** @type {ActivityReason} */ _reason) => {}, onEnded }) {
+function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, spawn, log, idleMs, interruptMs, emptyGraceMs, stopGraceMs, requestTimeoutMs = CONTROL_REQUEST_TIMEOUT_MS, scratchRoot, onUnsolicited, seed = null, onBackground = (/** @type {boolean} */ _running) => {}, onActivity = (/** @type {Activity} */ _activity, /** @type {ActivityReason} */ _reason) => {}, onEnded }) {
   // One private scratch directory per process. Never grant access to all of /tmp.
   const scratchDir = realpathSync(mkdtempSync(path.join(scratchRoot, 'jolo-agent-')));
   const { argv, env } = prepare(scratchDir);
   const controller = new AbortController();
   let gracefulClose = true;
   const child = spawn({ argv, cwd, env, signal: controller.signal, onCancel: () => gracefulClose, log, agentId, maxLineBytes: MAX_LINE_BYTES, maxQueueBytes: MAX_QUEUE_BYTES });
-  /** What the process has told us about itself: the model it answers with, and the Claude conversation it holds. */
-  const state = { model: null, claudeSessionId: null };
+  /**
+   * What the process has told us about itself: the model it answers with, the Claude conversation it holds, and its MCP
+   * servers as its latest init listed them (see mcpServersOf).
+   * @type {{ model: string | null, claudeSessionId: string | null, mcpServers: ReturnType<typeof mcpServersOf> }}
+   */
+  const state = { model: null, claudeSessionId: null, mcpServers: null };
   /** @type {any} the turn a run is holding */
   let current = null;
   /** @type {any[] | null} a turn the process started by itself, kept until a run takes it */
@@ -337,6 +369,27 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     const answered = (answer) => { clearTimeout(timer); taskStops.delete(requestId); resolve(answer); };
     taskStops.set(requestId, answered);
     write({ type: 'control_request', request_id: requestId, request: { subtype: 'stop_task', task_id: taskId } });
+  });
+  /** @type {Map<string, (response: any) => void>} the host's own questions to the process still unanswered, by request id */
+  const questions = new Map();
+  /**
+   * Ask the process something with a control request and wait for its answer (requestTimeoutMs). Resolves the answer's
+   * `response`; rejects on an `error` answer (with Claude's words), on the time running out (`timedOut`), and when the
+   * process has ended or ends meanwhile (code `no_process`).
+   * @param {string} subtype @param {Record<string, unknown>} [fields] @returns {Promise<any>}
+   */
+  const question = (subtype, fields = {}) => new Promise((resolve, reject) => {
+    if (!alive || closing) { reject(Object.assign(new Error('the process has ended'), { code: 'no_process' })); return; }
+    const requestId = `jolo-${subtype}-${++sequence}`;
+    const timer = setTimeout(() => { questions.delete(requestId); reject(Object.assign(new Error(`${subtype} had no answer`), { timedOut: true })); }, requestTimeoutMs);
+    questions.set(requestId, (response) => {
+      clearTimeout(timer);
+      questions.delete(requestId);
+      if (response.subtype === 'success') resolve(response.response ?? {});
+      else if (response.subtype === 'ended') reject(Object.assign(new Error('the process has ended'), { code: 'no_process' }));
+      else reject(new Error(String(response.error ?? `${subtype} failed`)));
+    });
+    write({ type: 'control_request', request_id: requestId, request: { subtype, ...fields } });
   });
   /** Claude answered a stop_task: the task is on its way out, or Claude says why it is not. */
   const taskStopAnswered = (response) => {
@@ -529,6 +582,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     trackModel(message);
     if (message.parent_tool_use_id != null) return;
     if (message.type === 'system' && message.subtype === 'init') {
+      state.mcpServers = mcpServersOf(message.mcp_servers) ?? state.mcpServers;
       settleEmpty();
       settleReport(); // the report has begun: a run holds it, or it waits for one
       mainTurn = true;
@@ -543,6 +597,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     } else if (afterEmpty && turnNotice(message)) {
       compacting = compactingAfter(message, compacting);
       awaitAnswer(retryDelay(message)); // compacting or retrying before the answer: the grace starts over
+    } else if (message.type === 'control_response' && questions.has(message.response?.request_id)) {
+      questions.get(message.response.request_id)(message.response);
     } else if (message.type === 'control_response' && taskStops.has(message.response?.request_id)) {
       taskStopAnswered(message.response);
     } else if (message.type === 'control_response' && stops.delete(message.response?.request_id)) {
@@ -691,6 +747,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       // new process may start from the stored record, which a late report would then overwrite with this one's.
       if (activityTimer) reportActivity();
       for (const answered of [...taskStops.values()]) answered({ ok: false, error: 'process ended' }); // no answer comes now
+      for (const answered of [...questions.values()]) answered({ subtype: 'ended' });
       tasksEnded();
       settleReport();
       try { settled = await child.settle(); } catch { /* the reader already reported */ }
@@ -858,6 +915,22 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
      */
     stopTask,
     stopBackground,
+    /**
+     * A task's whole output as the process holds it (while the task runs and after it ended): its last TASK_OUTPUT_MAX
+     * bytes, `truncated` when earlier output was left out by the process or here. Rejects with Claude's words for a task
+     * it does not know, `timedOut` with no answer, and code `no_process` once the process has ended.
+     * @param {string} taskId @returns {Promise<{ output: string, totalBytes: number, truncated: boolean }>}
+     */
+    async taskOutput(taskId) {
+      const answer = await question('get_task_output', { task_id: taskId });
+      const { text, cut } = outputTail(typeof answer.output === 'string' ? answer.output : '');
+      return { output: text, totalBytes: countOf(answer.total_bytes) ?? Buffer.byteLength(text), truncated: cut || answer.truncated === true };
+    },
+    /** The process's MCP servers and how each is, as it says now (see mcpServersOf). @returns {Promise<{ servers: ReturnType<typeof mcpServersOf> }>} */
+    async mcpStatus() {
+      const answer = await question('mcp_status');
+      return { servers: mcpServersOf(answer.mcpServers) ?? [] };
+    },
     close,
   };
   touch();

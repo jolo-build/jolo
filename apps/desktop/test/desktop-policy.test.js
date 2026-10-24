@@ -13,7 +13,7 @@ test('the renderer may call the engine methods for background work and dialogs, 
   const source = readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8');
   const list = (source.match(/const RENDERER_METHODS = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '').replace(/\/\/.*$/gm, '');
   const methods = [...list.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
-  expect(methods).toEqual(expect.arrayContaining(['session.activity', 'session.stopBackground', 'session.stopTask', 'session.closeProcess', 'session.clearFinished', 'delegation.list', 'dialog.resolve', 'dialog.dismiss']));
+  expect(methods).toEqual(expect.arrayContaining(['session.activity', 'session.stopBackground', 'session.stopTask', 'session.closeProcess', 'session.clearFinished', 'session.taskOutput', 'session.mcpStatus', 'delegation.list', 'dialog.resolve', 'dialog.dismiss']));
   expect(methods.filter(method => !METHOD_NAMES.includes(method))).toEqual([]);
 });
 

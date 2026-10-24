@@ -22,3 +22,18 @@ test('budget patches preserve omitted fields and accept an explicit disabled hos
   expect(parseParams('settings.update', { budgets: { hostedToolDeadlineMs: 0 } }).ok).toBe(false);
   expect(parseParams('settings.update', { budgets: { toolDeadlineMs: null } }).ok).toBe(false);
 });
+
+test('a task\'s output and the MCP servers\' status have their own methods, and an ended process its own error code', async () => {
+  const { ERROR_CODES, McpServerSchema, toRpcError, ProtocolError } = await import('../src/schemas.js');
+  expect(parseParams('session.taskOutput', { sessionId: 's', taskId: 'task-1' }).ok).toBe(true);
+  expect(parseParams('session.taskOutput', { sessionId: 's' }).ok).toBe(false);
+  expect(MethodSchemas['session.taskOutput'].result.parse({ output: 'line 1\n', totalBytes: 7, truncated: false })).toEqual({ output: 'line 1\n', totalBytes: 7, truncated: false });
+  expect(MethodSchemas['session.taskOutput'].result.safeParse({ output: 'x'.repeat(200 * 1024 + 1), totalBytes: 1, truncated: true }).success).toBe(false); // the engine keeps the last 200 KiB
+  expect(parseParams('session.mcpStatus', { sessionId: 's' }).ok).toBe(true);
+  const servers = [{ name: 'probe', status: 'connected', source: 'user', error: null }, { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' }];
+  expect(MethodSchemas['session.mcpStatus'].result.parse({ servers })).toEqual({ servers });
+  expect(MethodSchemas['session.mcpStatus'].result.parse({ servers: null })).toEqual({ servers: null });
+  expect(McpServerSchema.safeParse({ name: 'n'.repeat(201), status: 'connected', source: null, error: null }).success).toBe(false);
+  expect(ERROR_CODES).toContain('no_process');
+  expect(toRpcError(new ProtocolError('no_process', 'the process that ran it has ended')).data.code).toBe('no_process');
+});

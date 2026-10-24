@@ -482,6 +482,13 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             }
             if (message.subtype === "init" && message.model) link.state.model = message.model;
             if (message.subtype === "compact_boundary" && compactRequested(run)) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, "Context compacted."); ctx.finishMessage(messageId, "complete"); }
+            if (message.subtype === "away_summary") {
+              // Claude's summary for the person coming back after being away, kept in the conversation as compaction's note is.
+              // Which field carries it is unprobed: the first string of these; one with none is logged and dropped.
+              const summary = [message.summary, message.message, message.content, message.text].find((value) => typeof value === "string" && value.trim());
+              if (summary) { const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, summary.trim()); ctx.finishMessage(messageId, "complete"); }
+              else log.info("away summary without a text field; not shown", { runId: run.id, agentId: manifest.id, fields: Object.keys(message).slice(0, 20) });
+            }
             if (message.subtype === "init" && message.session_id) {
               link.state.claudeSessionId = message.session_id;
               if (recall(session, manifest).claudeSessionId !== message.session_id) turn.remember({ claudeSessionId: message.session_id });
