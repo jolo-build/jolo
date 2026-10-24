@@ -15,7 +15,7 @@
 // the subagent (`request.agent_id`). That needs a run to answer it, but there is no turn of the main thread to
 // end or interrupt, so stopping such a run never signals the process.
 import path from 'node:path';
-import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
@@ -109,6 +109,100 @@ export function outputTail(output) {
     start -= pair ? 2 : 1;
   }
   return { text: output, cut: false };
+}
+
+/** How much of an agent's transcript is read for its report: its end, where the last message is. */
+const AGENT_TRANSCRIPT_TAIL = 2 * 1024 * 1024;
+
+/**
+ * The last `max` bytes of the regular file at `file` (a link to one is followed) and the file's size, or null when it is
+ * not one or cannot be read. A read that starts inside a character leaves out its broken bytes rather than showing them.
+ * @param {string} file @param {number} max @returns {{ text: string, size: number, partial: boolean } | null}
+ */
+function fileTail(file, max) {
+  let fd = null;
+  try {
+    if (!statSync(file).isFile()) return null; // before opening it: a FIFO would hold the open
+    fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) return null; // swapped for something else in between
+    const size = opened.size;
+    const length = Math.min(size, max);
+    const bytes = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const got = readSync(fd, bytes, read, length - read, size - length + read);
+      if (!got) break;
+      read += got;
+    }
+    let start = 0;
+    if (size > length) while (start < read && (bytes[start] & 0xc0) === 0x80) start++;
+    return { text: bytes.subarray(start, read).toString('utf8'), size, partial: size > length };
+  } catch { return null; }
+  finally { if (fd !== null) try { closeSync(fd); } catch { /* already closed */ } }
+}
+
+/** The text blocks of a transcript entry's message, in order. @param {any} entry @returns {string[]} */
+const textBlocks = (entry) => {
+  const content = entry?.message?.content;
+  if (typeof content === 'string') return [content];
+  return Array.isArray(content) ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text) : [];
+};
+
+/**
+ * An agent's report from the end of its transcript (JSON lines, one message or one content block of a message a line, as
+ * Claude Code 2.1.304 writes it): the text of its last assistant message that has any, its text blocks joined by a blank
+ * line (Claude Code writes a message's blocks on lines of their own, with the message's id on each). A first line cut by
+ * the read is left out. '' when the transcript has no such message yet; null when nothing in it is a transcript entry.
+ * @param {string} text @param {boolean} partial @returns {string | null}
+ */
+function agentReport(text, partial) {
+  const lines = text.split('\n');
+  if (partial) lines.shift();
+  /** @type {any[]} */
+  const assistant = [];
+  let entries = 0;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; } // a line cut short, or not JSON
+    if (!entry || typeof entry !== 'object') continue;
+    entries += 1;
+    if (entry.type === 'assistant') assistant.push(entry);
+  }
+  if (!entries) return null;
+  let last = assistant.length - 1;
+  while (last >= 0 && !textBlocks(assistant[last]).length) last--;
+  if (last < 0) return '';
+  const id = assistant[last].message?.id;
+  let first = last;
+  if (id) while (first > 0 && assistant[first - 1].message?.id === id) first--;
+  return assistant.slice(first, last + 1).flatMap(textBlocks).join('\n\n');
+}
+
+/**
+ * A task's output read from the file its notice named (`output_file`), for what Claude Code does not serve (an agent's
+ * or a workflow's output) or no longer can (its process has ended): the end of it as outputTail cuts it, `totalBytes` the
+ * file's size. An agent's file is a link to its transcript, so for an agent (`agent`) it is the report in it (see
+ * agentReport; `totalBytes` the report's size), or the file as it is when it holds no transcript. Only the absolute path
+ * Claude gave, as it gave it (no `.` or `..` parts, no doubled slashes), named after the task (`<taskId>.output`, so a
+ * path cut short is refused), and only a regular file are read; null for anything else, or a file missing or unreadable.
+ * @param {string | null | undefined} file @param {string} taskId @param {{ agent?: boolean }} [options]
+ * @returns {{ output: string, totalBytes: number, truncated: boolean, source: 'file' } | null}
+ */
+export function outputFromFile(file, taskId, { agent = false } = {}) {
+  if (typeof file !== 'string' || !file || file.includes('\0') || !path.isAbsolute(file) || path.normalize(file) !== file) return null;
+  if (path.basename(file) !== `${taskId}.output`) return null;
+  // Escaping never makes text smaller, so what fits on the wire lies within the file's last TASK_OUTPUT_MAX bytes.
+  const tail = fileTail(file, agent ? AGENT_TRANSCRIPT_TAIL : TASK_OUTPUT_MAX);
+  if (!tail) return null;
+  const report = agent ? agentReport(tail.text, tail.partial) : null;
+  if (report !== null) {
+    const { text, cut } = outputTail(report);
+    return { output: text, totalBytes: Buffer.byteLength(report), truncated: cut, source: 'file' };
+  }
+  const { text, cut } = outputTail(tail.text);
+  return { output: text, totalBytes: tail.size, truncated: cut || tail.partial, source: 'file' };
 }
 
 /**

@@ -13,11 +13,14 @@ import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { CONTINUATION_PREFIX, isContinuation } from "../agents/claude-stream.js";
 import { withTaskChoice } from "../agents/hosted.js";
-import { endedActivity } from "../agents/claude-link.js";
+import { endedActivity, outputFromFile } from "../agents/claude-link.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
 import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '../search/files.js';
+
+/** Task types whose output Claude Code never serves with `get_task_output` (it serves commands' and monitors' only). */
+const UNSERVED_TASKS = new Set(["local_agent", "local_workflow"]);
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
@@ -311,13 +314,31 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const link = hostedLinks?.get(sessionId);
       return link?.alive ? link.stopBackground() : { requested: 0, stopped: 0, escalated: false };
     },
-    // A task's whole output, read from the conversation's process, which holds it during the task and after it.
+    // A task's whole output, read from the conversation's process, which holds it during the task and after it. What the
+    // process never serves (an agent's or a workflow's output: Claude Code serves only commands' and monitors'), what it
+    // fails to, and every task once the process has ended, is read from the output file the task's notice named, if it has
+    // one (an agent's is its transcript, whose report is read out; see outputFromFile): the task is found among the live
+    // process's tasks, else in the conversation's stored activity. Without a readable file, the error stands.
     "session.taskOutput": async ({ sessionId, taskId }) => {
       if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
       const link = hostedLinks?.get(sessionId);
-      if (!link?.alive) throw new ProtocolError("no_process", "the process that ran this task has ended");
-      try { return await link.taskOutput(taskId); }
+      /** @param {any[] | undefined} tasks */
+      const recordOf = (tasks) => tasks?.find(task => task?.taskId === taskId) ?? null;
+      /** @param {any} task */
+      const fromFile = (task) => (task ? outputFromFile(task.outputFile, taskId, { agent: task.taskType === "local_agent" }) : null);
+      if (!link?.alive) {
+        const read = fromFile(recordOf(storage.getSessionActivity(sessionId)?.tasks));
+        if (read) return read;
+        throw new ProtocolError("no_process", "the process that ran this task has ended");
+      }
+      // Claude always refuses an agent's or a workflow's output: their file is read without asking. With no file yet (it is
+      // named only when the task ends), Claude is asked all the same, so that what it says stands.
+      const task = recordOf(link.activity.tasks);
+      if (task && UNSERVED_TASKS.has(task.taskType)) { const read = fromFile(task); if (read) return read; }
+      try { return { ...(await link.taskOutput(taskId)), source: "process" }; }
       catch (error) {
+        const read = fromFile(recordOf(link.activity.tasks));
+        if (read) return read;
         if (error?.code === "no_process") throw new ProtocolError("no_process", "the process that ran this task has ended");
         if (error?.timedOut) throw new ProtocolError("unavailable", "Claude did not answer with the task's output");
         throw new ProtocolError("not_found", String(error?.message ?? error)); // Claude's own words: it knows no such task

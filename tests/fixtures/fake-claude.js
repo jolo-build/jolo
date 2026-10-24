@@ -21,12 +21,14 @@
 // 8000 tokens, one tool call), and at <ms> both are done (40776 tokens); it then
 // completes with the summary 'Dynamic workflow "Workflow <name>" completed' and the output file /tmp/<name>.output unless stop_task ended it first, and is
 // reported a moment later in a turn of its own ("Workflow <name> done."), "nested-agent <ms>" runs a background subagent agent-1 and the command cmd-1
-// it owns (parent_task_id agent-1), the subagent's own message naming its model claude-opus-5-5, which end at <ms>, the command first, and
+// it owns (parent_task_id agent-1), the subagent's own message naming its model claude-opus-5-5, which end at <ms>, the command first, the
+// subagent's transcript written as it works (JSON lines, its last assistant message the report) and named in its notice through the
+// link Claude Code makes to it (tasks/agent-1.output, in a directory of its own under TMPDIR), and
 // stop_task on the subagent kills it (task_updated status "killed"), and
 // anything else just answers in prose. A second control response to one request, or one to a request it took back,
 // makes the fixture exit 70. "away-summary <text>" sends a system away_summary with <text> as its summary, then a reply. It answers
 // get_task_output for a task it started (its description, two lines, and the exit line once it ended; an unknown task is an
-// error) and mcp_status with three servers (connected, failed, needs-auth), which every init lists too. The other scenarios
+// error, and so is an agent's, in Claude Code's words, since it serves commands and monitors only) and mcp_status with three servers (connected, failed, needs-auth), which every init lists too. The other scenarios
 // are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
@@ -102,13 +104,15 @@ const INIT_MCP = MCP_SERVERS.map(({ name, status, source }) => ({ name, status, 
 const startedTasks = new Map();
 const noteTask = (message) => {
   if (message?.type !== "system") return;
-  if (message.subtype === "task_started") startedTasks.set(message.task_id, { description: message.description ?? "", ended: false });
+  if (message.subtype === "task_started") startedTasks.set(message.task_id, { description: message.description ?? "", type: message.task_type ?? null, ended: false });
   else if (message.subtype === "task_notification" && startedTasks.has(message.task_id)) startedTasks.get(message.task_id).ended = true;
 };
 /** get_task_output: its description and two lines, then the exit line once it ended, as Claude Code 2.1.304 answers for a command. */
 const answerTaskOutput = (requestId, taskId) => {
   const task = startedTasks.get(taskId);
   if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "no such task" } });
+  // Claude Code serves a command's or a monitor's output only; an agent's is in its output file (seen 2026-10-25).
+  if (task.type === "local_agent") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "get_task_output: no shell or Monitor task with that task_id in this session" } });
   const output = `${task.description}\nline 1\nline 2\n${task.ended ? "[exited with code 0]\n" : ""}`;
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { output, total_bytes: Buffer.byteLength(output), truncated: false } } });
 };
@@ -528,10 +532,24 @@ async function turn(prompt, images = [], uuid = null) {
     // first, then task_updated says killed and the notice says stopped.
     const ms = Number(match[1]);
     say("Agent started.");
+    // As Claude Code 2.1.304 keeps it, the subagent's output file is a link to its transcript, JSON lines written as it
+    // works (a message, or one content block of one, a line), whose last assistant message is its report; the file is
+    // named only in the subagent's notice.
+    const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-claude-"));
+    const transcript = path.join(dir, "subagents", "agent-agent-1.jsonl");
+    const report = path.join(dir, "tasks", "agent-1.output");
+    fs.mkdirSync(path.dirname(transcript)); fs.mkdirSync(path.dirname(report));
+    const said = (entry) => fs.appendFileSync(transcript, `${JSON.stringify({ ...entry, agentId: "agent-1-agent", sessionId })}\n`);
+    said({ type: "user", message: { role: "user", content: "Run the checks with Bash, then reply: done" } });
+    said({ type: "assistant", message: { id: "msg_agent_1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_cmd_1", name: "Bash", input: { command: "bun test" } }] } });
+    said({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_cmd_1", content: "12 pass, 0 fail" }] } });
+    fs.symlinkSync(transcript, report);
     const ended = (status) => {
       endTask("cmd-1", status, { summary: "Run the checks command", output_file: "" });
       if (status === "stopped") out({ type: "system", subtype: "task_updated", task_id: "agent-1", patch: { status: "killed", end_time: Date.now() }, session_id: sessionId });
-      endTask("agent-1", status, { summary: "Run the checks", output_file: "/tmp/agent-1.output" });
+      if (status === "completed") said({ type: "assistant", message: { id: "msg_agent_2", role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "The checks pass: 12 tests, no failures." }] } });
+      endTask("agent-1", status, { summary: "Run the checks", output_file: report });
     };
     startTask("agent-1", { onStop: () => ended("stopped") });
     startTask("cmd-1");

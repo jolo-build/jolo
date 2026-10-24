@@ -44,3 +44,16 @@ A host that keeps the latest init's list has the status without asking.
 Not observed in this probe (it is the summary Claude Code gives when the person returns after being away). The spec
 (docs/superpowers/specs/2026-10-23-native-claude-hosting-design.md) lists it among the `system` subtypes; its payload
 field is unprobed.
+
+## Seen in use (2026-10-25)
+
+`get_task_output` serves shell and Monitor tasks only. For a background agent (`local_agent`) it answers an error:
+`get_task_output: no shell or Monitor task with that task_id in this session`. The agent's `output_file`
+(`/tmp/claude-<uid>/<cwd slug>/<session>/tasks/<task_id>.output`, named only in its final `task_notification`) is a
+symlink to the subagent's transcript, `~/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl`: JSON lines,
+one message block per line, the report in the last `assistant` entry's text blocks (every agent file on this machine is
+such a link; in the 191 transcripts written by Jolo-hosted processes the last message's text is the report wherever the
+agent reached one; an agent stopped mid-tool-call leaves none). Claude desktop's own transcripts end in a
+`SubagentHandback` tool call whose input holds the report instead; Jolo-hosted processes never did. A shell task's file is plain text; a workflow's is pretty-printed JSON. The
+files live outside the process's TMPDIR and outlive the process (until the system cleans `/tmp`). The notification's
+`summary` for an agent only says `Agent "…" finished`.

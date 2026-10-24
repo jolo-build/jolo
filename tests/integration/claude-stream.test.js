@@ -464,7 +464,7 @@ describe("one Claude process per conversation", () => {
     const { client, events, session, runTo, starts } = await boot();
     await runTo('bg', 'tasks 1 20000');
     await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
-    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).toEqual({ output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false });
+    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).toEqual({ output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false, source: 'process' });
     await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'nope' })).rejects.toMatchObject({ code: 'not_found', message: 'no such task' });
     await expect(client.call('session.taskOutput', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
     expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
@@ -474,6 +474,17 @@ describe("one Claude process per conversation", () => {
     await runTo('again', 'hello');
     expect(starts()).toHaveLength(2);
     await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
+  }, 30_000);
+
+  test('a background agent\'s report, which Claude does not serve, is read from its transcript once its notice names it; while it works, Claude\'s refusal stands', async () => {
+    const { client, session, runTo } = await boot();
+    await runTo('agent', 'nested-agent 1500');
+    const agent = async () => (await client.call('session.activity', { sessionId: session.id })).activity?.tasks.find(task => task.taskId === 'agent-1');
+    await waitFor(async () => Boolean(await agent()), { label: 'the agent listed' });
+    // Claude Code names the file (a link to the agent's transcript) only in the agent's notice: while it works there is no file to read.
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'agent-1' })).rejects.toMatchObject({ code: 'not_found', message: 'get_task_output: no shell or Monitor task with that task_id in this session' });
+    await waitFor(async () => (await agent())?.status === 'completed', { label: 'the agent done', timeoutMs: 10_000 });
+    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'agent-1' })).toEqual({ output: 'The checks pass: 12 tests, no failures.', totalBytes: 39, truncated: false, source: 'file' });
   }, 30_000);
 
   test('the MCP servers\' status comes from the process, and none without one', async () => {

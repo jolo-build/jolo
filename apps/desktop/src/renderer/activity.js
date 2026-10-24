@@ -366,23 +366,6 @@ function processLine(running, now) {
 }
 
 /**
- * The MCP servers of a conversation's process in one line: how many are connected, failed, need signing in or are still
- * starting, the non-zero ones only; the failed ones by name with their error, and those needing sign-in, for its tooltip.
- * Null when there are none to tell of (no process, or no servers).
- * @param {{ name: string, status: string, error?: string | null }[] | null | undefined} servers
- * @returns {{ text: string, title: string | null } | null}
- */
-export function mcpLine(servers) {
-  if (!Array.isArray(servers) || !servers.length) return null;
-  const of = (/** @type {string} */ status) => servers.filter(server => server.status === status);
-  const [connected, failed, unsigned, pending] = ['connected', 'failed', 'needs-auth', 'pending'].map(of);
-  const parts = [[connected, 'connected'], [failed, 'failed'], [unsigned, 'needs sign-in'], [pending, 'starting']].filter(([list]) => list.length).map(([list, word]) => `${list.length} ${word}`);
-  if (!parts.length) return null;
-  const title = [failed.length ? `Failed: ${failed.map(server => server.error ? `${server.name} (${server.error})` : server.name).join(', ')}` : null, unsigned.length ? `Needs sign-in: ${unsigned.map(server => server.name).join(', ')}` : null].filter(Boolean).join('\n');
-  return { text: `MCP: ${parts.join(' · ')}`, title: title || null };
-}
-
-/**
  * Clear finished: the finished tasks listed now are hidden at once (`hide`, with what clearFinished worked out), then the
  * engine is asked to delete them for good (`remove`). An engine that cannot (an older one, without session.clearFinished)
  * leaves the local hide in place. Resolves whether the engine deleted them.

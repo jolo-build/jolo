@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from 'react';
-import { agentStatus, agentsByPhase, childRows, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, mcpLine, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
+import { agentStatus, agentsByPhase, childRows, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, phaseSquares, plural, squaresInWords, statusWord, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../activity.js';
 import { modelLabel } from '../model-options.js';
 import { delegationWords } from '../delegation.js';
 import { Icon } from './icon.jsx';
@@ -43,11 +43,12 @@ function ItemHead({ task, name, nested = false, className, now, onStopTask, outp
 const OUTPUT_REFRESH_MS = 2000;
 
 /**
- * What a task's output pane shows (see TaskOutput): `Loading output…` until the first answer; the output, after `… earlier
- * output left out` when its start was cut; with the process gone, that it has ended and, for a task that wrote one, its
- * output file by name (the full path on hover); with an engine from before the method, that it is not available; any
- * other error in its own words.
- * @param {{ task: TaskRecord, state: { status: 'loading' } | { status: 'ready', result: { output: string, totalBytes: number, truncated: boolean } } | { status: 'error', error: { code?: string, message?: string } } }} props
+ * What a task's output pane shows (see TaskOutput): `Loading output…` until the first answer; the output (from the process
+ * or the task's output file alike), after `… earlier output left out` when its start was cut; for a running agent or
+ * workflow that Claude cannot serve, `The output is readable once it finishes`; with the process gone, that it has ended
+ * and, for a task that wrote one, its output file by name (the full path on hover); with an engine from before the
+ * method, that it is not available; any other error in its own words.
+ * @param {{ task: TaskRecord, state: { status: 'loading' } | { status: 'ready', result: { output: string, totalBytes: number, truncated: boolean, source?: 'process' | 'file' } } | { status: 'error', error: { code?: string, message?: string } } }} props
  */
 export function TaskOutputView({ task, state }) {
   const note = (/** @type {string} */ text, /** @type {string | undefined} */ title = undefined) => <p className="task-output-note" title={title}>{text}</p>;
@@ -55,6 +56,9 @@ export function TaskOutputView({ task, state }) {
   if (state.status === 'error') {
     // An engine from before session.taskOutput, as the client reports one (Clear finished falls back the same way).
     if (state.error?.code === 'unknown_method') return <div className="task-output-pane">{note('Not available with this engine')}</div>;
+    // Claude serves a command's output as it runs, never an agent's or a workflow's. Their output file exists from the start
+    // (an agent's is a link to its transcript), but only its name arrives, with the notice that the task ended.
+    if (state.error?.code !== 'no_process' && task.status === 'running' && ['Agent', 'Workflow'].includes(taskKind(task))) return <div className="task-output-pane">{note('The output is readable once it finishes')}</div>;
     if (state.error?.code !== 'no_process') { const message = state.error?.message || 'Could not read the output'; return <div className="task-output-pane">{note(message, message)}</div>; }
     const file = task.outputFile ? { name: task.outputFile.split('/').pop() || task.outputFile, path: task.outputFile } : null;
     return <div className="task-output-pane">{note('The process that ran it has ended')}{file && note(`Output file: ${file.name}`, file.path)}</div>;
@@ -288,13 +292,11 @@ export function ForceStopDialog({ onConfirm, onClose }) {
  *   delegations?: Map<string, import('../activity.js').DelegationRow>,
  *   onOpenTask?: (sessionId: string) => void,
  *   onStopChild?: (runId: string) => void,
- *   loadTaskOutput?: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>,
- *   mcpServers?: { name: string, status: string, source: string | null, error: string | null }[] | null,
+ *   loadTaskOutput?: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean, source?: 'process' | 'file' }>,
  * }} props `stopping` while a Stop background work waits for its reply; `visible` while the panel is on screen;
- * `loadTaskOutput` reads a task's output from the process; `mcpServers` is the process's MCP servers as the pane last
- * asked them, said in one muted line at the bottom (see mcpLine).
+ * `loadTaskOutput` reads a task's output, from the process or, for what it cannot serve, the task's output file.
  */
-export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear, childTasks = NO_CHILDREN, delegations = NO_DELEGATIONS, onOpenTask = noop, onStopChild = noop, loadTaskOutput = noOutput, mcpServers = null }) {
+export function ActivityPanel({ activity, stopResult, stopping, visible, cleared, onStopAll, onStopTask, onForceStop, onClear, childTasks = NO_CHILDREN, delegations = NO_DELEGATIONS, onOpenTask = noop, onStopChild = noop, loadTaskOutput = noOutput }) {
   const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
   const [openPhases, setOpenPhases] = useState(() => /** @type {Set<string>} */ (new Set()));
   const onPhaseToggle = (/** @type {string} */ key, /** @type {boolean} */ open) => setOpenPhases(current => {
@@ -315,7 +317,6 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
   });
   const { running, finished } = groupActivity(activity, cleared);
   const now = Date.now();
-  const mcp = mcpLine(mcpServers);
   const children = childRows(childTasks, delegations, now);
   const ticking = visible && (running.length > 0 || children.some(row => row.running));
   // Elapsed times move once a second while something runs and the panel is shown; nothing ticks otherwise, and showing
@@ -350,6 +351,5 @@ export function ActivityPanel({ activity, stopResult, stopping, visible, cleared
       <ol className="activity-list">{nestTasks(finished).map(item)}</ol>
     </details>}
     {activity?.truncated && <p className="panel-note">Older finished tasks are not listed</p>}
-    {mcp && <p className="panel-note mcp-status" title={mcp.title ?? undefined}>{mcp.text}</p>}
   </div>;
 }

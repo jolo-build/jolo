@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventPayloadSchemas, activityPayload } from '@jolo/protocol';
-import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, outputFromFile, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -649,7 +649,17 @@ test('a subagent\'s own command names the subagent as its parent, and the subage
   expect(command).toMatchObject({ taskId: 'cmd-1', taskType: 'local_bash', parentTaskId: 'agent-1', spawnDepth: null, backgrounded: false, description: 'Run the checks command', model: null });
   await waitFor(() => link.activity.tasks.every(t => t.status === 'completed'), 4000);
   // Claude Code 2.1.304 summed each up with its description; the command wrote no output file (its notice says "").
-  expect(link.activity.tasks.map(t => [t.taskId, t.summary, t.outputFile])).toEqual([['agent-1', 'Run the checks', '/tmp/agent-1.output'], ['cmd-1', 'Run the checks command', null]]);
+  expect(link.activity.tasks.map(t => [t.taskId, t.summary])).toEqual([['agent-1', 'Run the checks'], ['cmd-1', 'Run the checks command']]);
+  expect(link.activity.tasks[1].outputFile).toBeNull();
+  // The subagent's output file is a link to its transcript (JSON lines), as Claude Code 2.1.304 keeps it; its report is the
+  // text of the transcript's last assistant message.
+  const report = link.activity.tasks[0].outputFile;
+  expect(report.startsWith(link.scratchDir) && report.endsWith(path.join('tasks', 'agent-1.output'))).toBe(true);
+  expect(lstatSync(report).isSymbolicLink() && readlinkSync(report).endsWith(path.join('subagents', 'agent-agent-1.jsonl'))).toBe(true);
+  expect(readFileSync(report, 'utf8').trim().split('\n').map((line) => JSON.parse(line).type)).toEqual(['user', 'assistant', 'user', 'assistant']);
+  expect(outputFromFile(report, 'agent-1', { agent: true })).toEqual({ output: 'The checks pass: 12 tests, no failures.', totalBytes: 39, truncated: false, source: 'file' });
+  // Claude Code serves a command's output, never an agent's: it answers an agent's with an error.
+  await expect(link.taskOutput('agent-1')).rejects.toThrow('get_task_output: no shell or Monitor task with that task_id in this session');
   expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
   await registry.closeAll();
 });
@@ -1241,4 +1251,194 @@ test('a task\'s output is cut by its size once escaped for the wire, so output f
   expect(read.output.endsWith('\x1b[0mdone\n')).toBe(true);
   expect(read.truncated).toBe(true);
   await link.close({ reason: 'test', graceful: false });
+});
+
+/** A temporary directory for a test's own files, removed after it. */
+async function withTempDir(fn) {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'task-output-')));
+  try { return await fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('session.taskOutput reads from Claude what it serves, and an agent\'s output from its file when Claude cannot serve it', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    const report = path.join(dir, 'tasks', 'agent-1.output'); mkdirSync(path.dirname(report)); writeFileSync(report, 'the agent\'s report\n');
+    const gone = path.join(dir, 'tasks', 'agent-2.output');
+    // A process with a command it serves the output of, and two agents it does not, as Claude Code answers; one agent's file is missing.
+    const script = `
+      out({ type: 'system', subtype: 'task_started', task_id: 'shell', task_type: 'local_bash', description: 'a command', is_backgrounded: true });
+      out({ type: 'system', subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', description: 'an agent', is_backgrounded: true });
+      out({ type: 'system', subtype: 'task_started', task_id: 'agent-2', task_type: 'local_agent', description: 'another agent', is_backgrounded: true });
+      out({ type: 'system', subtype: 'task_notification', task_id: 'agent-1', status: 'completed', summary: 'Reported', output_file: ${JSON.stringify(report)} });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'agent-2', description: 'working' });
+      out({ type: 'system', subtype: 'task_notification', task_id: 'agent-2', status: 'failed', output_file: ${JSON.stringify(gone)} });
+      process.stdin.on('data', (chunk) => {
+        for (const line of String(chunk).split('\\n').filter(Boolean)) {
+          const m = JSON.parse(line);
+          if (m.request?.subtype !== 'get_task_output') continue;
+          if (m.request.task_id === 'shell') out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { output: 'shell output\\n', total_bytes: 13, truncated: false } } });
+          else out({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'get_task_output: no shell or Monitor task with that task_id in this session' } });
+        }
+      });
+    `;
+    const hostedLinks = createHostedLinks({ log });
+    const link = openStub(hostedLinks, 'files', script);
+    link.write({ type: 'hello' });
+    await waitFor(() => link.activity.tasks.find((task) => task.taskId === 'agent-2')?.outputFile === gone);
+    /** @type {any} */
+    let kept = null;
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => (id === 'files' ? { id } : null), getSessionActivity: () => kept }, hostedLinks, log }));
+    const read = (taskId) => handlers['session.taskOutput']({ sessionId: 'files', taskId });
+    const refusal = 'get_task_output: no shell or Monitor task with that task_id in this session';
+    expect(await read('shell')).toEqual({ output: 'shell output\n', totalBytes: 13, truncated: false, source: 'process' });
+    expect(await read('agent-1')).toEqual({ output: 'the agent\'s report\n', totalBytes: 19, truncated: false, source: 'file' });
+    await expect(read('agent-2')).rejects.toMatchObject({ code: 'not_found', message: refusal }); // its file is missing: Claude's words, as before
+    await expect(read('nope')).rejects.toMatchObject({ code: 'not_found', message: refusal });
+    // Once the process is gone, its tasks are found in the conversation's stored activity.
+    await link.close({ reason: 'test', graceful: false });
+    kept = stored([storedTask('agent-1', 'completed', { taskType: 'local_agent', outputFile: report }), storedTask('agent-2', 'failed', { taskType: 'local_agent', outputFile: gone }), storedTask('shell', 'completed')]);
+    expect(await read('agent-1')).toEqual({ output: 'the agent\'s report\n', totalBytes: 19, truncated: false, source: 'file' });
+    await expect(read('agent-2')).rejects.toMatchObject({ code: 'no_process' }); // a missing file
+    await expect(read('shell')).rejects.toMatchObject({ code: 'no_process' }); // no file
+    kept = null;
+    await expect(read('agent-1')).rejects.toMatchObject({ code: 'no_process' }); // nothing stored
+  });
+});
+
+test('a task\'s output file is read only at the absolute path Claude gave, named after the task, and only when it is a regular file', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    const tasks = path.join(dir, 'tasks'); mkdirSync(tasks);
+    for (const name of ['b7x', 'relative', 'dotted', 'other']) writeFileSync(path.join(tasks, `${name}.output`), 'report\n');
+    mkdirSync(path.join(tasks, 'folder.output'));
+    const paths = {
+      b7x: path.join(tasks, 'b7x.output'), // as Claude names it: the task's id
+      relative: path.relative(process.cwd(), path.join(tasks, 'relative.output')),
+      dotted: `${tasks}/../tasks/dotted.output`,
+      folder: path.join(tasks, 'folder.output'), // not a regular file
+      renamed: path.join(tasks, 'other.output'), // another task's file, or a path cut short
+      empty: '',
+    };
+    const kept = stored(Object.entries(paths).map(([taskId, outputFile]) => storedTask(taskId, 'completed', { outputFile })));
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => kept }, hostedLinks: createHostedLinks({ log }), log }));
+    const read = (taskId) => handlers['session.taskOutput']({ sessionId: 's', taskId });
+    expect(await read('b7x')).toMatchObject({ output: 'report\n', source: 'file' });
+    for (const taskId of ['relative', 'dotted', 'folder', 'renamed', 'empty']) await expect(read(taskId)).rejects.toMatchObject({ code: 'no_process' });
+  });
+});
+
+test('a task\'s output file is read from its end: its last 200 KiB once escaped for the wire, in whole characters, and says it was cut', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    const files = { big: 'a'.repeat(100 * 1024) + 'b'.repeat(250 * 1024) + 'END\n', wide: '€'.repeat(150 * 1024) + 'END\n', escapes: '\x1b[0m'.repeat(100_000) + 'done\n' };
+    for (const [name, text] of Object.entries(files)) writeFileSync(path.join(dir, `${name}.output`), text);
+    const kept = stored(Object.keys(files).map((name) => storedTask(name, 'completed', { taskType: 'local_bash', outputFile: path.join(dir, `${name}.output`) })));
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => kept }, hostedLinks: createHostedLinks({ log }), log }));
+    const wire = (text) => Buffer.byteLength(JSON.stringify(text)) - 2;
+    const big = await handlers['session.taskOutput']({ sessionId: 's', taskId: 'big' });
+    expect(wire(big.output)).toBe(200 * 1024);
+    expect(big.output.endsWith('b'.repeat(10) + 'END\n')).toBe(true);
+    expect(big).toMatchObject({ totalBytes: Buffer.byteLength(files.big), truncated: true, source: 'file' });
+    // Three bytes a character: the read starts inside one, which is left out rather than shown broken.
+    const wide = await handlers['session.taskOutput']({ sessionId: 's', taskId: 'wide' });
+    expect(wide.output.includes('\uFFFD')).toBe(false);
+    expect(wide.output.startsWith('€') && wide.output.endsWith('€END\n')).toBe(true);
+    expect(wire(wide.output)).toBeLessThanOrEqual(200 * 1024);
+    expect(wide).toMatchObject({ totalBytes: Buffer.byteLength(files.wide), truncated: true });
+    const escapes = await handlers['session.taskOutput']({ sessionId: 's', taskId: 'escapes' });
+    expect(wire(escapes.output)).toBeLessThanOrEqual(200 * 1024);
+    expect(wire(escapes.output)).toBeGreaterThan(200 * 1024 - 16);
+    expect(escapes.output.endsWith('\x1b[0mdone\n')).toBe(true);
+    expect(escapes.truncated).toBe(true);
+  });
+});
+
+test('a task of an earlier process is read from its output file by the next process\'s conversation, which never asks Claude for it', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    const report = path.join(dir, 'old.output'); writeFileSync(report, 'the old report\n');
+    const kept = stored([storedTask('old', 'completed', { taskType: 'local_agent', outputFile: report }), storedTask('older', 'completed')]);
+    const hostedLinks = createHostedLinks({ log, history: () => kept });
+    const link = open(hostedLinks, 'seeded');
+    await turn(link, 'hello', { init: true });
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => kept }, hostedLinks, log }));
+    expect(await handlers['session.taskOutput']({ sessionId: 'seeded', taskId: 'old' })).toEqual({ output: 'the old report\n', totalBytes: 15, truncated: false, source: 'file' });
+    await expect(handlers['session.taskOutput']({ sessionId: 'seeded', taskId: 'older' })).rejects.toMatchObject({ code: 'no_process' }); // seeded, with no file
+    await hostedLinks.closeAll();
+  });
+});
+
+/** A transcript line as Claude Code writes it: one message, or one content block of an assistant message, a line. */
+const line = (entry) => JSON.stringify(entry) + '\n';
+const assistantSaid = (id, ...blocks) => line({ type: 'assistant', message: { id, role: 'assistant', model: 'claude-opus-5-5', content: blocks } });
+
+test('an agent\'s output file is its transcript, through a link: what is shown is the text of its last assistant message, not JSON', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, 'tasks')); mkdirSync(path.join(dir, 'subagents'));
+    /** An agent's transcript and the link Claude names as its output file. */
+    const agent = (taskId, text) => {
+      const transcript = path.join(dir, 'subagents', `agent-${taskId}.jsonl`); writeFileSync(transcript, text);
+      const file = path.join(dir, 'tasks', `${taskId}.output`); symlinkSync(transcript, file);
+      return storedTask(taskId, 'completed', { taskType: 'local_agent', outputFile: file });
+    };
+    const start = line({ type: 'user', message: { role: 'user', content: 'Find the big files' } })
+      + assistantSaid('msg_1', { type: 'text', text: 'Let me look.' }) + assistantSaid('msg_1', { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'du -sh *' } })
+      + line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: '2.0G a.bin' }] } });
+    // The report, one message Claude Code wrote a line per text block.
+    const report = assistantSaid('msg_2', { type: 'text', text: 'Found one big file.' }) + assistantSaid('msg_2', { type: 'text', text: '- a.bin, 2.0 GB' });
+    const huge = line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x'.repeat(3 * 1024 * 1024) }] } });
+    const shellFile = path.join(dir, 'tasks', 'shell.output'); writeFileSync(shellFile, line({ type: 'assistant', message: { content: [{ type: 'text', text: 'not a report' }] } }));
+    const workflowFile = path.join(dir, 'tasks', 'wf.output'); writeFileSync(workflowFile, JSON.stringify({ phases: [{ title: 'Say' }] }, null, 2));
+    const kept = stored([
+      agent('done', start + report),
+      agent('long', start + huge + report), // past what is read: the cut line it starts in is left out
+      agent('working', start.split('\n').slice(0, 1).join('\n') + '\n'), // nothing said yet
+      agent('plain', 'not JSON at all\n'),
+      storedTask('shell', 'completed', { taskType: 'local_bash', outputFile: shellFile }),
+      storedTask('wf', 'completed', { taskType: 'local_workflow', outputFile: workflowFile }),
+    ]);
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => kept }, hostedLinks: createHostedLinks({ log }), log }));
+    const read = (taskId) => handlers['session.taskOutput']({ sessionId: 's', taskId });
+    const words = 'Found one big file.\n\n- a.bin, 2.0 GB';
+    expect(await read('done')).toEqual({ output: words, totalBytes: Buffer.byteLength(words), truncated: false, source: 'file' });
+    expect(await read('long')).toEqual({ output: words, totalBytes: Buffer.byteLength(words), truncated: false, source: 'file' });
+    expect(await read('working')).toEqual({ output: '', totalBytes: 0, truncated: false, source: 'file' }); // the pane says No output yet
+    expect(await read('plain')).toEqual({ output: 'not JSON at all\n', totalBytes: 16, truncated: false, source: 'file' }); // not a transcript: as it is
+    expect((await read('shell')).output).toContain('"not a report"'); // a command's file is its output, whatever it reads like
+    expect((await read('wf')).output).toBe(JSON.stringify({ phases: [{ title: 'Say' }] }, null, 2)); // a workflow's, its JSON as written
+  });
+});
+
+test('Claude is not asked for an agent\'s or a workflow\'s output, which it never serves: their files are read at once; a command\'s is asked', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  await withTempDir(async (dir) => {
+    mkdirSync(path.join(dir, 'tasks'));
+    const files = Object.fromEntries(['agent-1', 'wf-1', 'shell'].map((taskId) => { const file = path.join(dir, 'tasks', `${taskId}.output`); writeFileSync(file, `${taskId} from its file\n`); return [taskId, file]; }));
+    // A process that would answer for every task, so an answer from the file shows it was never asked.
+    const script = `
+      for (const [taskId, type] of [['agent-1', 'local_agent'], ['wf-1', 'local_workflow'], ['shell', 'local_bash'], ['agent-2', 'local_agent']]) {
+        out({ type: 'system', subtype: 'task_started', task_id: taskId, task_type: type, description: taskId, is_backgrounded: true });
+        if (taskId !== 'agent-2') out({ type: 'system', subtype: 'task_notification', task_id: taskId, status: 'completed', output_file: ${JSON.stringify(dir)} + '/tasks/' + taskId + '.output' });
+      }
+      process.stdin.on('data', (chunk) => {
+        for (const line of String(chunk).split('\\n').filter(Boolean)) {
+          const m = JSON.parse(line);
+          if (m.request?.subtype === 'get_task_output') out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { output: m.request.task_id + ' from the process\\n', total_bytes: 1, truncated: false } } });
+        }
+      });
+    `;
+    const hostedLinks = createHostedLinks({ log });
+    const link = openStub(hostedLinks, 'unserved', script);
+    link.write({ type: 'hello' });
+    await waitFor(() => link.activity.tasks.length === 4 && link.activity.tasks.filter((task) => task.outputFile).length === 3);
+    const handlers = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => null }, hostedLinks, log }));
+    const read = (taskId) => handlers['session.taskOutput']({ sessionId: 'unserved', taskId });
+    expect(await read('agent-1')).toMatchObject({ output: 'agent-1 from its file\n', source: 'file' });
+    expect(await read('wf-1')).toMatchObject({ output: 'wf-1 from its file\n', source: 'file' });
+    expect(await read('shell')).toMatchObject({ output: 'shell from the process\n', source: 'process' });
+    // An agent with no file yet is still asked, so whatever Claude says of it stands.
+    expect(await read('agent-2')).toMatchObject({ output: 'agent-2 from the process\n', source: 'process' });
+    await link.close({ reason: 'test', graceful: false });
+  });
 });

@@ -29,6 +29,9 @@ test('a task\'s output and the MCP servers\' status have their own methods, and 
   expect(parseParams('session.taskOutput', { sessionId: 's' }).ok).toBe(false);
   expect(MethodSchemas['session.taskOutput'].result.parse({ output: 'line 1\n', totalBytes: 7, truncated: false })).toEqual({ output: 'line 1\n', totalBytes: 7, truncated: false });
   expect(MethodSchemas['session.taskOutput'].result.safeParse({ output: 'x'.repeat(200 * 1024 + 1), totalBytes: 1, truncated: true }).success).toBe(false); // the engine keeps the last 200 KiB
+  // Where the output came from: the process, or the task's output file when the process cannot serve it; an older engine says neither.
+  for (const source of /** @type {const} */ (['process', 'file'])) expect(MethodSchemas['session.taskOutput'].result.parse({ output: 'a\n', totalBytes: 2, truncated: false, source })).toEqual({ output: 'a\n', totalBytes: 2, truncated: false, source });
+  expect(MethodSchemas['session.taskOutput'].result.safeParse({ output: 'a\n', totalBytes: 2, truncated: false, source: 'disk' }).success).toBe(false);
   expect(parseParams('session.mcpStatus', { sessionId: 's' }).ok).toBe(true);
   const servers = [{ name: 'probe', status: 'connected', source: 'user', error: null }, { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' }];
   expect(MethodSchemas['session.mcpStatus'].result.parse({ servers })).toEqual({ servers });

@@ -959,12 +959,14 @@ export const MethodSchemas = {
   "session.clearFinished": { params: z.object({ sessionId: Id }), result: z.object({ cleared: z.number().int().nonnegative() }) },
   /**
    * A task's whole output, as the conversation's agent process holds it (during the task and after it, while the process
-   * lives): the last TASK_OUTPUT_MAX bytes of it, `truncated` when earlier output was left out (by the process or here).
-   * `no_process` when the process has ended, `not_found` when the process knows no such task.
+   * lives), or else from the output file the task's notice named (an agent's, which Claude Code does not serve, or any
+   * task's once its process has ended): the last TASK_OUTPUT_MAX bytes of it, `truncated` when earlier output was left out
+   * (by the process or here), and `source` where it was read (an older engine leaves it out). `no_process` when the
+   * process has ended and there is no file to read, `not_found` when the process knows no such task.
    */
   "session.taskOutput": {
     params: z.object({ sessionId: Id, taskId: TaskId.min(1) }),
-    result: z.object({ output: z.string().max(TASK_OUTPUT_MAX), totalBytes: z.number().int().nonnegative(), truncated: z.boolean() }),
+    result: z.object({ output: z.string().max(TASK_OUTPUT_MAX), totalBytes: z.number().int().nonnegative(), truncated: z.boolean(), source: z.enum(["process", "file"]).optional() }),
   },
   /** The MCP servers of the conversation's agent process and how each is (connected, failed, needs-auth, pending); null with no process. */
   "session.mcpStatus": { params: z.object({ sessionId: Id }), result: z.object({ servers: z.array(McpServerSchema).max(MCP_SERVERS_MAX).nullable() }) },

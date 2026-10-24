@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
+import * as activityHelpers from '../src/renderer/activity.js';
 import { clearFinished } from '../src/renderer/activity.js';
 import { ActivityPanel, ForceStopDialog, TaskOutputView, TaskRow, WorkflowCard, agentKey, phaseKey } from '../src/renderer/components/activity-panel.jsx';
 
@@ -15,9 +16,9 @@ const workflow = (options = {}) => task({ taskType: 'local_workflow', ...options
 const activity = (tasks, truncated = false) => ({ state: 'background', tasks, truncated, updatedAt: new Date().toISOString() });
 const noop = () => {};
 /** @param {import('../src/renderer/activity.js').Activity | null} value @param {Record<string, any>} [props] */
-const render = (value, { stopResult = null, stopping = false, cleared = {}, childTasks = undefined, delegations = undefined, mcpServers = undefined } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
+const render = (value, { stopResult = null, stopping = false, cleared = {}, childTasks = undefined, delegations = undefined } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
   stopResult={stopResult} stopping={stopping} visible cleared={cleared} onStopAll={noop} onStopTask={noop} onForceStop={noop} onClear={noop}
-  childTasks={childTasks} delegations={delegations} onOpenTask={noop} onStopChild={noop} mcpServers={mcpServers} loadTaskOutput={async () => ({ output: '', totalBytes: 0, truncated: false })} />);
+  childTasks={childTasks} delegations={delegations} onOpenTask={noop} onStopChild={noop} loadTaskOutput={async () => ({ output: '', totalBytes: 0, truncated: false })} />);
 /** The chevron that opens a task's output, as a pattern; `open` says whether it reads open. */
 const outputToggle = (open = false) => `<button type="button" class="icon-button task-output-toggle" aria-label="Show output" aria-expanded="${open}" title="Output"><svg[^>]*class="icon activity-disclosure"[^>]*>.*?</svg></button>`;
 const count = (/** @type {string} */ html, /** @type {RegExp} */ pattern) => html.match(pattern)?.length ?? 0;
@@ -522,18 +523,28 @@ test('the output pane shows the output, a note when earlier output was left out,
   expect(view({ task: { ...command, outputFile: null }, state: { status: 'error', error: { code: 'no_process', message: 'x' } } })).toBe('<div class="task-output-pane"><p class="task-output-note">The process that ran it has ended</p></div>');
   expect(view({ task: command, state: { status: 'error', error: { code: 'not_found', message: 'no such task' } } })).toBe('<div class="task-output-pane"><p class="task-output-note" title="no such task">no such task</p></div>'); // a long error is readable in full on hover
   expect(view({ task: command, state: { status: 'ready', result: { output: '', totalBytes: 0, truncated: false } } })).toBe('<div class="task-output-pane"><p class="task-output-note">No output yet</p></div>');
+  // Claude serves no agent's or workflow's output, and names their file only once they end: while they run, the note says when.
+  const refused = { status: 'error', error: { code: 'not_found', message: 'get_task_output: no shell or Monitor task with that task_id in this session' } };
+  const later = '<div class="task-output-pane"><p class="task-output-note">The output is readable once it finishes</p></div>';
+  expect(view({ task: task({ description: 'Find big files', taskType: 'local_agent', status: 'running' }), state: refused })).toBe(later);
+  expect(view({ task: workflow({ workflowName: 'demo', status: 'running' }), state: refused })).toBe(later);
+  // A running command's refusal is Claude's own words; a running agent whose process has gone says so.
+  expect(view({ task: task({ description: 'Watch the build', taskType: 'local_bash', status: 'running' }), state: { status: 'error', error: { code: 'not_found', message: 'no such task' } } }))
+    .toBe('<div class="task-output-pane"><p class="task-output-note" title="no such task">no such task</p></div>');
+  expect(view({ task: task({ description: 'Find big files', taskType: 'local_agent', status: 'running' }), state: { status: 'error', error: { code: 'no_process', message: 'x' } } }))
+    .toBe('<div class="task-output-pane"><p class="task-output-note">The process that ran it has ended</p></div>');
+  // Output read from the task's file, because Claude could not serve it, reads as output from the process does.
+  for (const truncated of [false, true]) expect(view({ task: command, state: { status: 'ready', result: { output: 'the report\n', totalBytes: 11, truncated, source: 'file' } } }))
+    .toBe(view({ task: command, state: { status: 'ready', result: { output: 'the report\n', totalBytes: 11, truncated, source: 'process' } } }));
   // An engine from before session.taskOutput: said plainly, not as the raw unknown method.
   expect(view({ task: command, state: { status: 'error', error: { code: 'unknown_method', message: 'unknown method session.taskOutput' } } })).toBe('<div class="task-output-pane"><p class="task-output-note">Not available with this engine</p></div>');
 });
 
-test('the MCP servers\' status is one muted line at the bottom: the non-zero counts, the failed and unsigned ones by name on hover', () => {
-  const servers = [
-    { name: 'probe', status: 'connected', source: 'user', error: null },
-    { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' },
-    { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
-  ];
-  const html = render(activity([]), { mcpServers: servers });
-  expect(html).toContain('<p class="panel-note mcp-status" title="Failed: pencil (ENOENT)\nNeeds sign-in: claude.ai Gmail">MCP: 1 connected · 1 failed · 1 needs sign-in</p>');
-  expect(render(activity([]), { mcpServers: [servers[0], { ...servers[0], name: 'other' }] })).toContain('<p class="panel-note mcp-status">MCP: 2 connected</p>');
-  for (const none of [null, [], undefined]) expect(render(activity([]), { mcpServers: none })).not.toContain('mcp-status');
+test('the panel says nothing of the MCP servers, whatever it is handed', () => {
+  const servers = [{ name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' }];
+  const html = renderToStaticMarkup(<ActivityPanel activity={activity([task()])} stopResult={null} stopping={false} visible cleared={{}} onStopAll={noop} onStopTask={noop} onForceStop={noop} onClear={noop}
+    {.../** @type {any} */ ({ mcpServers: servers })} />);
+  expect(html).not.toContain('mcp-status');
+  expect(html).not.toContain('MCP');
+  expect(/** @type {any} */ (activityHelpers).mcpLine).toBeUndefined();
 });

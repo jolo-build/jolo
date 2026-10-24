@@ -419,18 +419,6 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   }, [sessionId, childIds]);
   const activityShown = context === 'activity';
   useEffect(() => { if (activityShown && childIds) loadDelegations(); }, [activityShown]);
-  // The MCP servers of the conversation's process, asked each time the Activity panel is shown and again whenever the
-  // process's state changes while it is (a new process, a turn, the process gone); no polling. Another conversation's
-  // line is never shown: it is dropped as the conversation changes.
-  const [mcpServers, setMcpServers] = useState(/** @type {{ name: string, status: string, source: string | null, error: string | null }[] | null} */ (null));
-  const processState = state.activity?.state ?? null;
-  useEffect(() => { setMcpServers(null); }, [sessionId]);
-  useEffect(() => {
-    if (!activityShown || !visible || !sessionId) { if (!activityShown) setMcpServers(null); return; }
-    let current = true;
-    state.mcpStatus().then(result => { if (current) setMcpServers(result?.servers ?? null); }, () => { if (current) setMcpServers(null); });
-    return () => { current = false; };
-  }, [activityShown, visible, sessionId, processState]);
   const shownDelegations = delegationRows.sessionId === sessionId ? delegationRows.rows : NO_DELEGATIONS;
   const delegations = useMemo(() => new Map(shownDelegations.map(row => [row.id, row])), [shownDelegations]);
   const delegationsBySession = useMemo(() => new Map(shownDelegations.map(row => [row.sessionId, row])), [shownDelegations]);
@@ -575,7 +563,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
               cleared={clearedTasks} onClear={next => clearFinishedTasks(next, { hide: setClearedTasks, remove: state.clearFinished })} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)}
               childTasks={family.children} delegations={delegationsBySession} onOpenTask={id => reportError(() => state.selectSession(id))} onStopChild={runId => reportError(() => state.call('run.cancel', { runId }))}
-              loadTaskOutput={taskId => state.taskOutput(taskId)} mcpServers={mcpServers} />}</div>
+              loadTaskOutput={taskId => state.taskOutput(taskId)} />}</div>
           </div>
         </aside>
       </ContextSplit>

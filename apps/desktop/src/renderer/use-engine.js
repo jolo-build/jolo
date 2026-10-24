@@ -383,9 +383,10 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const closeProcess = useCallback(async () => call("session.closeProcess", { sessionId: sessionRef.current }), []);
   // Deletes the conversation's finished tasks in the engine; an older engine rejects (unknown method), and the caller keeps its own hide.
   const clearFinished = useCallback(async () => call("session.clearFinished", { sessionId: sessionRef.current }), []);
-  // A task's whole output, read from the conversation's process; rejects with code no_process once that has ended.
+  // A task's whole output, read from the conversation's process or, for what it cannot serve, the task's output file;
+  // rejects with code no_process once the process has ended and there is no file to read.
   const taskOutput = useCallback(async (taskId) => call("session.taskOutput", { sessionId: sessionRef.current, taskId }), []);
-  // The process's MCP servers and how each is; `servers` is null with no process.
+  // The process's MCP servers and how each is; `servers` is null with no process. Nothing shows it now (the panel's line went); kept for a later place.
   const mcpStatus = useCallback(async () => call("session.mcpStatus", { sessionId: sessionRef.current }), []);
   const resolveDialog = useCallback(async (dialogId, response) => {
     const open = dialogs.current;
