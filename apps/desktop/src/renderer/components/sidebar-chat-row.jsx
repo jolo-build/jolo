@@ -1,4 +1,6 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { modelLabel } from '../model-options.js';
+import { titleSteps, typedLength, typeStepMs } from '../typed-title.js';
 import { relativeTime } from '@jolo/client/board';
 import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
@@ -14,6 +16,37 @@ const progress = {
 /** What stands for a title while a task is being named (its title is blank but it has a run): a muted, sweeping bar. */
 export function TitleShimmer() {
   return <span className="title-shimmer" role="img" aria-label="Naming…"><span /></span>;
+}
+
+/** Whether the person asked for less motion; a renderer without matchMedia has no preference. */
+const reducedMotion = () => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+
+/**
+ * A task's title, or the shimmer while it is being named. The title that replaces the shimmer is typed out; a title that
+ * was already there when this first rendered, or one that changes while no shimmer was shown (a rename), appears at
+ * once, as it does with less motion asked for. A static render never shows part of a title: typing starts in an effect.
+ * @param {{ title: string, naming: boolean }} props
+ */
+export function TypedTitle({ title, naming }) {
+  const wasNaming = useRef(naming);
+  const [shown, setShown] = useState(/** @type {number | null} */ (null)); // code points typed so far; null is all
+  // A layout effect, so the first character replaces the shimmer in the same paint rather than the whole title flashing.
+  useLayoutEffect(() => {
+    const typing = wasNaming.current && !naming && Boolean(title);
+    wasNaming.current = naming;
+    if (!typing || reducedMotion()) { setShown(null); return; }
+    const started = Date.now();
+    const total = titleSteps(title).length;
+    setShown(typedLength(title, 0));
+    const timer = setInterval(() => {
+      const count = typedLength(title, Date.now() - started);
+      setShown(count >= total ? null : count);
+      if (count >= total) clearInterval(timer);
+    }, Math.max(16, typeStepMs(title))); // the count comes from the clock, so a long title renders at most once a frame
+    return () => clearInterval(timer);
+  }, [naming, title]);
+  if (naming) return <TitleShimmer />;
+  return shown === null ? title : titleSteps(title).slice(0, shown).join('');
 }
 
 /**
@@ -45,7 +78,7 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
     onKeyDown={onMenu ? event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); onMenu(task); } } : undefined}>
     <button className={`sidebar-chat ${standalone ? 'recent-chat' : 'task'}`} {...drag(target)} data-session-id={task.sessionId}
       aria-current={selected ? 'page' : undefined} title={`${title}\n${details}`} onClick={onOpen}>
-      <span className={standalone ? 'recent-chat-title' : 'task-title'}>{naming ? <TitleShimmer /> : title}</span>
+      <span className={standalone ? 'recent-chat-title' : 'task-title'}><TypedTitle title={naming ? '' : title} naming={naming} /></span>
       {worktree && <span className="sidebar-task-worktree" role="img" aria-label="Worktree" title={workspacePath ? `Worktree: ${workspacePath}` : 'Worktree'}><Icon name="worktree" size={12} /></span>}
       {icon && <span className={`sidebar-task-progress${needs ? ' needs' : ''}${icon === 'spinner' ? ' working' : ''}`} role="img" aria-label={status}>
         <Icon name={icon} size={14} className={icon === 'spinner' ? 'activity-spin' : ''} />

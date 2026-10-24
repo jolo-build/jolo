@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Sidebar, SidebarTask } from '../src/renderer/components/sidebar.jsx';
-import { SidebarChatRow } from '../src/renderer/components/sidebar-chat-row.jsx';
+import { SidebarChatRow, TypedTitle } from '../src/renderer/components/sidebar-chat-row.jsx';
 const workspace = (id, path, taskCount = 0) => ({ workspaceId: id, workspace: { path, mode: 'direct' }, taskCount });
 const board = { projects: [workspace('alpha', '/work/alpha', 3), workspace('beta', '/work/beta')] };
 const render = props => renderToStaticMarkup(<Sidebar board={board} historyState="open" {...props} />);
@@ -94,4 +94,12 @@ test('a chat being named shows a shimmer in place of its title, never the prompt
   const named = row({ title: 'Counting to two hundred', run: { state: 'model' } }, true);
   expect(named).toContain('>Counting to two hundred</span>');
   expect(named).not.toContain('title-shimmer');
+});
+
+test('a title already there renders whole, never part-typed; a chat being named renders the shimmer (typing itself starts in an effect)', () => {
+  expect(renderToStaticMarkup(<TypedTitle title="Counting to two hundred" naming={false} />)).toBe('Counting to two hundred');
+  expect(renderToStaticMarkup(<TypedTitle title="" naming />)).toBe('<span class="title-shimmer" role="img" aria-label="Naming…"><span></span></span>');
+  const row = renderToStaticMarkup(<SidebarChatRow {...(/** @type {import('react').ComponentProps<typeof SidebarChatRow>} */ ({ task: { sessionId: 'chat', title: 'Counting to two hundred', run: { state: 'completed' } }, standalone: true }))} />);
+  expect(row).toContain('<span class="recent-chat-title">Counting to two hundred</span>');
+  expect(row).toContain('title="Counting to two hundred');
 });
