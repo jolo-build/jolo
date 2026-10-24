@@ -118,6 +118,15 @@ export function createAttentionService({ bridge, window, log, app, Notification,
     notification.show();
   };
 
+  /**
+   * Whether the conversation's process still runs background work after its run answered: Claude carries on, and reports
+   * it in a run of its own. An engine that cannot say (an older one, a failed read) is taken to have none.
+   * @param {string} sessionId
+   */
+  const backgroundRunning = async (sessionId) => {
+    try { return (await bridge.rawCall("session.activity", { sessionId }))?.activity?.state === "background"; } catch { return false; }
+  };
+
   const announce = async (event, kind) => {
     const pending = { runId: event.runId, permissionId: event.payload.permissionId, dialogId: event.payload.dialogId ?? null, cancelled: false };
     announcements.add(pending);
@@ -155,12 +164,15 @@ export function createAttentionService({ bridge, window, log, app, Notification,
         return;
       }
       const state = event.payload.state;
+      // A run that answered while its process still works in the background has not finished the conversation's work.
+      const carriesOn = state === "completed" && event.sessionId ? await backgroundRunning(event.sessionId) : false;
+      if (disposed || pending.cancelled) return;
       const where = task ? `${row.name} · ${clip(task, 40)}` : row.name;
-      const title = state === "completed" ? `${where}: done` : state === "failed" ? `${where}: task failed` : state === "interrupted" ? `${where}: interrupted` : `${where}: paused`;
+      const title = carriesOn ? `${where}: answered · background work running` : state === "completed" ? `${where}: done` : state === "failed" ? `${where}: task failed` : state === "interrupted" ? `${where}: interrupted` : `${where}: paused`;
       // The title already names the task; the body only adds what the title cannot say.
       const files = row.changedFiles, checks = row.run?.verification?.status;
       const body = state === "completed" ? [!task && clip(row.run?.prompt ?? "", 80), files && `${files} file${files === 1 ? "" : "s"} changed`, checks === "failed" ? "checks failed" : checks === "stale" ? "checks out of date" : null].filter(Boolean).join(" · ") : clip(row.summary ?? "", 120);
-      const tone = state === "completed" ? "good" : state === "failed" ? "needs" : "muted";
+      const tone = carriesOn ? "muted" : state === "completed" ? "good" : state === "failed" ? "needs" : "muted";
       show({ kind, row, tone, title, body, sessionId: event.sessionId ?? null, permissionId: row.pendingPermission?.permissionId ?? null });
     } catch (error) {
       if (!disposed) log.warn("could not prepare task notification", { error: String(error?.message ?? error) });

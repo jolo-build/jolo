@@ -56,8 +56,12 @@ const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof 
 const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER) : null);
 
 /**
- * A background task of the process (an agent, a workflow, a command), as its notices describe it.
+ * A background task of the process (an agent, a workflow, a command), as its notices describe it. `runId` is the task's
+ * own run id (Claude Code gives every task one; it is not a workflow's id). `taskType` is Claude's `task_type`
+ * (`local_workflow`, `local_bash`, `local_agent`, ...): a workflow is ONE task of type `local_workflow`, named by
+ * `workflowName`; its agents have no tasks of their own.
  * @typedef {{ taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
+ *   taskType: string | null, workflowName: string | null,
  *   phase: string | null, backgrounded: boolean, status: 'running' | 'completed' | 'stopped' | 'failed', startedAt: string,
  *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null } }} TaskRecord
  */
@@ -291,10 +295,13 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   let reportDue = null;
   const settleReport = () => { if (reportDue) { clearTimeout(reportDue); reportDue = null; } };
   // Every field is read through textOf/countOf: what Claude sends is bounded and typed before it is kept or published.
+  // A task is background work unless Claude says it is not: it sets is_backgrounded only for agents and commands, so a
+  // workflow or an MCP call it moved off the turn arrives without one (its own client reads the flag the same way).
   /** @param {string} taskId @param {any} message @param {string} at @returns {TaskRecord} */
   const newTask = (taskId, message, at) => ({
     taskId, runId: textOf(message.run_id, TASK_ID_MAX), toolUseId: textOf(message.tool_use_id, TASK_ID_MAX), description: textOf(message.description, TASK_TEXT_MAX) ?? '',
-    subagentType: textOf(message.subagent_type, TASK_ID_MAX), phase: null, backgrounded: message.is_backgrounded === true, status: 'running',
+    subagentType: textOf(message.subagent_type, TASK_ID_MAX), taskType: textOf(message.task_type, TASK_ID_MAX), workflowName: textOf(message.workflow_name, TASK_TEXT_MAX),
+    phase: null, backgrounded: message.is_backgrounded !== false, status: 'running',
     startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null },
   });
   /** A count that is not one leaves what was known. @param {TaskRecord} task @param {any} usage */
@@ -311,7 +318,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     task.status = status;
     task.endedAt ??= at;
     if (was !== 'running') return;
-    if (task.backgrounded) {
+    // Claude reports a task that ends while no turn runs in a turn of its own, whatever its flag; one that ends inside a
+    // foreground turn is reported there.
+    if (task.backgrounded || current === null) {
       settleReport();
       reportDue = setTimeout(() => { reportDue = null; }, REPORT_GRACE_MS);
       reportDue.unref?.();
@@ -346,6 +355,7 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       takeUsage(task, message.usage);
     } else if (message.subtype === 'task_updated' && task) {
       const patch = message.patch ?? {};
+      if (typeof patch.is_backgrounded === 'boolean') task.backgrounded = patch.is_backgrounded; // moved to the background later
       task.phase = textOf(patch.workflow_phase ?? patch.phase, TASK_TEXT_MAX) ?? task.phase;
       task.description = textOf(patch.description, TASK_TEXT_MAX) ?? task.description;
       const ending = TASK_ENDINGS.get(patch.status);

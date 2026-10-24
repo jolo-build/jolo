@@ -1,9 +1,8 @@
 import { useEffect, useReducer } from 'react';
-import { forceStopOffered, formatElapsed, formatTokens, groupActivity, plural, runningTasks } from '../activity.js';
-import { Icon } from './icon.jsx';
+import { forceStopOffered, formatElapsed, formatTokens, groupActivity, runningTasks, taskKind } from '../activity.js';
 import { Modal } from './modal.jsx';
 
-/** @typedef {import('../activity.js').TaskRecord} TaskRecord @typedef {import('../activity.js').WorkflowRun} WorkflowRun */
+/** @typedef {import('../activity.js').TaskRecord} TaskRecord */
 
 const WORDS = { running: 'running', completed: 'done', stopped: 'stopped', failed: 'failed' };
 const elapsed = (/** @type {string} */ startedAt, /** @type {string | null} */ endedAt, /** @type {number} */ now) => formatElapsed((endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt));
@@ -15,30 +14,29 @@ const meta = (/** @type {(string | null)[]} */ parts) => parts.filter(Boolean).j
 function TaskRow({ task, now, onStopTask }) {
   return <li className="task-row" data-state={task.status}>
     <span className="activity-task-name" title={task.description}>{task.description}</span>
-    <span className="activity-task-meta">{meta([task.subagentType ? 'Agent' : 'Task', task.phase, WORDS[task.status], elapsed(task.startedAt, task.endedAt, now), tokens(task.usage.totalTokens)])}</span>
+    <span className="activity-task-meta">{meta([taskKind(task), task.phase, WORDS[task.status], elapsed(task.startedAt, task.endedAt, now), tokens(task.usage.totalTokens)])}</span>
     {task.status === 'running' && <button type="button" onClick={() => onStopTask(task.taskId)}>Stop</button>}
   </li>;
 }
 
-/** @param {{ run: WorkflowRun, name: string, now: number, onStopTask: (taskId: string) => void, onStopRun: (run: WorkflowRun) => void }} props */
-function WorkflowCard({ run, name, now, onStopTask, onStopRun }) {
-  return <section className="workflow-card">
+/**
+ * A workflow (D3): ONE task of the process, so its card says what the wire carries, its name, status, elapsed time and
+ * tokens, and stops it as any task is stopped. Claude Code reports no agents, phases or agent count for it.
+ * @param {{ task: TaskRecord, now: number, onStopTask: (taskId: string) => void }} props
+ */
+function WorkflowCard({ task, now, onStopTask }) {
+  const name = task.workflowName ?? task.description;
+  return <section className="workflow-card" data-state={task.status}>
     <header>
       <div className="workflow-head">
         <span className="workflow-title" title={name}>{name}</span>
-        {run.large && <span className="plan-mark">Large</span>}
         <span className="grow" />
-        {run.running && <button type="button" onClick={() => onStopRun(run)}>Stop run</button>}
+        {task.status === 'running' && <button type="button" onClick={() => onStopTask(task.taskId)}>Stop</button>}
       </div>
       <div className="workflow-line">
-        <span className="workflow-meta">{meta(['Workflow', plural(run.agents, 'agent'), elapsed(run.startedAt, run.endedAt, now), tokens(run.tokens)])}</span>
-        <span className="status-dots">{run.phases.map((phase, index) => <span key={index} data-status={phase.status} title={phase.name ? `${phase.name}: ${phase.status}` : phase.status} />)}</span>
+        <span className="workflow-meta">{meta(['Workflow', WORDS[task.status], elapsed(task.startedAt, task.endedAt, now), tokens(task.usage.totalTokens)])}</span>
       </div>
     </header>
-    <details className="block">
-      <summary><span>Agents</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
-      <ol className="activity-tasks">{run.tasks.map(task => <TaskRow key={task.taskId} task={task} now={now} onStopTask={onStopTask} />)}</ol>
-    </details>
   </section>;
 }
 
@@ -58,23 +56,21 @@ export function ForceStopDialog({ onConfirm, onClose }) {
 }
 
 /**
- * The conversation's background work (D2): workflow runs as cards, then standalone tasks, each running one with a Stop.
+ * The conversation's background work (D2): workflows as cards, then the other tasks, each running one with a Stop.
  * A Stop background work that left some of its tasks running offers `Force stop`, which asks the pane to confirm closing
  * the process; tasks that end with it are recorded `failed` by the engine and read so here. Everything comes from the
  * activity snapshot: no row asks the engine for anything, so hundreds of tasks render in one pass (Review Focus 3).
  * @param {{
  *   activity: import('../activity.js').Activity | null,
- *   workflowNames: Map<string, string>,
  *   stopResult: import('../activity.js').StopResult | null,
  *   stopping: boolean,
  *   visible: boolean,
  *   onStopAll: () => void,
  *   onStopTask: (taskId: string) => void,
- *   onStopRun: (run: WorkflowRun) => void,
  *   onForceStop: () => void,
  * }} props `stopping` while a Stop background work waits for its reply; `visible` while the panel is on screen.
  */
-export function ActivityPanel({ activity, workflowNames, stopResult, stopping, visible, onStopAll, onStopTask, onStopRun, onForceStop }) {
+export function ActivityPanel({ activity, stopResult, stopping, visible, onStopAll, onStopTask, onForceStop }) {
   const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
   const running = runningTasks(activity);
   const ticking = visible && running.length > 0;
@@ -86,16 +82,14 @@ export function ActivityPanel({ activity, workflowNames, stopResult, stopping, v
     return () => clearInterval(timer);
   }, [ticking]);
   const now = Date.now();
-  const { runs, tasks } = groupActivity(activity);
-  // Running before finished, newest first, as the standalone tasks already are (D2).
-  const cards = [...runs].sort((a, b) => Number(b.running) - Number(a.running) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const { workflows, tasks } = groupActivity(activity);
   return <div className="activity-panel">
     <div className="activity-heading">
       <strong>Activity</strong>
       {running.length ? <button type="button" disabled={stopping} onClick={onStopAll}>{stopping ? 'Stopping…' : 'Stop background work'}</button> : <span className="muted">Nothing running</span>}
     </div>
     {forceStopOffered(activity, stopResult) && <p className="panel-note" role="status"><span>Some tasks did not stop</span><button type="button" onClick={onForceStop}>Force stop</button></p>}
-    {cards.map(run => <WorkflowCard key={run.runId} run={run} name={workflowNames.get(run.runId) ?? run.tasks[0].description} now={now} onStopTask={onStopTask} onStopRun={onStopRun} />)}
+    {workflows.map(task => <WorkflowCard key={task.taskId} task={task} now={now} onStopTask={onStopTask} />)}
     {tasks.length > 0 && <ol className="activity-tasks">{tasks.map(task => <TaskRow key={task.taskId} task={task} now={now} onStopTask={onStopTask} />)}</ol>}
     {activity?.truncated && <p className="panel-note">Older finished tasks are not listed</p>}
   </div>;

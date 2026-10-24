@@ -1,17 +1,19 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, parseWorkflowName, plural, runningTasks, stopFor, workflowNames } from '../src/renderer/activity.js';
+import { activityLine, backgroundTasks, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, plural, runningTasks, stopFor, taskKind } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
 let ids = 0;
 /** @typedef {import('../src/renderer/activity.js').TaskRecord} TaskRecord */
 /** @param {Record<string, any>} [options] @returns {TaskRecord} */
-const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true } = {}) => ({
-  taskId: `t${++ids}`, runId, toolUseId, description, subagentType: null, phase, backgrounded, status,
+const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true, taskType = null, workflowName = null, subagentType = null } = {}) => ({
+  taskId: `t${++ids}`, runId, toolUseId, description, subagentType, taskType, workflowName, phase, backgrounded, status,
   startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null },
 });
-/** @param {TaskRecord[]} tasks @returns {import('../src/renderer/activity.js').Activity} */
-const activity = (tasks) => ({ state: 'background', tasks, truncated: false, updatedAt: at(0) });
+/** A workflow as Claude Code 2.1.304 reports one: one task of type local_workflow, named. @param {Record<string, any>} [options] */
+const workflow = (options = {}) => task({ taskType: 'local_workflow', workflowName: 'demo', description: 'Workflow demo', ...options });
+/** @param {TaskRecord[]} tasks @param {import('../src/renderer/activity.js').Activity['state']} [state] @returns {import('../src/renderer/activity.js').Activity} */
+const activity = (tasks, state = 'background') => ({ state, tasks, truncated: false, updatedAt: at(0) });
 
 test('runningTasks keeps the running ones, foreground ones too, and reads nothing from no activity', () => {
   const running = task();
@@ -20,99 +22,87 @@ test('runningTasks keeps the running ones, foreground ones too, and reads nothin
   expect(runningTasks(null)).toEqual([]);
 });
 
-test('a workflow run is the tasks that share a run id, with one status per distinct phase and the tokens they reported', () => {
-  const { runs, tasks } = groupActivity(activity([
-    task({ runId: 'wf1', phase: 'Review', status: 'completed', started: 0, ended: 10, tokens: 1000 }),
-    task({ runId: 'wf1', phase: 'Review', started: 1, tokens: 2000 }),
-    task({ runId: 'wf1', phase: 'Verify', started: 2 }),
-  ]));
-  expect(tasks).toEqual([]);
-  expect(runs).toHaveLength(1);
-  expect(runs[0]).toMatchObject({
-    runId: 'wf1', agents: 3, startedAt: at(0), endedAt: null, running: true, tokens: 3000, large: false,
-    phases: [{ name: 'Review', status: 'running' }, { name: 'Verify', status: 'running' }],
-  });
-  expect(runs[0].tasks).toHaveLength(3);
-});
-
-test('a phase is red when any of its agents failed or stopped and green when all completed', () => {
-  const { runs: [run] } = groupActivity(activity([
-    task({ runId: 'wf', phase: 'Plan', status: 'completed', ended: 3 }),
-    task({ runId: 'wf', phase: 'Build', status: 'stopped', ended: 4 }),
-    task({ runId: 'wf', phase: 'Build', status: 'completed', ended: 5 }),
-  ]));
-  expect(run.phases).toEqual([{ name: 'Plan', status: 'done' }, { name: 'Build', status: 'failed' }]);
-  expect(run).toMatchObject({ running: false, endedAt: at(5), tokens: null });
-});
-
-test('a run without phases has one status per agent, and more than LARGE_RUN_AGENTS agents make it large', () => {
-  const { runs: [small] } = groupActivity(activity([task({ runId: 'wf' }), task({ runId: 'wf', status: 'completed', ended: 2 }), task({ runId: 'wf', status: 'failed', ended: 3 })]));
-  expect(small.phases).toEqual([{ name: null, status: 'running' }, { name: null, status: 'done' }, { name: null, status: 'failed' }]);
-  expect(LARGE_RUN_AGENTS).toBe(25);
-  const { runs: [atLimit] } = groupActivity(activity(Array.from({ length: 25 }, () => task({ runId: 'wf' }))));
-  expect(atLimit.large).toBe(false);
-  const { runs: [large] } = groupActivity(activity(Array.from({ length: 26 }, () => task({ runId: 'wf' }))));
-  expect(large).toMatchObject({ agents: 26, large: true });
-});
-
-test('runs are ordered by their first start, standalone tasks come running first and newest first', () => {
-  const oldDone = task({ status: 'completed', started: 1, ended: 2 });
-  const newDone = task({ status: 'completed', started: 5, ended: 6 });
-  const oldRunning = task({ started: 2 });
-  const newRunning = task({ started: 4 });
-  const { runs, tasks } = groupActivity(activity([
-    task({ runId: 'late', started: 3 }), task({ runId: 'early', started: 0 }), oldDone, oldRunning, newRunning, newDone, task({ runId: 'late', started: 7 }),
-  ]));
-  expect(runs.map(run => run.runId)).toEqual(['early', 'late']);
+test('a workflow is one task of type local_workflow; the rest are tasks, whatever run ids they carry, running first and newest first', () => {
+  const oldDone = task({ status: 'completed', started: 1, ended: 2, runId: 'r1' });
+  const newDone = task({ status: 'completed', started: 5, ended: 6, runId: 'r2' });
+  const oldRunning = task({ started: 2, runId: 'r3' });
+  const newRunning = task({ started: 4, runId: 'r4' });
+  const doneFlow = workflow({ status: 'completed', started: 0, ended: 9 });
+  const oldFlow = workflow({ started: 1 });
+  const newFlow = workflow({ started: 3 });
+  const { workflows, tasks } = groupActivity(activity([doneFlow, oldDone, oldFlow, oldRunning, newRunning, newFlow, newDone]));
+  expect(workflows).toEqual([newFlow, oldFlow, doneFlow]);
   expect(tasks).toEqual([newRunning, oldRunning, newDone, oldDone]);
 });
 
 test('groupActivity of no activity is empty', () => {
-  expect(groupActivity(null)).toEqual({ runs: [], tasks: [] });
+  expect(groupActivity(null)).toEqual({ workflows: [], tasks: [] });
 });
 
-test('Review Focus 3: two hundred tasks across sixteen runs group in one pass', () => {
-  const tasks = Array.from({ length: 200 }, (_, index) => task({ runId: index < 192 ? `wf${index % 16}` : null, phase: index % 2 ? 'Review' : 'Verify', started: index, tokens: 1000 }));
+test('Review Focus 3: two hundred tasks, sixteen of them workflows, group in one pass', () => {
+  const tasks = Array.from({ length: 200 }, (_, index) => index < 16 ? workflow({ started: index }) : task({ runId: `run-${index}`, started: index, tokens: 1000 }));
   const grouped = groupActivity(activity(tasks));
-  expect(grouped.runs).toHaveLength(16);
-  expect(grouped.runs.every(run => run.agents === 12 && run.tokens === 12_000)).toBe(true);
-  expect(grouped.tasks).toHaveLength(8);
+  expect(grouped.workflows).toHaveLength(16);
+  expect(grouped.tasks).toHaveLength(184);
+});
+
+test("a task's kind comes from Claude's task type: a workflow, a command, an agent, else a task", () => {
+  expect(taskKind(workflow())).toBe('Workflow');
+  expect(taskKind(task({ taskType: 'local_bash' }))).toBe('Command');
+  expect(taskKind(task({ taskType: 'local_agent' }))).toBe('Agent');
+  expect(taskKind(task({ subagentType: 'general-purpose' }))).toBe('Agent'); // an engine from before task types
+  expect(taskKind(task({ taskType: 'remote_agent' }))).toBe('Task');
+  expect(taskKind(task())).toBe('Task');
+});
+
+test('a background command as the real binary reports it, with a run id of its own, is a Command row, not a workflow', () => {
+  const sleep = task({ runId: '0mvll0x40-1842e72b', taskType: 'local_bash', backgrounded: true, description: 'Sleep for 60 seconds', started: 0 });
+  const grouped = groupActivity(activity([sleep]));
+  expect(grouped).toEqual({ workflows: [], tasks: [sleep] });
+  expect(taskKind(sleep)).toBe('Command');
+  expect(activityLine(activity([sleep]), { now: START + 30_000 })).toEqual({ text: 'Background work: 1 task · 00:30', running: 1 });
 });
 
 test('the activity line counts background tasks and their elapsed time, without tokens nobody reported', () => {
   const tasks = [task({ started: 0 }), task({ started: 10 })];
-  expect(activityLine(activity(tasks), { now: START + 30_000, workflowNames: new Map() })).toEqual({ text: 'Background work: 2 tasks · 00:30', running: 2 });
+  expect(activityLine(activity(tasks), { now: START + 30_000 })).toEqual({ text: 'Background work: 2 tasks · 00:30', running: 2 });
 });
 
 test('the activity line adds the tokens the running tasks reported', () => {
   const tasks = [task({ started: 0, tokens: 412_000 }), task({ started: 10 })];
-  expect(activityLine(activity(tasks), { now: START + 30_000, workflowNames: new Map() })?.text).toBe('Background work: 2 tasks · 412k tokens · 00:30');
+  expect(activityLine(activity(tasks), { now: START + 30_000 })?.text).toBe('Background work: 2 tasks · 412k tokens · 00:30');
 });
 
-test('the activity line names an open workflow run with the phase of its newest running agent and the agents finished', () => {
-  const tasks = [
-    ...Array.from({ length: 37 }, (_, index) => task({ runId: 'wf', phase: 'Review', status: 'completed', started: index, ended: 100 + index, tokens: 20_000 })),
-    ...Array.from({ length: 82 }, (_, index) => task({ runId: 'wf', phase: 'Review', started: 40 + index, tokens: 5_000 })),
-    task({ runId: 'wf', phase: 'Verify', started: 200, tokens: 50_000 }),
-  ];
-  expect(activityLine(activity(tasks), { now: START + 300_000, workflowNames: new Map([['wf', 'review']]) })).toEqual({ text: 'Workflow review: Verify 37/120 · 1.2M tokens', running: 83 });
+test('a running workflow names the line, with its own elapsed time and tokens, and counts the other background tasks', () => {
+  const flow = workflow({ started: 10, tokens: 1_200_000 });
+  expect(activityLine(activity([flow]), { now: START + 40_000 })).toEqual({ text: 'Workflow demo · 00:30 · 1.2M tokens', running: 1 });
+  expect(activityLine(activity([task({ started: 0, tokens: 5_000 }), flow]), { now: START + 40_000 })).toEqual({ text: 'Workflow demo · 00:30 · 1.2M tokens · 1 other task', running: 2 });
+  expect(activityLine(activity([task(), task(), workflow({ started: 10 })]), { now: START + 40_000 })?.text).toBe('Workflow demo · 00:30 · 2 other tasks');
+  // Without a name, its description; the newest of several running workflows names the line.
+  expect(activityLine(activity([workflow({ workflowName: 'older', started: 0 }), workflow({ workflowName: null, description: 'Review the diff', started: 20 })]), { now: START + 40_000 })?.text).toBe('Workflow Review the diff · 00:20 · 1 other task');
+  // A finished workflow names nothing.
+  expect(activityLine(activity([workflow({ status: 'completed', ended: 5 }), task({ started: 10 })]), { now: START + 40_000 })?.text).toBe('Background work: 1 task · 00:30');
 });
 
-test('a workflow run without phases or a known name reads as its agents under its first description', () => {
-  const tasks = [task({ runId: 'wf', description: 'Check the API', started: 0 }), task({ runId: 'wf', description: 'Check the UI', started: 1 })];
-  expect(activityLine(activity(tasks), { now: START + 5_000, workflowNames: new Map() })?.text).toBe('Workflow Check the API: 2 agents');
+test('during a turn a foreground subagent is the turn\'s own; once the turn ends, any task still running is background work', () => {
+  const options = { now: START + 30_000 };
+  const foreground = task({ backgrounded: false, started: 0, tokens: 9_000 });
+  expect(activityLine(activity([foreground], 'working'), options)).toBeNull();
+  expect(activityLine(activity([foreground, task({ started: 10 })], 'working'), options)).toEqual({ text: 'Background work: 1 task · 00:20', running: 1 });
+  expect(activityLine(activity([foreground], 'background'), options)).toEqual({ text: 'Background work: 1 task · 9.0k tokens · 00:30', running: 1 });
 });
 
-test('a foreground subagent is not background work: the transcript shows it and the composer stops it', () => {
-  const options = { now: START + 30_000, workflowNames: new Map() };
-  expect(activityLine(activity([task({ backgrounded: false })]), options)).toBeNull();
-  expect(activityLine(activity([task({ backgrounded: false, started: 0, tokens: 9_000 }), task({ started: 10 })]), options)).toEqual({ text: 'Background work: 1 task · 00:20', running: 1 });
-  expect(activityLine(activity([task({ runId: 'wf', backgrounded: false }), task({ started: 10 })]), options)?.text).toBe('Background work: 1 task · 00:20');
+test('the Panels menu counts the same background tasks the line does', () => {
+  const foreground = task({ backgrounded: false });
+  const background = task();
+  expect(backgroundTasks(activity([foreground, background, task({ status: 'completed', ended: 3 })], 'working'))).toEqual([background]);
+  expect(backgroundTasks(activity([foreground, background], 'background'))).toEqual([foreground, background]);
+  expect(backgroundTasks(null)).toEqual([]);
 });
 
 test('the activity line is absent when nothing runs', () => {
-  expect(activityLine(activity([task({ status: 'completed', ended: 3 })]), { now: START, workflowNames: new Map() })).toBeNull();
-  expect(activityLine(null, { now: START, workflowNames: new Map() })).toBeNull();
+  expect(activityLine(activity([task({ status: 'completed', ended: 3 })]), { now: START })).toBeNull();
+  expect(activityLine(null, { now: START })).toBeNull();
 });
 
 test('a read of the activity keeps a newer snapshot that arrived meanwhile, and replaces an older one', () => {
@@ -164,21 +154,3 @@ test('tokens and elapsed time read compactly', () => {
   expect(formatElapsed(3_849_000)).toBe('1:04:09');
 });
 
-test('a workflow name comes from its meta, else its script path, and survives a cut-off head', () => {
-  expect(parseWorkflowName('Workflow {"script":"export const meta = { name: \'review-changes\', description: \'x\' }"}\n...')).toBe('review-changes');
-  expect(parseWorkflowName('Workflow {"scriptPath":"/a/b/plan-review.js"}\nStarted')).toBe('plan-review');
-  expect(parseWorkflowName('Bash {"command":"ls"}\nfile.txt')).toBeNull();
-  expect(parseWorkflowName('Workflow {"script":"export const meta = { name: \'review-changes\', descr')).toBe('review-changes');
-});
-
-test('a workflow name is joined to its run by the tool call id, then the run id in a message, then the single pair', () => {
-  const wf = (runId, toolUseId = null) => groupActivity(activity([task({ runId, toolUseId })])).runs[0];
-  const byCall = wf('wf_1', 'toolu_wf');
-  const tools = [{ callId: 'toolu_wf', name: 'Workflow', preview: 'Workflow {"script":"export const meta = { name: \'by-call\'' }];
-  const message = (id, text) => ({ id, runId: 'run', kind: 'tool', text, status: 'complete' });
-  const byRunId = message('m1', 'Workflow {"script":"export const meta = { name: \'by-run-id\' }"}\nStarted workflow run wf_2');
-  expect(workflowNames([byRunId], tools, [byCall, wf('wf_2')])).toEqual(new Map([['wf_1', 'by-call'], ['wf_2', 'by-run-id']]));
-  const single = message('m2', 'Workflow {"scriptPath":"/w/single.js"}\nStarted');
-  expect(workflowNames([single], [], [wf('wf_3')])).toEqual(new Map([['wf_3', 'single']]));
-  expect(workflowNames([single, message('m3', 'Workflow {"scriptPath":"/w/other.js"}\nStarted')], [], [wf('wf_4')])).toEqual(new Map());
-});

@@ -14,9 +14,11 @@
 // as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, "ask-user
 // <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
 // that question back <ms> later, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
-// and says whether it was approved or sent back, and anything else just answers in prose. A second control response to
-// one request, or one to a request it took back, makes the fixture exit 70. The other scenarios are described where they
-// are played.
+// and says whether it was approved or sent back, "workflow <name> <ms>" starts a workflow named <name> as one background
+// task (task_type local_workflow, no is_backgrounded field) that reports 1.2M tokens halfway through <ms>, completes
+// after it unless stop_task ends it first, and is reported a moment later in a turn of its own ("Workflow <name> done."),
+// and anything else just answers in prose. A second control response to one request, or one to a request it took back,
+// makes the fixture exit 70. The other scenarios are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
 // --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
@@ -110,6 +112,8 @@ const inBackground = (fn, ms, taskId = null) => {
   backgroundWork.add(timer);
   runningTasks.get(taskId)?.timers.add(timer);
 };
+/** How long after a workflow completes the turn reporting it begins: the real binary begins it a moment later. */
+const WORKFLOW_REPORT_DELAY_MS = 300;
 /** stop_task: a running task is stopped once the request is answered, as Claude Code 2.1 does; one that ignores it is only answered. */
 const stopTask = (requestId, taskId) => {
   if (SILENT_STOP_TASK) return;
@@ -412,7 +416,7 @@ async function turn(prompt, images = [], uuid = null) {
   } else if ((match = prompt.match(/^background (\d+) (.+)$/s))) {
     say("Background work started.");
     const [, delay, text] = match;
-    out({ type: "system", subtype: "task_started", task_id: "fake-task", description: "background work", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "fake-task", run_id: "fake-task-run", task_type: "local_bash", description: "background work", is_backgrounded: true, session_id: sessionId });
     inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
   } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
@@ -425,7 +429,7 @@ async function turn(prompt, images = [], uuid = null) {
     for (let i = 1; i <= count; i++) {
       const taskId = `task-${i}`;
       startTask(taskId);
-      out({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `toolu_task_${i}`, description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
+      out({ type: "system", subtype: "task_started", task_id: taskId, run_id: `${taskId}-run`, tool_use_id: `toolu_task_${i}`, task_type: "local_bash", description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
       inBackground(() => {
         out({ type: "system", subtype: "task_updated", task_id: taskId, patch: { workflow_phase: "review", description: `task ${i}, reviewing` }, session_id: sessionId });
         out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
@@ -440,8 +444,22 @@ async function turn(prompt, images = [], uuid = null) {
     say(`Started ${count} stubborn tasks.`);
     for (let i = 1; i <= count; i++) {
       startTask(`task-${i}`, { stubborn: true });
-      out({ type: "system", subtype: "task_started", task_id: `task-${i}`, tool_use_id: `toolu_task_${i}`, description: `stubborn task ${i}`, is_backgrounded: true, session_id: sessionId });
+      out({ type: "system", subtype: "task_started", task_id: `task-${i}`, run_id: `task-${i}-run`, tool_use_id: `toolu_task_${i}`, task_type: "local_bash", description: `stubborn task ${i}`, is_backgrounded: true, session_id: sessionId });
     }
+  } else if ((match = prompt.match(/^workflow (\S+) (\d+)$/))) {
+    // A workflow named <name>, as Claude Code 2.1.304 reports one: ONE task of type local_workflow carrying its name,
+    // with a run id of its own and no is_backgrounded field (the binary sets that only for agents and commands). It
+    // reports its tokens halfway through <ms> and completes after it, on timers of its own so that stop_task ends it;
+    // a moment after it completes, a turn of its own reports it, as "background" does.
+    const [name, ms] = [match[1], Number(match[2])];
+    say("Workflow started.");
+    startTask("wf-1");
+    out({ type: "system", subtype: "task_started", task_id: "wf-1", run_id: "wf-1-run", tool_use_id: "toolu_wf_1", task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
+    inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "wf-1", usage: { total_tokens: 1200000, tool_uses: 12, duration_ms: ms / 2 }, session_id: sessionId }), ms / 2, "wf-1");
+    inBackground(() => {
+      endTask("wf-1", "completed");
+      inBackground(() => enqueue(() => selfStartedTurn(`Workflow ${name} done.`, [])), WORKFLOW_REPORT_DELAY_MS);
+    }, ms, "wf-1");
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });

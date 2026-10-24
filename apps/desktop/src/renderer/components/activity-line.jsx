@@ -6,15 +6,14 @@ import { activityLine } from '../activity.js';
  * Activity panel, and one button stops all of it. Nothing is shown while no background task runs.
  * @param {{
  *   activity: import('../activity.js').Activity | null,
- *   workflowNames: Map<string, string>,
  *   onStop: () => void,
  *   onOpenPanel: () => void,
  *   stopping: boolean,
  * }} props
  */
-export function ActivityLine({ activity, workflowNames, onStop, onOpenPanel, stopping }) {
+export function ActivityLine({ activity, onStop, onOpenPanel, stopping }) {
   const [, tick] = useReducer((/** @type {number} */ count) => count + 1, 0);
-  const line = activityLine(activity, { now: Date.now(), workflowNames });
+  const line = activityLine(activity, { now: Date.now() });
   const running = line !== null;
   // The elapsed time moves once a second while something runs, and nothing ticks otherwise.
   useEffect(() => {

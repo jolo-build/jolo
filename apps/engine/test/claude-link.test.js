@@ -471,29 +471,96 @@ test('stopping a run while its message waits behind a turn drops the message wit
   await registry.closeAll();
 });
 
+/** A link to a stub process that runs `script` (Bun, with `out(message)` writing one line) once its first input arrives. */
+const openStub = (registry, sessionId, script) => registry.open({
+  sessionId, workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(),
+  prepare: () => ({ argv: [process.execPath, '--eval', `const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n'); process.stdin.once('data', () => { ${script} }); setInterval(() => {}, 1000);`], env: { PATH: process.env.PATH } }),
+});
+
 test('background work that has just finished counts as work until the turn reporting it begins; a foreground task does not', async () => {
-  // A process that runs a background task and a foreground one; each finishes, and the background one is reported later.
+  // A process that runs a foreground task inside a run's turn and then a background one; each finishes, and the
+  // background one is reported later.
   const script = `
-    const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
-    process.stdin.once('data', () => {
       out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'init', user_message_uuids: [] });
       out({ type: 'system', subtype: 'task_started', task_id: 'fg', tool_use_id: 'call-fg', is_backgrounded: false });
       out({ type: 'system', subtype: 'task_notification', task_id: 'fg', tool_use_id: 'call-fg', status: 'completed' });
+      out({ type: 'result', num_turns: 1, result: 'done' });
       setTimeout(() => out({ type: 'system', subtype: 'task_started', task_id: 'bg', tool_use_id: 'call-bg', is_backgrounded: true }), 300);
       setTimeout(() => out({ type: 'system', subtype: 'task_notification', task_id: 'bg', tool_use_id: 'call-bg', status: 'completed' }), 400);
       setTimeout(() => { out({ type: 'system', subtype: 'init', user_message_uuids: [] }); out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'it finished' }] } }); out({ type: 'result', num_turns: 1, result: 'it finished' }); }, 1400);
-    });
-    setInterval(() => {}, 1000);
   `;
   const registry = createHostedLinks({ log, onUnsolicited: () => false });
-  const link = registry.open({ sessionId: 'report', workspaceId: 'workspace', agentId: 'test', identity: 'stub', cwd: process.cwd(), prepare: () => ({ argv: [process.execPath, '--eval', script], env: { PATH: process.env.PATH } }) });
+  const link = openStub(registry, 'report', script);
+  const held = link.beginTurn({ signal: new AbortController().signal, handle: (message) => message.type === 'result' });
   link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
-  await sleep(200);
+  await held.done;
+  await sleep(150);
   expect(link.working).toBe(false); // a foreground task that finished is reported in the turn that ran it
   await sleep(500); // the background task finished at 400 ms; its report begins at 1400 ms
   expect(link.working).toBe(true);
   await waitFor(() => link.pending, 3000); // the report is a turn waiting for a run
   expect(link.working).toBe(true);
+  await registry.closeAll();
+});
+
+test('a task that ends while no turn runs is followed by Claude\'s report, whatever its flag', async () => {
+  // A task flagged foreground (an MCP call the binary moved off the turn, say) ends with the main thread idle.
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'mcp', tool_use_id: 'call-mcp', is_backgrounded: false });
+      setTimeout(() => out({ type: 'system', subtype: 'task_notification', task_id: 'mcp', tool_use_id: 'call-mcp', status: 'completed' }), 100);
+      setTimeout(() => { out({ type: 'system', subtype: 'init', user_message_uuids: [] }); out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'it finished' }] } }); out({ type: 'result', num_turns: 1, result: 'it finished' }); }, 1200);
+  `;
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = openStub(registry, 'idle-end', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks[0]?.status === 'completed');
+  expect(link.activity.state).toBe('idle');
+  expect(link.pending).toBe(false);
+  expect(link.working).toBe(true); // its report is due
+  await waitFor(() => link.pending, 3000);
+  await registry.closeAll();
+});
+
+test('a task the binary moves to the background later is recorded as background work', async () => {
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'init', user_message_uuids: [] });
+      out({ type: 'system', subtype: 'task_started', task_id: 'moved', tool_use_id: 'call-moved', is_backgrounded: false });
+      out({ type: 'system', subtype: 'task_started', task_id: 'kept', tool_use_id: 'call-kept', is_backgrounded: false });
+      out({ type: 'system', subtype: 'task_updated', task_id: 'moved', patch: { is_backgrounded: true } });
+      out({ type: 'system', subtype: 'task_updated', task_id: 'kept', patch: { is_backgrounded: 'yes' } });
+      out({ type: 'result', num_turns: 1, result: 'done' });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = openStub(registry, 'moved', script);
+  const held = link.beginTurn({ signal: new AbortController().signal, handle: (message) => message.type === 'result' });
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await held.done;
+  expect(link.activity.tasks.map(t => [t.taskId, t.backgrounded])).toEqual([['moved', true], ['kept', false]]); // a flag that is not a boolean leaves it
+  await registry.closeAll();
+});
+
+test('a workflow is one background task with its type and name, and is work until the turn reporting it begins', async () => {
+  // The fixture's `workflow x 1500` reports a workflow as Claude Code 2.1.304 does: one local_workflow task carrying its
+  // name and a run id of its own, with no is_backgrounded field; a moment after it completes, a turn reports it.
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = open(registry);
+  expect((await turn(link, 'workflow x 1500', { init: true })).text).toBe('Workflow started.');
+  await waitFor(() => link.activity.tasks.length === 1);
+  expect(link.activity.tasks[0]).toMatchObject({ taskId: 'wf-1', runId: 'wf-1-run', toolUseId: 'toolu_wf_1', taskType: 'local_workflow', workflowName: 'x', description: 'Workflow x', backgrounded: true, status: 'running' });
+  expect(link.activity.state).toBe('background');
+  await waitFor(() => link.activity.tasks[0].status === 'completed', 4000);
+  expect(link.activity.tasks[0].usage.totalTokens).toBe(1_200_000);
+  // Completed, and its report has not begun: the process keeps its work until it does.
+  for (const until = Date.now() + 3000; !link.pending; await sleep(10)) {
+    expect(link.working).toBe(true);
+    if (Date.now() > until) throw new Error('the report never began');
+  }
+  const seen = [];
+  await link.beginTurn({ signal: new AbortController().signal, handle: (message) => { seen.push(message); return message.type === 'result'; } }).done;
+  expect(seen.filter((m) => m.type === 'assistant').flatMap((m) => m.message.content).map((b) => b.text)).toEqual(['Workflow x done.']);
   await registry.closeAll();
 });
 
@@ -503,7 +570,7 @@ test('the link keeps a record of each background task with its usage and reports
   const link = open(registry);
   await turn(link, 'tasks 2 300', { init: true });
   await waitFor(() => link.activity.state === 'background');
-  expect(link.activity.tasks.map(t => [t.taskId, t.status, t.backgrounded])).toEqual([['task-1', 'running', true], ['task-2', 'running', true]]);
+  expect(link.activity.tasks.map(t => [t.taskId, t.status, t.backgrounded, t.runId, t.taskType, t.workflowName])).toEqual([['task-1', 'running', true, 'task-1-run', 'local_bash', null], ['task-2', 'running', true, 'task-2-run', 'local_bash', null]]);
   await waitFor(() => link.activity.tasks.every(t => t.usage.totalTokens !== null));
   expect(link.activity.tasks[1].usage).toEqual({ totalTokens: 2000, toolUses: 2, durationMs: 150 });
   await waitFor(() => link.activity.tasks.every(t => t.phase !== null));
@@ -565,7 +632,7 @@ test('what Claude says about a task is bounded and of the right type, and a noti
   await turn(link, 'tasks-malformed', { init: true });
   const [odd, long] = link.activity.tasks;
   expect(link.activity.tasks.map(t => t.taskId)).toEqual(['odd', 'long']);
-  expect(odd).toMatchObject({ description: '42', runId: '7', subagentType: null, usage: { totalTokens: null, toolUses: 2, durationMs: null } });
+  expect(odd).toMatchObject({ description: '42', runId: '7', subagentType: null, taskType: null, workflowName: null, usage: { totalTokens: null, toolUses: 2, durationMs: null } });
   expect(odd.toolUseId).toHaveLength(TASK_ID_MAX);
   expect(long.description).toBe('d'.repeat(TASK_TEXT_MAX)); // the update's description was not text, so it is kept
   expect(long.phase).toBe('p'.repeat(TASK_TEXT_MAX));

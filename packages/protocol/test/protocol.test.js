@@ -82,6 +82,15 @@ describe("schemas", () => {
       { runId: 'r'.repeat(TASK_ID_MAX + 1) }, { toolUseId: 'u'.repeat(TASK_ID_MAX + 1) }, { subagentType: 's'.repeat(TASK_ID_MAX + 1) }, { description: 42 }]) expect(valid(patch)).toBe(false);
     for (const count of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2]) expect(valid({ usage: { ...task.usage, totalTokens: count } })).toBe(false);
   });
+  test("a task record carries Claude's task type and a workflow's name, which an older payload lacks", () => {
+    const task = { taskId: 'wf-1', runId: 'wf-1-run', toolUseId: null, description: 'Workflow review', subagentType: null, phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null } };
+    expect(TaskRecordSchema.parse({ ...task, taskType: 'local_workflow', workflowName: 'review' })).toMatchObject({ taskType: 'local_workflow', workflowName: 'review' });
+    expect(TaskRecordSchema.parse({ ...task, taskType: null, workflowName: null })).toMatchObject({ taskType: null, workflowName: null });
+    expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before them
+    expect(TaskRecordSchema.safeParse({ ...task, taskType: 't'.repeat(TASK_ID_MAX + 1) }).success).toBe(false);
+    expect(TaskRecordSchema.safeParse({ ...task, workflowName: 'w'.repeat(TASK_TEXT_MAX + 1) }).success).toBe(false);
+    expect(TaskRecordSchema.safeParse({ ...task, taskType: 7 }).success).toBe(false);
+  });
   test("a dialog's tool and the input its event carries are bounded; the record keeps any input", () => {
     const at = new Date().toISOString();
     const dialog = { id: 'dlg_1', sessionId: 's1', runId: 'r1', requestId: 'req-1', tool: 'AskUserQuestion', toolUseId: null, input: { big: 'x'.repeat(DIALOG_INPUT_EVENT_MAX) }, response: null, state: 'requested', createdAt: at, resolvedAt: null };

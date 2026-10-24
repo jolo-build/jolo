@@ -5,7 +5,9 @@ import { selectPanel } from './panel-controls.js';
 
 /**
  * Claude's background work and its questions to the person, against the fake Claude: two background tasks are listed
- * in the Activity panel and stopped from it, then an AskUserQuestion and an ExitPlanMode are answered from dialog cards.
+ * in the Activity panel and stopped from it, then an AskUserQuestion and an ExitPlanMode are answered from dialog cards,
+ * then two tasks that ignore Stop background work are ended by Force stop (closing the process after a confirmation),
+ * and a workflow names the activity line, shows as one card, and is stopped.
  */
 export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor, report, results }) {
   const send = async value => {
@@ -21,6 +23,7 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   const completed = label => waitFor("window.__joloSmoke.state().runState === 'completed'", label, 30_000);
   const button = (scope, text) => `[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find(item => item.textContent === ${JSON.stringify(text)})`;
   const rows = "[...document.querySelectorAll('.activity-panel .task-row')]";
+  const line = "document.querySelector('.activity-line .activity-line-text')?.textContent";
 
   await evaluate("window.__joloSmoke.pickAnswerer('claude')");
   await waitFor("window.__joloSmoke.state().answerer === 'Claude Code'", 'composer shows Claude Code as the answerer');
@@ -55,5 +58,34 @@ export async function runBackgroundWorkSmoke({ window, bridge, evaluate, waitFor
   await waitFor("!document.querySelector('dialog.dialog-modal[open]')", 'the plan card closed');
   await completed('the plan turn completed');
 
-  report.checks.push('background work is listed and stopped from the Activity panel; AskUserQuestion and ExitPlanMode are answered from dialog cards');
+  // Tasks that ignore stop_task: the stop leaves them running and offers Force stop, which closes Claude's process after a
+  // confirmation; the tasks end with it and read failed.
+  await send('tasks-stubborn 2');
+  await waitFor(`${line}?.includes('Background work: 2 tasks')`, 'the activity line counts two stubborn tasks', 20_000);
+  await completed('the turn that started the stubborn tasks completed');
+  await selectPanel(evaluate, waitFor, 'Activity');
+  await waitFor(`${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'running')`, 'the Activity panel lists both stubborn tasks running');
+  await evaluate(`${button('.activity-line', 'Stop background work')}.click()`);
+  const forceStop = button('.activity-panel .panel-note', 'Force stop');
+  await waitFor(`document.querySelector('.activity-panel .panel-note')?.textContent.includes('Some tasks did not stop') && Boolean(${forceStop})`, 'a stop the tasks ignored offers Force stop', 20_000);
+  await evaluate(`${forceStop}.click()`);
+  const confirm = `[...document.querySelectorAll('dialog.modal[open]')].find(item => item.getAttribute('aria-label') === ${JSON.stringify("Close Claude's process?")})`;
+  await waitFor(`Boolean(${confirm}) && [...${confirm}.querySelectorAll('button')].some(item => item.textContent === 'Close process')`, 'Force stop asks before closing the process');
+  await screenshot('force-stop.png');
+  await evaluate(`[...${confirm}.querySelectorAll('button')].find(item => item.textContent === 'Close process').click()`);
+  await waitFor(`!document.querySelector('.activity-line') && ${rows}.length === 2 && ${rows}.every(row => row.dataset.state === 'failed' && row.querySelector('.activity-task-meta').textContent.includes('failed'))`, 'closing the process ended both tasks, which read failed', 20_000);
+  await waitFor('!document.querySelector("dialog.modal[open]")', 'the confirmation closed');
+
+  // A workflow is one task: it names the line, shows as one card titled with its name, and Stop background work ends it.
+  await send('workflow demo 20000');
+  await waitFor(`${line}?.startsWith('Workflow demo · ')`, 'the activity line names the workflow', 20_000);
+  await completed('the turn that started the workflow completed');
+  await selectPanel(evaluate, waitFor, 'Activity');
+  const card = "document.querySelector('.activity-panel .workflow-card')";
+  await waitFor(`document.querySelectorAll('.activity-panel .workflow-card').length === 1 && ${card}.querySelector('.workflow-title').textContent === 'demo' && ${card}.querySelector('.workflow-meta').textContent.startsWith('Workflow · running')`, 'the Activity panel shows one workflow card titled demo');
+  await screenshot('workflow.png');
+  await evaluate(`${button('.activity-panel .activity-heading', 'Stop background work')}.click()`);
+  await waitFor(`!document.querySelector('.activity-line') && ${card}?.dataset.state === 'stopped' && ${card}.querySelector('.workflow-meta').textContent.startsWith('Workflow · stopped') && !${card}.querySelector('button')`, 'Stop background work ended the workflow', 20_000);
+
+  report.checks.push('background work is listed and stopped from the Activity panel; AskUserQuestion and ExitPlanMode are answered from dialog cards; tasks that ignore Stop background work are ended by Force stop after the Close process confirmation and read failed; a workflow names the activity line, shows as one card titled with its name, and Stop background work ends it');
 }

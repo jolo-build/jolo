@@ -1515,6 +1515,20 @@ describe('A delegated Claude child', () => {
     } finally { await client.call('run.cancel', { runId: parent.id }); }
   }, 30_000);
 
+  test('a delegated child running a workflow, which the binary does not flag as backgrounded, is done only after its report', async () => {
+    const { client, events, parent } = await bootWithParent();
+    try {
+      const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'workflow child', prompt: 'workflow x 1500', requestId: 'c-wf' } });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered' });
+      const early = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id } });
+      expect(early.delegation).toMatchObject({ done: false, activity: 'background', output: 'Workflow started.' });
+      const late = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(late.delegation).toMatchObject({ done: true, partial: false, output: 'Workflow x done.' });
+      const report = events.find(e => e.type === 'run.state' && e.sessionId === delegation.sessionId && e.runId !== delegation.runId && e.payload.state === 'completed');
+      expect(report).toBeDefined(); // the report ran as a run of its own, and completed before the child was done
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
+  }, 30_000);
+
   /** A child that answered and left two background tasks running, which only stop_task ends (its Stop spares them). */
   const childInBackground = async ({ client, events, parent }, requestId) => {
     const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'bg child', prompt: 'tasks 2 20000', requestId } });

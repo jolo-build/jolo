@@ -265,6 +265,49 @@ test('a finished task says nothing its title already says', async () => {
   } finally { f.service.dispose(); }
 });
 
+test('a run that answered while its process still runs background work is not announced as done', async () => {
+  /** What `session.activity` answers for the conversation, by test step; a throw stands for an engine that cannot say. */
+  let activity = /** @type {any} */ ({ state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() });
+  const asked = [];
+  const f = attentionFixture({ focused: false, read: async (method, params) => {
+    if (method === 'board.list') return { projects: [f.row] };
+    if (method === 'session.activity') { asked.push(params); if (activity instanceof Error) throw activity; return { activity }; }
+    return { pendingPermissions: [], pendingDialogs: [] };
+  } });
+  try {
+    Object.assign(f.row, { session: { id: 's', title: 'look around' } });
+    const completed = { type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } };
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(asked).toEqual([{ sessionId: 's' }]);
+    expect(f.notifications[0].options).toMatchObject({ title: 'repo · look around: answered · background work running', silent: true });
+    // Once its process is idle or answering again, or nothing says what it does, a finished run is done.
+    for (const [state, title] of [['idle', 'repo · look around: done'], ['working', 'repo · look around: done']]) {
+      activity = { ...activity, state };
+      f.service.onEvent(completed);
+      await Bun.sleep(1);
+      expect(f.notifications.at(-1).options.title).toBe(title);
+    }
+    activity = null; // no process
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(f.notifications.at(-1).options.title).toBe('repo · look around: done');
+    activity = new Error('unknown method');
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(f.notifications.at(-1).options.title).toBe('repo · look around: done');
+    expect(f.notifications).toHaveLength(5);
+  } finally { f.service.dispose(); }
+});
+
+test('the answered-with-background-work notice is muted in the app', async () => {
+  const f = attentionFixture({ read: async method => method === 'board.list' ? { projects: [f.row] } : method === 'session.activity' ? { activity: { state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() } } : { pendingPermissions: [], pendingDialogs: [] } });
+  try {
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } });
+    await Bun.sleep(1);
+    expect(f.notices).toMatchObject([{ title: 'repo: answered · background work running', tone: 'muted' }]);
+  } finally { f.service.dispose(); }
+});
 
 test('browser uses native isolated mouse zoom and bounded keyboard shortcuts', () => {
   const contents = new EventEmitter();

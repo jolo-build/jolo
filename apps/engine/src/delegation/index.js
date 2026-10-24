@@ -11,8 +11,12 @@ export const MAX_ACTIVE = 4;
  */
 export const SETTLE_RECHECK_MS = 1_000;
 const ended = run => !run || TERMINAL_RUN_STATES.includes(run.state) || run.state === 'paused';
-/** A child run in one of these waits on the person: its parent has to say so, and send them to it. */
-const ASKING_STATES = ['awaiting_permission', 'paused'];
+/**
+ * Whether a child's conversation waits on the person, so its parent has to say so and send them to it: a run asks for a
+ * permission, or its newest run paused for them. A paused run that a later prompt superseded is over: nothing resumes it.
+ * @param {{ state: string }[]} runs the conversation's runs, oldest first
+ */
+const waitsOnPerson = runs => runs.some(r => r.state === 'awaiting_permission') || runs.at(-1)?.state === 'paused';
 /** A parent run that ends in one of these stops its children, and its own waits on them. */
 const STOPPED_STATES = ['cancelled', 'failed', 'interrupted', 'paused'];
 
@@ -87,22 +91,26 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     return null;
   }
   /**
-   * Done: every run of the child's conversation has ended, none of them paused for the person, and its process (if one
-   * is running) has nothing left to do: no turn, no background work, no report of finished work about to begin.
+   * Done: every run of the child's conversation has ended, its newest not paused for the person (an older paused run a
+   * later prompt superseded is over), and its process (if one is running) has nothing left to do: no turn, no background
+   * work, no report of finished work about to begin.
    */
   function isDone(run, link) {
-    const over = r => !r || TERMINAL_RUN_STATES.includes(r.state);
-    return over(run) && (!run || (storage.listRunsForSession(run.sessionId).every(over) && !link?.working));
+    if (!run) return true;
+    const all = storage.listRunsForSession(run.sessionId), newest = all.at(-1);
+    const over = r => !r || TERMINAL_RUN_STATES.includes(r.state) || (r.state === 'paused' && r.id !== newest?.id);
+    return over(run) && all.every(over) && !link?.working;
   }
   /** `wakeReason` is why the wait of a status call ended; none when it made no wait. */
   function view(row, includeOutput = false, wakeReason = null) {
     const run = storage.getRun(row.childRunId), session = run && storage.getSession(run.sessionId);
     const link = run ? links.get(run.sessionId) : null;
-    // The answer goes last: a tool result shown cut short still says the state, why the wait ended, and whether it is done.
+    // The answer goes last, after a failure's text, which has no bound: a tool result shown cut short (600 characters) still
+    // says the state, why the wait ended, the activity, and whether it is done.
     const result = { id: row.id, parentRunId: row.parentRunId, runId: row.childRunId, sessionId: run?.sessionId ?? '',
       title: session?.title ?? 'Deleted task', modelAlias: row.modelAlias, state: run?.state ?? 'interrupted',
-      ...(wakeReason ? { wakeReason } : {}), failure: run?.failure ?? null, execution: run?.execution ?? null, createdAt: row.createdAt,
-      activity: link?.activity.state ?? null, done: isDone(run, link), partial: false, output: '', truncated: false };
+      ...(wakeReason ? { wakeReason } : {}), execution: run?.execution ?? null, createdAt: row.createdAt,
+      activity: link?.activity.state ?? null, done: isDone(run, link), partial: false, failure: run?.failure ?? null, output: '', truncated: false };
     // The final text is the child result; tool transcripts remain in the child's own conversation.
     const answer = includeOutput && run ? latestAnswer(run.sessionId) : null;
     const artifact = answer && storage.getArtifact(answer.message.artifactId);
@@ -222,11 +230,11 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
         const check = () => {
           clearTimeout(recheck);
           const link = links.get(child.sessionId), run = storage.getRun(child.id);
-          // Read the runs again: one that ended without a word (cancelled, failed) is done all the same, and any run of
-          // the child's conversation that waits on the person (asked before the wait began, or paused for them, a later
-          // continuation included) needs its parent to say so.
+          // Read the runs again: one that ended without a word (cancelled, failed) is done all the same, and a child's
+          // conversation that waits on the person (a run asked before the wait began, or its newest run paused for them,
+          // a later continuation included) needs its parent to say so.
           if (isDone(run, link)) return finish('done');
-          if (storage.listRunsForSession(child.sessionId).some(r => ASKING_STATES.includes(r.state))) return finish('asking');
+          if (waitsOnPerson(storage.listRunsForSession(child.sessionId))) return finish('asking');
           if ((latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish('answer');
           if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
         };

@@ -548,7 +548,7 @@ export const ScheduleSchema = z.object({
  * ones fill the room left, the newest kept.
  */
 export const TASK_HISTORY_LIMIT = 200;
-/** The most characters a task's description or phase keeps, and an id (its own, its run's, its tool call's) or subagent type. */
+/** The most characters a task's description, phase or workflow name keeps, and an id (its own, its run's, its tool call's), subagent type or task type. */
 export const TASK_TEXT_MAX = 500;
 export const TASK_ID_MAX = 128;
 const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
@@ -562,6 +562,9 @@ export const TaskRecordSchema = z.object({
   toolUseId: TaskId.nullable(),
   description: TaskText,
   subagentType: TaskId.nullable(),
+  // Claude's task_type (`local_workflow`, `local_bash`, `local_agent`, ...) and a workflow's name; an older engine sends neither.
+  taskType: TaskId.nullable().optional(),
+  workflowName: TaskText.nullable().optional(),
   phase: TaskText.nullable(),
   backgrounded: z.boolean(),
   status: z.enum(["running", "completed", "stopped", "failed"]),

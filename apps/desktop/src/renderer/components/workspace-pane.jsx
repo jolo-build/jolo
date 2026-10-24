@@ -19,7 +19,7 @@ import { PermissionNotice } from "./permission-notice.jsx";
 import { DialogModal, dialogSummary } from "./dialog-modal.jsx";
 import { ActivityLine } from "./activity-line.jsx";
 import { ActivityPanel, ForceStopDialog } from "./activity-panel.jsx";
-import { forceStopOffered, groupActivity, plural, runningTasks, stopFor, workflowNames } from "../activity.js";
+import { backgroundTasks, forceStopOffered, plural, runningTasks, stopFor } from "../activity.js";
 import { ChangesPanel } from "./changes-panel.jsx";
 import { Icon } from "./icon.jsx";
 import { ChecksPanel } from "./checks-panel.jsx";
@@ -219,11 +219,11 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const projectLabel = project?.standalone ? 'Chat' : project ? basename(project.rootPath) : 'Workspace';
   const newChat = () => reportError(async () => { await state.newChat(); setAnswerer(null); });
   const changedFiles = useMemo(() => uniqueChanges(changes), [changes]);
-  // The workflow runs' names, found in the transcript (D3); the projection changes in place, so they follow the activity.
-  const runNames = useMemo(() => workflowNames(projection?.ordered() ?? [], projection ? [...projection.tools.values()] : [], groupActivity(state.activity).runs), [projection, state.activity]);
   // `stopResult` is the shown conversation's last stop reply, or null; the Activity panel reads it for its force-stop.
   const { stopping, stopResult } = stopFor(stop, sessionId);
   const running = runningTasks(state.activity);
+  // What the Panels menu counts: the background work the activity line counts, never a foreground subagent of the turn.
+  const background = backgroundTasks(state.activity);
   // The force-stop confirmation stays only while the stop it was opened for still offers it: it goes when that stop's
   // tasks end on their own, and a later stop never reopens it.
   const confirmingForceStop = forceStop !== null && forceStop === stopResult && forceStopOffered(state.activity, stopResult);
@@ -484,7 +484,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
           </div>
           <div className="header-actions">
             {showSettings ? <button onClick={() => setShowSettings(false)} aria-label="Back to workspace"><Icon name="back" size={14} />Back to workspace</button> : <>
-            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules', 'activity'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null, activity: running.length ? plural(running.length, 'task') : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
+            <PanelMenu selected={context} panels={project?.standalone ? CONTEXT_PANELS.filter(([id]) => ['changes', 'browser', 'files', 'schedules', 'activity'].includes(id)) : CONTEXT_PANELS} disabled={!project} details={{ changes: changedFiles.length ? `${changedFiles.length} files` : null, plans: planCount ? `${planCount}${plansNeedingYou ? ' · needs you' : ''}` : null, schedules: activeSchedules ? `${activeSchedules} active` : null, checks: verification && verification.status !== 'not_run' ? verificationLabel(verification) : null, activity: background.length ? plural(background.length, 'task') : null }} onSelect={selectContext} onHide={() => setContext(null)} onOpenChange={setPanelMenuOpen}
               extra={[['x', 'Split right', 'splitRight', mac ? '⌘\\' : 'Ctrl+\\', !canSplit], ['y', 'Split below', 'splitBelow', mac ? '⇧⌘\\' : 'Ctrl+Shift+\\', !canSplit]]} onExtra={axis => onSplit(pane.id, axis)} />
             </>}
           </div>
@@ -514,7 +514,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             childTasks={family.children} parentTask={family.parent} onOpenTask={id => reportError(() => state.selectSession(id))} delegations={delegationsBySession} onShowChildTasks={loadDelegations} />}
           {needsFolder && <div className="resume-note" role="status"><span>This conversation belongs to {projectLabel}. Link its folder on this device to continue working.</span><button onClick={linkFolder}>Link local folder<Icon name="folderOpen" size={14} /></button></div>}
           <Conversation key={`conversation:${sessionId ?? project?.workspaceId ?? "empty"}`} agents={hostedAgents} projection={projection} sessionId={sessionId} history={state.history} standalone={Boolean(project?.standalone)} hasProject={Boolean(project)} onReview={path => { if (typeof path === 'string') setChangesFocus({ path, at: Date.now() }); selectContext("changes"); }} onOpenFolder={openFolder} assistantName={sessionAgentId ? agentName(sessionAgentId) : "Jolo"} assistantAgentId={sessionAgentId} providerModel={selectedModel?.model} delegations={delegations} onOpenSession={id => reportError(() => state.selectSession(id))} />
-          <ActivityLine activity={state.activity} workflowNames={runNames} stopping={stopping} onStop={stopBackground} onOpenPanel={() => selectContext('activity')} />
+          <ActivityLine activity={state.activity} stopping={stopping} onStop={stopBackground} onOpenPanel={() => selectContext('activity')} />
           <PermissionNotice request={pendingPermission} active={active} onReview={() => onFocus(pane.id)} />
           {!pendingPermission && <PermissionNotice request={pendingDialog && { summary: dialogSummary(pendingDialog) }} title="Claude has a question" icon="chat" active={active} onReview={() => onFocus(pane.id)} />}
           {lastRun?.state === "paused" && lastRun.pauseReason !== "permission" && <div className="resume-note"><span>{pauseDescription(lastRun)}</span><button onClick={() => reportError(() => state.resumeRun(lastRun.id))}>Resume task<Icon name="right" size={14} /></button></div>}
@@ -551,8 +551,8 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             </div>
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
             <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
-            <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} workflowNames={runNames} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
-              onStopTask={taskId => reportError(() => state.stopTask(taskId))} onStopRun={run => reportError(() => Promise.all(run.tasks.filter(task => task.status === 'running').map(task => state.stopTask(task.taskId))))} onForceStop={() => setForceStop(stopResult)} />}</div>
+            <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
+              onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)} />}</div>
           </div>
         </aside>
       </ContextSplit>

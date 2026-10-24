@@ -4,46 +4,48 @@ import { ActivityPanel, ForceStopDialog } from '../src/renderer/components/activ
 
 let ids = 0;
 /** @param {Record<string, any>} [options] @returns {import('../src/renderer/activity.js').TaskRecord} */
-const task = ({ status = 'running', runId = null, phase = null, subagentType = null, description = 'A task', tokens = null, startedAt = new Date().toISOString(), endedAt = status === 'running' ? null : new Date().toISOString() } = {}) => ({
-  taskId: `t${++ids}`, runId, toolUseId: null, description, subagentType, phase, backgrounded: true, status,
+const task = ({ status = 'running', runId = null, phase = null, subagentType = null, taskType = null, workflowName = null, description = 'A task', tokens = null, startedAt = new Date().toISOString(), endedAt = status === 'running' ? null : new Date().toISOString() } = {}) => ({
+  taskId: `t${++ids}`, runId, toolUseId: null, description, subagentType, taskType, workflowName, phase, backgrounded: true, status,
   startedAt, endedAt, usage: { totalTokens: tokens, toolUses: null, durationMs: null },
 });
+/** A workflow as Claude Code 2.1.304 reports one: one task of type local_workflow. @param {Record<string, any>} [options] */
+const workflow = (options = {}) => task({ taskType: 'local_workflow', ...options });
 /** @param {import('../src/renderer/activity.js').TaskRecord[]} tasks @returns {import('../src/renderer/activity.js').Activity} */
 const activity = (tasks, truncated = false) => ({ state: 'background', tasks, truncated, updatedAt: new Date().toISOString() });
 const noop = () => {};
 /** @param {import('../src/renderer/activity.js').Activity | null} value @param {Record<string, any>} [props] */
-const render = (value, { stopResult = null, workflowNames = new Map(), stopping = false } = {}) => renderToStaticMarkup(<ActivityPanel activity={value} workflowNames={workflowNames}
-  stopResult={stopResult} stopping={stopping} visible onStopAll={noop} onStopTask={noop} onStopRun={noop} onForceStop={noop} />);
+const render = (value, { stopResult = null, stopping = false } = {}) => renderToStaticMarkup(<ActivityPanel activity={value}
+  stopResult={stopResult} stopping={stopping} visible onStopAll={noop} onStopTask={noop} onForceStop={noop} />);
 const count = (/** @type {string} */ html, /** @type {RegExp} */ pattern) => html.match(pattern)?.length ?? 0;
 
-test('a workflow run of three agents in two phases is one card with its agents behind a disclosure', () => {
-  const run = [
-    task({ runId: 'run_1', phase: 'Plan', status: 'completed', tokens: 4000 }),
-    task({ runId: 'run_1', phase: 'Verify', tokens: 8400 }),
-    task({ runId: 'run_1', phase: 'Verify' }),
-  ];
-  const html = render(activity(run), { workflowNames: new Map([['run_1', 'api-plan-review']]) });
+test('a workflow is one card with its name, kind, status, elapsed time and tokens, and a Stop while it runs', () => {
+  const html = render(activity([workflow({ workflowName: 'api-plan-review', description: 'Workflow api-plan-review', runId: 'wf-1-run', tokens: 1_200_000 })]));
   expect(count(html, /class="workflow-card"/g)).toBe(1);
   expect(html).toContain('api-plan-review');
-  expect(html).toMatch(/Workflow · 3 agents · \d\d:\d\d · 12k tokens/);
-  expect(count(html, /data-status="/g)).toBe(2);
-  expect(html).toContain('data-status="done"');
-  expect(html).toContain('data-status="running"');
-  expect(html).toMatch(/<button[^>]*>Stop run<\/button>/);
-  expect(html).not.toContain('Large');
-  expect(html).toMatch(/<details[^>]*>.*task-row.*<\/details>/s);
-  expect(count(html, /task-row/g)).toBe(3);
+  expect(html).toMatch(/Workflow · running · \d\d:\d\d · 1\.2M tokens/);
+  expect(count(html, /<button[^>]*>Stop<\/button>/g)).toBe(1);
+  // One task on the wire: no agent count, phase dots, Large badge, Stop run or agent rows.
+  for (const absent of ['Stop run', 'agent', 'Large', 'data-status=', 'task-row', '<details']) expect(html).not.toContain(absent);
 });
 
-test('a card falls back to its first task, badges a large run, and offers no Stop run once it ended', () => {
-  const agents = Array.from({ length: 26 }, () => task({ runId: 'run_2', description: 'Check a file', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:09:41.000Z' }));
-  const html = render(activity(agents));
-  expect(html).toContain('Check a file');
-  expect(html).toContain('Workflow · 26 agents · 09:41<');
-  expect(html).toContain('Large');
-  expect(html).not.toContain('Stop run');
+test('a finished workflow card falls back to its description, freezes its elapsed time, and offers no Stop', () => {
+  const html = render(activity([workflow({ description: 'Workflow review', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:09:41.000Z' })]));
+  expect(html).toContain('Workflow review');
+  expect(html).toContain('Workflow · done · 09:41<');
+  expect(html).not.toMatch(/<button[^>]*>Stop<\/button>/);
   expect(html).not.toContain('tokens');
   expect(html).toContain('Nothing running');
+});
+
+test('workflow cards come running first and newest first, before the tasks', () => {
+  const html = render(activity([
+    workflow({ workflowName: 'finished', status: 'completed', startedAt: '2026-10-24T00:00:05.000Z', endedAt: '2026-10-24T00:00:09.000Z' }),
+    workflow({ workflowName: 'older', startedAt: '2026-10-24T00:00:01.000Z' }),
+    task({ description: 'A command', taskType: 'local_bash' }),
+    workflow({ workflowName: 'newer', startedAt: '2026-10-24T00:00:03.000Z' }),
+  ]));
+  const at = (/** @type {string} */ text) => html.indexOf(`>${text}<`);
+  expect([at('newer'), at('older'), at('finished'), at('A command')].every((index, i, all) => index >= 0 && (i === 0 || index > all[i - 1]))).toBe(true);
 });
 
 test('a standalone running task is a row with its kind, phase, status, and a Stop; a finished one reads done', () => {
@@ -52,10 +54,15 @@ test('a standalone running task is a row with its kind, phase, status, and a Sto
     task({ description: 'Run the tests', status: 'completed', startedAt: '2026-10-24T00:00:00.000Z', endedAt: '2026-10-24T00:02:05.000Z' }),
     task({ description: 'Lint', status: 'stopped' }),
     task({ description: 'Deploy', status: 'failed' }),
+    task({ description: 'Sleep for 60 seconds', runId: '0mvll0x40-1842e72b', taskType: 'local_bash', status: 'completed' }),
+    task({ description: 'Explore the repo', taskType: 'local_agent', status: 'completed' }),
   ]));
-  expect(count(html, /task-row/g)).toBe(4);
+  expect(count(html, /task-row/g)).toBe(6);
+  expect(html).not.toContain('workflow-card');
   expect(html).toContain('Watch the build');
   expect(html).toMatch(/Agent · Build · running · \d\d:\d\d · 950 tokens/);
+  expect(html).toMatch(/Command · done · \d\d:\d\d</);
+  expect(html).toMatch(/Agent · done · \d\d:\d\d</);
   expect(count(html, /<button[^>]*>Stop<\/button>/g)).toBe(1);
   expect(html).toContain('Run the tests');
   expect(html).toContain('Task · done · 02:05<');
@@ -108,9 +115,9 @@ test('a snapshot the engine cut short says older finished tasks are not listed',
   expect(render(activity([task()]))).not.toContain('Older finished tasks are not listed');
 });
 
-test('two hundred tasks across sixteen runs render in one static pass', () => {
-  const tasks = Array.from({ length: 200 }, (_, index) => task({ runId: `run_${index % 16}`, phase: `Phase ${index % 3}`, tokens: 1000, status: index % 5 ? 'running' : 'completed' }));
+test('two hundred tasks, sixteen of them workflows, render in one static pass', () => {
+  const tasks = Array.from({ length: 200 }, (_, index) => index < 16 ? workflow({ workflowName: `flow ${index}`, tokens: 1000 }) : task({ runId: `run_${index}`, phase: `Phase ${index % 3}`, tokens: 1000, status: index % 5 ? 'running' : 'completed' }));
   const html = render(activity(tasks));
   expect(count(html, /class="workflow-card"/g)).toBe(16);
-  expect(html.match(/task-row/g).length).toBe(200);
+  expect(html.match(/task-row/g).length).toBe(184);
 });

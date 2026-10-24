@@ -810,12 +810,6 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .workflow-head button { font-size: 11px; padding: 3px 9px; }
 .workflow-title { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-meta { min-width: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-card > details > summary { padding: 6px 10px; border-top: 1px solid var(--border); font-size: 11px; }
-.status-dots { display: flex; flex-wrap: wrap; gap: 3px; }
-.status-dots span { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--muted); }
-.status-dots span[data-status="running"] { background: var(--highlight); border-color: var(--highlight); }
-.status-dots span[data-status="done"] { background: var(--green); border-color: var(--green); }
-.status-dots span[data-status="failed"] { background: var(--red); border-color: var(--red); }
 .activity-tasks { list-style: none; margin: 0; padding: 0; }
 .activity-panel > .activity-tasks { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; }
 .activity-panel .task-row { display: grid; grid-template-columns: minmax(10ch, 1fr) minmax(0, max-content) auto; align-items: center; gap: 10px; padding: 6px 10px; border-top: 1px solid var(--border); }

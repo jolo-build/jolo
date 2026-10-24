@@ -29,6 +29,10 @@ function fixture({ holdChild = false, childOutcome = 'completed', settings: patc
         return { outcome: 'failed', failure: 'it broke' };
       }
       if (ctx.run.prompt === 'pause') return { outcome: 'paused' }; // a later run that paused for the person
+      if (ctx.run.prompt === 'answer again') { // a later run that answers and completes, as a prompt after a pause does
+        const message = ctx.startMessage('assistant', 'text'); ctx.appendText(message, 'Answered again.'); ctx.finishMessage(message, 'complete');
+        return { outcome: 'completed' };
+      }
       if (ctx.run.prompt === 'ask') { // a later run that asks the person and waits
         ctx.transition('awaiting_permission');
         await new Promise(resolve => { if (ctx.signal.aborted) resolve(null); else ctx.signal.addEventListener('abort', resolve, { once: true }); });
@@ -134,10 +138,11 @@ test('a child whose process still has background work is not done, and its outpu
     f.storage.appendEvent({ sessionId: delegation.sessionId, type: 'session.activity', payload: f.links.activities.get(delegation.sessionId) });
     const { delegation: done } = await waiting;
     expect(done).toMatchObject({ done: true, partial: false, wakeReason: 'done' });
-    // A tool display cut short still carries why the wait ended; the answer comes last.
+    // A tool display cut short still carries why the wait ended, the activity and whether it is done ahead of a failure's
+    // text, which has no bound; the answer comes last.
     const keys = Object.keys(done);
     expect(keys[keys.indexOf('state') + 1]).toBe('wakeReason');
-    expect(keys.slice(-2)).toEqual(['output', 'truncated']);
+    expect(keys.slice(keys.indexOf('activity'))).toEqual(['activity', 'done', 'partial', 'failure', 'output', 'truncated']);
   } finally { await f.close(); }
 });
 
@@ -226,6 +231,40 @@ test('a later run of the child that paused for the person ends a wait on the del
     const { delegation: seen } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(seen).toMatchObject({ state: 'completed', done: false, wakeReason: 'asking' });
+  } finally { await f.close(); }
+});
+
+/** A child that answered, paused for the person in a later run, and was then prompted again, which completed. */
+const pausedThenPrompted = async (f, requestId) => {
+  await f.select();
+  const { delegation } = await f.service.start(f.parent.id, { ...request, requestId });
+  await f.settled(delegation.runId);
+  const { run: paused } = f.runs.start({ sessionId: delegation.sessionId, requestId: `${requestId}-pause`, prompt: 'pause' });
+  expect((await f.settled(paused.id)).state).toBe('paused');
+  const { run: later } = f.runs.start({ sessionId: delegation.sessionId, requestId: `${requestId}-again`, prompt: 'answer again' });
+  expect((await f.settled(later.id)).state).toBe('completed');
+  return delegation;
+};
+
+test('a paused run a later prompt superseded no longer waits on the person: the child is done once its process is idle', async () => {
+  const f = fixture();
+  try {
+    const delegation = await pausedThenPrompted(f, 'r12');
+    f.links.activities.set(delegation.sessionId, activity('idle'));
+    const { delegation: seen } = await f.service.status(f.parent.id, { delegationId: delegation.id });
+    expect(seen).toMatchObject({ state: 'completed', activity: 'idle', done: true, partial: false, output: 'Answered again.' });
+  } finally { await f.close(); }
+});
+
+test('a wait on a child whose paused run was superseded is not answered at once with asking', async () => {
+  const f = fixture({ settings: { delegation: { maxWaitMs: 1000 } } });
+  try {
+    const delegation = await pausedThenPrompted(f, 'r13');
+    f.links.activities.set(delegation.sessionId, activity('background')); // still working, so only the cap ends the wait
+    const started = Date.now();
+    const { delegation: waited } = await f.service.status(f.parent.id, { delegationId: delegation.id, waitMs: 3000 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    expect(waited).toMatchObject({ done: false, wakeReason: 'timeout' });
   } finally { await f.close(); }
 });
 
