@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, backgroundTasks, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, plural, runningTasks, stopFor, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, phaseSquares, plural, runningTasks, stopFor, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
@@ -32,28 +32,45 @@ test('runningTasks keeps the running ones, foreground ones too, and reads nothin
   expect(runningTasks(null)).toEqual([]);
 });
 
-test('a workflow is one task of type local_workflow; the rest are tasks, whatever run ids they carry, running first and newest first', () => {
+test('the panel lists the running tasks, then the finished ones, each newest first, workflows among the rest whatever run ids they carry', () => {
   const oldDone = task({ status: 'completed', started: 1, ended: 2, runId: 'r1' });
-  const newDone = task({ status: 'completed', started: 5, ended: 6, runId: 'r2' });
+  const newDone = task({ status: 'stopped', started: 5, ended: 6, runId: 'r2' });
   const oldRunning = task({ started: 2, runId: 'r3' });
   const newRunning = task({ started: 4, runId: 'r4' });
-  const doneFlow = workflow({ status: 'completed', started: 0, ended: 9 });
+  const doneFlow = workflow({ status: 'failed', started: 0, ended: 9 });
   const oldFlow = workflow({ started: 1 });
   const newFlow = workflow({ started: 3 });
-  const { workflows, tasks } = groupActivity(activity([doneFlow, oldDone, oldFlow, oldRunning, newRunning, newFlow, newDone]));
-  expect(workflows).toEqual([newFlow, oldFlow, doneFlow]);
-  expect(tasks).toEqual([newRunning, oldRunning, newDone, oldDone]);
+  const { running, finished } = groupActivity(activity([doneFlow, oldDone, oldFlow, oldRunning, newRunning, newFlow, newDone]));
+  expect(running).toEqual([newRunning, newFlow, oldRunning, oldFlow]);
+  expect(finished).toEqual([newDone, oldDone, doneFlow]);
 });
 
 test('groupActivity of no activity is empty', () => {
-  expect(groupActivity(null)).toEqual({ workflows: [], tasks: [] });
+  expect(groupActivity(null)).toEqual({ running: [], finished: [] });
 });
 
 test('Review Focus 3: two hundred tasks, sixteen of them workflows, group in one pass', () => {
-  const tasks = Array.from({ length: 200 }, (_, index) => index < 16 ? workflow({ started: index }) : task({ runId: `run-${index}`, started: index, tokens: 1000 }));
+  const tasks = Array.from({ length: 200 }, (_, index) => index < 16 ? workflow({ started: index }) : task({ runId: `run-${index}`, started: index, tokens: 1000, status: index % 4 ? 'running' : 'completed', ended: index % 4 ? null : index }));
   const grouped = groupActivity(activity(tasks));
-  expect(grouped.workflows).toHaveLength(16);
-  expect(grouped.tasks).toHaveLength(184);
+  expect(grouped.running).toHaveLength(154);
+  expect(grouped.finished).toHaveLength(46);
+});
+
+test('Clear finished hides the finished tasks listed then, never one that runs again, ended again, or ended since', () => {
+  const done = task({ status: 'completed', started: 1, ended: 2 });
+  const stopped = workflow({ status: 'stopped', started: 2, ended: 3 });
+  const running = task({ started: 3 });
+  const cleared = clearFinished(activity([done, stopped, running]), {});
+  expect(cleared).toEqual({ [done.taskId]: at(2), [stopped.taskId]: at(3) }); // each with when it ended
+  expect(groupActivity(activity([done, stopped, running]), cleared)).toEqual({ running: [running], finished: [] });
+  const later = task({ status: 'failed', started: 4, ended: 5 });
+  const again = { ...done, status: /** @type {const} */ ('running'), endedAt: null };
+  expect(groupActivity(activity([again, stopped, running, later]), cleared)).toEqual({ running: [running, again], finished: [later] });
+  const endedAgain = { ...done, endedAt: at(8) };
+  expect(groupActivity(activity([endedAgain, stopped]), cleared)).toEqual({ running: [], finished: [endedAgain] });
+  // A later Clear finished keeps what the earlier one hid.
+  expect(clearFinished(activity([later]), cleared)).toEqual({ ...cleared, [later.taskId]: at(5) });
+  expect(clearFinished(null, cleared)).toEqual(cleared);
 });
 
 test("a task's kind comes from Claude's task type: a workflow, a command, an agent, else a task", () => {
@@ -68,7 +85,7 @@ test("a task's kind comes from Claude's task type: a workflow, a command, an age
 test('a background command as the real binary reports it, with a run id of its own, is a Command row, not a workflow', () => {
   const sleep = task({ runId: '0mvll0x40-1842e72b', taskType: 'local_bash', backgrounded: true, description: 'Sleep for 60 seconds', started: 0 });
   const grouped = groupActivity(activity([sleep]));
-  expect(grouped).toEqual({ workflows: [], tasks: [sleep] });
+  expect(grouped).toEqual({ running: [sleep], finished: [] });
   expect(taskKind(sleep)).toBe('Command');
   expect(activityLine(activity([sleep]), { now: START + 30_000 })).toEqual({ text: 'Background work: 1 task · 00:30', running: 1 });
 });
@@ -133,6 +150,22 @@ test('a token count of 0 is left out of the line: no agent or task has reported 
   const flow = workflow({ started: 10, tokens: 0, workflow: progress([phase('Say', { agents: 2, running: 2 })], null, 'Say: say:1') });
   expect(activityLine(activity([flow]), { now: START + 40_000 })?.text).toBe('Workflow demo: Say 0/2 · 00:30');
   expect(activityLine(activity([task({ started: 0, tokens: 0 }), task({ started: 10, tokens: 0 })]), { now: START + 30_000 })?.text).toBe('Background work: 2 tasks · 00:30');
+});
+
+test("a phase has a square per agent: done, running, failed, then pending (the report counts them, it does not order them)", () => {
+  expect(phaseSquares(phase('Read', { agents: 5, done: 5 }))).toEqual(['done', 'done', 'done', 'done', 'done']);
+  expect(phaseSquares(phase('Build', { agents: 5, done: 1, running: 1, failed: 1 }))).toEqual(['done', 'running', 'failed', 'pending', 'pending']);
+  expect(phaseSquares(phase('Ship'))).toEqual([]);
+  // Counts past the agents never make a negative number of pending ones.
+  expect(phaseSquares(phase('Odd', { agents: 1, done: 1, running: 1 }))).toEqual(['done', 'running']);
+});
+
+test("an agent still reported running on a workflow that ended takes the workflow's own end word", () => {
+  const working = phase('Say', { agents: 3, done: 1, running: 1 });
+  expect(phaseSquares(working, 'running')).toEqual(['done', 'running', 'pending']);
+  expect(phaseSquares(working, 'stopped')).toEqual(['done', 'stopped', 'pending']);
+  expect(phaseSquares(working, 'failed')).toEqual(['done', 'failed', 'pending']);
+  expect(phaseSquares(working, 'completed')).toEqual(['done', 'done', 'pending']);
 });
 
 test("a workflow's summary is known only once its progress reported its agents, and Large past the threshold", () => {

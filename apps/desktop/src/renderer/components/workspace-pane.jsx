@@ -120,6 +120,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
   const [answerer, setAnswerer] = useState(null); // null follows the current task; otherwise the agent id, or "jolo"
   const [stop, setStop] = useState(/** @type {import('../activity.js').StopState | null} */ (null)); // the last Stop background work, for the conversation that sent it
   const [forceStop, setForceStop] = useState(/** @type {import('../activity.js').StopResult | null} */ (null)); // the stop whose force-stop the person is confirming
+  const [clearedTasks, setClearedTasks] = useState(/** @type {import('../activity.js').ClearedTasks} */ ({})); // the finished tasks the Activity panel's Clear finished hid
   const { engine, project, sessions, sessionId, settings, error, projection, activeRun, pendingPermission, pendingDialog, changes, workspaces, workspaceId, workspace, agents, agentCatalog } = state;
   const panelScope = state.panelScope;
   const panelTabs = usePanelTabs(panelScope, (file, remaining) => {
@@ -552,7 +553,7 @@ export const WorkspacePane = memo(function WorkspacePane(/** @type {WorkspacePan
             <div className="tool-panel" id={`${pane.id}-plans-panel`} hidden={context !== "plans"}>{plansOpen && project && <PlanPane projectId={project.projectId} plans={state.plans} catalog={hostedAgents} call={state.call} refresh={state.refreshPlans} onOpenSession={(sessionId) => { state.selectSession(sessionId); setContext(null); }} />}</div>
             <div className="tool-panel" id={`${pane.id}-schedules-panel`} hidden={context !== "schedules"}>{schedulesOpen && project && <SchedulesPanel sessionId={sessionId} schedules={state.schedules} call={state.call} refresh={state.refreshSchedules} />}</div>
             <div className="tool-panel" id={`${pane.id}-activity-panel`} hidden={context !== "activity"}>{activityOpen && <ActivityPanel activity={state.activity} stopResult={stopResult} stopping={stopping} visible={visible && context === 'activity'} onStopAll={stopBackground}
-              onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)} />}</div>
+              cleared={clearedTasks} onClear={setClearedTasks} onStopTask={taskId => reportError(() => state.stopTask(taskId))} onForceStop={() => setForceStop(stopResult)} />}</div>
           </div>
         </aside>
       </ContextSplit>

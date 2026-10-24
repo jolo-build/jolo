@@ -80,23 +80,44 @@ const tokensOf = (/** @type {TaskRecord[]} */ tasks) => {
   return total;
 };
 
-/** Running before finished, newest first (D2). */
-const byRecency = (/** @type {TaskRecord} */ a, /** @type {TaskRecord} */ b) => Number(b.status === 'running') - Number(a.status === 'running') || started(b) - started(a);
+const newestFirst = (/** @type {TaskRecord} */ a, /** @type {TaskRecord} */ b) => started(b) - started(a);
 
 /**
- * The workflows (tasks of type `local_workflow`, one card each) and the other tasks, each running first and newest first.
- * Tasks are never grouped by `runId`: every task carries a run id of its own. One pass over the tasks, so a snapshot of
- * hundreds stays cheap (Review Focus 3).
- * @param {Activity | null} activity
- * @returns {{ workflows: TaskRecord[], tasks: TaskRecord[] }}
+ * What the panel's Clear finished hid: each finished task it listed then, by id, with when that task ended.
+ * @typedef {Record<string, string | null>} ClearedTasks
  */
-export function groupActivity(activity) {
+
+/**
+ * The panel's two lists (D2): the running tasks, then the finished ones but those Clear finished hid, each newest first,
+ * workflows (tasks of type `local_workflow`, one card each) among the rest. Tasks are never grouped by `runId`: every
+ * task carries a run id of its own. One pass over the tasks, so a snapshot of hundreds stays cheap (Review Focus 3).
+ * @param {Activity | null} activity
+ * @param {ClearedTasks} [cleared]
+ * @returns {{ running: TaskRecord[], finished: TaskRecord[] }}
+ */
+export function groupActivity(activity, cleared = {}) {
   /** @type {TaskRecord[]} */
-  const workflows = [];
+  const running = [];
   /** @type {TaskRecord[]} */
-  const tasks = [];
-  for (const task of activity?.tasks ?? []) (isWorkflow(task) ? workflows : tasks).push(task);
-  return { workflows: workflows.sort(byRecency), tasks: tasks.sort(byRecency) };
+  const finished = [];
+  for (const task of activity?.tasks ?? []) {
+    if (task.status === 'running') running.push(task);
+    else if (!(Object.hasOwn(cleared, task.taskId) && cleared[task.taskId] === task.endedAt)) finished.push(task);
+  }
+  return { running: running.sort(newestFirst), finished: finished.sort(newestFirst) };
+}
+
+/**
+ * Clear finished: the finished tasks listed at that moment join those hidden before, each with when it ended, so a task
+ * that runs again is listed, and so is one that ended since or ended again.
+ * @param {Activity | null} activity
+ * @param {ClearedTasks} cleared
+ * @returns {ClearedTasks}
+ */
+export function clearFinished(activity, cleared) {
+  const next = { ...cleared };
+  for (const task of activity?.tasks ?? []) if (task.status !== 'running') next[task.taskId] = task.endedAt;
+  return next;
 }
 
 /**
@@ -115,17 +136,35 @@ export function taskKind(task) {
 const ENDED_PHASE = /** @type {const} */ ({ completed: 'done', stopped: 'stopped', failed: 'failed' });
 
 /**
- * A workflow phase's dot: failed once an agent of it failed, running while one runs, done when all of them are, and
+ * A workflow phase's status: failed once an agent of it failed, running while one runs, done when all of them are, and
  * pending before any started. The last report outlives the workflow: a phase it left running on a workflow that ended
  * takes the workflow's end word (`stopped`, `failed`, or `done` for a completed one), never `running`.
  * @param {WorkflowPhase} phase
  * @param {TaskRecord['status']} [taskStatus] the workflow task's status
- * @returns {'pending' | 'running' | 'done' | 'failed' | 'stopped'}
+ * @returns {PhaseStatus}
  */
 export function workflowPhaseStatus(phase, taskStatus = 'running') {
   if (phase.failed > 0) return 'failed';
   if (phase.running > 0) return taskStatus === 'running' ? 'running' : ENDED_PHASE[taskStatus];
   return phase.agents > 0 && phase.done === phase.agents ? 'done' : 'pending';
+}
+
+/** @typedef {'pending' | 'running' | 'done' | 'failed' | 'stopped'} PhaseStatus */
+const repeat = (/** @type {number} */ count, /** @type {PhaseStatus} */ status) => Array.from({ length: Math.max(0, count) }, () => status);
+
+/**
+ * A workflow phase's agents, one square each: done, running, failed, then pending. Claude's progress report counts a
+ * phase's agents by status and does not say their order, so the squares are ordered by status, not by agent. Agents it
+ * left running on a workflow that ended take the workflow's end word, as the phase does (workflowPhaseStatus).
+ * @param {WorkflowPhase} phase
+ * @param {TaskRecord['status']} [taskStatus] the workflow task's status
+ * @returns {PhaseStatus[]}
+ */
+export function phaseSquares(phase, taskStatus = 'running') {
+  return [
+    ...repeat(phase.done, 'done'), ...repeat(phase.running, taskStatus === 'running' ? 'running' : ENDED_PHASE[taskStatus]),
+    ...repeat(phase.failed, 'failed'), ...repeat(phase.agents - phase.done - phase.running - phase.failed, 'pending'),
+  ];
 }
 
 /**
