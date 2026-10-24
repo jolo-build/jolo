@@ -834,6 +834,24 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .finished-tasks > summary { display: flex; align-items: center; gap: 6px; list-style: none; padding: 2px 0; color: var(--muted); cursor: default; }
 .finished-tasks[open] > summary { margin-bottom: 4px; }
 .finished-tasks[open] > summary > .activity-disclosure { transform: rotate(90deg); }
+/* What a task does now (its progress line, mono as a subagent's now-line is) and how it ended (its summary and output
+   file), muted on one line each; a task under the task that started it is indented, after a muted ↳. */
+.activity-panel .activity-now { font: 11px/1.6 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-panel :is(.activity-summary, .activity-output) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-list > [data-nested] { margin-left: 16px; }
+.activity-panel .activity-nest { color: var(--muted); }
+/* A phase whose agents are listed: its head and squares are the summary, its chevron turns as it opens to one line per
+   agent (its label, then model, tokens, duration and state muted) and the agent's result below in mono. */
+.activity-panel details.workflow-phase { display: block; }
+.activity-panel details.workflow-phase > summary { display: flex; flex-direction: column; gap: 5px; list-style: none; cursor: default; }
+.activity-panel details.workflow-phase > summary::-webkit-details-marker { display: none; }
+.activity-panel .phase-title { display: flex; align-items: center; gap: 4px; }
+.activity-panel .phase-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-panel details.workflow-phase[open] .activity-disclosure { transform: rotate(90deg); }
+.activity-panel .phase-agents { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 8px 0 2px; padding: 0; }
+.activity-panel :is(.phase-agent-line, .phase-agent-result) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.activity-panel .phase-agent-label { color: var(--text); }
+.activity-panel .phase-agent-result { font: 11px/1.6 var(--mono); }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
 .terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* xterm's fit reads the host's computed width, so its padding must sit outside it or the last columns are cut off. */

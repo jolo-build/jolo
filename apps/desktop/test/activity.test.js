@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test';
-import { LARGE_RUN_AGENTS, activityLine, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, newerActivity, phaseSquares, plural, runningTasks, stopFor, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
+import { LARGE_RUN_AGENTS, activityLine, agentStatus, agentsByPhase, backgroundTasks, clearFinished, forceStopOffered, formatElapsed, formatTokens, groupActivity, nestTasks, newerActivity, phaseSquares, plural, runningTasks, stopFor, taskDetail, taskKind, workflowPhaseStatus, workflowSummary } from '../src/renderer/activity.js';
 
 const START = Date.parse('2026-10-24T10:00:00.000Z');
 const at = (seconds) => new Date(START + seconds * 1000).toISOString();
 let ids = 0;
 /** @typedef {import('../src/renderer/activity.js').TaskRecord} TaskRecord */
 /** @param {Record<string, any>} [options] @returns {TaskRecord} */
-const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true, taskType = null, workflowName = null, subagentType = null, workflow = undefined } = {}) => ({
+const task = ({ runId = null, phase = null, status = 'running', started = 0, ended = null, tokens = null, toolUseId = null, description = 'A task', backgrounded = true, taskType = null, workflowName = null, subagentType = null, workflow = undefined, ...detail } = {}) => ({
   taskId: `t${++ids}`, runId, toolUseId, description, subagentType, taskType, workflowName, phase, backgrounded, status,
-  startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null }, workflow,
+  startedAt: at(started), endedAt: ended === null ? null : at(ended), usage: { totalTokens: tokens, toolUses: null, durationMs: null }, workflow, ...detail,
 });
 /** A workflow as Claude Code 2.1.304 reports one: one task of type local_workflow, named. @param {Record<string, any>} [options] */
 const workflow = (options = {}) => task({ taskType: 'local_workflow', workflowName: 'demo', description: 'Workflow demo', ...options });
@@ -177,6 +177,89 @@ test("a workflow's summary is known only once its progress reported its agents, 
   expect(fanOut(LARGE_RUN_AGENTS + 1)).toBe(true);
   expect(workflowSummary(workflow({ workflow: null }))).toEqual({ agents: null, phases: [], current: null, large: false });
   expect(workflowSummary(workflow())).toEqual({ agents: null, phases: [], current: null, large: false }); // an engine from before it
+});
+
+test('a list draws each task under the listed task that started it, one level deep, and one whose parent is not listed at the top', () => {
+  // As groupActivity lists them, newest first: a subagent, its command, the command's own command, and a task whose
+  // parent is in no list (finished, cleared or forgotten).
+  const other = task({ started: 0 });
+  const agent = task({ started: 1, taskType: 'local_agent', spawnDepth: 1 });
+  const command = task({ started: 2, taskType: 'local_bash', parentTaskId: agent.taskId });
+  const deeper = task({ started: 3, taskType: 'local_bash', parentTaskId: command.taskId });
+  const orphan = task({ started: 4, parentTaskId: 'gone' });
+  expect(nestTasks([orphan, deeper, command, agent, other])).toEqual([
+    { task: orphan, nested: false },
+    { task: agent, nested: false }, { task: deeper, nested: true }, { task: command, nested: true }, // deeper levels flatten to one
+    { task: other, nested: false },
+  ]);
+  // Tasks naming each other, or themselves, are nobody's child; a task from an engine from before parents stands alone.
+  const first = task({ started: 5 });
+  const second = task({ started: 6, parentTaskId: first.taskId });
+  first.parentTaskId = second.taskId;
+  const itself = task({ started: 7 });
+  itself.parentTaskId = itself.taskId;
+  const older = task({ started: 8 });
+  expect(nestTasks([older, itself, second, first]).map(item => item.nested)).toEqual([false, false, false, false]);
+  expect(nestTasks([])).toEqual([]);
+});
+
+test('what a running task does now is its progress line, else the tool it last used; an older engine says neither', () => {
+  expect(taskDetail(task({ progress: 'Running Sleep 75 seconds then print ok', lastTool: 'Bash' }))).toEqual({ now: 'Running Sleep 75 seconds then print ok', tool: null, summary: null, output: null });
+  expect(taskDetail(task({ progress: null, lastTool: 'Bash' }))).toEqual({ now: null, tool: 'Bash', summary: null, output: null });
+  expect(taskDetail(task({ progress: '', lastTool: '' }))).toEqual({ now: null, tool: null, summary: null, output: null });
+  expect(taskDetail(task())).toEqual({ now: null, tool: null, summary: null, output: null });
+  // A summary or an output file is how a task ended: a running one shows neither.
+  expect(taskDetail(task({ summary: 'done early', outputFile: '/tmp/a.output' }))).toEqual({ now: null, tool: null, summary: null, output: null });
+});
+
+test('how a task ended is its summary when that says more than its description, and its output file by name', () => {
+  const ended = (/** @type {Record<string, any>} */ detail) => taskDetail(task({ status: 'completed', ended: 5, description: 'Run 75s sleep command', progress: 'Running Sleep 75 seconds then print ok', lastTool: 'Bash', ...detail }));
+  expect(ended({ summary: 'Run 75s sleep command', outputFile: '/private/tmp/claude-501/x/tasks/a47340cffe7ba1185.output' })).toEqual({ now: null, tool: null, summary: null, output: { name: 'a47340cffe7ba1185.output', path: '/private/tmp/claude-501/x/tasks/a47340cffe7ba1185.output' } });
+  expect(ended({ summary: 'Slept, then printed ok', outputFile: null })).toEqual({ now: null, tool: null, summary: 'Slept, then printed ok', output: null });
+  expect(ended({ outputFile: 'C:\\Temp\\tasks\\out.txt' }).output).toEqual({ name: 'out.txt', path: 'C:\\Temp\\tasks\\out.txt' });
+  expect(ended({ outputFile: '/tmp/tasks/' }).output).toEqual({ name: 'tasks', path: '/tmp/tasks/' });
+  expect(ended({})).toEqual({ now: null, tool: null, summary: null, output: null }); // an older engine
+});
+
+/** A workflow agent as the engine lists it, with its phase's title and index. */
+const agentOf = (/** @type {string} */ label, /** @type {string | null} */ phaseTitle, /** @type {'running' | 'done' | 'failed'} */ state, /** @type {number | null} */ phaseIndex = null) => ({ label, phase: phaseTitle, phaseIndex, state, model: 'claude-fable-5-1', tokens: null, toolCalls: null, durationMs: null, resultPreview: null });
+/** A workflow whose summary lists `list`. */
+const listing = (/** @type {ReturnType<typeof phase>[]} */ phases, /** @type {ReturnType<typeof agentOf>[]} */ list) => {
+  const summary = progress(phases);
+  return workflow({ workflow: { ...summary, agents: { ...summary.agents, list } } });
+};
+
+test("a workflow phase's agents are those its progress listed under the phase's index; none without a list", () => {
+  // Two phases with one title: each has its own agents.
+  const review = { ...phase('Review', { agents: 1, running: 1 }), index: 1 };
+  const again = { ...phase('Review', { agents: 2, done: 1, running: 1 }), index: 2 };
+  const list = [agentOf('first:1', 'Review', 'running', 1), agentOf('second:1', 'Review', 'done', 2), agentOf('second:2', 'Review', 'running', 2), agentOf('lost', null, 'failed')];
+  const agentsOf = agentsByPhase(listing([review, again], list));
+  expect(agentsOf?.(review)).toEqual([list[0]]);
+  expect(agentsOf?.(again)).toEqual([list[1], list[2]]);
+  expect(agentsOf?.({ ...phase('Ship'), index: 3 })).toEqual([]);
+  const summary = progress([review]);
+  expect(agentsByPhase(workflow({ workflow: summary }))).toBeNull(); // an engine from before the list
+  expect(agentsByPhase(workflow({ workflow: null }))).toBeNull();
+  expect(agentsByPhase(workflow())).toBeNull();
+});
+
+test("an agent that names no phase index, or a phase that has none, is matched by the phase's title", () => {
+  const say = { ...phase('Say', { agents: 2, running: 2 }), index: 1 };
+  const list = [agentOf('say:1', 'Say', 'running', 1), agentOf('say:2', 'Say', 'running'), agentOf('check:1', 'Check', 'running')];
+  const agentsOf = agentsByPhase(listing([say], list));
+  expect(agentsOf?.(say)).toEqual([list[0], list[1]]);
+  // A phase without an index (an engine before phase indexes) takes every agent under its title.
+  expect(agentsByPhase(listing([phase('Say')], list))?.(phase('Say'))).toEqual([list[0], list[1]]);
+});
+
+test("an agent's status is its state; one still running on a workflow that ended takes the workflow's own end word", () => {
+  expect(agentStatus(agentOf('a', 'Say', 'running'))).toBe('running');
+  expect(agentStatus(agentOf('a', 'Say', 'done'), 'stopped')).toBe('done');
+  expect(agentStatus(agentOf('a', 'Say', 'failed'), 'completed')).toBe('failed');
+  expect(agentStatus(agentOf('a', 'Say', 'running'), 'stopped')).toBe('stopped');
+  expect(agentStatus(agentOf('a', 'Say', 'running'), 'failed')).toBe('failed');
+  expect(agentStatus(agentOf('a', 'Say', 'running'), 'completed')).toBe('done');
 });
 
 test('during a turn a foreground subagent is the turn\'s own; once the turn ends, any task still running is background work', () => {

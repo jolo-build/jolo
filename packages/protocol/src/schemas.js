@@ -548,11 +548,33 @@ export const ScheduleSchema = z.object({
  * ones fill the room left, the newest kept.
  */
 export const TASK_HISTORY_LIMIT = 200;
-/** The most characters a task's description, phase or workflow name keeps, and an id (its own, its run's, its tool call's), subagent type or task type. */
+/**
+ * The most characters a task's description, phase, workflow name, progress line or summary keeps (and a workflow agent's
+ * label, phase or result preview), and an id (its own, its run's, its tool call's, its parent's), subagent type, task
+ * type, tool or model.
+ */
 export const TASK_TEXT_MAX = 500;
 export const TASK_ID_MAX = 128;
+/** The most characters of the path a finished task's output was written to. */
+export const TASK_PATH_MAX = 1024;
 /** The most phases a workflow's summary lists; agents of a phase past them count in its totals only. */
 export const WORKFLOW_PHASES_MAX = 100;
+/** The most agents a workflow's summary lists, the latest by index; those left out still count in its totals. */
+export const WORKFLOW_AGENTS_MAX = 200;
+/**
+ * What a workflow's summary keeps of each phase and listed agent, in characters: a phase's title and an agent's phase
+ * share one cap (an agent that names no phase index is matched to its phase by title); an agent's label, model and result
+ * preview have their own. Claude Code allows a result preview of 2048 characters: these keep a full list well inside a frame.
+ */
+export const WORKFLOW_TITLE_MAX = 80;
+export const WORKFLOW_LABEL_MAX = 120;
+export const WORKFLOW_MODEL_MAX = 64;
+export const WORKFLOW_PREVIEW_MAX = 160;
+/**
+ * The most bytes an activity payload takes as JSON: a frame (framing.js's FRAME_MAX_BYTES, 256 KiB, written out here so
+ * the renderer's schemas need not load the Node framing), less room for the event or notification it travels in.
+ */
+export const ACTIVITY_PAYLOAD_MAX_BYTES = 256 * 1024 - 16 * 1024;
 const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
 
 const TaskId = z.string().max(TASK_ID_MAX);
@@ -560,12 +582,23 @@ const TaskText = z.string().max(TASK_TEXT_MAX);
 const TaskCount = z.number().int().nonnegative().nullable();
 const WorkflowCount = z.number().int().nonnegative();
 /**
- * What a workflow's progress last said of its phases and agents, as counts: each phase in index order with its agents
- * running, done and failed, the totals over every agent, and the agent the last progress report named (`<phase>: <label>`).
+ * One agent of a workflow as its progress last reported it: its label, the title of its phase, whether it runs, is done or
+ * failed, its model, tokens, tool calls and duration, and a preview of its result; each null until Claude reports it.
+ */
+const WorkflowTitle = z.string().max(WORKFLOW_TITLE_MAX);
+const WorkflowAgentSchema = z.object({
+  label: z.string().max(WORKFLOW_LABEL_MAX), phase: WorkflowTitle.nullable(), phaseIndex: TaskCount, state: z.enum(["running", "done", "failed"]),
+  model: z.string().max(WORKFLOW_MODEL_MAX).nullable(), tokens: TaskCount, toolCalls: TaskCount, durationMs: TaskCount, resultPreview: z.string().max(WORKFLOW_PREVIEW_MAX).nullable(),
+});
+/**
+ * What a workflow's progress last said of its phases and agents, as counts: each phase in index order with its index (an
+ * older engine sends none) and its agents running, done and failed, the totals over every agent, and the agent the last
+ * progress report named (`<phase>: <label>`). `agents.list` names the latest WORKFLOW_AGENTS_MAX agents in index order,
+ * each with its phase's index and title; an older engine sends none.
  */
 const WorkflowSummarySchema = z.object({
-  phases: z.array(z.object({ title: TaskText, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
-  agents: z.object({ total: WorkflowCount, running: WorkflowCount, done: WorkflowCount, failed: WorkflowCount }),
+  phases: z.array(z.object({ index: WorkflowCount.optional(), title: WorkflowTitle, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
+  agents: z.object({ total: WorkflowCount, running: WorkflowCount, done: WorkflowCount, failed: WorkflowCount, list: z.array(WorkflowAgentSchema).max(WORKFLOW_AGENTS_MAX).optional() }),
   current: TaskText.nullable(),
 });
 export const TaskRecordSchema = z.object({
@@ -585,6 +618,15 @@ export const TaskRecordSchema = z.object({
   usage: z.object({ totalTokens: TaskCount, toolUses: TaskCount, durationMs: TaskCount }),
   // A workflow's phases and agents, null until its progress reports them and for any other task; an older engine sends none.
   workflow: WorkflowSummarySchema.nullable().optional(),
+  // Where the task sits (the task that started it, how deep a subagent it is), what it does now (its last progress line
+  // and the tool it last used) and how it ended (the summary and output file of its notification): each null until
+  // Claude says it, and an older engine sends none.
+  parentTaskId: TaskId.nullable().optional(),
+  spawnDepth: TaskCount.optional(),
+  lastTool: TaskId.nullable().optional(),
+  progress: TaskText.nullable().optional(),
+  summary: TaskText.nullable().optional(),
+  outputFile: z.string().max(TASK_PATH_MAX).nullable().optional(),
 });
 
 /** `truncated` says the process had finished tasks left out of these. */
@@ -601,9 +643,61 @@ export const ActivitySchema = z.object({
  */
 export const ActivityNotificationSchema = z.object({ sessionId: Id, activity: ActivitySchema });
 
+/** How many bytes `text` takes in UTF-8, without encoding it (Bun and Electron's renderer alike). @param {string} text */
+const utf8Bytes = (text) => {
+  let count = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) count += 1;
+    else if (code < 0x800) count += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) { count += 4; i += 1; } // a surrogate pair
+    else count += 3;
+  }
+  return count;
+};
+const jsonBytes = (/** @type {unknown} */ value) => utf8Bytes(JSON.stringify(value) ?? "");
+
+/**
+ * A payload past ACTIVITY_PAYLOAD_MAX_BYTES, brought within it: first the agent lists of finished workflows go, the oldest
+ * first, then those of running ones (their counts and phases stay), then the oldest finished tasks, which marks it
+ * truncated. Running tasks are never left out. Each task is measured once and again only when its list goes, and the
+ * tasks are copied, never changed: a snapshot the engine reported shares them.
+ * @template {{ tasks: any[], truncated: boolean }} T
+ * @param {T} payload
+ * @returns {T}
+ */
+const fitActivity = (payload) => {
+  const sizes = payload.tasks.map(jsonBytes);
+  // The payload without its tasks, each task, and a comma between two.
+  let total = jsonBytes({ ...payload, tasks: [] }) + sizes.reduce((sum, size) => sum + size, 0) + Math.max(0, sizes.length - 1);
+  if (total <= ACTIVITY_PAYLOAD_MAX_BYTES) return payload;
+  const tasks = [...payload.tasks];
+  for (const running of [false, true]) {
+    for (let i = 0; i < tasks.length && total > ACTIVITY_PAYLOAD_MAX_BYTES; i++) {
+      const task = tasks[i];
+      if ((task.status === "running") !== running || task.workflow?.agents?.list === undefined) continue;
+      const { list, ...agents } = task.workflow.agents;
+      tasks[i] = { ...task, workflow: { ...task.workflow, agents } };
+      const size = jsonBytes(tasks[i]);
+      total += size - sizes[i];
+      sizes[i] = size;
+    }
+  }
+  let truncated = payload.truncated;
+  const dropped = new Set();
+  for (let i = 0; i < tasks.length && total > ACTIVITY_PAYLOAD_MAX_BYTES; i++) {
+    if (tasks[i].status === "running") continue;
+    dropped.add(i);
+    total -= sizes[i] + 1;
+    truncated = true;
+  }
+  return { ...payload, tasks: tasks.filter((_, i) => !dropped.has(i)), truncated };
+};
+
 /**
  * A process's activity as it goes on the wire: every running task, and the newest finished ones up to
- * TASK_HISTORY_LIMIT in all, in the order they started; `truncated` when finished ones were left out.
+ * TASK_HISTORY_LIMIT in all, in the order they started; `truncated` when finished ones were left out. It fits in a frame
+ * with room for the event or notification around it (see fitActivity), unless its running tasks alone do not.
  */
 export const activityPayload = ({ state, tasks, updatedAt }) => {
   const running = runningCount(tasks);
@@ -615,7 +709,7 @@ export const activityPayload = ({ state, tasks, updatedAt }) => {
     left -= 1;
     return false;
   });
-  return { state, tasks: kept, truncated, updatedAt };
+  return fitActivity({ state, tasks: kept, truncated, updatedAt });
 };
 
 /** A task as it is written down, before it has an identity. */

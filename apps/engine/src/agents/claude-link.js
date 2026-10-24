@@ -17,7 +17,10 @@
 import path from 'node:path';
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX } from '@jolo/protocol';
+import {
+  TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
+  WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX,
+} from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
 
 /** How long an idle process is kept. Long on purpose: the point is that background work gets to finish. */
@@ -44,26 +47,42 @@ export const REPORT_GRACE_MS = 3_000;
 export const ACTIVITY_COALESCE_MS = 250;
 // A link remembers TASK_HISTORY_LIMIT finished tasks, the most an activity names, forgetting the oldest first; those
 // still running are never forgotten. What Claude says about a task is kept to TASK_TEXT_MAX characters (a description, a
-// phase) and TASK_ID_MAX (an id, a subagent type).
-export { TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX };
-/** @type {Map<string, TaskRecord['status']>} how a task's end is recorded, by the status Claude names; any other is completed */
-const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
+// phase, a progress line, a summary), TASK_ID_MAX (an id, a subagent type, a tool) and TASK_PATH_MAX (an output file); a
+// workflow lists WORKFLOW_PHASES_MAX phases and WORKFLOW_AGENTS_MAX agents at most.
+export {
+  TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
+  WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX,
+};
+/**
+ * How a task's end is recorded, by the status Claude names; any other is completed. `killed` is a subagent an interrupt or
+ * stop_task ended (Claude Code 2.1.304 says it in task_updated; the notice that follows says stopped).
+ * @type {Map<string, TaskRecord['status']>}
+ */
+const TASK_ENDINGS = new Map([['completed', 'completed'], ['stopped', 'stopped'], ['killed', 'stopped'], ['failed', 'failed'], ['error', 'failed']]);
 /** The notices that say something about one task, by its id. */
 const TASK_NOTICES = new Set(['task_started', 'task_progress', 'task_updated', 'task_notification']);
 /** Text Claude sent, cut to `max` characters: a number or a boolean as written, anything else (an object, nothing) null. */
 const textOf = (value, max) => (['string', 'number', 'boolean'].includes(typeof value) ? String(value).slice(0, max) : null);
 /** A count Claude sent, as a whole number from 0 to the largest safe integer; null when it is not a number of zero or more. */
 const countOf = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER) : null);
-/** @type {Map<unknown, 'running' | 'done'>} a workflow agent's bucket by the state Claude names; any other is failed */
-const AGENT_BUCKETS = new Map([['start', 'running'], ['done', 'done']]);
+/**
+ * A workflow agent's bucket by the state Claude names: Claude Code's schema has `start`, `progress` (at work, making tool
+ * calls), `done` and `error`; `error`, and any state it does not name, is failed.
+ * @type {Map<unknown, 'running' | 'done'>}
+ */
+const AGENT_BUCKETS = new Map([['start', 'running'], ['progress', 'running'], ['done', 'done']]);
 
 /**
  * What a workflow's `task_progress` says of its phases and agents (`workflow_progress`), kept as counts: the raw list grows
- * with every agent and repeats on every tick. One entry per `workflow_phase`, in index order, at most WORKFLOW_PHASES_MAX;
- * an agent counts once (by its index, the last entry winning), in its phase's counts and in the totals, or in the totals
- * only when its phase is not listed. An agent that has started is running, one that is done is done, and one in any
- * other state failed (Claude Code 2.1.304 was seen to send only `start` and `done`). `current` is the agent the last
- * progress report named in its description (`<phase>: <label>`); it outlives that agent's work.
+ * with every agent and repeats on every tick. One entry per `workflow_phase`, in index order, with its index and title, at
+ * most WORKFLOW_PHASES_MAX; an agent counts once (by its index, the last entry winning), in its phase's counts and in the
+ * totals, or in the totals only when its phase is not listed. An agent that has started or is at work is running, one
+ * that is done is done, and one in any other state failed (see AGENT_BUCKETS). `current` is the agent the last progress
+ * report named in its description (`<phase>: <label>`); it outlives that agent's work. `agents.list` names the latest
+ * WORKFLOW_AGENTS_MAX agents by index (one without an index after them, as listed), each with what its entry says: its
+ * label, its phase's index and title (`phaseTitle`, else the title of its phase by index), its state as the counts read
+ * it, its model, tokens, tool calls, duration and result preview, each null until Claude reports it. A phase's title and
+ * an agent's phase share WORKFLOW_TITLE_MAX; a label, model and preview are cut to their own caps (see the protocol).
  * @param {any[]} entries
  * @param {unknown} description
  * @returns {WorkflowSummary}
@@ -71,20 +90,20 @@ const AGENT_BUCKETS = new Map([['start', 'running'], ['done', 'done']]);
 function summarizeWorkflow(entries, description) {
   /** @type {Map<number, string>} */
   const titles = new Map();
-  /** @type {Map<number | string, { phaseIndex: number | null, bucket: 'running' | 'done' | 'failed' }>} */
+  /** @type {Map<number | string, { phaseIndex: number | null, bucket: 'running' | 'done' | 'failed', entry: any }>} */
   const agents = new Map();
   entries.forEach((entry, position) => {
     const index = countOf(entry?.index);
-    if (entry?.type === 'workflow_phase' && index !== null) titles.set(index, textOf(entry.title, TASK_TEXT_MAX) ?? '');
+    if (entry?.type === 'workflow_phase' && index !== null) titles.set(index, textOf(entry.title, WORKFLOW_TITLE_MAX) ?? '');
     else if (entry?.type === 'workflow_agent') {
       const key = index ?? `#${position}`; // one without an index is told apart by where it is listed
       agents.delete(key); // the last entry wins
-      agents.set(key, { phaseIndex: countOf(entry.phaseIndex), bucket: AGENT_BUCKETS.get(entry.state) ?? 'failed' });
+      agents.set(key, { phaseIndex: countOf(entry.phaseIndex), bucket: AGENT_BUCKETS.get(entry.state) ?? 'failed', entry });
     }
   });
   const listed = [...titles.keys()].sort((a, b) => a - b).slice(0, WORKFLOW_PHASES_MAX);
   /** @type {Map<number, WorkflowSummary['phases'][number]>} */
-  const phases = new Map(listed.map((index) => [index, { title: titles.get(index), agents: 0, done: 0, running: 0, failed: 0 }]));
+  const phases = new Map(listed.map((index) => [index, { index, title: titles.get(index), agents: 0, done: 0, running: 0, failed: 0 }]));
   const totals = { total: 0, running: 0, done: 0, failed: 0 };
   for (const { phaseIndex, bucket } of agents.values()) {
     totals.total += 1;
@@ -92,8 +111,17 @@ function summarizeWorkflow(entries, description) {
     const phase = phaseIndex === null ? undefined : phases.get(phaseIndex);
     if (phase) { phase.agents += 1; phase[bucket] += 1; }
   }
+  const byIndex = (/** @type {number | string} */ a, /** @type {number | string} */ b) => (typeof a === 'number' ? (typeof b === 'number' ? a - b : -1) : typeof b === 'number' ? 1 : 0);
+  const list = [...agents.keys()].sort(byIndex).slice(-WORKFLOW_AGENTS_MAX).map((key) => {
+    const { phaseIndex, bucket, entry } = agents.get(key);
+    return {
+      label: textOf(entry.label, WORKFLOW_LABEL_MAX) ?? '', phase: textOf(entry.phaseTitle, WORKFLOW_TITLE_MAX) ?? (phaseIndex === null ? null : titles.get(phaseIndex) ?? null),
+      phaseIndex, state: bucket, model: textOf(entry.model, WORKFLOW_MODEL_MAX), tokens: countOf(entry.tokens), toolCalls: countOf(entry.toolCalls),
+      durationMs: countOf(entry.durationMs), resultPreview: textOf(entry.resultPreview, WORKFLOW_PREVIEW_MAX),
+    };
+  });
   const current = typeof description === 'string' && description.includes(': ') ? textOf(description, TASK_TEXT_MAX) : null;
-  return { phases: [...phases.values()], agents: totals, current };
+  return { phases: [...phases.values()], agents: { ...totals, list }, current };
 }
 
 /**
@@ -101,17 +129,23 @@ function summarizeWorkflow(entries, description) {
  * own run id (Claude Code gives every task one; it is not a workflow's id). `taskType` is Claude's `task_type`
  * (`local_workflow`, `local_bash`, `local_agent`, ...): a workflow is ONE task of type `local_workflow`, named by
  * `workflowName`; its agents have no tasks of their own, and `workflow` is what its progress last said of them (null
- * until a progress carries `workflow_progress`, and for any other task).
+ * until a progress carries `workflow_progress`, and for any other task). `parentTaskId` is the task that started it (a
+ * subagent's own command names the subagent) and `spawnDepth` how deep a subagent it is; `progress` is its latest progress
+ * line (`Running …`, a workflow's `<phase>: <label>`) and `lastTool` the tool it last used, neither ever its description;
+ * `summary` and `outputFile` are what its notification said of its end. Each is null until Claude says it.
  * @typedef {{ taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType: string | null, workflowName: string | null,
  *   phase: string | null, backgrounded: boolean, status: 'running' | 'completed' | 'stopped' | 'failed', startedAt: string,
  *   endedAt: string | null, usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
- *   workflow: WorkflowSummary | null }} TaskRecord
+ *   workflow: WorkflowSummary | null, parentTaskId: string | null, spawnDepth: number | null, lastTool: string | null,
+ *   progress: string | null, summary: string | null, outputFile: string | null }} TaskRecord
  */
 /**
- * A workflow's phases and agents as counts (see summarizeWorkflow).
- * @typedef {{ phases: { title: string, agents: number, done: number, running: number, failed: number }[],
- *   agents: { total: number, running: number, done: number, failed: number }, current: string | null }} WorkflowSummary
+ * A workflow's phases and agents as counts, and its latest agents (see summarizeWorkflow).
+ * @typedef {{ label: string, phase: string | null, phaseIndex: number | null, state: 'running' | 'done' | 'failed', model: string | null,
+ *   tokens: number | null, toolCalls: number | null, durationMs: number | null, resultPreview: string | null }} WorkflowAgent
+ * @typedef {{ phases: { index: number, title: string, agents: number, done: number, running: number, failed: number }[],
+ *   agents: { total: number, running: number, done: number, failed: number, list: WorkflowAgent[] }, current: string | null }} WorkflowSummary
  */
 /**
  * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing.
@@ -351,6 +385,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     subagentType: textOf(message.subagent_type, TASK_ID_MAX), taskType: textOf(message.task_type, TASK_ID_MAX), workflowName: textOf(message.workflow_name, TASK_TEXT_MAX),
     phase: null, backgrounded: message.is_backgrounded !== false, status: 'running',
     startedAt: at, endedAt: null, usage: { totalTokens: null, toolUses: null, durationMs: null }, workflow: null,
+    parentTaskId: textOf(message.parent_task_id, TASK_ID_MAX), spawnDepth: countOf(message.spawn_depth),
+    lastTool: null, progress: null, summary: null, outputFile: null,
   });
   /** A count that is not one leaves what was known. @param {TaskRecord} task @param {any} usage */
   const takeUsage = (task, usage) => {
@@ -401,8 +437,11 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       tasks.set(taskId, newTask(taskId, message, at));
     } else if (message.subtype === 'task_progress' && task) {
       takeUsage(task, message.usage);
-      // A new summary each time, never changed in place: a snapshot already reported shares it. The description stays the
-      // one the task started with; a workflow's progress names its current agent there.
+      // The description stays the one the task started with: what a progress report says there is what the task does now
+      // (`Running …`, a workflow's current agent), kept as its progress line; one that says none leaves the last.
+      task.progress = textOf(message.description, TASK_TEXT_MAX) ?? task.progress;
+      task.lastTool = textOf(message.last_tool_name, TASK_ID_MAX) ?? task.lastTool;
+      // A new summary each time, never changed in place: a snapshot already reported shares it.
       if (Array.isArray(message.workflow_progress)) task.workflow = summarizeWorkflow(message.workflow_progress, message.description);
     } else if (message.subtype === 'task_updated' && task) {
       const patch = message.patch ?? {};
@@ -419,6 +458,9 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
         tasks.set(taskId, task);
       }
       takeUsage(task, message.usage);
+      // How it ended, as its notice says: Claude Code sends an empty output file for a task that wrote none.
+      task.summary = textOf(message.summary, TASK_TEXT_MAX) ?? task.summary;
+      task.outputFile = textOf(message.output_file, TASK_PATH_MAX) || task.outputFile;
     } else return;
     trimTasks();
     // A task listed anew, or one whose status changed, is a change of its tasks; anything else is their progress.

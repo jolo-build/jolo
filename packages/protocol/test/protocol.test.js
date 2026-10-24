@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, WORKFLOW_PHASES_MAX, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, TASK_PATH_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_TITLE_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX, ACTIVITY_PAYLOAD_MAX_BYTES, DialogSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -99,11 +99,122 @@ describe("schemas", () => {
     expect(TaskRecordSchema.parse({ ...task, workflow: null }).workflow).toBeNull();
     expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before it
     const valid = (patch) => TaskRecordSchema.safeParse({ ...task, workflow: { ...workflow, ...patch } }).success;
-    expect(valid({ current: null, phases: Array.from({ length: WORKFLOW_PHASES_MAX }, () => ({ ...phase, title: 't'.repeat(TASK_TEXT_MAX) })) })).toBe(true);
+    // A phase's title is cut to WORKFLOW_TITLE_MAX, as its agents' phase is (the renderer matches them by it when an agent
+    // names no phase index); its index, which an older payload lacks, is a count.
+    expect(WORKFLOW_TITLE_MAX).toBe(80);
+    expect(valid({ current: null, phases: Array.from({ length: WORKFLOW_PHASES_MAX }, (_, i) => ({ ...phase, index: i + 1, title: 't'.repeat(WORKFLOW_TITLE_MAX) })) })).toBe(true);
     expect(valid({ phases: [], agents: { total: 0, running: 0, done: 0, failed: 0 } })).toBe(true);
-    for (const patch of [{ phases: Array.from({ length: WORKFLOW_PHASES_MAX + 1 }, () => phase) }, { phases: [{ ...phase, title: 't'.repeat(TASK_TEXT_MAX + 1) }] },
+    for (const patch of [{ phases: Array.from({ length: WORKFLOW_PHASES_MAX + 1 }, () => phase) }, { phases: [{ ...phase, title: 't'.repeat(WORKFLOW_TITLE_MAX + 1) }] },
+      { phases: [{ ...phase, index: -1 }] }, { phases: [{ ...phase, index: null }] },
       { phases: [{ ...phase, running: null }] }, { phases: [{ ...phase, failed: -1 }] }, { agents: { ...workflow.agents, total: 1.5 } }, { agents: { ...workflow.agents, done: null } },
       { current: 'c'.repeat(TASK_TEXT_MAX + 1) }, { current: 7 }, { current: undefined }]) expect(valid(patch)).toBe(false);
+  });
+  test("a task record may carry where it sits, what it does now and how it ended, which an older payload lacks", () => {
+    const task = { taskId: 'cmd-1', runId: 'cmd-1-run', toolUseId: null, description: 'Sleep 75 seconds then print ok', subagentType: null, taskType: 'local_bash', phase: null, backgrounded: false, status: 'stopped', startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), usage: { totalTokens: null, toolUses: null, durationMs: null } };
+    const detail = { parentTaskId: 'a47340cffe7ba1185', spawnDepth: 1, lastTool: 'Bash', progress: 'Running Sleep 75 seconds then print ok', summary: 'Sleep 75 seconds then print ok', outputFile: '/private/tmp/tasks/cmd-1.output' };
+    expect(TaskRecordSchema.parse({ ...task, ...detail })).toMatchObject(detail);
+    const none = { parentTaskId: null, spawnDepth: null, lastTool: null, progress: null, summary: null, outputFile: null };
+    expect(TaskRecordSchema.parse({ ...task, ...none })).toMatchObject(none);
+    expect(TaskRecordSchema.safeParse(task).success).toBe(true); // an engine from before them
+    const valid = (patch) => TaskRecordSchema.safeParse({ ...task, ...detail, ...patch }).success;
+    expect(valid({ parentTaskId: 'p'.repeat(TASK_ID_MAX), lastTool: 'b'.repeat(TASK_ID_MAX), progress: 'd'.repeat(TASK_TEXT_MAX), summary: 's'.repeat(TASK_TEXT_MAX), outputFile: 'f'.repeat(TASK_PATH_MAX) })).toBe(true);
+    expect(TASK_PATH_MAX).toBe(1024);
+    for (const patch of [{ parentTaskId: 'p'.repeat(TASK_ID_MAX + 1) }, { lastTool: 'b'.repeat(TASK_ID_MAX + 1) }, { progress: 'd'.repeat(TASK_TEXT_MAX + 1) }, { summary: 's'.repeat(TASK_TEXT_MAX + 1) },
+      { outputFile: 'f'.repeat(TASK_PATH_MAX + 1) }, { spawnDepth: -1 }, { spawnDepth: 1.5 }, { summary: 7 }, { parentTaskId: 7 }]) expect(valid(patch)).toBe(false);
+  });
+  test("a workflow's summary may carry a bounded list of its agents, which an older payload lacks", () => {
+    const task = { taskId: 'wf-1', runId: 'wf-1-run', toolUseId: null, description: 'two trivial agents', subagentType: null, taskType: 'local_workflow', workflowName: 'probe-two', phase: null, backgrounded: true, status: 'running', startedAt: new Date().toISOString(), endedAt: null, usage: { totalTokens: 20388, toolUses: 0, durationMs: 42 } };
+    const done = { label: 'say:1', phase: 'Say', phaseIndex: 1, state: /** @type {const} */ ('done'), model: 'claude-fable-5-1', tokens: 20388, toolCalls: 0, durationMs: 3428, resultPreview: 'agent 1 ok' };
+    const started = { label: 'say:2', phase: 'Say', phaseIndex: 1, state: /** @type {const} */ ('running'), model: 'claude-fable-5-1', tokens: null, toolCalls: null, durationMs: null, resultPreview: null };
+    const workflow = (list) => ({ phases: [{ index: 1, title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], agents: { total: 2, running: 1, done: 1, failed: 0, ...(list && { list }) }, current: 'Say: say:2' });
+    expect(TaskRecordSchema.parse({ ...task, workflow: workflow([done, started]) }).workflow.agents.list).toEqual([done, started]);
+    expect(TaskRecordSchema.safeParse({ ...task, workflow: workflow(null) }).success).toBe(true); // an engine from before it
+    const valid = (list) => TaskRecordSchema.safeParse({ ...task, workflow: workflow(list) }).success;
+    expect([WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX]).toEqual([200, 120, 64, 160]);
+    expect(valid(Array.from({ length: WORKFLOW_AGENTS_MAX }, () => ({ ...done, label: 'l'.repeat(WORKFLOW_LABEL_MAX), phase: 'p'.repeat(WORKFLOW_TITLE_MAX), model: 'm'.repeat(WORKFLOW_MODEL_MAX), resultPreview: 'r'.repeat(WORKFLOW_PREVIEW_MAX) })))).toBe(true);
+    expect(valid([{ ...started, state: 'failed', phase: null, phaseIndex: null }])).toBe(true);
+    for (const list of [Array.from({ length: WORKFLOW_AGENTS_MAX + 1 }, () => done), [{ ...done, label: 'l'.repeat(WORKFLOW_LABEL_MAX + 1) }], [{ ...done, resultPreview: 'r'.repeat(WORKFLOW_PREVIEW_MAX + 1) }],
+      [{ ...done, model: 'm'.repeat(WORKFLOW_MODEL_MAX + 1) }], [{ ...done, phase: 'p'.repeat(WORKFLOW_TITLE_MAX + 1) }], [{ ...done, phaseIndex: -1 }], [{ ...done, phaseIndex: undefined }],
+      [{ ...done, state: 'start' }], [{ ...done, tokens: -1 }], [{ ...done, durationMs: 1.5 }], [{ ...done, label: null }], [{ ...done, toolCalls: undefined }]]) expect(valid(list)).toBe(false);
+  });
+  describe("an activity payload fits in a frame", () => {
+    const at = new Date().toISOString();
+    const bytes = (/** @type {unknown} */ value) => Buffer.byteLength(JSON.stringify(value));
+    let serial = 0;
+    /** A task as the engine keeps it; `fill` writes each string at its cap (a three-byte character is the most one costs). */
+    const taskOf = (/** @type {string} */ status, workflow = null, fill = '') => {
+      const text = (/** @type {number} */ max) => (fill ? fill.repeat(max) : 'x');
+      return {
+        taskId: fill ? String(++serial).padStart(TASK_ID_MAX, 'i') : `t${++serial}`, runId: text(TASK_ID_MAX), toolUseId: text(TASK_ID_MAX), description: text(TASK_TEXT_MAX),
+        subagentType: text(TASK_ID_MAX), taskType: workflow ? 'local_workflow' : text(TASK_ID_MAX), workflowName: text(TASK_TEXT_MAX), phase: text(TASK_TEXT_MAX),
+        backgrounded: true, status, startedAt: at, endedAt: status === 'running' ? null : at,
+        usage: { totalTokens: Number.MAX_SAFE_INTEGER, toolUses: Number.MAX_SAFE_INTEGER, durationMs: Number.MAX_SAFE_INTEGER }, workflow,
+        parentTaskId: text(TASK_ID_MAX), spawnDepth: Number.MAX_SAFE_INTEGER, lastTool: text(TASK_ID_MAX), progress: text(TASK_TEXT_MAX), summary: text(TASK_TEXT_MAX), outputFile: text(TASK_PATH_MAX),
+      };
+    };
+    /** A workflow's summary listing `agents` agents and `phases` phases, every string of them at its cap. */
+    const flowOf = (/** @type {number} */ agents, fill = 'a', phases = 1) => ({
+      phases: Array.from({ length: phases }, (_, i) => ({ index: i + 1, title: fill.repeat(WORKFLOW_TITLE_MAX), agents, done: 0, running: agents, failed: 0 })),
+      agents: { total: agents, running: agents, done: 0, failed: 0, list: Array.from({ length: agents }, () => ({
+        label: fill.repeat(WORKFLOW_LABEL_MAX), phase: fill.repeat(WORKFLOW_TITLE_MAX), phaseIndex: 1, state: /** @type {const} */ ('running'), model: fill.repeat(WORKFLOW_MODEL_MAX),
+        tokens: Number.MAX_SAFE_INTEGER, toolCalls: Number.MAX_SAFE_INTEGER, durationMs: Number.MAX_SAFE_INTEGER, resultPreview: fill.repeat(WORKFLOW_PREVIEW_MAX),
+      })) },
+      current: fill.repeat(TASK_TEXT_MAX),
+    });
+    const listed = (/** @type {any} */ task) => task.workflow?.agents.list !== undefined;
+    const activityOf = (/** @type {any[]} */ tasks) => ({ state: /** @type {const} */ ('background'), tasks, updatedAt: at });
+
+    test("what fits is kept whole", () => {
+      const tasks = [taskOf('completed'), taskOf('running', flowOf(WORKFLOW_AGENTS_MAX)), taskOf('running')];
+      expect(ACTIVITY_PAYLOAD_MAX_BYTES).toBe(FRAME_MAX_BYTES - 16 * 1024);
+      expect(activityPayload(activityOf(tasks))).toEqual({ ...activityOf(tasks), truncated: false });
+    });
+
+    test("past the room, the finished workflows' agent lists go first, the oldest first", () => {
+      // Three lists of 150 agents (about 89 KB each) and a small one: dropping the oldest finished list is enough.
+      const tasks = [taskOf('completed', flowOf(150)), taskOf('running', flowOf(150)), taskOf('stopped', flowOf(150)), taskOf('completed', flowOf(10))];
+      const payload = activityPayload(activityOf(tasks));
+      expect(payload.tasks.map(t => t.taskId)).toEqual(tasks.map(t => t.taskId));
+      expect(payload.tasks.map(listed)).toEqual([false, true, true, true]);
+      expect(payload.tasks[0].workflow).toEqual({ ...tasks[0].workflow, agents: { total: 150, running: 150, done: 0, failed: 0 } }); // its counts and phases stay
+      expect(payload.truncated).toBe(false);
+      expect(bytes(payload)).toBeLessThanOrEqual(ACTIVITY_PAYLOAD_MAX_BYTES);
+      expect(listed(tasks[0])).toBe(true); // what the engine keeps is not changed
+    });
+
+    test("then the running workflows' lists, the oldest first, before any finished task is left out", () => {
+      const tasks = [taskOf('completed'), taskOf('running', flowOf(150)), taskOf('running', flowOf(150)), taskOf('running', flowOf(150))];
+      const payload = activityPayload(activityOf(tasks));
+      expect(payload.tasks.map(t => t.taskId)).toEqual(tasks.map(t => t.taskId));
+      expect(payload.tasks.map(listed)).toEqual([false, false, true, true]);
+      expect(payload.truncated).toBe(false);
+    });
+
+    test("then the oldest finished tasks, never a running one: 200 tasks with every string at its cap still travel as one event", () => {
+      // Five running tasks (three of them workflows of 200 agents and 100 phases), and 195 finished, every tenth a workflow
+      // with a full list; each string at its cap in three-byte characters.
+      const tasks = Array.from({ length: TASK_HISTORY_LIMIT }, (_, i) => {
+        const running = i % 40 === 7;
+        const flow = running ? i < 100 : i % 10 === 0;
+        return taskOf(running ? 'running' : 'completed', flow ? flowOf(WORKFLOW_AGENTS_MAX, 'あ', WORKFLOW_PHASES_MAX) : null, 'あ');
+      });
+      const running = tasks.filter(t => t.status === 'running').map(t => t.taskId);
+      expect(running).toHaveLength(5);
+      expect(bytes(tasks)).toBeGreaterThan(10 * FRAME_MAX_BYTES);
+      const payload = activityPayload(activityOf(tasks));
+      expect(payload.tasks.filter(t => t.status === 'running').map(t => t.taskId)).toEqual(running);
+      const finished = tasks.filter(t => t.status !== 'running').map(t => t.taskId);
+      const kept = payload.tasks.filter(t => t.status !== 'running').map(t => t.taskId);
+      expect(kept.length).toBeGreaterThan(0);
+      expect(kept).toEqual(finished.slice(-kept.length)); // the newest finished ones, the oldest left out
+      expect(payload.tasks.some(listed)).toBe(false);
+      expect(payload.truncated).toBe(true);
+      expect(bytes(payload)).toBeLessThanOrEqual(ACTIVITY_PAYLOAD_MAX_BYTES);
+      expect(ActivitySchema.safeParse(payload).success).toBe(true);
+      const event = { engineBootId: 'boot_' + 'b'.repeat(59), eventSeq: '9'.repeat(19), sessionId: 's'.repeat(64), runId: null, type: 'session.activity', payload, at };
+      expect(() => encodeFrame({ jsonrpc: '2.0', method: 'event', params: event })).not.toThrow();
+      expect(() => encodeFrame({ jsonrpc: '2.0', method: 'activity', params: { sessionId: 's'.repeat(64), activity: payload } })).not.toThrow();
+    });
   });
   test("a dialog's tool and the input its event carries are bounded; the record keeps any input", () => {
     const at = new Date().toISOString();

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventPayloadSchemas, activityPayload } from '@jolo/protocol';
-import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_TEXT_MAX, WORKFLOW_PHASES_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
+import { STOP_TASK_GRACE_MS, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX, createHostedLinks, isSubagentRequest, removeScratch, startsTurn } from '../src/agents/claude-link.js';
 
 const FAKE = path.join(import.meta.dir, '..', '..', '..', 'tests', 'fixtures', 'fake-claude.js');
 const PROTOCOL = ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--replay-user-messages', '--permission-prompt-tool', 'stdio'];
@@ -571,14 +571,137 @@ test('a workflow keeps a summary of its agents and phases from its progress repo
   const link = open(registry);
   await turn(link, 'workflow x 1500', { init: true });
   await waitFor(() => link.activity.tasks[0]?.workflow != null);
-  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 0, running: 2, failed: 0 }], agents: { total: 2, running: 2, done: 0, failed: 0 }, current: 'Say: say:1' });
+  // Each agent as the last report named it: its phase, its model from the start, its tokens, tool calls, duration and result once done.
+  const started = (index) => ({ label: `say:${index}`, phase: 'Say', phaseIndex: 1, state: 'running', model: 'claude-fable-5-1', tokens: null, toolCalls: null, durationMs: null, resultPreview: null });
+  const done = (index) => ({ ...started(index), state: 'done', tokens: 20388, toolCalls: 0, durationMs: 750, resultPreview: `agent ${index} ok` });
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ index: 1, title: 'Say', agents: 2, done: 0, running: 2, failed: 0 }], agents: { total: 2, running: 2, done: 0, failed: 0, list: [started(1), started(2)] }, current: 'Say: say:1' });
   expect(link.activity.tasks[0].usage.totalTokens).toBe(0); // the first tick says 0 tokens, as the real binary does; the engine keeps what it said
+  // What it does now is its progress line and the tool (for a workflow, the agent) it last named; nothing has ended yet.
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', progress: 'Say: say:1', lastTool: 'say:1', summary: null, outputFile: null });
   await waitFor(() => link.activity.tasks[0].workflow.agents.done === 1);
   expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', usage: { totalTokens: 20388 } });
-  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], agents: { total: 2, running: 1, done: 1, failed: 0 }, current: 'Say: say:1' });
+  // say:2 is at work halfway (Claude Code's `progress` state, with its tokens and tool calls so far): it runs, it has not failed.
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ index: 1, title: 'Say', agents: 2, done: 1, running: 1, failed: 0 }], agents: { total: 2, running: 1, done: 1, failed: 0, list: [done(1), { ...started(2), tokens: 8000, toolCalls: 1 }] }, current: 'Say: say:1' });
   await waitFor(() => link.activity.tasks[0].status === 'completed', 4000);
-  expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', usage: { totalTokens: 40776 } });
-  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ title: 'Say', agents: 2, done: 2, running: 0, failed: 0 }], agents: { total: 2, running: 0, done: 2, failed: 0 }, current: 'Say: say:2' });
+  // How it ended is its notification's summary and output file; the description stays the one it started with.
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'Workflow x', usage: { totalTokens: 40776 }, progress: 'Say: say:2', lastTool: 'say:2', summary: 'Dynamic workflow "Workflow x" completed', outputFile: '/tmp/x.output' });
+  expect(link.activity.tasks[0].workflow).toEqual({ phases: [{ index: 1, title: 'Say', agents: 2, done: 2, running: 0, failed: 0 }], agents: { total: 2, running: 0, done: 2, failed: 0, list: [done(1), done(2)] }, current: 'Say: say:2' });
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await registry.closeAll();
+});
+
+test('a workflow lists its latest agents by index, at most WORKFLOW_AGENTS_MAX, each bounded, and counts them all', async () => {
+  // 250 agents listed last first, in each state Claude Code's schema names (start, progress, done, error; and one it does
+  // not); the newest carries a label, phase, model and result far too long, and counts that are not counts. An agent with
+  // no label is listed with an empty one.
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'wf', task_type: 'local_workflow', workflow_name: 'wide', description: 'many agents' });
+      const agent = (index) => ({ type: 'workflow_agent', index, label: 'a' + index, phaseIndex: 1, phaseTitle: 'Fan out', model: 'claude-fable-5-1', state: index === 150 ? 'cancelled' : index % 50 === 0 ? 'error' : index % 4 === 1 ? 'start' : index % 2 ? 'progress' : 'done', tokens: 100, toolCalls: 1, durationMs: 1000, resultPreview: 'ok ' + index });
+      const newest = { ...agent(250), label: 'l'.repeat(1000), phaseTitle: 'p'.repeat(1000), model: 'm'.repeat(300), resultPreview: 'r'.repeat(1000), tokens: -1, toolCalls: 2.7, durationMs: 'soon', state: 'done' };
+      const unlabelled = { ...agent(249), label: { text: 'x' } };
+      const agents = [newest, unlabelled, ...Array.from({ length: 248 }, (_, i) => agent(248 - i))];
+      out({ type: 'system', subtype: 'task_progress', task_id: 'wf', description: 'Fan out: a1', usage: { total_tokens: 25000 }, workflow_progress: [{ type: 'workflow_phase', index: 1, title: 'Fan out' }, ...agents] });
+      out({ type: 'system', subtype: 'task_notification', task_id: 'wf', status: 'completed' });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = openStub(registry, 'wide-workflow', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks[0]?.status === 'completed');
+  const { agents } = link.activity.tasks[0].workflow;
+  expect(WORKFLOW_AGENTS_MAX).toBe(200);
+  expect(agents.total).toBe(250);
+  expect(agents.list).toHaveLength(WORKFLOW_AGENTS_MAX);
+  expect(agents.list.slice(0, 2).map(a => a.label)).toEqual(['a51', 'a52']); // the oldest fifty dropped, the rest in index order
+  expect(agents.list[0]).toEqual({ label: 'a51', phase: 'Fan out', phaseIndex: 1, state: 'running', model: 'claude-fable-5-1', tokens: 100, toolCalls: 1, durationMs: 1000, resultPreview: 'ok 51' }); // at work (progress)
+  expect(agents.list.map(a => a.state).slice(48, 52)).toEqual(['running', 'failed', 'running', 'done']); // a99 (progress), a100 (error), a101 (start), a102
+  expect(agents.list[99].state).toBe('failed'); // a150, in a state Claude Code does not name
+  expect(agents.list.at(-2)).toMatchObject({ label: '', state: 'running' });
+  expect(agents.list.at(-1)).toEqual({ label: 'l'.repeat(WORKFLOW_LABEL_MAX), phase: 'p'.repeat(WORKFLOW_TITLE_MAX), phaseIndex: 1, state: 'done', model: 'm'.repeat(WORKFLOW_MODEL_MAX), tokens: null, toolCalls: 2, durationMs: null, resultPreview: 'r'.repeat(WORKFLOW_PREVIEW_MAX) });
+  expect([agents.total, agents.running, agents.done, agents.failed]).toEqual([250, 125, 121, 4]); // the newest is done
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await registry.closeAll();
+});
+
+test('a task keeps its latest progress line and tool apart from its description, and its notification\'s summary once it ends', async () => {
+  // The fixture's `tasks 2 300` moves each task to "task <i>, reviewing" halfway, with a progress line "Running task <i>"
+  // and the tool Bash, and ends each with the summary "task <i>".
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = open(registry);
+  await turn(link, 'tasks 2 300', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  expect(link.activity.tasks[0]).toMatchObject({ description: 'task 1', progress: null, lastTool: null, summary: null, outputFile: null, parentTaskId: null, spawnDepth: null });
+  await waitFor(() => link.activity.tasks.every(t => t.progress !== null));
+  expect(link.activity.tasks.map(t => [t.description, t.progress, t.lastTool, t.summary])).toEqual([['task 1, reviewing', 'Running task 1', 'Bash', null], ['task 2, reviewing', 'Running task 2', 'Bash', null]]);
+  await waitFor(() => link.activity.tasks.every(t => t.status === 'completed'), 4000);
+  expect(link.activity.tasks.map(t => [t.description, t.progress, t.summary, t.outputFile])).toEqual([['task 1, reviewing', 'Running task 1', 'task 1', null], ['task 2, reviewing', 'Running task 2', 'task 2', null]]);
+  await registry.closeAll();
+});
+
+test('a subagent\'s own command names the subagent as its parent, and the subagent its depth', async () => {
+  // The fixture's `nested-agent 300` runs a background subagent agent-1 whose command cmd-1 it owns; both end at 300 ms.
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = open(registry);
+  await turn(link, 'nested-agent 300', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks[0].progress !== null);
+  const [agent, command] = link.activity.tasks;
+  expect(agent).toMatchObject({ taskId: 'agent-1', taskType: 'local_agent', subagentType: 'general-purpose', spawnDepth: 1, parentTaskId: null, backgrounded: true, description: 'Run the checks', progress: 'Running Run the checks', lastTool: 'Bash' });
+  expect(command).toMatchObject({ taskId: 'cmd-1', taskType: 'local_bash', parentTaskId: 'agent-1', spawnDepth: null, backgrounded: false, description: 'Run the checks command' });
+  await waitFor(() => link.activity.tasks.every(t => t.status === 'completed'), 4000);
+  // Claude Code 2.1.304 summed each up with its description; the command wrote no output file (its notice says "").
+  expect(link.activity.tasks.map(t => [t.taskId, t.summary, t.outputFile])).toEqual([['agent-1', 'Run the checks', '/tmp/agent-1.output'], ['cmd-1', 'Run the checks command', null]]);
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await registry.closeAll();
+});
+
+test('a subagent stopped with stop_task is killed: its command stops first, and it ends as stopped', async () => {
+  const registry = createHostedLinks({ log, onUnsolicited: () => false });
+  const link = open(registry);
+  await turn(link, 'nested-agent 5000', { init: true });
+  await waitFor(() => link.activity.tasks.length === 2);
+  expect(await link.stopTask('agent-1')).toMatchObject({ ok: true });
+  await waitFor(() => link.activity.tasks.every(t => t.status !== 'running'));
+  expect(link.activity.tasks.map(t => [t.taskId, t.status])).toEqual([['agent-1', 'stopped'], ['cmd-1', 'stopped']]);
+  expect(link.activity.state).toBe('idle');
+  await registry.closeAll();
+});
+
+test('an update that says a subagent was killed ends it as stopped, before any notice of its end', async () => {
+  // Claude Code 2.1.304 marks a subagent an interrupt killed with task_updated patch.status "killed"; here no notice follows.
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'sub', task_type: 'local_agent', description: 'a subagent', is_backgrounded: true, spawn_depth: 1 });
+      out({ type: 'system', subtype: 'task_updated', task_id: 'sub', patch: { status: 'killed', end_time: 1792813178394 } });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = openStub(registry, 'killed', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks.length === 1 && link.activity.tasks[0].status !== 'running');
+  expect(link.activity.tasks[0]).toMatchObject({ taskId: 'sub', status: 'stopped', endedAt: expect.any(String), spawnDepth: 1 });
+  expect(link.activity.state).toBe('idle');
+  await registry.closeAll();
+});
+
+test('what Claude says of where a task sits, what it does now and how it ended is bounded and of the right type', async () => {
+  const script = `
+      out({ type: 'control_response', response: { subtype: 'success', request_id: 'jolo-init', response: {} } });
+      out({ type: 'system', subtype: 'task_started', task_id: 'long', parent_task_id: 'p'.repeat(300), spawn_depth: 2.5, description: 'long' });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'long', last_tool_name: 'b'.repeat(300), description: 'd'.repeat(1000) });
+      out({ type: 'system', subtype: 'task_notification', task_id: 'long', status: 'completed', summary: 's'.repeat(1000), output_file: '/' + 'f'.repeat(2000) });
+      out({ type: 'system', subtype: 'task_started', task_id: 'odd', parent_task_id: { id: 'x' }, spawn_depth: -1, description: 'odd' });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'odd', last_tool_name: 'Bash', description: 'Running odd' });
+      out({ type: 'system', subtype: 'task_progress', task_id: 'odd', last_tool_name: ['Read'], description: { text: 'x' } });
+      out({ type: 'system', subtype: 'task_notification', task_id: 'odd', status: 'stopped', summary: { text: 'x' }, output_file: '' });
+  `;
+  const registry = createHostedLinks({ log });
+  const link = openStub(registry, 'bounded-detail', script);
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize' } });
+  await waitFor(() => link.activity.tasks.length === 2 && link.activity.tasks.every(t => t.status !== 'running'));
+  const [long, odd] = link.activity.tasks;
+  expect(long).toMatchObject({ parentTaskId: 'p'.repeat(TASK_ID_MAX), spawnDepth: 2, lastTool: 'b'.repeat(TASK_ID_MAX), progress: 'd'.repeat(TASK_TEXT_MAX), summary: 's'.repeat(TASK_TEXT_MAX), description: 'long' });
+  expect(long.outputFile).toBe('/' + 'f'.repeat(TASK_PATH_MAX - 1));
+  // A progress whose tool and line are not text leaves what the last one said; an empty output file is none.
+  expect(odd).toMatchObject({ parentTaskId: null, spawnDepth: null, lastTool: 'Bash', progress: 'Running odd', summary: null, outputFile: null, status: 'stopped' });
   expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
   await registry.closeAll();
 });
@@ -607,13 +730,15 @@ test('a workflow summary is bounded: an agent in an unknown state counts as fail
   expect(flow.usage.totalTokens).toBe(20); // the second progress is read for its usage; its odd workflow_progress leaves the summary
   expect(flow.workflow.phases).toHaveLength(WORKFLOW_PHASES_MAX);
   expect(WORKFLOW_PHASES_MAX).toBe(100);
-  expect(flow.workflow.phases.map(p => p.title)).toEqual(['t'.repeat(TASK_TEXT_MAX), ...Array.from({ length: 99 }, (_, i) => `Phase ${i + 2}`)]);
+  expect(flow.workflow.phases.map(p => p.title)).toEqual(['t'.repeat(WORKFLOW_TITLE_MAX), ...Array.from({ length: 99 }, (_, i) => `Phase ${i + 2}`)]);
   expect(flow.workflow.phases.slice(0, 3)).toEqual([
-    { title: 't'.repeat(TASK_TEXT_MAX), agents: 1, done: 1, running: 0, failed: 0 },
-    { title: 'Phase 2', agents: 2, done: 0, running: 1, failed: 1 },
-    { title: 'Phase 3', agents: 0, done: 0, running: 0, failed: 0 },
+    { index: 1, title: 't'.repeat(WORKFLOW_TITLE_MAX), agents: 1, done: 1, running: 0, failed: 0 },
+    { index: 2, title: 'Phase 2', agents: 2, done: 0, running: 1, failed: 1 },
+    { index: 3, title: 'Phase 3', agents: 0, done: 0, running: 0, failed: 0 },
   ]);
-  expect(flow.workflow.agents).toEqual({ total: 5, running: 2, done: 2, failed: 1 }); // agents of a cut or unknown phase count here only
+  expect(flow.workflow.agents).toMatchObject({ total: 5, running: 2, done: 2, failed: 1 }); // agents of a cut or unknown phase count here only
+  // Every agent is listed once, in index order, the last entry winning, with the title of its phase whether or not it is listed.
+  expect(flow.workflow.agents.list.map(a => [a.label, a.phase, a.phaseIndex, a.state])).toEqual([['a1', 'Phase 1', 1, 'done'], ['a2', 'Phase 2', 2, 'failed'], ['a3', 'Phase 2', 2, 'running'], ['a4', 'Phase 120', 120, 'done'], ['a5', 'Phase 999', 999, 'running']]);
   expect(flow.workflow.current).toBeNull();
   expect(plain.workflow).toBeNull();
   expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);

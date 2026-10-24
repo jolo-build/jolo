@@ -5,7 +5,9 @@
  * task one), not a workflow's. `taskType` is Claude's task type: a workflow is ONE task of type `local_workflow`, named
  * by `workflowName`, and its agents have no tasks of their own. An engine from before task types sends neither.
  * `workflow` is what a workflow's progress last said of its phases and agents (D3): null until Claude reports them, and
- * absent from an engine from before it.
+ * absent from an engine from before it. `parentTaskId` names the task that started it (a subagent's own command names
+ * the subagent), `progress` is its latest progress line and `lastTool` the tool it last used, and `summary` and
+ * `outputFile` are what its notification said of its end: each null until Claude says it, absent from an older engine.
  * @typedef {{
  *   taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType?: string | null, workflowName?: string | null,
@@ -13,9 +15,13 @@
  *   startedAt: string, endedAt: string | null,
  *   usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
  *   workflow?: WorkflowProgress | null,
+ *   parentTaskId?: string | null, spawnDepth?: number | null, lastTool?: string | null, progress?: string | null,
+ *   summary?: string | null, outputFile?: string | null,
  * }} TaskRecord
- * @typedef {{ title: string, agents: number, done: number, running: number, failed: number }} WorkflowPhase
- * @typedef {{ phases: WorkflowPhase[], agents: { total: number, running: number, done: number, failed: number }, current: string | null }} WorkflowProgress
+ * @typedef {{ index?: number, title: string, agents: number, done: number, running: number, failed: number }} WorkflowPhase
+ * @typedef {{ label: string, phase: string | null, phaseIndex?: number | null, state: 'running' | 'done' | 'failed', model: string | null,
+ *   tokens: number | null, toolCalls: number | null, durationMs: number | null, resultPreview: string | null }} WorkflowAgent
+ * @typedef {{ phases: WorkflowPhase[], agents: { total: number, running: number, done: number, failed: number, list?: WorkflowAgent[] }, current: string | null }} WorkflowProgress
  * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], truncated: boolean, updatedAt: string }} Activity
  */
 
@@ -121,6 +127,55 @@ export function clearFinished(activity, cleared) {
 }
 
 /**
+ * A list of the panel (running or finished, as groupActivity gives it) with each task whose parent is listed in it drawn
+ * under that parent, one level deep: deeper descendants flatten to the same level under the task at the top, each in the
+ * list's own order. A task whose parent is in no list here (the other list, cleared or forgotten), or whose parents name
+ * each other, stands at the top. One pass, plus each task's short walk up to the top.
+ * @param {TaskRecord[]} tasks
+ * @returns {{ task: TaskRecord, nested: boolean }[]}
+ */
+export function nestTasks(tasks) {
+  const byId = new Map(tasks.map(task => [task.taskId, task]));
+  const topOf = (/** @type {TaskRecord} */ task) => {
+    const seen = new Set();
+    let at = task;
+    while (at.parentTaskId && byId.has(at.parentTaskId)) {
+      if (seen.has(at.taskId)) return task; // parents that name each other: nobody's child
+      seen.add(at.taskId);
+      at = /** @type {TaskRecord} */ (byId.get(at.parentTaskId));
+    }
+    return at;
+  };
+  /** @type {TaskRecord[]} */
+  const tops = [];
+  /** @type {Map<string, TaskRecord[]>} */
+  const under = new Map();
+  for (const task of tasks) {
+    const top = topOf(task);
+    if (top === task) tops.push(task);
+    else if (under.has(top.taskId)) under.get(top.taskId)?.push(task);
+    else under.set(top.taskId, [task]);
+  }
+  return tops.flatMap(top => [{ task: top, nested: false }, ...(under.get(top.taskId) ?? []).map(task => ({ task, nested: true }))]);
+}
+
+/** The last part of a path, `/` or `\` separated; the path itself when it has none. @param {string} path */
+const fileName = (path) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/**
+ * What a task's row or card says beyond its kind and status, all as Claude said it: while it runs, its progress line
+ * (`now`), else the tool it last used (`tool`, for the status line); once it ended, its notification's summary when that
+ * says more than its description, and the file its output was written to (`output`, by name, with the full path).
+ * @param {TaskRecord} task
+ * @returns {{ now: string | null, tool: string | null, summary: string | null, output: { name: string, path: string } | null }}
+ */
+export function taskDetail(task) {
+  if (task.status === 'running') return { now: task.progress || null, tool: task.progress ? null : task.lastTool || null, summary: null, output: null };
+  const summary = task.summary && task.summary !== task.description ? task.summary : null;
+  return { now: null, tool: null, summary, output: task.outputFile ? { name: fileName(task.outputFile), path: task.outputFile } : null };
+}
+
+/**
  * What kind of task the panel names it: Claude's task type, else an agent when a subagent type is known (an engine from
  * before task types), else a task.
  * @param {TaskRecord} task
@@ -165,6 +220,51 @@ export function phaseSquares(phase, taskStatus = 'running') {
     ...repeat(phase.done, 'done'), ...repeat(phase.running, taskStatus === 'running' ? 'running' : ENDED_PHASE[taskStatus]),
     ...repeat(phase.failed, 'failed'), ...repeat(phase.agents - phase.done - phase.running - phase.failed, 'pending'),
   ];
+}
+
+/** Add `item` to the group of `key`. @template K, V @param {Map<K, V[]>} groups @param {K} key @param {V} item */
+const group = (groups, key, item) => {
+  const items = groups.get(key);
+  if (items) items.push(item);
+  else groups.set(key, [item]);
+};
+
+/**
+ * A workflow's listed agents (the latest by index, see the engine's summarizeWorkflow) for each of its phases: those that
+ * name the phase's index, then those that name no index but the phase's title; a phase from an engine before phase
+ * indexes takes every agent under its title. Null when the engine sent no list (one from before it), so no phase opens.
+ * One pass over the list; each phase is then a lookup.
+ * @param {TaskRecord} task
+ * @returns {((phase: WorkflowPhase) => WorkflowAgent[]) | null}
+ */
+export function agentsByPhase(task) {
+  const list = task.workflow?.agents.list;
+  if (!list) return null;
+  /** @type {Map<number, WorkflowAgent[]>} */
+  const byIndex = new Map();
+  /** @type {Map<string | null, WorkflowAgent[]>} */
+  const byTitle = new Map();
+  /** @type {Map<string | null, WorkflowAgent[]>} */
+  const unindexed = new Map();
+  for (const agent of list) {
+    group(byTitle, agent.phase, agent);
+    if (typeof agent.phaseIndex === 'number') group(byIndex, agent.phaseIndex, agent);
+    else group(unindexed, agent.phase, agent);
+  }
+  return (phase) => (typeof phase.index === 'number'
+    ? [...(byIndex.get(phase.index) ?? []), ...(unindexed.get(phase.title) ?? [])]
+    : byTitle.get(phase.title) ?? []);
+}
+
+/**
+ * A workflow agent's status: its state as Claude last reported it; one it left running on a workflow that ended takes the
+ * workflow's end word, as its square does (phaseSquares).
+ * @param {WorkflowAgent} agent
+ * @param {TaskRecord['status']} [taskStatus] the workflow task's status
+ * @returns {PhaseStatus}
+ */
+export function agentStatus(agent, taskStatus = 'running') {
+  return agent.state === 'running' && taskStatus !== 'running' ? ENDED_PHASE[taskStatus] : agent.state;
 }
 
 /**

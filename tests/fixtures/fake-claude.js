@@ -15,10 +15,14 @@
 // <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
 // that question back <ms> later, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
 // and says whether it was approved or sent back, "workflow <name> <ms>" starts a workflow named <name> as one background
-// task (task_type local_workflow, no is_backgrounded field) whose progress reports carry its phases and agents
-// (workflow_progress): at once both agents of phase "Say" (say:1, say:2) have started (0 tokens, as the real binary's first
-// tick says), halfway through <ms> say:1 is done (20388 tokens), and at <ms> both are done (40776 tokens); it then completes unless stop_task ended it first, and is
-// reported a moment later in a turn of its own ("Workflow <name> done."), and anything else just answers in prose. A second control response to one request, or one to a request it took back,
+// task (task_type local_workflow, no is_backgrounded field, ids wf-1, wf-2, ... in a process) whose progress reports carry its phases and agents
+// (workflow_progress): at once both agents of phase "Say" (say:1, say:2, model claude-fable-5-1) have started (0 tokens, as the real binary's first
+// tick says), halfway through <ms> say:1 is done (20388 tokens, its duration and result preview "agent 1 ok") and say:2 at work (state "progress",
+// 8000 tokens, one tool call), and at <ms> both are done (40776 tokens); it then
+// completes with the summary 'Dynamic workflow "Workflow <name>" completed' and the output file /tmp/<name>.output unless stop_task ended it first, and is
+// reported a moment later in a turn of its own ("Workflow <name> done."), "nested-agent <ms>" runs a background subagent agent-1 and the command cmd-1
+// it owns (parent_task_id agent-1), which end at <ms>, the command first, and stop_task on the subagent kills it (task_updated status "killed"), and
+// anything else just answers in prose. A second control response to one request, or one to a request it took back,
 // makes the fixture exit 70. The other scenarios are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
@@ -98,14 +102,15 @@ let forwardsNested = false;
 const backgroundWork = new Set();
 /** Background tasks still running, by id: the timers carrying each one's work, and whether it ignores stop_task. */
 const runningTasks = new Map();
-const startTask = (taskId, { stubborn = false } = {}) => runningTasks.set(taskId, { timers: new Set(), stubborn });
-/** A task ends: its work is cancelled and its end is told, as the real binary tells it. */
-const endTask = (taskId, status) => {
+/** `onStop` is what stop_task does to the task in place of ending it as stopped. */
+const startTask = (taskId, { stubborn = false, onStop = null } = {}) => runningTasks.set(taskId, { timers: new Set(), stubborn, onStop });
+/** A task ends: its work is cancelled and its end is told, as the real binary tells it, with what `notice` adds (a summary, an output file). */
+const endTask = (taskId, status, notice = {}) => {
   const task = runningTasks.get(taskId);
   if (!task) return;
   runningTasks.delete(taskId);
   for (const timer of task.timers) { clearTimeout(timer); backgroundWork.delete(timer); }
-  out({ type: "system", subtype: "task_notification", task_id: taskId, status, session_id: sessionId });
+  out({ type: "system", subtype: "task_notification", task_id: taskId, status, ...notice, session_id: sessionId });
 };
 /** Work done later beside the turns; with `taskId`, part of that running task's work, cancelled when it ends. */
 const inBackground = (fn, ms, taskId = null) => {
@@ -113,6 +118,8 @@ const inBackground = (fn, ms, taskId = null) => {
   backgroundWork.add(timer);
   runningTasks.get(taskId)?.timers.add(timer);
 };
+/** The workflows this process started, which number their task ids. */
+let workflows = 0;
 /** How long after a workflow completes the turn reporting it begins: the real binary begins it a moment later. */
 const WORKFLOW_REPORT_DELAY_MS = 300;
 /** stop_task: a running task is stopped once the request is answered, as Claude Code 2.1 does; one that ignores it is only answered. */
@@ -122,7 +129,8 @@ const stopTask = (requestId, taskId) => {
   const task = runningTasks.get(taskId);
   if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task: unknown task" } });
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: {} } });
-  if (!task.stubborn) endTask(taskId, "stopped");
+  if (task.onStop) task.onStop();
+  else if (!task.stubborn) endTask(taskId, "stopped");
 };
 /** The turn in progress, so an interrupt from the host can end it the way the real binary does. */
 let current = null;
@@ -421,9 +429,10 @@ async function turn(prompt, images = [], uuid = null) {
     inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
   } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
-    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, and end together
-    // after it, each on timers of its own so that stop_task ends one alone. Those that completed are reported in a turn
-    // of their own, as "background" is; when none did, there is nothing to report.
+    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, with a progress line
+    // "Running task <i>" and the tool Bash, and end together after it with the summary "task <i>", each on timers of its
+    // own so that stop_task ends one alone. Those that completed are reported in a turn of their own, as "background" is;
+    // when none did, there is nothing to report.
     const [count, ms] = [Number(match[1]), Number(match[2])];
     say(`Started ${count} tasks.`);
     let completed = 0;
@@ -433,9 +442,9 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_started", task_id: taskId, run_id: `${taskId}-run`, tool_use_id: `toolu_task_${i}`, task_type: "local_bash", description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
       inBackground(() => {
         out({ type: "system", subtype: "task_updated", task_id: taskId, patch: { workflow_phase: "review", description: `task ${i}, reviewing` }, session_id: sessionId });
-        out({ type: "system", subtype: "task_progress", task_id: taskId, usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
+        out({ type: "system", subtype: "task_progress", task_id: taskId, description: `Running task ${i}`, last_tool_name: "Bash", usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
       }, ms / 2, taskId);
-      inBackground(() => { completed += 1; endTask(taskId, "completed"); }, ms, taskId);
+      inBackground(() => { completed += 1; endTask(taskId, "completed", { summary: `task ${i}` }); }, ms, taskId);
     }
     inBackground(() => { if (completed) enqueue(() => selfStartedTurn(`${completed} of ${count} tasks done.`, [])); }, ms);
   } else if ((match = prompt.match(/^tasks-stubborn (\d+)$/))) {
@@ -452,22 +461,47 @@ async function turn(prompt, images = [], uuid = null) {
     // with a run id of its own and no is_backgrounded field (the binary sets that only for agents and commands). Each of
     // its progress reports lists its phases and agents (workflow_progress) and names the current agent in its
     // description, with the running sum of the agents' tokens in usage: both agents of phase Say start at once, say:1 is
-    // done halfway through <ms>, both are done at <ms>, when it completes; all on timers of its own so that stop_task
-    // ends it. A moment after it completes, a turn of its own reports it, as "background" does.
+    // done halfway through <ms>, both are done at <ms>, when it completes with a summary and an output file, as the probe's
+    // notice did; all on timers of its own so that stop_task ends it. A moment after it completes, a turn of its own
+    // reports it, as "background" does.
     const [name, ms] = [match[1], Number(match[2])];
+    // Every task has an id of its own: the first workflow of a process is wf-1, the next wf-2, and so on.
+    const n = ++workflows;
+    const [taskId, runId, toolUseId] = [`wf-${n}`, `wf-${n}-run`, `toolu_wf_${n}`];
     say("Workflow started.");
-    startTask("wf-1");
-    out({ type: "system", subtype: "task_started", task_id: "wf-1", run_id: "wf-1-run", tool_use_id: "toolu_wf_1", task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
-    const agent = (index, state, done = {}) => ({ type: "workflow_agent", index, label: `say:${index}`, phaseIndex: 1, phaseTitle: "Say", agentId: `agent-${index}`, model: "fake-fable-5-1", state, attempt: 1, promptPreview: `Reply with exactly: agent ${index} ok`, ...done });
+    startTask(taskId);
+    out({ type: "system", subtype: "task_started", task_id: taskId, run_id: runId, tool_use_id: toolUseId, task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
+    const agent = (index, state, done = {}) => ({ type: "workflow_agent", index, label: `say:${index}`, phaseIndex: 1, phaseTitle: "Say", agentId: `agent-${index}`, model: "claude-fable-5-1", state, attempt: 1, promptPreview: `Reply with exactly: agent ${index} ok`, ...done });
     const finished = (index) => ({ tokens: 20388, toolCalls: 0, durationMs: ms / 2, resultPreview: `agent ${index} ok` });
-    const progress = (current, usage, agents) => out({ type: "system", subtype: "task_progress", task_id: "wf-1", run_id: "wf-1-run", tool_use_id: "toolu_wf_1", description: `Say: ${current}`, last_tool_name: current, summary: `Workflow ${name}`, usage, workflow_progress: [{ type: "workflow_phase", index: 1, title: "Say" }, ...agents], session_id: sessionId });
+    const progress = (current, usage, agents) => out({ type: "system", subtype: "task_progress", task_id: taskId, run_id: runId, tool_use_id: toolUseId, description: `Say: ${current}`, last_tool_name: current, summary: `Workflow ${name}`, usage, workflow_progress: [{ type: "workflow_phase", index: 1, title: "Say" }, ...agents], session_id: sessionId });
     progress("say:1", { total_tokens: 0, tool_uses: 0, duration_ms: 42 }, [agent(1, "start"), agent(2, "start")]);
-    inBackground(() => progress("say:1", { total_tokens: 20388, tool_uses: 0, duration_ms: ms / 2 }, [agent(1, "done", finished(1)), agent(2, "start")]), ms / 2, "wf-1");
+    // Halfway, say:2 is at work: Claude Code's `progress` state, with its tokens and tool calls so far.
+    inBackground(() => progress("say:1", { total_tokens: 20388, tool_uses: 0, duration_ms: ms / 2 }, [agent(1, "done", finished(1)), agent(2, "progress", { tokens: 8000, toolCalls: 1 })]), ms / 2, taskId);
     inBackground(() => {
       progress("say:2", { total_tokens: 40776, tool_uses: 0, duration_ms: ms }, [agent(1, "done", finished(1)), agent(2, "done", finished(2))]);
-      endTask("wf-1", "completed");
+      endTask(taskId, "completed", { summary: `Dynamic workflow "Workflow ${name}" completed`, output_file: `/tmp/${name}.output` });
       inBackground(() => enqueue(() => selfStartedTurn(`Workflow ${name} done.`, [])), WORKFLOW_REPORT_DELAY_MS);
-    }, ms, "wf-1");
+    }, ms, taskId);
+  } else if ((match = prompt.match(/^nested-agent (\d+)$/))) {
+    // A background subagent and the command it runs, as Claude Code 2.1.304 reports them (the send-now probe): the
+    // subagent agent-1 (local_agent, spawn_depth 1) says what it does now and the tool it last used; its command cmd-1
+    // (local_bash, a foreground call of the subagent's) names it as its parent and is owned by it. At <ms> the command
+    // ends, then the subagent, each with its description as its summary and the subagent with an output file, and a turn
+    // of its own reports it. stop_task on the subagent kills it as an interrupt did in the probe: its command is stopped
+    // first, then task_updated says killed and the notice says stopped.
+    const ms = Number(match[1]);
+    say("Agent started.");
+    const ended = (status) => {
+      endTask("cmd-1", status, { summary: "Run the checks command", output_file: "" });
+      if (status === "stopped") out({ type: "system", subtype: "task_updated", task_id: "agent-1", patch: { status: "killed", end_time: Date.now() }, session_id: sessionId });
+      endTask("agent-1", status, { summary: "Run the checks", output_file: "/tmp/agent-1.output" });
+    };
+    startTask("agent-1", { onStop: () => ended("stopped") });
+    startTask("cmd-1");
+    out({ type: "system", subtype: "task_started", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", task_type: "local_agent", subagent_type: "general-purpose", description: "Run the checks", is_backgrounded: true, spawn_depth: 1, prompt: "Run the checks with Bash, then reply: done", session_id: sessionId });
+    out({ type: "system", subtype: "task_progress", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", subagent_type: "general-purpose", description: "Running Run the checks", last_tool_name: "Bash", usage: { total_tokens: 22304, tool_uses: 1, duration_ms: 4659 }, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "cmd-1", run_id: "cmd-1-run", tool_use_id: "toolu_cmd_1", task_type: "local_bash", description: "Run the checks command", is_backgrounded: false, parent_task_id: "agent-1", owned_by_subagent: true, session_id: sessionId });
+    inBackground(() => { ended("completed"); enqueue(() => selfStartedTurn("Agent agent-1 done.", [])); }, ms, "agent-1");
   } else if (prompt === "notify-unknown") {
     // A task ends that was never seen to start, then the turn answers.
     out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
