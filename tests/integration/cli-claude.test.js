@@ -111,6 +111,24 @@ describe("the headless CLI with a hosted Claude", () => {
     finally { run.proc.kill(); await run.done; }
   }, 60_000);
 
+  test("jolo attach to a run already waiting on a question prints it, with how to answer it, once", async () => {
+    const { home, repo } = boot();
+    const run = followAtTerminal(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo], home);
+    const attached = { output: () => "", proc: null, done: Promise.resolve(0) };
+    try {
+      await waitFor(() => run.output().includes("answer with: jolo dialog answer "), { label: "the question announced", timeoutMs: 20_000 });
+      const runId = /answer with: jolo dialog answer (\S+) <choice>/.exec(run.output())[1];
+      Object.assign(attached, followAtTerminal(["attach", runId], home));
+      await waitFor(() => attached.output().includes(`answer with: jolo dialog answer ${runId}`), { label: "the question shown on attach", timeoutMs: 20_000 });
+      expect(attached.output()).toContain("Claude asks: tea or coffee?\n  [1] tea\n  [2] coffee\n");
+      expect((await jolo(["dialog", "answer", runId, "1"], home)).code).toBe(0);
+      expect(await attached.done).toBe(0);
+      expect(attached.output()).toContain("You answered: tea");
+      expect(attached.output().split("Claude asks: tea or coffee?").length).toBe(2); // told once, not again by a replayed event
+    } catch (error) { console.error(run.output(), attached.output()); throw error; }
+    finally { run.proc.kill(); attached.proc?.kill(); await run.done; await attached.done; }
+  }, 60_000);
+
   test("piped or --json, jolo run is headless: a question with nobody to answer it pauses the run, which is reported with how to resume it", async () => {
     const { home, repo } = boot();
     const run = follow(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo, "--json"], home);

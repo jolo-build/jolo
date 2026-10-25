@@ -80,12 +80,27 @@ export async function followRun(client, { session, cursor, json, startRun, run: 
     shownRunning = running;
     err(line ? line.text : "background work ended");
   };
+  /** Dialogs already told of: one comes from its event, or from the run's pending list when joining late, never both. */
+  const announced = new Set();
   const announceDialog = (/** @type {any} */ payload) => {
+    if (announced.has(payload.dialogId)) return;
+    announced.add(payload.dialogId);
     const runId = run?.id ?? payload.runId;
     const kind = dialogKind(payload);
     if (json) { emit(json, { type: "dialog_required", runId, dialogId: payload.dialogId, tool: payload.tool, kind, answerArgv: ["jolo", "dialog", kind === "question" ? "answer" : "approve", runId], dismissArgv: ["jolo", "dialog", "dismiss", runId] }); return; }
     for (const line of dialogLines(payload)) err(line);
     err(dialogHint(payload, runId));
+  };
+  /**
+   * Questions the run already asked: joining late (attach, or a reconnect) starts the stream after their events, and the
+   * run would wait on a question this terminal never showed.
+   */
+  const announcePending = async () => {
+    if (!run) return;
+    try {
+      const { pendingDialogs = [] } = await client.call("session.page", { sessionId: session.id, limit: 1 });
+      for (const dialog of pendingDialogs) if (dialog.runId === run.id) announceDialog(dialog);
+    } catch (error) { err(`could not read open questions: ${error.message}`); }
   };
   // Writers hand back whatever they hand back (`process.stdout.write` returns a boolean); the
   // chain exists only to keep the order, so the resolved value is never looked at.
@@ -139,6 +154,7 @@ export async function followRun(client, { session, cursor, json, startRun, run: 
         for (const message of snapshot.messages) await projection.fill(message.id);
         if (TERMINAL.has(snapshot.run.state)) { finalState = snapshot.run.state; resolve(); }
         else if (snapshot.run.state === "paused") { pause = snapshot.run; resolve(); }
+        else await announcePending();
       } catch (error) { err(`could not restore run: ${error.message}`); finalState = "interrupted"; resolve(); }
     });
   });
@@ -152,6 +168,7 @@ export async function followRun(client, { session, cursor, json, startRun, run: 
   try {
     await client.subscribe({ after: cursor ?? "0", sessionId: session.id });
     if (startRun) run = await startRun();
+    else await announcePending();
     // Joining late: the process may already run background work that no event in this stream will tell of.
     void readActivity(client, session.id).then((current) => { if (current) noteActivity(current); });
     for (const message of existingRun?.messages ?? []) if (message.committedBytes > 0) await projection.fill(message.id);
