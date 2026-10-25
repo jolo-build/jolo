@@ -22,7 +22,8 @@ function statusLine(prompt) {
   const device = e(prompt.device_name);
   return {
     pending: `Sending to ${device}…`, delivered: `Sending to ${device}…`, accepted: `Starting on ${device}…`, running: `Running on ${device}…`,
-    awaiting_permission: `Waiting for approval on ${device}.`,
+    // Without a permission's details the run waits on something else, such as a question Claude Code asked.
+    awaiting_permission: prompt.permission ? `Waiting for approval on ${device}.` : `Waiting for an answer on ${device}.`,
     completed: prompt.error ? e(prompt.error) : `Finished on ${device}.`, cancelled: prompt.error ? e(prompt.error) : `Cancelled on ${device}.`,
   }[prompt.status] ?? e(prompt.error || `Did not run on ${prompt.device_name}.`);
 }
@@ -32,7 +33,7 @@ const waitingOn = prompt => { try { return prompt.status === 'awaiting_permissio
 
 function permissionBlock(prompt, csrf, approvals) {
   const request = waitingOn(prompt);
-  if (!request) return prompt.status === 'awaiting_permission' ? `<p class="fine">Open Jolo on ${e(prompt.device_name)} to allow or deny the request.</p>` : '';
+  if (!request) return prompt.status === 'awaiting_permission' ? `<p class="fine">Open Jolo on ${e(prompt.device_name)} to answer.</p>` : '';
   const answer = (decision, label, style) => `<form method="post" action="/prompts/${e(prompt.id)}/permission"><input type="hidden" name="csrf" value="${e(csrf)}"><input type="hidden" name="permission" value="${e(request.id)}"><input type="hidden" name="decision" value="${decision}"><button class="button${style}" type="submit">${label}</button></form>`;
   return `<div class="prompt-permission"><p><strong>${e(request.tool)}</strong> · ${e(request.summary)}</p>${request.command ? `<pre><code>${e(request.command)}</code></pre>` : ''}
     ${!request.complete ? `<p class="fine">This request is too long to review here. Open Jolo on ${e(prompt.device_name)} to allow or deny it.</p>`
