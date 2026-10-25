@@ -25,6 +25,8 @@ const engineCommand = (extraArgs = []) => resolveEngineCommand({
 import { EXIT } from "./exit-codes.js";
 export { EXIT } from "./exit-codes.js";
 import { followRun } from "./follow-run.js";
+import { answersFor, dialogKind, dismissMessage, readQuestions } from "@jolo/client/dialogs";
+import { backgroundTasks } from "@jolo/client/activity";
 
 const USAGE = `usage:
   jolo [<dir>] [--theme <id>]                       interactive terminal client (needs a TTY)
@@ -34,6 +36,10 @@ const USAGE = `usage:
   jolo resume <run-id> [--json]
   jolo permission allow <permission-id> [--once | --project]
   jolo permission deny <permission-id>
+  jolo dialog answer <run-id> <choice> [<choice>…]  answer Claude's question: an option's number, several as 1,2, or your own words; one per question
+  jolo dialog approve <run-id>                      approve the plan Claude asks about
+  jolo dialog dismiss <run-id> [<message>]          send a plan back with what should change, or leave a question unanswered
+  jolo background stop <session-id> [--force]       stop a conversation's background work; --force closes its Claude process
   jolo revert <invocation-id> <path>
   jolo status [--json]
   jolo board [--json]                    every project: what needs you, what finished, what is running
@@ -88,6 +94,14 @@ function emit(json, record) {
   if (json) out(JSON.stringify(record));
 }
 
+/**
+ * How a command that follows a run connects. A person at a terminal is an interactive client, as `jolo permission`
+ * already is: the run then waits for their answer to a question, a plan or a permission request (each printed with the
+ * command that answers it) instead of pausing with nobody to ask, which would close Claude's question unanswered. Piped,
+ * or asked for --json, the command is headless, and a run with nobody to ask pauses as before.
+ */
+const followerKind = (flags) => flags.json !== true && process.stdin.isTTY ? "tui" : "headless";
+
 async function attachEngine(flags, { start = true, clientKind = 'headless' } = {}) {
   const paths = resolvePaths({ home: flags.home, profile: flags.profile });
   const options = { paths, clientKind, build: BUILD };
@@ -114,7 +128,7 @@ async function commandRun({ positional, flags }) {
   if (flags.every !== undefined && !everyMs) { err(EVERY_BOUNDS); return EXIT.usage; }
   if (flags["every-prompt"] !== undefined && !everyMs) { err("--every-prompt needs --every"); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags);
+  const { client } = await attachEngine(flags, { clientKind: followerKind(flags) });
   try {
     if (flags.agent && flags.model) throw new Error('Choose --agent or --model for this run');
     const modelOverride = flags.model ? parseModelTarget(flags.model) : null;
@@ -131,7 +145,8 @@ async function commandRun({ positional, flags }) {
       if (!json) err(`worktree ${workspace.branch} at ${workspace.path}`);
     }
     // --agent hands the task to a hosted agent; Jolo relays the prompt and routes its permission requests here.
-    const { session, cursor } = await client.call("session.create", { projectId: project.projectId, workspaceId, title: prompt.slice(0, 80), ...(flags.agent ? { agentId: flags.agent } : {}) });
+    // Untitled: the engine names it, from its answerer's title or the prompt's first characters.
+    const { session, cursor } = await client.call("session.create", { projectId: project.projectId, workspaceId, title: "", ...(flags.agent ? { agentId: flags.agent } : {}) });
     if (flags.agent && !json) err(`task answered by ${flags.agent}`);
     if (everyMs) {
       const { schedule } = await client.call("schedule.create", { sessionId: session.id, prompt: flags["every-prompt"] ?? prompt, everyMs });
@@ -156,7 +171,7 @@ async function commandAttach({ positional, flags }) {
   const runId = positional[1];
   if (!runId) { err(USAGE); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags, { start: false });
+  const { client } = await attachEngine(flags, { start: false, clientKind: followerKind(flags) });
   if (!client) { err("engine is not running"); return EXIT.failed; }
   try {
     const { run, messages, cursor } = await client.call("run.snapshot", { runId });
@@ -198,6 +213,67 @@ async function commandPermission({ positional, flags }) {
   }
 }
 
+/**
+ * Answer a question or a plan Claude asks in a run, from the shell, as `jolo permission` answers a permission: `jolo run`
+ * itself cannot (the engine takes a decision only from an interactive client). The run names the dialog: a run has one
+ * open question at a time, except when subagents it runs ask together, and then the oldest is answered first.
+ */
+async function commandDialog({ positional, flags }) {
+  const [, action, runId, ...choices] = positional;
+  if (!["answer", "approve", "dismiss"].includes(action) || !runId || (action === "answer" && !choices.length) || (action === "approve" && choices.length)) { err(USAGE); return EXIT.usage; }
+  const paths = resolvePaths({ home: flags.home, profile: flags.profile });
+  const client = await tryConnect(paths, { clientKind: "tui", build: BUILD }); // a human at a terminal is an interactive client
+  if (!client) { err("engine is not running"); return EXIT.failed; }
+  try {
+    const { run } = await client.call("run.snapshot", { runId });
+    const open = ((await client.call("session.page", { sessionId: run.sessionId, limit: 1 })).pendingDialogs ?? []).filter((dialog) => dialog.runId === runId);
+    if (!open.length) { err(`no open question for run ${runId}`); return EXIT.failed; }
+    const [dialog] = open;
+    const kind = dialogKind(dialog);
+    let result;
+    if (action === "dismiss") result = await client.call("dialog.dismiss", { dialogId: dialog.dialogId, message: choices.join(" ").trim() || dismissMessage(dialog.tool) });
+    else if (kind === "truncated" || kind === "unreadable") { err(`this question can only be dismissed: jolo dialog dismiss ${runId}`); return EXIT.failed; }
+    else if (action === "answer") {
+      if (kind !== "question") { err(`run ${runId} asks for an approval, not an answer: jolo dialog approve ${runId}`); return EXIT.failed; }
+      const questions = readQuestions(dialog.input);
+      const answers = answersFor(questions, choices);
+      if (!answers) { err(`the question${questions.length === 1 ? "" : "s"} need${questions.length === 1 ? "s" : ""} ${questions.length} answer${questions.length === 1 ? "" : "s"}: an option's number (${questions.map((question) => `1-${question.options.length}`).join(", ")}), several as 1,2 for a multi-select, or your own words`); return EXIT.usage; }
+      result = await client.call("dialog.resolve", { dialogId: dialog.dialogId, response: { answers } });
+    } else {
+      if (kind === "question") { err(`run ${runId} asks a question: jolo dialog answer ${runId} <choice>`); return EXIT.failed; }
+      result = await client.call("dialog.resolve", { dialogId: dialog.dialogId, response: {} });
+    }
+    out(flags.json ? JSON.stringify({ ...result, runId }) : `${action === "dismiss" ? "dismissed" : action === "answer" ? "answered" : "approved"} for run ${runId}`);
+    if (open.length > 1 && !flags.json) err(`${open.length - 1} more open question${open.length > 2 ? "s" : ""} in run ${runId}`);
+    return EXIT.completed;
+  } finally {
+    await client.close();
+  }
+}
+
+/** Stop a conversation's background work (its Claude process's tasks), or with --force close the process itself. */
+async function commandBackground({ positional, flags }) {
+  const [, action, sessionId] = positional;
+  if (action !== "stop" || !sessionId || positional.length > 3) { err(USAGE); return EXIT.usage; }
+  const paths = resolvePaths({ home: flags.home, profile: flags.profile });
+  const client = await tryConnect(paths, { clientKind: "tui", build: BUILD }); // closing a process is an interactive client's call
+  if (!client) { err("engine is not running"); return EXIT.failed; }
+  try {
+    if (flags.force === true) {
+      const { closing } = await client.call("session.closeProcess", { sessionId });
+      out(flags.json ? JSON.stringify({ closing }) : closing ? "closing the conversation's Claude process; its background work ends with it" : "the conversation has no Claude process");
+      return EXIT.completed;
+    }
+    const result = await client.call("session.stopBackground", { sessionId });
+    out(flags.json ? JSON.stringify(result) : `stopped ${result.stopped} of ${result.requested} background task${result.requested === 1 ? "" : "s"}`);
+    const left = backgroundTasks((await client.call("session.activity", { sessionId })).activity).length;
+    if (!flags.json && (result.escalated || left)) err(`${left ? `${left} task${left === 1 ? "" : "s"}` : "work"} did not stop; close the process with: jolo background stop ${sessionId} --force`);
+    return EXIT.completed;
+  } finally {
+    await client.close();
+  }
+}
+
 async function commandRevert({ positional, flags }) {
   const [, invocationId, target] = positional;
   if (!invocationId || !target) { err(USAGE); return EXIT.usage; }
@@ -217,7 +293,7 @@ async function commandResume({ positional, flags }) {
   const runId = positional[1];
   if (!runId) { err(USAGE); return EXIT.usage; }
   const json = flags.json === true;
-  const { client } = await attachEngine(flags, { start: false });
+  const { client } = await attachEngine(flags, { start: false, clientKind: followerKind(flags) });
   if (!client) { err("engine is not running"); return EXIT.failed; }
   try {
     const { run } = await client.call("run.resume", { runId });
@@ -761,7 +837,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, schedule: commandSchedule, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
+  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, dialog: commandDialog, background: commandBackground, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, schedule: commandSchedule, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

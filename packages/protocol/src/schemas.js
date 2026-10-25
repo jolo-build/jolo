@@ -22,6 +22,8 @@ export const ERROR_CODES = Object.freeze([
   "interrupted",
   "resync_required",
   "not_found",
+  // The conversation's agent process that a request needs has ended (a task's output, read from the process).
+  "no_process",
   "internal",
 ]);
 
@@ -177,6 +179,7 @@ export const MessageSchema = z.object({
   artifactId: Id,
   committedBytes: z.number().int().nonnegative(),
   status: z.enum(["streaming", "complete", "interrupted"]),
+  createdAt: IsoTimestamp.optional(), // an older engine leaves it out
 });
 
 // ---- JSON-RPC envelopes -------------------------------------------------------------------
@@ -203,7 +206,7 @@ export const ResponseSchema = z.union([
 
 export const NotificationSchema = z.object({
   jsonrpc: z.literal("2.0"),
-  method: z.enum(["event", "preview", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
+  method: z.enum(["event", "preview", "activity", "browser.execute", "browser.open", "browser.cancel", "terminal.output", "terminal.state"]),
   params: z.record(z.string(), z.unknown()),
 });
 
@@ -245,6 +248,9 @@ export const EVENT_TYPES = Object.freeze([
   "account.changed",
   "schedule.fired",
   "schedule.updated",
+  "session.activity",
+  "dialog.requested",
+  "dialog.resolved",
 ]);
 
 /**
@@ -536,6 +542,189 @@ export const ScheduleSchema = z.object({
   updatedAt: IsoTimestamp,
 });
 
+// ---- hosted process activity ----------------------------------------------------------------
+// What a conversation's agent process is doing between and during turns: the background tasks it runs (agents,
+// workflows, commands) and those it finished lately.
+
+/**
+ * The most tasks an activity names, unless more than that are running: running tasks are never dropped. Finished
+ * ones fill the room left, the newest kept.
+ */
+export const TASK_HISTORY_LIMIT = 200;
+/** The most bytes (UTF-8) of a task's output the engine passes on: the last ones, since the end of a log is what is looked for. */
+export const TASK_OUTPUT_MAX = 200 * 1024;
+/** The most MCP servers a status names, and how long each field may be. */
+export const MCP_SERVERS_MAX = 100;
+/** One MCP server of an agent process: its name, status (`connected`, `failed`, `needs-auth`, `pending`), where it is configured, and why it failed. */
+export const McpServerSchema = z.object({ name: z.string().max(200), status: z.string().max(40), source: z.string().max(40).nullable(), error: z.string().max(500).nullable() });
+/**
+ * The most characters a task's description, phase, workflow name, progress line or summary keeps (and a workflow agent's
+ * label, phase or result preview), and an id (its own, its run's, its tool call's, its parent's), subagent type, task
+ * type, tool or model.
+ */
+export const TASK_TEXT_MAX = 500;
+export const TASK_ID_MAX = 128;
+/** The most characters of the path a finished task's output was written to. */
+export const TASK_PATH_MAX = 1024;
+/** The most phases a workflow's summary lists; agents of a phase past them count in its totals only. */
+export const WORKFLOW_PHASES_MAX = 100;
+/** The most agents a workflow's summary lists, the latest by index; those left out still count in its totals. */
+export const WORKFLOW_AGENTS_MAX = 200;
+/**
+ * What a workflow's summary keeps of each phase and listed agent, in characters: a phase's title and an agent's phase
+ * share one cap (an agent that names no phase index is matched to its phase by title); an agent's label, model and result
+ * preview have their own. Claude Code allows a result preview of 2048 characters: these keep a full list well inside a frame.
+ */
+export const WORKFLOW_TITLE_MAX = 80;
+export const WORKFLOW_LABEL_MAX = 120;
+export const WORKFLOW_MODEL_MAX = 64;
+export const WORKFLOW_PREVIEW_MAX = 160;
+/**
+ * The most bytes an activity payload takes as JSON: a frame (framing.js's FRAME_MAX_BYTES, 256 KiB, written out here so
+ * the renderer's schemas need not load the Node framing), less room for the event or notification it travels in.
+ */
+export const ACTIVITY_PAYLOAD_MAX_BYTES = 256 * 1024 - 16 * 1024;
+const runningCount = (/** @type {{ status: string }[]} */ tasks) => tasks.filter((task) => task.status === "running").length;
+
+const TaskId = z.string().max(TASK_ID_MAX);
+const TaskText = z.string().max(TASK_TEXT_MAX);
+const TaskCount = z.number().int().nonnegative().nullable();
+const WorkflowCount = z.number().int().nonnegative();
+/**
+ * One agent of a workflow as its progress last reported it: its label, the title of its phase, whether it runs, is done or
+ * failed, its model, tokens, tool calls and duration, and a preview of its result; each null until Claude reports it.
+ */
+const WorkflowTitle = z.string().max(WORKFLOW_TITLE_MAX);
+const WorkflowAgentSchema = z.object({
+  label: z.string().max(WORKFLOW_LABEL_MAX), phase: WorkflowTitle.nullable(), phaseIndex: TaskCount, state: z.enum(["running", "done", "failed"]),
+  model: z.string().max(WORKFLOW_MODEL_MAX).nullable(), tokens: TaskCount, toolCalls: TaskCount, durationMs: TaskCount, resultPreview: z.string().max(WORKFLOW_PREVIEW_MAX).nullable(),
+});
+/**
+ * What a workflow's progress last said of its phases and agents, as counts: each phase in index order with its index (an
+ * older engine sends none) and its agents running, done and failed, the totals over every agent, and the agent the last
+ * progress report named (`<phase>: <label>`). `agents.list` names the latest WORKFLOW_AGENTS_MAX agents in index order,
+ * each with its phase's index and title; an older engine sends none.
+ */
+const WorkflowSummarySchema = z.object({
+  // The engine cuts a phase's title to WORKFLOW_TITLE_MAX; the schema keeps taking the TASK_TEXT_MAX it once allowed.
+  phases: z.array(z.object({ index: WorkflowCount.optional(), title: TaskText, agents: WorkflowCount, done: WorkflowCount, running: WorkflowCount, failed: WorkflowCount })).max(WORKFLOW_PHASES_MAX),
+  agents: z.object({ total: WorkflowCount, running: WorkflowCount, done: WorkflowCount, failed: WorkflowCount, list: z.array(WorkflowAgentSchema).max(WORKFLOW_AGENTS_MAX).optional() }),
+  current: TaskText.nullable(),
+});
+export const TaskRecordSchema = z.object({
+  taskId: TaskId.min(1),
+  runId: TaskId.nullable(),
+  toolUseId: TaskId.nullable(),
+  description: TaskText,
+  subagentType: TaskId.nullable(),
+  // Claude's task_type (`local_workflow`, `local_bash`, `local_agent`, ...) and a workflow's name; an older engine sends neither.
+  taskType: TaskId.nullable().optional(),
+  workflowName: TaskText.nullable().optional(),
+  phase: TaskText.nullable(),
+  backgrounded: z.boolean(),
+  status: z.enum(["running", "completed", "stopped", "failed"]),
+  startedAt: IsoTimestamp,
+  endedAt: IsoTimestamp.nullable(),
+  usage: z.object({ totalTokens: TaskCount, toolUses: TaskCount, durationMs: TaskCount }),
+  // A workflow's phases and agents, null until its progress reports them and for any other task; an older engine sends none.
+  workflow: WorkflowSummarySchema.nullable().optional(),
+  // Where the task sits (the task that started it, how deep a subagent it is), what it does now (its last progress line
+  // and the tool it last used) and how it ended (the summary and output file of its notification): each null until
+  // Claude says it, and an older engine sends none.
+  parentTaskId: TaskId.nullable().optional(),
+  spawnDepth: TaskCount.optional(),
+  lastTool: TaskId.nullable().optional(),
+  progress: TaskText.nullable().optional(),
+  summary: TaskText.nullable().optional(),
+  outputFile: z.string().max(TASK_PATH_MAX).nullable().optional(),
+  // The model a background agent answers with, as its own messages name it: null until one does, and for any other
+  // task; an older engine sends none.
+  model: z.string().max(WORKFLOW_MODEL_MAX).nullable().optional(),
+});
+
+/** `truncated` says the process had finished tasks left out of these. */
+export const ActivitySchema = z.object({
+  state: z.enum(["idle", "working", "background"]),
+  tasks: z.array(TaskRecordSchema).refine((tasks) => tasks.length <= Math.max(TASK_HISTORY_LIMIT, runningCount(tasks)), { message: `at most ${TASK_HISTORY_LIMIT} tasks, unless more are running: running tasks are never dropped` }),
+  truncated: z.boolean(),
+  updatedAt: IsoTimestamp,
+});
+
+/**
+ * Transient activity: a process's progress between changes of its state or tasks, sent only to subscribers that
+ * declare `session.activity`; never a durable sequence, which only those changes get.
+ */
+export const ActivityNotificationSchema = z.object({ sessionId: Id, activity: ActivitySchema });
+
+/** How many bytes `text` takes in UTF-8, without encoding it (Bun and Electron's renderer alike). @param {string} text */
+const utf8Bytes = (text) => {
+  let count = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) count += 1;
+    else if (code < 0x800) count += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) { count += 4; i += 1; } // a surrogate pair
+    else count += 3;
+  }
+  return count;
+};
+const jsonBytes = (/** @type {unknown} */ value) => utf8Bytes(JSON.stringify(value) ?? "");
+
+/**
+ * A payload past ACTIVITY_PAYLOAD_MAX_BYTES, brought within it: first the agent lists of finished workflows go, the oldest
+ * first, then those of running ones (their counts and phases stay), then the oldest finished tasks, which marks it
+ * truncated. Running tasks are never left out. Each task is measured once and again only when its list goes, and the
+ * tasks are copied, never changed: a snapshot the engine reported shares them.
+ * @template {{ tasks: any[], truncated: boolean }} T
+ * @param {T} payload
+ * @returns {T}
+ */
+const fitActivity = (payload) => {
+  const sizes = payload.tasks.map(jsonBytes);
+  // The payload without its tasks, each task, and a comma between two.
+  let total = jsonBytes({ ...payload, tasks: [] }) + sizes.reduce((sum, size) => sum + size, 0) + Math.max(0, sizes.length - 1);
+  if (total <= ACTIVITY_PAYLOAD_MAX_BYTES) return payload;
+  const tasks = [...payload.tasks];
+  for (const running of [false, true]) {
+    for (let i = 0; i < tasks.length && total > ACTIVITY_PAYLOAD_MAX_BYTES; i++) {
+      const task = tasks[i];
+      if ((task.status === "running") !== running || task.workflow?.agents?.list === undefined) continue;
+      const { list, ...agents } = task.workflow.agents;
+      tasks[i] = { ...task, workflow: { ...task.workflow, agents } };
+      const size = jsonBytes(tasks[i]);
+      total += size - sizes[i];
+      sizes[i] = size;
+    }
+  }
+  let truncated = payload.truncated;
+  const dropped = new Set();
+  for (let i = 0; i < tasks.length && total > ACTIVITY_PAYLOAD_MAX_BYTES; i++) {
+    if (tasks[i].status === "running") continue;
+    dropped.add(i);
+    total -= sizes[i] + 1;
+    truncated = true;
+  }
+  return { ...payload, tasks: tasks.filter((_, i) => !dropped.has(i)), truncated };
+};
+
+/**
+ * A process's activity as it goes on the wire: every running task, and the newest finished ones up to
+ * TASK_HISTORY_LIMIT in all, in the order they started; `truncated` when finished ones were left out. It fits in a frame
+ * with room for the event or notification around it (see fitActivity), unless its running tasks alone do not.
+ */
+export const activityPayload = ({ state, tasks, updatedAt }) => {
+  const running = runningCount(tasks);
+  const room = Math.max(0, TASK_HISTORY_LIMIT - running); // for finished tasks
+  let left = Math.max(0, tasks.length - running - room); // the oldest finished ones, left out
+  const truncated = left > 0;
+  const kept = tasks.filter((task) => {
+    if (task.status === "running" || left === 0) return true;
+    left -= 1;
+    return false;
+  });
+  return fitActivity({ state, tasks: kept, truncated, updatedAt });
+};
+
 /** A task as it is written down, before it has an identity. */
 export const PlanTaskDraftSchema = z.object({
   title: z.string().min(1).max(200),
@@ -543,6 +732,27 @@ export const PlanTaskDraftSchema = z.object({
   agentId: Id.nullable().optional(),
   model: z.string().max(200).nullable().optional(),
   effort: z.string().max(40).nullable().optional(),
+});
+
+/**
+ * A question an agent asks the person rather than a permission: Claude's AskUserQuestion and plan approval (ExitPlanMode).
+ * `input` is the tool's input as Claude sent it; `response` is the person's answer (`{ message }` when dismissed).
+ */
+export const DIALOG_STATES = Object.freeze(["requested", "answered", "dismissed", "cancelled"]);
+/**
+ * The longest a dialog.requested event's `input` may be, as JSON. A longer input is published as `{ truncated: true,
+ * preview }`, `preview` being the start of its JSON; the dialog's record keeps it whole, and the answer is built from that.
+ */
+export const DIALOG_INPUT_EVENT_MAX = 64 * 1024;
+const DialogTool = z.string().min(1).max(128);
+const DialogValue = z.record(z.string(), z.unknown());
+const DialogEventInput = DialogValue
+  .refine((input) => JSON.stringify(input).length <= DIALOG_INPUT_EVENT_MAX, { message: `at most ${DIALOG_INPUT_EVENT_MAX} characters of JSON` })
+  .describe(`The tool's input as Claude sent it; when its JSON is longer than ${DIALOG_INPUT_EVENT_MAX} characters, { truncated: true, preview: <the start of its JSON> } instead.`);
+export const DialogSchema = z.object({
+  id: Id, sessionId: Id, runId: Id, requestId: Id, tool: DialogTool, toolUseId: Id.nullable(),
+  input: DialogValue, response: DialogValue.nullable(), state: z.enum(DIALOG_STATES),
+  createdAt: IsoTimestamp, resolvedAt: IsoTimestamp.nullable(),
 });
 
 export const EventPayloadSchemas = Object.freeze({
@@ -571,11 +781,14 @@ export const EventPayloadSchemas = Object.freeze({
   "plan.task.updated": z.object({ planId: Id, task: PlanTaskSchema }),
   "schedule.fired": z.object({ scheduleId: Id, runId: Id, fireCount: z.number().int().nonnegative() }),
   "schedule.updated": z.object({ schedule: ScheduleSchema }),
+  "session.activity": ActivitySchema,
+  "dialog.requested": z.object({ dialogId: Id, runId: Id, tool: DialogTool, input: DialogEventInput, toolUseId: Id.nullable() }),
+  "dialog.resolved": z.object({ dialogId: Id, state: z.enum(DIALOG_STATES.filter((state) => state !== "requested")) }),
   "permission.requested": z.object({ permissionId: Id, runId: Id, workspaceId: Id, tool: z.string(), summary: z.string().max(500), argv: z.array(z.string()).optional(), script: z.string().max(4000).optional(), cwd: z.string(), isolation: z.enum(["none"]), revision: Revision }),
   "permission.resolved": z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, grantId: Id.nullable().optional() }),
   "files.changed": z.object({ invocationId: Id, tool: z.string(), messageId: Id.optional(), diffArtifactId: Id.optional(), changes: z.array(z.object({ path: z.string(), op: z.enum(["create", "replace", "delete", "rename"]), newPath: z.string().optional(), beforeHash: z.string().nullable(), afterHash: z.string().nullable() })) }),
   "run.verification": z.object({ status: z.enum(["passed", "failed", "not_run", "interrupted", "stale"]), checks: z.array(z.object({ invocationId: Id, argv: z.array(z.string()), exitCode: z.number().int().nullable(), signal: z.string().nullable(), at: IsoTimestamp })) }),
-  "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative() }),
+  "message.started": z.object({ messageId: Id, role: MessageSchema.shape.role, kind: MessageSchema.shape.kind.optional(), artifactId: Id, ordinal: z.number().int().nonnegative(), createdAt: IsoTimestamp.optional() }),
   "run.usage": UsageSchema,
   "provider.attempt": z.object({ attempt: z.number().int().positive(), provider: z.string(), preset: PresetId.optional(), model: z.string(), status: z.enum(["started", "completed", "interrupted", "retrying", "failed"]), reason: z.string().optional() }),
   "tool.started": z.object({ invocationId: Id, callId: z.string(), name: z.string(), argumentDigest: z.string(), preview: z.string().max(200) }),
@@ -726,8 +939,44 @@ export const MethodSchemas = {
   },
   "session.page": {
     params: z.object({ sessionId: Id, beforeOrdinal: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(200).default(100) }),
-    result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
+    result: z.object({ session: SessionSchema, messages: z.array(MessageSchema), runs: z.array(RunSchema), pendingPermissions: z.array(EventPayloadSchemas['permission.requested']).optional(), pendingDialogs: z.array(EventPayloadSchemas['dialog.requested']).optional(), hasOlder: z.boolean(), cursor: DecimalString }),
   },
+  /** What the conversation's agent process is doing now; with none, what its last one left (idle); null when it never had one. */
+  "session.activity": { params: z.object({ sessionId: Id }), result: z.object({ activity: ActivitySchema.nullable() }) },
+  /**
+   * Stop the background work of the conversation's agent process, leaving its turn alone: every running task. `stopped`
+   * is how many ended within the grace; `escalated` when Claude cannot stop tasks and was sent a Stop instead. All zero
+   * when it has no process.
+   */
+  "session.stopBackground": {
+    params: z.object({ sessionId: Id }),
+    result: z.object({ requested: z.number().int().nonnegative(), stopped: z.number().int().nonnegative(), escalated: z.boolean() }),
+  },
+  /**
+   * Delete the conversation's finished tasks for good (Clear finished): from its process's tasks, or from its stored
+   * activity when it has no process. `cleared` is how many went. For interactive clients.
+   */
+  "session.clearFinished": { params: z.object({ sessionId: Id }), result: z.object({ cleared: z.number().int().nonnegative() }) },
+  /**
+   * A task's whole output, as the conversation's agent process holds it (during the task and after it, while the process
+   * lives), or else from the output file the task's notice named (an agent's, which Claude Code does not serve, or any
+   * task's once its process has ended): the last TASK_OUTPUT_MAX bytes of it, `truncated` when earlier output was left out
+   * (by the process or here), and `source` where it was read (an older engine leaves it out). `no_process` when the
+   * process has ended and there is no file to read, `not_found` when the process knows no such task.
+   */
+  "session.taskOutput": {
+    params: z.object({ sessionId: Id, taskId: TaskId.min(1) }),
+    result: z.object({ output: z.string().max(TASK_OUTPUT_MAX), totalBytes: z.number().int().nonnegative(), truncated: z.boolean(), source: z.enum(["process", "file"]).optional() }),
+  },
+  /** The MCP servers of the conversation's agent process and how each is (connected, failed, needs-auth, pending); null with no process. */
+  "session.mcpStatus": { params: z.object({ sessionId: Id }), result: z.object({ servers: z.array(McpServerSchema).max(MCP_SERVERS_MAX).nullable() }) },
+  /** Stop one background task of the conversation's agent process; `error` says why not ('no process' when it has none). */
+  "session.stopTask": { params: z.object({ sessionId: Id, taskId: Id }), result: z.object({ ok: z.boolean(), error: z.string().nullable() }) },
+  /**
+   * Close the conversation's agent process, ending its turn and every task it runs, for tasks that ignored a stop: the
+   * close goes on after the answer. `closing` is false when it has no process.
+   */
+  "session.closeProcess": { params: z.object({ sessionId: Id }), result: z.object({ closing: z.boolean() }) },
   "run.start": {
     params: z.object({
       sessionId: Id,
@@ -795,8 +1044,22 @@ export const DelegationModelSchema = z.object({
 });
 export const DelegationSchema = z.object({
   id: Id, parentRunId: Id, runId: Id, sessionId: Id, title: z.string(), modelAlias: z.string(),
-  state: RunStateSchema, failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
+  state: RunStateSchema,
+  /**
+   * Why a delegation_status wait ended: the child is done, it has a newer answer, a run of it is asking the person, the
+   * parent was stopped, the waiting call itself was stopped, or `waitMs` elapsed. Absent when no wait was made.
+   */
+  wakeReason: z.enum(['done', 'answer', 'asking', 'parent_stopped', 'stopped', 'timeout']).optional(),
+  failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
   createdAt: IsoTimestamp, output: z.string(), truncated: z.boolean(),
+  // The three below came after protocol 1.1 shipped, so an engine of that protocol from before them omits them; a client
+  // reads a missing one as unknown (no activity, not done, not partial). This engine always sends them.
+  /** What the child's agent process is doing; null when it has none running. */
+  activity: z.enum(['idle', 'working', 'background']).nullable().optional(),
+  /** Its runs have ended and its process is idle: `output` is its answer. */
+  done: z.boolean().optional(),
+  /** `output` is there but the child is not done: it may still be followed by another answer. */
+  partial: z.boolean().optional(),
 });
 
 Object.assign(MethodSchemas, {
@@ -870,6 +1133,15 @@ const BudgetPatchSchema = z.object({
   hostedToolDeadlineMs: BudgetSettingsSchema.shape.hostedToolDeadlineMs.removeDefault().optional(),
 });
 
+export const DelegationSettingsSchema = z.object({
+  /** The longest a parent's delegation_status may wait inside Jolo for a child, spending no model turns. */
+  maxWaitMs: z.number().int().min(1_000).max(3_600_000).default(600_000),
+});
+
+const DelegationPatchSchema = z.object({
+  maxWaitMs: DelegationSettingsSchema.shape.maxWaitMs.removeDefault().optional(),
+});
+
 export const SettingsSchema = z.object({
   model: ModelRefSchema.nullable().default(null),
   providers: ProviderOverridesSchema.default({}),
@@ -877,6 +1149,8 @@ export const SettingsSchema = z.object({
   /** Read-only engine capability; older engines do not advertise demo support. */
   demoProviderEnabled: z.boolean().default(false),
   budgets: BudgetSettingsSchema,
+  /** Older engines do not report it; their parent waits are capped at the default. */
+  delegation: DelegationSettingsSchema.prefault({}),
   /** Per hosted agent, keyed by manifest id: which model it should use (§4.3). */
   agents: z.record(AgentIdKey, AgentModelSettingsSchema).default({}),
   /** Agents ("agent:<id>") and providers ("provider:<preset>") the user keeps out of the model menu. */
@@ -920,6 +1194,10 @@ Object.assign(MethodSchemas, {
   "terminal.lease": { params: z.object({ terminalId: Id }), result: z.object({ inputLease: z.literal(true) }) },
   "terminal.close": { params: z.object({ terminalId: Id }), result: z.object({ closed: z.literal(true) }) },
   "terminal.list": { params: z.object({ workspaceId: Id.optional() }), result: z.object({ terminals: z.array(TerminalSchema) }) },
+  /** The person's answer to a dialog: it goes to the agent as the tool's input with `response` merged in. */
+  "dialog.resolve": { params: z.object({ dialogId: Id, response: DialogValue }), result: z.object({ dialogId: Id, state: z.literal("answered") }) },
+  /** The person will not answer: the agent is told `message`. */
+  "dialog.dismiss": { params: z.object({ dialogId: Id, message: z.string().min(1).max(2000) }), result: z.object({ dialogId: Id, state: z.literal("dismissed") }) },
   "permission.resolve": {
     params: z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), expectedRevision: Revision.optional() }),
     result: z.object({ permissionId: Id, decision: z.enum(["allow_once", "allow_run", "allow_project", "deny"]), revision: Revision, runId: Id }),
@@ -950,6 +1228,7 @@ Object.assign(MethodSchemas, {
       model: ModelRefSchema.nullable().optional(),
       providers: ProviderOverridesSchema.optional(),
       budgets: BudgetPatchSchema.optional(),
+      delegation: DelegationPatchSchema.optional(),
       agents: z.record(AgentIdKey, AgentModelPatchSchema.nullable()).optional(),
       hiddenSources: z.array(z.string().min(1).max(80)).max(100).optional(),
     }),
@@ -1228,6 +1507,11 @@ export function parseEvent(value) {
 export function parsePreview(value) {
   const parsed = PreviewSchema.safeParse(value);
   return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: new ProtocolError("invalid_frame", "invalid preview notification") };
+}
+
+export function parseActivity(value) {
+  const parsed = ActivityNotificationSchema.safeParse(value);
+  return parsed.success ? { ok: true, value: parsed.data } : { ok: false, error: new ProtocolError("invalid_frame", "invalid activity notification") };
 }
 
 /** Compare durable sequence strings numerically without losing precision. */

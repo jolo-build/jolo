@@ -38,6 +38,7 @@ const paths = {
   browser: 'M3 5h18v14H3ZM3 10h18', settings: 'M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6m-6 0v6',
   shield: 'm12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6', refresh: 'M20 7V3m0 4h-4M20 7a9 9 0 1 0 1 9',
   back: 'm14 6-6 6 6 6', forward: 'm10 6 6 6-6 6', stop: 'M6 6h12v12H6Z',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13',
   board: 'M5 5h5v14H5ZM14 5h5v14h-5Z', plan: 'm4 8 2 2 3-3M4 17l2 2 3-3M13 9h7M13 18h7', agents: 'M4 8h16v10H4ZM9 5v3M15 5v3M9 13h.01M15 13h.01', branch: 'M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM18 9a9 9 0 0 1-9 9', alert: 'M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01', clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 7v5l3 2',
 };
 export function Icon({ name, size = 16, className = '' }) {

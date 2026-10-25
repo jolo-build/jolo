@@ -171,6 +171,16 @@ describe("session projection", () => {
     expect(seeded.runs.get("r")).toMatchObject({ createdAt: "2026-09-06T10:00:00.000Z", updatedAt: "2026-09-07T00:00:20.000Z" });
   });
 
+  test("a message keeps when it was created: the engine's own time, else its event's, and a saved one its row's", () => {
+    const projection = new SessionProjection({ readArtifact: async () => ({ text: "", bytes: 0, eof: true }) });
+    projection.applyEvent(ev(1, "message.started", { messageId: "m1", role: "user", artifactId: "a1", ordinal: 0, createdAt: "2026-09-06T23:59:58.000Z" }));
+    projection.applyEvent(ev(2, "message.started", { messageId: "m2", role: "assistant", artifactId: "a2", ordinal: 1 }, { at: "2026-09-07T00:00:03.000Z" }));
+    expect(projection.messages.get("m1").createdAt).toBe("2026-09-06T23:59:58.000Z");
+    expect(projection.messages.get("m2").createdAt).toBe("2026-09-07T00:00:03.000Z"); // an engine from before the field
+    projection.seed({ messages: [{ ...saved("m0"), createdAt: "2026-09-06T10:00:00.000Z" }] });
+    expect(projection.messages.get("m0").createdAt).toBe("2026-09-06T10:00:00.000Z");
+  });
+
   test("keeps verification attached through completion and replaces stale results", () => {
     const projection = new SessionProjection({ readArtifact: async () => ({ text: "", bytes: 0, eof: true }) });
     const checks = [{ invocationId: "i1", argv: ["bun", "test"], exitCode: 0, signal: null, at: "2026-09-07T00:00:00.000Z" }];

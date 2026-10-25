@@ -3,8 +3,15 @@ import { readFileSync } from 'node:fs';
 import { connect } from '@jolo/client';
 import { SearchTextParams } from '@jolo/protocol';
 import { z } from 'zod';
+import { MAX_ACTIVE } from '../delegation/index.js';
 
 const inputSchema = z.toJSONSchema(SearchTextParams); delete inputSchema.$schema;
+/**
+ * The most tool calls a bridge works on at once; it reads no more of its input until one of them ends. A delegation_status
+ * wait holds its call for minutes, so there is room for a wait on each child a parent may run at once (the delegation
+ * service's MAX_ACTIVE, 4) and 4 more for Jolo's other tools.
+ */
+export const MAX_IN_FLIGHT = MAX_ACTIVE + 4;
 
 export const searchBridge = {
   tools: [{ name: 'search_text', description: 'Search this workspace using Jolo’s live tgrep index, with automatic live-search fallback while indexing. Literal by default. Set fresh=true when verifying recent edits. Returns bounded file paths, line numbers, text, and a paging cursor.', inputSchema, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } }],
@@ -57,7 +64,7 @@ export async function runScopedMcp({ argv, name, tools, call }) {
         let request;
         try { request = JSON.parse(line); } catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Invalid JSON' } }); continue; }
         if (!request || Array.isArray(request) || request.jsonrpc !== '2.0' || typeof request.method !== 'string') { send({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request' } }); continue; }
-        if (inflight.size >= 4) await Promise.race(inflight);
+        if (inflight.size >= MAX_IN_FLIGHT) await Promise.race(inflight);
         const task = handle(request).catch(error => send({ jsonrpc: '2.0', id: request.id ?? null, error: { code: -32603, message: error.message } })).finally(() => inflight.delete(task));
         inflight.add(task);
       }

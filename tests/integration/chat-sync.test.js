@@ -206,3 +206,15 @@ test('pausing stops uploads, account switching does not upload another account h
   a.account.record.account.id=other.id; a.account.credential=token;
   await a.sync.cycle(); expect((await (await f.call('',null,token)).json()).chats).toHaveLength(0);
 });
+
+test('a synced message carries no time of its own: the export has none, so it is not stamped with the moment it arrived', async () => {
+  const f = await setup(), a = f.device();
+  const id = a.sync.restore(chat('Plan this feature'));
+  const restored = a.storage.listMessagesForSession(id, { limit: 10 }).messages;
+  expect(restored).toHaveLength(2);
+  for (const message of restored) expect(message.createdAt).toBeUndefined();
+  // A message written here keeps its time.
+  const artifact = a.storage.createArtifact({ sessionId: id, kind: 'text' });
+  const local = a.storage.insertMessage({ sessionId: id, runId: null, role: 'user', artifactId: artifact.id, ordinal: a.storage.nextMessageOrdinal(id) });
+  expect(local.createdAt).toMatch(/^\d{4}-\d\d-\d\dT/);
+});

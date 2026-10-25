@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { selectPanel } from './panel-controls.js';
 
 export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, report, results }) {
   const type = async value => {
@@ -37,23 +38,25 @@ export async function runDelegationSmoke({ window, bridge, evaluate, waitFor, re
   assert.equal(delegations[0].execution.model, 'fake-large');
   assert.equal(delegations[0].execution.effort, 'high');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /Child result:.*fake-large.*high/);
-  // The child is not a row of the sidebar; the parent's header lists it.
+  // The child is not a row of the sidebar, nor in the parent's header; the Activity panel lists it under Child tasks.
   const child = JSON.stringify(`[data-session-id="${delegations[0].sessionId}"]`);
   const parentRow = JSON.stringify(`.sidebar [data-session-id="${parent}"]`);
-  const toggle = "document.querySelector('.task-header .child-tasks-toggle')";
+  const row = `document.querySelector('.activity-panel .child-tasks ' + ${child})`;
   const painted = "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
-  await waitFor(`Boolean(document.querySelector(${parentRow})) && ${toggle}?.textContent.includes('1 child task')`, 'the parent lists its child task in its header');
+  await waitFor(`Boolean(document.querySelector(${parentRow}))`, 'the parent is a row of the sidebar');
   assert.equal(await evaluate(`Boolean(document.querySelector('.sidebar ' + ${child}))`), false, 'the child is not a row of the sidebar');
-  await evaluate(`${toggle}.click()`);
-  await waitFor(`Boolean(document.querySelector('.child-tasks-menu:popover-open ' + ${child}))`, 'the header lists the child task');
+  assert.equal(await evaluate("Boolean(document.querySelector('.task-header .child-tasks-toggle, .child-tasks-menu'))"), false, 'the header no longer lists child tasks');
+  await selectPanel(evaluate, waitFor, 'Activity');
+  await waitFor(`document.querySelector('.activity-panel .child-tasks .activity-section-label')?.textContent === 'Child tasks' && Boolean(${row}) && ${row}.dataset.state === 'done' && ${row}.querySelector('.child-task-open').title.startsWith('Open ') && /^Child · /.test(${row}.querySelector('.activity-task-meta').textContent) && !${row}.querySelector('.stop-task')`, 'the Activity panel lists the finished child task under Child tasks, with no stop', 20_000);
+  await waitFor(`/Answered/.test(${row}.querySelector('.activity-task-meta').textContent)`, 'the child row says the child answered, from its delegation row');
   await evaluate(painted);
   writeFileSync(path.join(results, 'delegation-result.png'), (await window.webContents.capturePage()).toPNG());
-  await evaluate(`document.querySelector('.child-tasks-menu ' + ${child}).click()`);
+  await evaluate(`${row}.querySelector('.child-task-open').click()`);
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(delegations[0].sessionId)}`, 'child opens its own conversation');
   await waitFor("window.__joloSmoke.state().assistantText.includes('fake-large')", 'child transcript loaded');
   assert.match(await evaluate('window.__joloSmoke.state().assistantText'), /fake-large.*high/);
   await waitFor("Boolean(document.querySelector('.task-header .parent-task-link'))", 'the child offers the way back to its parent');
   await evaluate("document.querySelector('.task-header .parent-task-link').click()");
   await waitFor(`window.__joloSmoke.state().sessionId === ${JSON.stringify(parent)}`, 'parent opens again');
-  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks listed in the header of their parent, and opening the child and returning to the parent passed.');
+  report.checks.push('Model mention search, effort selection, removable chips, unchanged parent model, real scoped MCP child execution, result collection, child tasks listed in the Activity panel of their parent (not in its header), and opening the child from there and returning to the parent passed.');
 }

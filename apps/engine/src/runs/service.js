@@ -14,12 +14,15 @@ export class RunService {
    * `captureProvider` records which model a native run was dispatched against, and `workspaceBusy`
    * reports a worktree another operation already holds; an engine that has neither still schedules
    * runs, so both are optional. `sessionIdle` hears when a conversation has no run queued or in progress.
-   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean }} options
+   * `titles` names a task from its first prompt when it claims the task; otherwise, or without it, the task is named
+   * after the prompt's first characters at once.
+   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean, titles?: { claims: (session: any, execution?: any) => boolean, suggest: (session: any, prompt: string, execution?: any) => Promise<string | null> } | null }} options
    */
   constructor(options) {
     this.storage = options.storage;
     this.executor = options.executor;
     this.captureProvider = options.captureProvider;
+    this.titles = options.titles ?? null;
     this.lifetime = options.lifetime;
     this.log = options.log;
     this.maxActive = options.maxActive ?? Infinity;
@@ -28,6 +31,7 @@ export class RunService {
     this.workspaceBusy = options.workspaceBusy ?? (() => false);
     /** Told when a conversation has no run queued or in progress any more. */
     this.sessionIdle = options.sessionIdle ?? (() => {});
+    /** Transient notifications, never stored: a message's text as it streams ("preview"), a process's progress ("activity"). */
     this.previews = new EventEmitter();
     /** Runs that have just stopped, for services that started them: emits the durable run record. */
     this.settled = new EventEmitter();
@@ -91,12 +95,19 @@ export class RunService {
         throw new ProtocolError("conflict", `session revision is ${session.revision}, expected ${expectedSessionRevision}`, { revision: session.revision });
       }
       const images = validateAttachments(this.storage, sessionId, attachments);
-      this.storage.assignSessionTitle(sessionId, prompt);
+      // A task still unnamed is named by its answerer when the title service claims it: the title stays blank meanwhile
+      // (clients show it being named), and the service writes the prompt's first characters itself if naming fails.
+      // Otherwise the first characters name it at once, as they always did.
+      const claimed = !String(session.title ?? "").trim() && prompt.trim() !== "" && Boolean(this.titles?.claims(session, execution));
+      if (!claimed) this.storage.assignSessionTitle(sessionId, prompt);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });
       const providerConfig = this.captureProvider?.(session, execution);
       if (providerConfig) this.storage.setRunProviderConfig(run.id, providerConfig);
       this.storage.bumpSessionRevision(sessionId);
       this.storage.appendEvent({ sessionId, runId: run.id, type: "run.state", payload: { state: run.state, revision: run.revision, agentId: run.execution?.agentId ?? null, promptPreview: prompt.slice(0, 500), ...(images.length ? { attachments: images } : {}), ...(run.taskReferences?.length ? { taskReferences: run.taskReferences } : {}) } });
+      // Never awaited, and it cannot fail the run. Asked on a later turn of the event loop, so the run is queued and
+      // started before any title work begins.
+      if (claimed) this.storage.afterCommit(() => setTimeout(() => void this.titles?.suggest(session, prompt, execution), 0));
       return { run, deduplicated: false };
     });
     if (!result.deduplicated) {
@@ -388,7 +399,7 @@ export class RunService {
           const artifact = storage.createArtifact({ sessionId: run.sessionId, kind: "message" });
           writer = storage.openArtifactWriter(artifact);
           const created = storage.insertMessage({ sessionId: run.sessionId, runId: run.id, role, kind, artifactId: artifact.id, ordinal: storage.nextMessageOrdinal(run.sessionId) });
-          storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "message.started", payload: { messageId: created.id, role, kind, artifactId: artifact.id, ordinal: created.ordinal } });
+          storage.appendEvent({ sessionId: run.sessionId, runId: run.id, type: "message.started", payload: { messageId: created.id, role, kind, artifactId: artifact.id, ordinal: created.ordinal, createdAt: created.createdAt } });
           return { message: created, artifact };
         }); } catch (error) { try { writer?.close(); } catch {} throw error; }
         streams.set(message.message.id, { writer, artifact: message.artifact, pending: [], pendingBytes: 0, offset: 0, timer: null, hash: createHash("sha256") });

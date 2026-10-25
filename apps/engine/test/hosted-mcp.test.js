@@ -1,8 +1,15 @@
 import { expect, test } from 'bun:test';
 import { createHostedMcpConfig, hostedMcpConfig, codexMcpArgs, acpMcpServers } from '../src/hosted-mcp.js';
 import { SCHEDULE_METHODS } from '../src/scheduler/mcp.js';
+import { MAX_IN_FLIGHT } from '../src/search/mcp.js';
+import { MAX_ACTIVE } from '../src/delegation/index.js';
 import { BrowserBroker } from '../src/browser/broker.js';
 import { ENGINE_ENTRY } from '../../../tests/integration/helpers.js';
+
+test('the scoped bridge works on a delegation_status wait for every child a parent may run, with room for other tools', () => {
+  expect(MAX_IN_FLIGHT).toBe(8);
+  expect(MAX_IN_FLIGHT).toBe(MAX_ACTIVE + 4);
+});
 
 test('all hosted transports preserve quoted paths and pin the same workspace without a shell', () => {
   const config = hostedMcpConfig({ socketPath: '/tmp/my project/engine.sock', tokenPath: '/tmp/quote" and $literal/token' }, 'ws_fixed', ['schedule', 'search', 'browser']);

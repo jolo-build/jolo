@@ -11,7 +11,7 @@ function collect(query, root) {
   const ranges = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: node => {
     const element = node.parentElement;
-    if (!element || !node.nodeValue?.trim() || element.closest('script, style, textarea, [hidden]')) return NodeFilter.FILTER_REJECT;
+    if (!element || !node.nodeValue?.trim() || element.closest('script, style, textarea, [hidden], .message-tools')) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   } });
   for (let node = walker.nextNode(); node && ranges.length < MAX_MATCHES; node = walker.nextNode()) {

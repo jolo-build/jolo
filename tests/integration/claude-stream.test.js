@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DEFAULT_EVENT_TYPES } from "@jolo/protocol";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
 
@@ -40,8 +41,9 @@ async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {
   engines.push(engine);
   const client = await engine.connect({ clientKind });
   const events = [];
+  const activities = [];
   const status = await client.call("engine.status", {});
-  await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event) });
+  await client.subscribe({ after: status.cursor }, { onEvent: (event) => events.push(event), onActivity: (activity) => activities.push(activity) });
   const project = await client.call("project.open", { path: repo });
   const { session } = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "hosted", agentId: "claude" });
   const runTo = async (requestId, prompt) => {
@@ -52,7 +54,19 @@ async function boot({ clientKind = "test", env = {}, idleMs, manifest = {} } = {
   const text = async (message) => (await client.call("artifact.read", { artifactId: message.artifactId })).text;
   const messagesOf = async (runId) => (await client.call("run.snapshot", { runId })).messages;
   const starts = () => (existsSync(startsLog) ? readFileSync(startsLog, "utf8").split("\n").filter(Boolean).map(Number) : []);
-  return { home, repo, engine, client, events, project, session, runTo, text, messagesOf, starts };
+  return { home, repo, engine, client, events, activities, project, session, runTo, text, messagesOf, starts };
+}
+
+/**
+ * A parent run kept live, as a delegating parent is while it waits on its children: the fixture asks permission for
+ * its command and nobody answers. Its prompt selects the fixture itself as the delegation model `m1`.
+ */
+async function bootWithParent() {
+  const booted = await boot({ manifest: { modelArgs: ['--model', '{model}'] } });
+  const { client, events, session } = booted;
+  const { run: parent } = await client.call('run.start', { sessionId: session.id, requestId: 'parent', prompt: 'run sleep 600 ^agent:claude/default' });
+  await waitFor(() => events.some(e => e.type === 'permission.requested' && e.runId === parent.id), { label: 'the parent waits on its permission', timeoutMs: 20_000 });
+  return { ...booted, parent };
 }
 
 describe("Claude Code through its structured stream", () => {
@@ -60,6 +74,18 @@ describe("Claude Code through its structured stream", () => {
     const { runTo } = await boot();
     const turn = await runTo('hello', 'hello');
     expect(turn.usage).toMatchObject({ contextUsed: 41007, contextWindow: 1_000_000, agentId: 'claude' });
+  }, 30_000);
+
+  test('a chat Claude answers is named by Claude itself once its first run starts', async () => {
+    const { client, events, project } = await boot();
+    const { session } = await client.call('session.create', { projectId: project.projectId, workspaceId: project.workspaceId, agentId: 'claude' });
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'named', prompt: 'summarise the release notes for me' });
+    const named = await waitFor(() => events.find((e) => e.type === 'session.updated' && e.payload.session.id === session.id && e.payload.session.title.startsWith('Fixture title:')), { label: 'the suggested title', timeoutMs: 20_000 });
+    expect(named.payload.session.title).toBe('Fixture title: summarise the release');
+    // Blank while it was being named: the prompt's first characters were never the title.
+    expect(events.filter((e) => e.type === 'session.updated' && e.payload.session.id === session.id).map((e) => e.payload.session.title)).toEqual(['Fixture title: summarise the release']);
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && TERMINAL.includes(e.payload.state)), { label: 'the run finished', timeoutMs: 20_000 });
+    expect((await client.call('session.page', { sessionId: session.id })).session.title).toBe('Fixture title: summarise the release');
   }, 30_000);
 
   test('subagent review reports stay in tool activity without corrupting or duplicating the parent reply', async () => {
@@ -242,8 +268,8 @@ describe("Claude Code through its structured stream", () => {
     expect(events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "awaiting_permission")).toBe(true);
     const messages = await messagesOf(run.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "tool", "text"]);
-    expect(await text(messages[1])).toContain('Bash {"command":"echo hosted-ok"}');
-    expect(await text(messages[1])).toContain("hosted-ok");
+    // The command's line, as Claude Code shows it (its first line, with no description), and the command itself below it.
+    expect(await text(messages[1])).toBe("Bash: echo hosted-ok\n$ echo hosted-ok\nhosted-ok\n");
     expect(await text(messages[2])).toBe("The command printed: hosted-ok");
     const started = events.find((e) => e.type === "tool.started" && e.runId === run.id);
     const completed = events.find((e) => e.type === "tool.completed" && e.runId === run.id);
@@ -255,6 +281,9 @@ describe("Claude Code through its structured stream", () => {
     expect(again.state).toBe("completed");
     expect(events.filter((e) => e.type === "permission.requested")).toHaveLength(1);
     expect(await text((await messagesOf(again.id)).at(-1))).toBe("The command printed: covered-by-grant");
+    // A command Claude describes is named by its description.
+    const described = await runTo("req_cmd3", "run-described Print a greeting\necho described-ok");
+    expect(await text((await messagesOf(described.id)).find((m) => m.kind === "tool"))).toBe("Bash: Print a greeting\n$ echo described-ok\ndescribed-ok\n");
   }, 40_000);
 
   test("edits inside the workspace are allowed by the task's grant; outside it, and a declined command, are refused in Claude's own words", async () => {
@@ -262,6 +291,7 @@ describe("Claude Code through its structured stream", () => {
     const inside = await runTo("req_write", `write ${path.join(repo, "made.txt")} hello from claude`);
     expect(inside.state).toBe("completed");
     expect(readFileSync(path.join(repo, "made.txt"), "utf8")).toBe("hello from claude");
+    expect((await text((await messagesOf(inside.id)).find((m) => m.kind === "tool"))).split("\n")[0]).toBe("Write made.txt"); // its file, from the workspace
     expect(events.some((e) => e.type === "permission.requested")).toBe(false); // no dialog for an in-workspace edit
 
     const outside = await runTo("req_escape", `write ${path.join(home, "escaped.txt")} nope`);
@@ -329,6 +359,179 @@ describe("one Claude process per conversation", () => {
     }, { label: "the self-started turn recorded as a run", timeoutMs: 10_000 });
     expect(await text((await messagesOf(followUp.id)).at(-1))).toBe("Background work finished: all good");
     expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('background work is reported as session activity while it runs and when it ends', async () => {
+    const { client, events, session, runTo } = await boot();
+    const run = await runTo('bg-activity', 'tasks 2 400');
+    expect(run.state).toBe('completed');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === session.id && e.payload.state === 'background'));
+    const live = await client.call('session.activity', { sessionId: session.id });
+    expect(live.activity.tasks).toHaveLength(2);
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle' && e.payload.tasks.every(t => t.status === 'completed')), { timeoutMs: 5000 });
+    const bursts = events.filter(e => e.type === 'session.activity');
+    expect(bursts.length).toBeLessThanOrEqual(2 + 2 * 2); // one per state change and per task start or end, none per progress message
+  }, 30_000);
+
+  test('progress of background work reaches clients as it happens, and only state and task changes are kept', async () => {
+    const { engine, client, events, activities, session, runTo } = await boot();
+    // A subscriber that declares only the event types every client knew is never sent an activity notification.
+    const older = await engine.connect();
+    const toOlder = [];
+    await older.subscribe({ eventTypes: [...DEFAULT_EVENT_TYPES] }, { onActivity: (activity) => toOlder.push(activity) });
+    const run = await runTo('bg-progress', 'tasks 2 1000');
+    expect(run.state).toBe('completed');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle' && e.payload.tasks.every(t => t.status === 'completed')), { timeoutMs: 5000 });
+    await waitFor(async () => (await client.call('session.page', { sessionId: session.id })).runs.some(r => r.id !== run.id && r.state === 'completed'), { label: 'the turn reporting the tasks done', timeoutMs: 10_000 });
+    expect(activities.some(a => a.sessionId === session.id && a.activity.state === 'background' && a.activity.tasks.every(t => t.usage.totalTokens !== null))).toBe(true);
+    const durable = events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).map(e => e.payload);
+    expect(durable.length).toBeLessThanOrEqual(2 + 2 * 2); // one per state change and per task start or end
+    const shape = (activity) => JSON.stringify([activity.state, activity.tasks.map(t => [t.taskId, t.status])]);
+    durable.slice(1).forEach((activity, i) => expect(shape(activity)).not.toBe(shape(durable[i]))); // none for usage alone
+    expect(toOlder).toEqual([]);
+    await older.close();
+  }, 30_000);
+
+  test('session activity is null for a conversation with no process and not_found for an unknown one', async () => {
+    const { client, session } = await boot();
+    expect(await client.call('session.activity', { sessionId: session.id })).toEqual({ activity: null });
+    await expect(client.call('session.activity', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+  }, 30_000);
+
+  test('Stop background work ends a conversation\'s background tasks and keeps its process', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('bg', 'tasks 2 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 2, stopped: 2, escalated: false });
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'idle'));
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('force-stopping a conversation closes its process, which ends the tasks that ignored stop_task', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('stubborn', 'tasks-stubborn 2');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toMatchObject({ requested: 2, stopped: 0 }); // stubborn tasks acknowledge stop_task and keep running: escalated stays false
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+    await waitFor(() => !alive(starts()[0]), { timeoutMs: 15_000 });
+    const activityOf = () => events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).at(-1);
+    await waitFor(() => activityOf().payload.state !== 'background', { label: 'the process end reported' }); // reported once the engine reads its output's end, a moment after it is gone
+    const last = activityOf();
+    expect(last.payload.state).toBe('idle');
+    expect(last.payload.tasks.map(t => t.status)).toEqual(['failed', 'failed']); // both stubborn tasks ended with the process
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: false });
+  }, 30_000);
+
+  test('a conversation\'s finished tasks outlive its process, are there for the next one, and Clear finished deletes them for good', async () => {
+    const { engine, client, events, session, runTo, starts } = await boot();
+    const activity = async () => (await client.call('session.activity', { sessionId: session.id })).activity;
+    const listed = async () => (await activity())?.tasks.map(t => [t.taskId, t.status]);
+    const lastEvent = () => events.filter(e => e.type === 'session.activity' && e.sessionId === session.id).at(-1)?.payload;
+    const stopAndClose = async (process) => {
+      await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background' && e.payload.tasks.some(t => t.status === 'running')));
+      expect(await client.call('session.stopBackground', { sessionId: session.id })).toMatchObject({ requested: 1, stopped: 1 });
+      expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+      await waitFor(() => !alive(starts()[process]), { timeoutMs: 15_000 });
+      await waitFor(async () => (await activity())?.state === 'idle', { label: 'the process gone' });
+    };
+    await runTo('bg', 'tasks 1 20000');
+    await stopAndClose(0);
+    // With no process, the stored activity answers: idle, the task stopped.
+    expect(await activity()).toMatchObject({ state: 'idle' });
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    // The next turn starts a new process, which still lists it.
+    await runTo('again', 'hello');
+    expect(starts()).toHaveLength(2);
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    // Clear finished with a process: its ledger drops the task and reports it, which stores it.
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 1 });
+    expect(await listed()).toEqual([]);
+    await waitFor(() => lastEvent()?.tasks.length === 0, { label: 'the cleared activity reported' });
+    // Without a process: the stored row is rewritten, and an event says so.
+    await runTo('bg2', 'tasks 1 20000'); // on the second process, still alive
+    await stopAndClose(1);
+    expect(await listed()).toEqual([['task-1', 'stopped']]);
+    const before = events.length;
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 1 });
+    await waitFor(() => events.slice(before).some(e => e.type === 'session.activity' && e.sessionId === session.id && e.payload.tasks.length === 0), { label: 'the cleared stored activity announced' });
+    expect(await listed()).toEqual([]);
+    expect(await client.call('session.clearFinished', { sessionId: session.id })).toEqual({ cleared: 0 });
+    // Deleting finished tasks is the person's: only an interactive client may ask.
+    const headless = await engine.connect({ clientKind: 'headless' });
+    await expect(headless.call('session.clearFinished', { sessionId: session.id })).rejects.toMatchObject({ code: 'permission_denied' });
+    await expect(client.call('session.clearFinished', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    await headless.close();
+  }, 60_000);
+
+  test('a task\'s output is read from its process; with the process gone, or for a task it does not know, the client is told why', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    await runTo('bg', 'tasks 1 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).toEqual({ output: 'task 1\nline 1\nline 2\n', totalBytes: 21, truncated: false, source: 'process' });
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'nope' })).rejects.toMatchObject({ code: 'not_found', message: 'no such task' });
+    await expect(client.call('session.taskOutput', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: true });
+    await waitFor(() => !alive(starts()[0]), { timeoutMs: 15_000 });
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
+    // The next process lists the task from the stored history, but never ran it: its output is gone with the old one.
+    await runTo('again', 'hello');
+    expect(starts()).toHaveLength(2);
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'task-1' })).rejects.toMatchObject({ code: 'no_process' });
+  }, 30_000);
+
+  test('a background agent\'s report, which Claude does not serve, is read from its transcript once its notice names it; while it works, Claude\'s refusal stands', async () => {
+    const { client, session, runTo } = await boot();
+    await runTo('agent', 'nested-agent 1500');
+    const agent = async () => (await client.call('session.activity', { sessionId: session.id })).activity?.tasks.find(task => task.taskId === 'agent-1');
+    await waitFor(async () => Boolean(await agent()), { label: 'the agent listed' });
+    // Claude Code names the file (a link to the agent's transcript) only in the agent's notice: while it works there is no file to read.
+    await expect(client.call('session.taskOutput', { sessionId: session.id, taskId: 'agent-1' })).rejects.toMatchObject({ code: 'not_found', message: 'get_task_output: no shell or Monitor task with that task_id in this session' });
+    await waitFor(async () => (await agent())?.status === 'completed', { label: 'the agent done', timeoutMs: 10_000 });
+    expect(await client.call('session.taskOutput', { sessionId: session.id, taskId: 'agent-1' })).toEqual({ output: 'The checks pass: 12 tests, no failures.', totalBytes: 39, truncated: false, source: 'file' });
+  }, 30_000);
+
+  test('the MCP servers\' status comes from the process, and none without one', async () => {
+    const { client, session, runTo } = await boot();
+    expect(await client.call('session.mcpStatus', { sessionId: session.id })).toEqual({ servers: null });
+    await runTo('hello', 'hello');
+    expect(await client.call('session.mcpStatus', { sessionId: session.id })).toEqual({ servers: [
+      { name: 'probe', status: 'connected', source: 'user', error: null },
+      { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' },
+      { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai', error: null },
+    ] });
+    await expect(client.call('session.mcpStatus', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+  }, 30_000);
+
+  test('Claude\'s away summary is a note in the conversation', async () => {
+    const { runTo, messagesOf, text } = await boot();
+    const run = await runTo('away', 'away-summary While you were away, the build passed.');
+    const texts = await Promise.all((await messagesOf(run.id)).filter(m => m.role === 'assistant' && m.kind === 'text').map(text));
+    expect(texts).toEqual(['While you were away, the build passed.', 'Welcome back.']);
+  }, 30_000);
+
+  test('stopping one background task ends only that task, and Claude\'s reason comes back when it will not', async () => {
+    const { client, events, session, runTo } = await boot();
+    await runTo('bg', 'tasks 2 20000');
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.payload.state === 'background'));
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'task-1' })).toEqual({ ok: true, error: null });
+    await waitFor(async () => (await client.call('session.activity', { sessionId: session.id })).activity.tasks.find(t => t.taskId === 'task-1').status === 'stopped');
+    expect((await client.call('session.activity', { sessionId: session.id })).activity.tasks.map(t => [t.taskId, t.status])).toEqual([['task-1', 'stopped'], ['task-2', 'running']]);
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'nope' })).toEqual({ ok: false, error: 'stop_task: unknown task' });
+  }, 30_000);
+
+  test('stopping background work, a task or the process of a conversation with no process stops nothing; an unknown one is not_found', async () => {
+    const { engine, client, session } = await boot();
+    expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 0, stopped: 0, escalated: false });
+    expect(await client.call('session.stopTask', { sessionId: session.id, taskId: 'task-1' })).toEqual({ ok: false, error: 'no process' });
+    expect(await client.call('session.closeProcess', { sessionId: session.id })).toEqual({ closing: false });
+    await expect(client.call('session.stopBackground', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(client.call('session.stopTask', { sessionId: 'no-such-session', taskId: 'task-1' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(client.call('session.closeProcess', { sessionId: 'no-such-session' })).rejects.toMatchObject({ code: 'not_found' });
+    // Closing a process ends Claude's work: only an interactive client may ask.
+    const headless = await engine.connect({ clientKind: 'headless' });
+    await expect(headless.call('session.closeProcess', { sessionId: session.id })).rejects.toMatchObject({ code: 'permission_denied' });
+    await headless.close();
   }, 30_000);
 
   test("an empty result ahead of the answer does not end the turn", async () => {
@@ -428,6 +631,23 @@ describe('background work after the turn, against a binary that queues turns lik
     expect(await later(booted, [launch.id, question, hello.id])).toEqual([]);
     // When the subagent finishes, the same process says so in a run of its own.
     await waitFor(async () => (await later(booted, [launch.id, question, hello.id])).some((run) => run.state === 'completed' && run.said === 'Background agent finished: allow'), { label: 'the report', timeoutMs: 5000 });
+    expect(starts()).toHaveLength(1);
+    expect(alive(starts()[0])).toBe(true);
+  }, 30_000);
+
+  test('a background subagent asking the person gets a short run of its own, held by its dialog until answered', async () => {
+    const booted = await boot();
+    const { client, events, runTo, starts } = booted;
+    const launch = await runTo('launch', 'background-dialog 100 300');
+    expect(launch.state).toBe('completed');
+    const asked = await waitFor(() => events.find((e) => e.type === 'dialog.requested'), { label: 'the subagent asked the person', timeoutMs: 5000 });
+    expect(asked.runId).not.toBe(launch.id);
+    expect(events.some((e) => e.type === 'permission.requested')).toBe(false);
+    expect((await client.call('run.snapshot', { runId: asked.runId })).run.state).toBe('awaiting_permission');
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    // The question's run ends as soon as it is answered, before the subagent reports back.
+    await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === asked.runId && e.payload.state === 'completed'), { label: 'the question run ended', timeoutMs: 1000 });
+    await waitFor(async () => (await later(booted, [launch.id, asked.runId])).some((run) => run.state === 'completed' && run.said === 'Background agent finished: coffee'), { label: 'the report', timeoutMs: 5000 });
     expect(starts()).toHaveLength(1);
     expect(alive(starts()[0])).toBe(true);
   }, 30_000);
@@ -930,16 +1150,18 @@ test('a turn Claude begins by itself shows no message from the user, only its an
   expect((await client.call('session.get', { sessionId: session.id }).catch(() => ({ session: page.session }))).session.title).not.toMatch(/carried on/);
 }, 30_000);
 
-test('stopping a turn stops the background work the process is running too, and the next message is answered', async () => {
+test('stopping a turn leaves the background work running until it is stopped itself, and the next message is answered', async () => {
   const { client, events, session, runTo, messagesOf, text, starts } = await boot();
-  const launch = await runTo('launch', 'background 1500 finished in the background');
+  await runTo('launch', 'tasks 1 2500');
   const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'stopped', prompt: 'slow 5000 never shown' });
   await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'model'), { label: 'the turn is under way', timeoutMs: 5000 });
   await Bun.sleep(300);
   await client.call('run.cancel', { runId: run.id });
   await waitFor(() => events.some((e) => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'stopped', timeoutMs: 5000 });
+  expect((await client.call('session.activity', { sessionId: session.id })).activity.tasks.map((t) => t.status)).toEqual(['running']); // Stop spared it
+  expect(await client.call('session.stopBackground', { sessionId: session.id })).toEqual({ requested: 1, stopped: 1, escalated: false });
   await Bun.sleep(2500); // past when the background work would have reported
-  expect(new Set(events.filter((e) => e.type === 'run.state').map((e) => e.runId)).size).toBe(2); // no report: the work ended with the stop
+  expect(new Set(events.filter((e) => e.type === 'run.state').map((e) => e.runId)).size).toBe(2); // no report: the work was stopped
   const next = await runTo('next', 'hello');
   expect((await Promise.all((await messagesOf(next.id)).filter((m) => m.role === 'assistant').map(text))).join('')).toMatch(/: hello$/);
   expect(starts()).toHaveLength(1); // the same process answers on
@@ -1289,3 +1511,176 @@ describe('slash commands and the task\'s own choices inside a kept process', () 
   }, 30_000);
 });
 
+
+describe("Claude's questions to the person reach Jolo as dialogs", () => {
+  test('a question Claude asks the person reaches Jolo as a dialog and the answer goes back', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect(asked.payload.tool).toBe('AskUserQuestion');
+    expect(asked.payload.input.questions[0].question).toBe('tea or coffee?');
+    expect(events.some(e => e.type === 'permission.requested' && e.runId === run.id)).toBe(false);
+    expect((await client.call('run.snapshot', { runId: run.id })).run.state).toBe('awaiting_permission');
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('You answered: coffee');
+  }, 30_000);
+
+  test('a plan approval Claude asks for reaches Jolo as a dialog and approving it lets Claude go on', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'plan', prompt: 'exit-plan Ship it' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect(asked.payload.tool).toBe('ExitPlanMode');
+    expect(asked.payload.input.plan.startsWith('# Ship it')).toBe(true);
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('Plan approved: Ship it');
+  }, 30_000);
+
+  test('a client that opens the conversation while a question is still waiting finds it in pendingDialogs until it is answered', async () => {
+    const { client, events, session } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-page', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    expect((await client.call('session.page', { sessionId: session.id })).pendingDialogs).toEqual([asked.payload]);
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    expect((await client.call('session.page', { sessionId: session.id })).pendingDialogs).toEqual([]);
+  }, 30_000);
+
+  test('dismissing a dialog tells Claude the person did not answer', async () => {
+    const { client, events, session, messagesOf, text } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-dismiss', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('dialog.dismiss', { dialogId: asked.payload.dialogId, message: 'Not now.' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('No answer: Not now.');
+  }, 30_000);
+
+  test('stopping a run with a dialog open cancels the dialog and answers Claude exactly once', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-stop', prompt: 'ask-user tea or coffee?' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled'), { label: 'dialog cancelled' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'run cancelled' });
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+    // A second answer to the question would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-stop', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('stopping a run while Claude acts on a dialog\'s answer still answers Claude exactly once', async () => {
+    const { client, events, session, runTo, starts } = await boot();
+    // The fixture takes 3 s to act on the answer: the Stop lands while the answer is still in flight.
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-race', prompt: 'ask-user-slow 3000' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: { answers: { 'tea or coffee?': 'coffee' } } });
+    await client.call('run.cancel', { runId: run.id });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'cancelled'), { label: 'the run cancelled' });
+    expect(events.filter(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId).map(e => e.payload.state)).toEqual(['answered']);
+    // A second answer to the question would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-race', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('a question Jolo cannot record is refused at once, so Claude never waits on it', async () => {
+    const { events, runTo, messagesOf, text, starts } = await boot();
+    const run = await runTo('ask-unrecordable', 'ask-user-unrecordable');
+    expect(run.state).toBe('completed');
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('No answer: Jolo could not record the question.');
+    expect(events.some(e => e.type === 'dialog.requested')).toBe(false);
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+
+  test('a question Claude takes back closes its dialog and is never answered', async () => {
+    const { client, events, session, runTo, messagesOf, text, starts } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-withdraw', prompt: 'ask-user-withdraw 300' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await waitFor(() => events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled'), { label: 'dialog cancelled' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'completed'), { label: 'completed' });
+    expect(await text((await messagesOf(run.id)).at(-1))).toBe('Never mind the question.');
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+    // An answer to the question it took back would have made Claude leave; the same process answers the next message.
+    expect((await runTo('after-withdraw', 'still here?')).state).toBe('completed');
+    expect(starts()).toHaveLength(1);
+  }, 30_000);
+});
+
+describe('A Claude process that exits with a question open', () => {
+  test('closes the question, so reopening the conversation shows nothing left to answer', async () => {
+    const { client, events, session } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-exit', prompt: 'ask-user-exit 300' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'failed'), { label: 'failed' });
+    expect(events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled')).toBe(true);
+    expect((await client.call('session.page', { sessionId: session.id, limit: 10 })).pendingDialogs ?? []).toEqual([]);
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+  }, 30_000);
+});
+
+describe('A delegated Claude child', () => {
+  test('a delegated child that keeps working after its first answer is done only when its process is idle, and the follow-up is its answer', async () => {
+    const { client, events, parent } = await bootWithParent();
+    try {
+      const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'bg child', prompt: 'background 1500 Follow-up: all good', requestId: 'c1' } });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered' });
+      const early = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id } });
+      expect(early.delegation).toMatchObject({ done: false, partial: true, activity: 'background', output: 'Background work started.' });
+      const late = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(late.delegation).toMatchObject({ done: true, partial: false, output: 'Follow-up: all good' });
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
+  }, 30_000);
+
+  test('a delegated child running a workflow, which the binary does not flag as backgrounded, is done only after its report', async () => {
+    const { client, events, parent } = await bootWithParent();
+    try {
+      const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'workflow child', prompt: 'workflow x 1500', requestId: 'c-wf' } });
+      await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered' });
+      const early = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id } });
+      expect(early.delegation).toMatchObject({ done: false, activity: 'background', output: 'Workflow started.' });
+      const late = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(late.delegation).toMatchObject({ done: true, partial: false, output: 'Workflow x done.' });
+      const report = events.find(e => e.type === 'run.state' && e.sessionId === delegation.sessionId && e.runId !== delegation.runId && e.payload.state === 'completed');
+      expect(report).toBeDefined(); // the report ran as a run of its own, and completed before the child was done
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
+  }, 30_000);
+
+  /** A child that answered and left two background tasks running, which only stop_task ends (its Stop spares them). */
+  const childInBackground = async ({ client, events, parent }, requestId) => {
+    const { delegation } = await client.call('delegation.call', { runId: parent.id, name: 'delegate_task', arguments: { modelAlias: 'm1', title: 'bg child', prompt: 'tasks 2 20000', requestId } });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === delegation.runId && e.payload.state === 'completed'), { label: 'the child answered', timeoutMs: 10_000 });
+    await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === delegation.sessionId && e.payload.state === 'background'), { label: 'the child works in the background' });
+    return delegation;
+  };
+  const tasksStopped = (events, sessionId) => events.some(e => e.type === 'session.activity' && e.sessionId === sessionId && e.payload.state === 'idle'
+    && e.payload.tasks.length === 2 && e.payload.tasks.every(t => t.status === 'stopped'));
+
+  test('stopping the parent also stops the background tasks of a child whose run already ended', async () => {
+    const booted = await bootWithParent();
+    const delegation = await childInBackground(booted, 'c-stop');
+    await booted.client.call('run.cancel', { runId: booted.parent.id });
+    await waitFor(() => tasksStopped(booted.events, delegation.sessionId), { label: 'the child\'s tasks stopped' });
+  }, 30_000);
+
+  test('delegation_cancel stops the background tasks of a child whose run already ended, and the child is then done', async () => {
+    const booted = await bootWithParent();
+    const { client, events, parent } = booted;
+    try {
+      const delegation = await childInBackground(booted, 'c-cancel');
+      await client.call('delegation.call', { runId: parent.id, name: 'delegation_cancel', arguments: { delegationId: delegation.id } });
+      await waitFor(() => tasksStopped(events, delegation.sessionId), { label: 'the child\'s tasks stopped' });
+      const after = await client.call('delegation.call', { runId: parent.id, name: 'delegation_status', arguments: { delegationId: delegation.id, waitMs: 10_000 } });
+      expect(after.delegation).toMatchObject({ state: 'completed', activity: 'idle', done: true });
+    } finally { await client.call('run.cancel', { runId: parent.id }); }
+  }, 30_000);
+});
+
+test('cancelling a plan stops the background tasks of a task waiting for its process to finish them', async () => {
+  const { client, events, project } = await boot();
+  const { plan } = await client.call('plan.create', { projectId: project.projectId, goal: 'background work', tasks: [{ title: 'bg', brief: 'tasks 2 20000', agentId: 'claude' }] });
+  await client.call('plan.start', { planId: plan.id });
+  const deferred = await waitFor(() => events.find(e => e.type === 'plan.task.state' && e.payload.planId === plan.id && e.payload.summary === 'finishing background work'), { label: 'the task waits for its process', timeoutMs: 10_000 });
+  await client.call('plan.cancel', { planId: plan.id });
+  await waitFor(() => events.some(e => e.type === 'session.activity' && e.sessionId === deferred.payload.sessionId && e.payload.state === 'idle'
+    && e.payload.tasks.length === 2 && e.payload.tasks.every(t => t.status === 'stopped')), { label: 'the task\'s background tasks stopped' });
+  await waitFor(async () => (await client.call('plan.get', { planId: plan.id })).tasks[0].state !== 'running', { label: 'the task no longer runs', timeoutMs: 10_000 });
+}, 30_000);

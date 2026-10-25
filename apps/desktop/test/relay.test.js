@@ -34,6 +34,19 @@ describe("desktop relay credits", () => {
     expect(sent[0].previewsDropped).toBe(1);
   });
 
+  test("activity ticks are dropped while blocked, like previews", async () => {
+    const sent = [];
+    const relay = createRelay({ send: (batch) => sent.push(batch), log: { warn() {} } });
+    for (let i = 1; i <= 8; i += 1) { relay.push("event", event(i)); await sleep(20); }
+    relay.push("activity", { sessionId: "s", activity: { state: "background", tasks: [], truncated: false, updatedAt: "x" } });
+    expect(relay.stats.queued).toBe(0);
+    relay.push("event", event(9));
+    relay.ack(sent[0].id);
+    await sleep(30);
+    expect(sent).toHaveLength(9);
+    expect(sent[8].previewsDropped).toBe(1);
+  });
+
   test("a resync with no queued events is delivered when the renderer returns credit", async () => {
     const sent = [];
     // Again without a logger; see the first test for why the option bag is asserted.

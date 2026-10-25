@@ -94,18 +94,21 @@ export function antigravityModels(listed) {
 /**
  * Start a hosted agent, ask it one thing, and stop it. `open` speaks first; `ask` returns the answer once it
  * has one. The agent's own failure never throws: it comes back as `{ note, timedOut }` for the caller to word.
+ * `input` is text written to the agent's stdin after `open` (a prompt kept off the command line, where `ps` shows it);
+ * `closeStdin` ends its stdin then, for an agent that reads its input to the end first; `env` adds to the hosted
+ * environment it starts with.
  * @param {{ supervisor: any, log: any }} deps
  * @param {any} manifest
  * @param {string[]} argv
  * @param {number} timeoutMs how long the agent has to answer, inside what its caller's client waits
- * @param {{ open: (send: (message: any) => void) => void, ask: (message: any, send: (message: any) => void) => any }} steps
+ * @param {{ open: (send: (message: any) => void) => void, ask: (message: any, send: (message: any) => void) => any, input?: string | null, closeStdin?: boolean, env?: Record<string, string> }} steps
  */
-export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs, { open, ask }) {
+export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs, { open, ask, input = null, closeStdin = false, env = {} }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let link;
   try {
-    link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
+    link = spawnLineChild({ argv, cwd: tmpdir(), env: { ...hostedEnvironment(supervisor), ...env }, signal: controller.signal, log, agentId: manifest.id });
   } catch (error) {
     clearTimeout(timer);
     return { note: `could not start ${manifest.displayName}: ${error?.message ?? error}`, timedOut: false };
@@ -115,6 +118,8 @@ export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs,
   try {
     const send = (message) => link.write(message);
     open(send);
+    if (input !== null) { try { link.child.stdin.write(input); link.child.stdin.flush?.(); } catch { /* an agent gone already is seen by the reader */ } }
+    if (closeStdin) link.end();
     for await (const message of link.messages()) {
       answer = await ask(message, send);
       if (answer) break;

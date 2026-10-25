@@ -7,31 +7,35 @@ import { liveRunFor } from './capabilities.js';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from 'node:path';
 import { resolveWorkspacePath, WorkspacePathError } from "../tools/paths.js";
-import { ProtocolError, PROTOCOL_VERSION } from "@jolo/protocol";
+import { ProtocolError, PROTOCOL_VERSION, activityPayload } from "@jolo/protocol";
 import { revertPatchPath } from "../workspaces/revert.js";
 import { workingChanges, workingDiff } from "../workspaces/working-changes.js";
 import { SELF_MENTION, routeFor } from "../agents/mentions.js";
 import { CONTINUATION_PREFIX, isContinuation } from "../agents/claude-stream.js";
 import { withTaskChoice } from "../agents/hosted.js";
+import { endedActivity, outputFromFile } from "../agents/claude-link.js";
 import { fileTools } from "../tools/files.js";
 import { createImageUpload, writeImageUpload } from '../attachments.js';
 import { linkChatFolder } from '../account/chat-context.js';
 import { searchWorkspaceFiles, listWorkspaceFolder, searchWorkspaceText } from '../search/files.js';
+
+/** Task types whose output Claude Code never serves with `get_task_output` (it serves commands' and monitors' only). */
+const UNSERVED_TASKS = new Set(["local_agent", "local_workflow"]);
 
 /**
  * Every service the RPC surface reaches. The engine hands over all of them at once; a test driving
  * a single method stands in for the few that method touches and names this type as it does so.
  * @typedef {{
  *   storage: any, settingsService: any, providerFactory: any, agentModels: any, agentLimits: any, credentials: any,
- *   account: any, tasks: any, permissions: any, dispatcher: any, browser: any, supervisor: any,
+ *   account: any, tasks: any, permissions: any, dialogs: any, dispatcher: any, browser: any, supervisor: any,
  *   search: any, terminals: any, board: any, worktrees: any, plans: any, schedules: any, delegations?: any, agents: any, runs: any,
  *   hostedLinks?: any, paths: any, bootId: string, build: string, startedMs: number, startedAt: string,
- *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any,
+ *   agentName: () => string, stop: (reason: string) => any, getServer: () => any, toolEnv: any, log?: any,
  * }} RpcDependencies
  */
 
 /** @param {RpcDependencies} deps */
-export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv }) {
+export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv, log = null }) {
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -274,8 +278,97 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
       const { messages, hasOlder } = storage.listMessagesForSession(sessionId, { beforeOrdinal, limit, hideUserMessagesOf: CONTINUATION_PREFIX });
       const runsOf = storage.listRunsForSession(sessionId).map(run => isContinuation(run) ? { ...run, prompt: "" } : run);
       const pendingPermissions = storage.pendingPermissionsForSession(sessionId).map(permission => ({ permissionId: permission.id, runId: permission.runId, workspaceId: permission.workspaceId, tool: permission.tool, summary: permission.request.summary ?? permission.tool, ...(permission.request.argv ? { argv: permission.request.argv } : {}), ...(permission.request.script ? { script: permission.request.script } : {}), cwd: permissionCwd(storage.getWorkspace(permission.workspaceId).path, permission.request.cwd), isolation: "none", revision: permission.revision }));
-      return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, hasOlder, cursor: storage.maxSeq() };
+      const pendingDialogs = dialogs?.pendingForSession(sessionId) ?? [];
+      return { session, messages, runs: runsOf.map(run => ({ ...run, changedPaths: storage.changedPathsForRun(run.id) })), pendingPermissions, pendingDialogs, hasOlder, cursor: storage.maxSeq() };
     }),
+    // What the conversation's agent process is doing now, for a client that joins while its work runs. With no process,
+    // what its last one left, as it reads now that it is gone (see endedActivity); the read stores nothing, and the next
+    // process starts from it and stores the change. Null when it never had a process.
+    "session.activity": ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const activity = hostedLinks?.get(sessionId)?.activity;
+      if (activity) return { activity: activityPayload(activity) };
+      const stored = storage.getSessionActivity(sessionId);
+      return { activity: stored ? activityPayload(endedActivity(stored)) : null };
+    },
+    // Delete the conversation's finished tasks for good (the panel's Clear finished): from its process's ledger, which
+    // reports and so stores the change, or with no process from its stored activity, announced here.
+    "session.clearFinished": ({ sessionId }, conn) => {
+      requireInteractive(conn, "only an interactive client can clear a conversation's finished tasks");
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      if (link) return { cleared: link.clearFinished() };
+      return storage.transaction(() => {
+        const stored = storage.getSessionActivity(sessionId);
+        if (!stored) return { cleared: 0 };
+        // A task its gone process left running reads stopped, and goes with the other finished ones.
+        if (stored.tasks.some(task => task.status === "running")) storage.saveSessionActivity(sessionId, endedActivity(stored));
+        const cleared = storage.clearFinishedActivity(sessionId);
+        if (cleared) storage.appendEvent({ sessionId, type: "session.activity", payload: activityPayload(endedActivity(storage.getSessionActivity(sessionId))) });
+        return { cleared };
+      });
+    },
+    // Stop the background work of the conversation's agent process, or one task of it; the turn under way goes on.
+    "session.stopBackground": async ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      return link?.alive ? link.stopBackground() : { requested: 0, stopped: 0, escalated: false };
+    },
+    // A task's whole output, read from the conversation's process, which holds it during the task and after it. What the
+    // process never serves (an agent's or a workflow's output: Claude Code serves only commands' and monitors'), what it
+    // fails to, and every task once the process has ended, is read from the output file the task's notice named, if it has
+    // one (an agent's is its transcript, whose report is read out; see outputFromFile): the task is found among the live
+    // process's tasks, else in the conversation's stored activity. Without a readable file, the error stands.
+    "session.taskOutput": async ({ sessionId, taskId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      /** @param {any[] | undefined} tasks */
+      const recordOf = (tasks) => tasks?.find(task => task?.taskId === taskId) ?? null;
+      /** @param {any} task */
+      const fromFile = (task) => (task ? outputFromFile(task.outputFile, taskId, { agent: task.taskType === "local_agent" }) : null);
+      if (!link?.alive) {
+        const read = fromFile(recordOf(storage.getSessionActivity(sessionId)?.tasks));
+        if (read) return read;
+        throw new ProtocolError("no_process", "the process that ran this task has ended");
+      }
+      // Claude always refuses an agent's or a workflow's output: their file is read without asking. With no file yet (it is
+      // named only when the task ends), Claude is asked all the same, so that what it says stands.
+      const task = recordOf(link.activity.tasks);
+      if (task && UNSERVED_TASKS.has(task.taskType)) { const read = fromFile(task); if (read) return read; }
+      try { return { ...(await link.taskOutput(taskId)), source: "process" }; }
+      catch (error) {
+        const read = fromFile(recordOf(link.activity.tasks));
+        if (read) return read;
+        if (error?.code === "no_process") throw new ProtocolError("no_process", "the process that ran this task has ended");
+        if (error?.timedOut) throw new ProtocolError("unavailable", "Claude did not answer with the task's output");
+        throw new ProtocolError("not_found", String(error?.message ?? error)); // Claude's own words: it knows no such task
+      }
+    },
+    // The MCP servers of the conversation's process and how each is: asked now, else as its latest turn's init listed them.
+    "session.mcpStatus": async ({ sessionId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      if (!link?.alive) return { servers: null };
+      try { return await link.mcpStatus(); }
+      catch (error) {
+        if (error?.code === "no_process") return { servers: null }; // it ended meanwhile: it has no servers now
+        log?.info?.("MCP status had no answer; using the process's latest init list", { sessionId, reason: String(error?.message ?? error) });
+        return { servers: link.state.mcpServers ?? null };
+      }
+    },
+    "session.stopTask": async ({ sessionId, taskId }) => {
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      const link = hostedLinks?.get(sessionId);
+      return link?.alive ? link.stopTask(taskId) : { ok: false, error: "no process" };
+    },
+    // Close the process itself, for tasks that ignored stop_task; a graceful close can outlast the call, so it is not awaited.
+    "session.closeProcess": ({ sessionId }, conn) => {
+      requireInteractive(conn, "only an interactive client can stop a conversation's process");
+      if (!storage.getSession(sessionId)) throw new ProtocolError("not_found", `unknown session ${sessionId}`);
+      if (!hostedLinks?.get(sessionId)?.alive) return { closing: false };
+      void hostedLinks.close(sessionId, "stopped by the person");
+      return { closing: true };
+    },
     'delegation.models': ({ source }) => delegations.models(source),
     'delegation.list': ({ sessionId }) => delegations.list(sessionId),
     'delegation.call': (params, conn) => {
@@ -361,6 +454,15 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
         try { runs.resume({ runId: paused.id }); } catch { /* it stays paused, to be resumed by hand */ }
       }
       return { permissionId: permission.id, decision: permission.decision, revision: permission.revision, runId: permission.runId };
+    },
+    // The person's answer to a question an agent asked them, or their refusal to answer; the first settlement wins.
+    "dialog.resolve": ({ dialogId, response }, conn) => {
+      requireInteractive(conn, "only an interactive client can answer for the user");
+      return { dialogId, state: dialogs.resolve(dialogId, response).state };
+    },
+    "dialog.dismiss": ({ dialogId, message }, conn) => {
+      requireInteractive(conn, "only an interactive client can answer for the user");
+      return { dialogId, state: dialogs.dismiss(dialogId, message).state };
     },
     "run.resume": (params) => ({ run: runs.resume(params) }),
     "terminal.open": (params, conn) => { requireInteractive(conn, "terminals are for interactive clients"); return terminals.open({ conn, ...params }); },

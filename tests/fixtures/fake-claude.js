@@ -3,7 +3,8 @@
 // end to end without the real CLI or its API. Shapes mirror what the real binary sent in a live session.
 // Like the real binary in streaming-input mode, one process answers as many turns as the host feeds it and
 // leaves when its stdin closes; it never exits on its own after a turn.
-// Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call, "write <file>" for a
+// Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call ("run-described <description>\n<cmd>"
+// for one with a description), "write <file>" for a
 // Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model, effort and fast mode
 // it was started with, "background <ms> <text>" answers at once and then, <ms> later, starts a turn of its own with
 // <text> (what a finished background task does), "zero-result <text>" sends an empty result before the real
@@ -11,8 +12,26 @@
 // pause, "exit-after-turn" leaves once its answer is out, "background-permission <ms> <ms>" answers at once and then,
 // <ms> later, has a background subagent ask permission while the main thread is idle and report back <ms> after the
 // answer, "race-self <text>" begins a turn of its own just before taking up the message (a background task finishing
-// as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, and anything
-// else just answers in prose. The other scenarios are described where they are played.
+// as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, "ask-user
+// <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
+// that question back <ms> later, "ask-user-exit <ms>" leaves (exit 1) <ms> after asking, the question unanswered,
+// "ask-user-two" asks two questions at once ("tea or coffee?", then "milk or sugar?") and says both answers, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
+// and says whether it was approved or sent back, "workflow <name> <ms>" starts a workflow named <name> as one background
+// task (task_type local_workflow, no is_backgrounded field, ids wf-1, wf-2, ... in a process) whose progress reports carry its phases and agents
+// (workflow_progress): at once both agents of phase "Say" (say:1, say:2, model claude-fable-5-1) have started (0 tokens, as the real binary's first
+// tick says), halfway through <ms> say:1 is done (20388 tokens, its duration and result preview "agent 1 ok") and say:2 at work (state "progress",
+// 8000 tokens, one tool call), and at <ms> both are done (40776 tokens); it then
+// completes with the summary 'Dynamic workflow "Workflow <name>" completed' and the output file /tmp/<name>.output unless stop_task ended it first, and is
+// reported a moment later in a turn of its own ("Workflow <name> done."), "nested-agent <ms>" runs a background subagent agent-1 and the command cmd-1
+// it owns (parent_task_id agent-1), the subagent's own message naming its model claude-opus-5-5, which end at <ms>, the command first, the
+// subagent's transcript written as it works (JSON lines, its last assistant message the report) and named in its notice through the
+// link Claude Code makes to it (tasks/agent-1.output, in a directory of its own under TMPDIR), and
+// stop_task on the subagent kills it (task_updated status "killed"), and
+// anything else just answers in prose. A second control response to one request, or one to a request it took back,
+// makes the fixture exit 70. "away-summary <text>" sends a system away_summary with <text> as its summary, then a reply. It answers
+// get_task_output for a task it started (its description, two lines, and the exit line once it ended; an unknown task is an
+// error, and so is an agent's, in Claude Code's words, since it serves commands and monitors only) and mcp_status with three servers (connected, failed, needs-auth), which every init lists too. The other scenarios
+// are described where they are played.
 // Like the real binary, turns run one at a time: a message that arrives during a turn waits for it, every turn opens
 // with system/init listing the messages it takes up, its result names the message it answers, and with
 // --replay-user-messages each message is echoed back as its turn takes it up, except one that carries a tag the
@@ -20,6 +39,13 @@
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
 const resumed = argv.includes("--resume") ? argv[argv.indexOf("--resume") + 1] : null;
+// One-shot print mode, how Jolo asks for a task's title: the prompt is stdin, read to its end, and the one JSON result line
+// names it after the prompt's first three words.
+if (flags.has("--print") && flags.has("--output-format") && argv[argv.indexOf("--output-format") + 1] === "json" && !flags.has("--input-format")) {
+  const words = require("node:fs").readFileSync(0, "utf8").trim().split(/\s+/).slice(0, 3).join(" ");
+  require("node:fs").writeSync(1, `${JSON.stringify({ type: "result", subtype: "success", result: `Fixture title: ${words}`, is_error: false })}\n`); // whole before the exit
+  process.exit(0);
+}
 if (!flags.has("--print") || !flags.has("--output-format") || !argv.includes("stream-json") || !flags.has("--permission-prompt-tool") || argv[argv.indexOf("--permission-prompt-tool") + 1] !== "stdio") {
   process.stderr.write(`fake-claude: unexpected argv ${JSON.stringify(argv)}\n`);
   process.exit(64);
@@ -69,11 +95,34 @@ const COMMANDS = [
   { name: "deploy", description: "Ship the current branch to an environment", argumentHint: "<environment>" },
 ];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
+// The MCP servers this Claude has, as mcp_status answers (with the config it also sends) and each turn's init lists them.
+const MCP_SERVERS = [
+  { name: "probe", status: "connected", config: { type: "stdio", command: "probe" }, scope: "user", source: "user" },
+  { name: "pencil", status: "failed", config: { type: "stdio", command: "pencil" }, scope: "user", source: "user", error: "ENOENT" },
+  { name: "claude.ai Gmail", status: "needs-auth", config: { type: "claudeai-proxy" }, scope: "claudeai", source: "claudeai" },
+];
+const INIT_MCP = MCP_SERVERS.map(({ name, status, source }) => ({ name, status, source }));
+/** The tasks this process started, and whether each ended: get_task_output answers for them, by what went out. */
+const startedTasks = new Map();
+const noteTask = (message) => {
+  if (message?.type !== "system") return;
+  if (message.subtype === "task_started") startedTasks.set(message.task_id, { description: message.description ?? "", type: message.task_type ?? null, ended: false });
+  else if (message.subtype === "task_notification" && startedTasks.has(message.task_id)) startedTasks.get(message.task_id).ended = true;
+};
+/** get_task_output: its description and two lines, then the exit line once it ended, as Claude Code 2.1.304 answers for a command. */
+const answerTaskOutput = (requestId, taskId) => {
+  const task = startedTasks.get(taskId);
+  if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "no such task" } });
+  // Claude Code serves a command's or a monitor's output only; an agent's is in its output file (seen 2026-10-25).
+  if (task.type === "local_agent") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "get_task_output: no shell or Monitor task with that task_id in this session" } });
+  const output = `${task.description}\nline 1\nline 2\n${task.ended ? "[exited with code 0]\n" : ""}`;
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { output, total_bytes: Buffer.byteLength(output), truncated: false } } });
+};
 /** The last local command's output, which the binary replays after a compaction. */
 let lastLocalOutput = null;
 /** Lines held back to go out in one write, as the real binary's output often arrives: several messages in one read. */
 let batch = null;
-const out = (message) => { const line = `${JSON.stringify(message)}\n`; if (batch) batch.push(line); else process.stdout.write(line); };
+const out = (message) => { noteTask(message); const line = `${JSON.stringify(message)}\n`; if (batch) batch.push(line); else process.stdout.write(line); };
 const flush = () => { const lines = batch ?? []; batch = null; if (lines.length) process.stdout.write(lines.join("")); };
 const pending = new Map();
 let counter = 0;
@@ -81,10 +130,46 @@ let turnsAnswered = 0;
 /** Background work the process runs beside its turns. Like the real binary, an interrupt kills it unless the host said
  * at initialize that it stops such work on its own (perTaskStopAffordance). */
 let sparesBackground = false;
+/** FAKE_CLAUDE_NO_STOP_TASK=1 is a Claude Code that cannot stop tasks: it refuses every stop_task, and knowing nothing of
+ * perTaskStopAffordance, its interrupt ends background work whatever the host declared. */
+const NO_STOP_TASK = process.env.FAKE_CLAUDE_NO_STOP_TASK === "1";
+/** FAKE_CLAUDE_SILENT_STOP_TASK=1 never answers a stop_task, and the task goes on. */
+const SILENT_STOP_TASK = process.env.FAKE_CLAUDE_SILENT_STOP_TASK === "1";
 /** Like the real binary, a subagent's own subagents' tool calls and results reach the host only when it asked for them. */
 let forwardsNested = false;
 const backgroundWork = new Set();
-const inBackground = (fn, ms) => { const timer = setTimeout(() => { backgroundWork.delete(timer); fn(); }, ms); backgroundWork.add(timer); };
+/** Background tasks still running, by id: the timers carrying each one's work, and whether it ignores stop_task. */
+const runningTasks = new Map();
+/** `onStop` is what stop_task does to the task in place of ending it as stopped. */
+const startTask = (taskId, { stubborn = false, onStop = null } = {}) => runningTasks.set(taskId, { timers: new Set(), stubborn, onStop });
+/** A task ends: its work is cancelled and its end is told, as the real binary tells it, with what `notice` adds (a summary, an output file). */
+const endTask = (taskId, status, notice = {}) => {
+  const task = runningTasks.get(taskId);
+  if (!task) return;
+  runningTasks.delete(taskId);
+  for (const timer of task.timers) { clearTimeout(timer); backgroundWork.delete(timer); }
+  out({ type: "system", subtype: "task_notification", task_id: taskId, status, ...notice, session_id: sessionId });
+};
+/** Work done later beside the turns; with `taskId`, part of that running task's work, cancelled when it ends. */
+const inBackground = (fn, ms, taskId = null) => {
+  const timer = setTimeout(() => { backgroundWork.delete(timer); runningTasks.get(taskId)?.timers.delete(timer); fn(); }, ms);
+  backgroundWork.add(timer);
+  runningTasks.get(taskId)?.timers.add(timer);
+};
+/** The workflows this process started, which number their task ids. */
+let workflows = 0;
+/** How long after a workflow completes the turn reporting it begins: the real binary begins it a moment later. */
+const WORKFLOW_REPORT_DELAY_MS = 300;
+/** stop_task: a running task is stopped once the request is answered, as Claude Code 2.1 does; one that ignores it is only answered. */
+const stopTask = (requestId, taskId) => {
+  if (SILENT_STOP_TASK) return;
+  if (NO_STOP_TASK) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task is not supported in this context" } });
+  const task = runningTasks.get(taskId);
+  if (!task) return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "stop_task: unknown task" } });
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: {} } });
+  if (task.onStop) task.onStop();
+  else if (!task.stubborn) endTask(taskId, "stopped");
+};
 /** The turn in progress, so an interrupt from the host can end it the way the real binary does. */
 let current = null;
 const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
@@ -92,6 +177,21 @@ const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
   pending.set(requestId, resolve);
   out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, description: extra.description ?? toolName, permission_suggestions: [], tool_use_id: extra.toolUseId } });
 });
+/** A question that needs the person, as Claude Code 2.1.304 sends AskUserQuestion in host mode: an ordinary can_use_tool
+ * marked requires_user_interaction, answered inside the permission answer (see apps/engine/src/agents/README.md, "Dialogs"). */
+const askPerson = (toolName, input, toolUseId) => new Promise((resolve) => {
+  const requestId = `req-${++counter}`;
+  pending.set(requestId, resolve);
+  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, tool_use_id: toolUseId, requires_user_interaction: true } });
+});
+/** Requests the process took back: the host must not answer them. */
+const withdrawn = new Set();
+/** Take back a question nobody has answered, as the real binary does with control_cancel_request. */
+const takeBack = (requestId) => {
+  withdrawn.add(requestId);
+  out({ type: "control_cancel_request", request_id: requestId });
+  const resolve = pending.get(requestId); pending.delete(requestId); resolve?.({ behavior: "withdrawn" });
+};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const result = (turns, uuid = null) => out({ type: "result", subtype: "success", is_error: false, result: "done", ...(uuid ? { user_message_uuid: uuid } : {}), session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
 const say = (text) => {
@@ -125,7 +225,11 @@ const interrupt = (requestId, cancelQueued = false, names = null) => {
   out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { still_queued: stillQueued, ...(cancelQueued ? { cancelled } : {}), ...(named ? { turn: spared ? "spared" : current ? "stopped" : "idle" } : {}) } } });
   for (const uuid of cancelled) lifecycle(uuid, "cancelled");
   if (spared) return;
-  if (!sparesBackground) { for (const timer of backgroundWork) clearTimeout(timer); backgroundWork.clear(); }
+  if (!sparesBackground) {
+    for (const taskId of [...runningTasks.keys()]) endTask(taskId, "stopped");
+    for (const timer of backgroundWork) clearTimeout(timer);
+    backgroundWork.clear();
+  }
   if (!current) return;
   const turn = current;
   current = null;
@@ -149,12 +253,12 @@ const enqueue = (work) => { queue = queue.then(work).catch((error) => { process.
 /** A notice of finished background work, queued as the real binary queues it: uuid-less, so cancel_queued drops it too. */
 const enqueueNotice = (work) => { const entry = { cancelled: false, notice: true }; waiting.push(entry); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (!entry.cancelled) await work(); }); };
 
-/** A turn the binary starts by itself, as it does when a background task it launched finishes: a notice, then a turn. */
-const selfStartedTurn = async (text) => {
-  out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
+/** A turn the binary starts by itself, as it does when background tasks it launched finish: their notices, then a turn. */
+const selfStartedTurn = async (text, taskIds = ["fake-task"]) => {
+  for (const taskId of taskIds) out({ type: "system", subtype: "task_notification", task_id: taskId, status: "completed", session_id: sessionId });
   const state = { interrupted: false, child: null };
   current = state;
-  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
+  out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake" });
   say(text);
   if (state.interrupted) return;
   current = null;
@@ -163,15 +267,16 @@ const selfStartedTurn = async (text) => {
 
 /** A subagent asking permission, as the real binary sends it: it names its agent, and its tool call comes first. By
  * default a background agent's; `call` names the main thread's Agent call a foreground one runs under, and `forwarded`
- * false is a nested agent, which asks before its call is forwarded. */
+ * false is a nested agent, which asks before its call is forwarded. `person` makes it a question for the person instead
+ * (`tool` AskUserQuestion, say), marked requires_user_interaction as Claude Code 2.1.304 sends one. */
 let lastQuestion = null;
-const subagentAsks = (input, { call = "toolu_bg_agent", agent = "fake-agent", toolUseId = "toolu_bg_bash", forwarded = true } = {}) => new Promise((resolve) => {
+const subagentAsks = (input, { call = "toolu_bg_agent", agent = "fake-agent", toolUseId = "toolu_bg_bash", forwarded = true, tool = "Bash", person = false } = {}) => new Promise((resolve) => {
   const requestId = `req-${++counter}`;
   lastQuestion = requestId;
   pending.set(requestId, resolve);
-  const toolUse = { type: "assistant", parent_tool_use_id: call, agent_id: agent, message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Bash", input }] }, session_id: sessionId };
+  const toolUse = { type: "assistant", parent_tool_use_id: call, agent_id: agent, message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: tool, input }] }, session_id: sessionId };
   if (forwarded) out(toolUse);
-  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: "Bash", display_name: "Bash", input, description: "background command", tool_use_id: toolUseId, agent_id: agent } });
+  out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: tool, display_name: tool, input, tool_use_id: toolUseId, agent_id: agent, ...(person ? { requires_user_interaction: true } : { description: "background command" }) } });
   if (!forwarded) out(toolUse);
   out({ type: "system", subtype: "task_progress", task_id: "fake-task", description: "waiting for permission", session_id: sessionId }); // a notice, not a turn
 });
@@ -188,7 +293,7 @@ async function turn(prompt, images = [], uuid = null) {
   current = state;
   turnsAnswered += 1;
   const continuing = resumed || turnsAnswered > 1; // this process, or a resumed one, already holds the conversation
-  out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: uuid ? [uuid] : [] });
+  out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash", "Read", "Write"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: uuid ? [uuid] : [] });
   const ownTags = /<(task-notification|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|tick)>/;
   if (replay && uuid && !ownTags.test(received)) out({ type: "user", message: { role: "user", content: received }, uuid, isReplay: true, parent_tool_use_id: null, session_id: sessionId });
   const tool = async (name, input, produce) => {
@@ -282,9 +387,12 @@ async function turn(prompt, images = [], uuid = null) {
     }
   } else if (prompt === 'image-check') {
     say(`Images received: ${images.map(image => `${image.source.media_type}:${Buffer.from(image.source.data, 'base64').length}`).join(', ')}`);
-  } else if ((match = prompt.match(/^run (.+)$/s))) {
+  } else if ((match = prompt.match(/^run (.+)$/s)) || (match = prompt.match(/^run-described ([^\n]+)\n(.+)$/s))) {
+    // "run <cmd>" asks for a Bash call with no description; "run-described <description>\n<cmd>" with one, as Claude Code
+    // gives most of its commands.
     turns = 2;
-    const outcome = await tool("Bash", { command: match[1] }, async (input) => {
+    const described = prompt.startsWith("run-described ");
+    const outcome = await tool("Bash", described ? { command: match[2], description: match[1] } : { command: match[1] }, async (input) => {
       // Spawned, not run synchronously, so an interrupt from the host can still be read and acted on.
       const proc = Bun.spawn(["/bin/sh", "-c", input.command], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
       state.child = proc;
@@ -302,6 +410,73 @@ async function turn(prompt, images = [], uuid = null) {
     turns = 2;
     const outcome = await tool("Read", { file_path: match[1] }, async (input) => ({ content: await Bun.file(input.file_path).text() }));
     if (!state.interrupted) say(outcome.denied ? `I could not read it: ${outcome.message}` : `The file says: ${outcome.content.trim()}`);
+  } else if ((match = prompt.match(/^ask-user-slow (\d+)$/))) {
+    // Claude asks the person "tea or coffee?", then takes <ms> to act on the answer, so a Stop lands while it is in flight.
+    turns = 2;
+    const question = "tea or coffee?";
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    for (let waited = 0; waited < Number(match[1]) && !state.interrupted; waited += 20) await sleep(20);
+    if (state.interrupted) return;
+    say(`You answered: ${decision.updatedInput?.answers?.[question] ?? decision.message}`);
+  } else if ((match = prompt.match(/^ask-user (.+)$/s))) {
+    // Claude asks the person (AskUserQuestion). An allow carries the answers, keyed by the question's text; an allow
+    // without them is a question nobody answered, as the real binary reports it; a deny is the person not answering.
+    turns = 2;
+    const question = match[1];
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    if (state.interrupted) return;
+    const answer = decision.behavior === "allow" ? decision.updatedInput?.answers?.[question] : undefined;
+    const unanswered = answer === undefined ? (decision.behavior === "allow" ? "The user did not answer the questions." : decision.message) : null;
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: unanswered ?? `Your questions have been answered: "${question}"="${answer}". You can now continue with these answers in mind.`, ...(decision.behavior === "allow" ? {} : { is_error: true }) }] }, session_id: sessionId });
+    say(unanswered === null ? `You answered: ${answer}` : `No answer: ${unanswered}`);
+  } else if ((match = prompt.match(/^exit-plan (.+)$/s))) {
+    // Claude asks the person to approve its plan (ExitPlanMode). An allow approves it; a deny sends it back with the
+    // person's feedback as its message.
+    turns = 2;
+    const title = match[1];
+    const input = { plan: `# ${title}\n\n1. Do the thing.`, planFilePath: "/tmp/plan.md" };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "ExitPlanMode", input }] }, session_id: sessionId });
+    const decision = await askPerson("ExitPlanMode", input, toolUseId);
+    if (state.interrupted) return;
+    const approved = decision.behavior === "allow";
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: approved ? "User has approved your plan." : decision.message, ...(approved ? {} : { is_error: true }) }] }, session_id: sessionId });
+    say(approved ? `Plan approved: ${title}` : `Plan sent back: ${decision.message}`);
+  } else if ((match = prompt.match(/^ask-user-withdraw (\d+)$/))) {
+    // Claude asks the person, then takes the question back <ms> later and answers without it.
+    const input = { questions: [{ question: "tea or coffee?", header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    void askPerson("AskUserQuestion", input, toolUseId);
+    const asked = `req-${counter}`;
+    await sleep(Number(match[1]));
+    if (state.interrupted) return;
+    takeBack(asked);
+    say("Never mind the question.");
+  } else if (prompt === "ask-user-two") {
+    const questions = [["tea or coffee?", "tea", "coffee"], ["milk or sugar?", "milk", "sugar"]].map(([question, ...labels]) => ({ question, header: "Choice", options: labels.map((label) => ({ label, description: "" })), multiSelect: false }));
+    const input = { questions };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    if (state.interrupted) return;
+    const answers = questions.map(({ question }) => decision.updatedInput?.answers?.[question] ?? "(none)");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Answered: ${answers.join(" / ")}` }] }, session_id: sessionId });
+    say(`You answered: ${answers.join(" / ")}`);
+  } else if ((match = prompt.match(/^ask-user-exit (\d+)$/))) {
+    // Claude asks the person, then its process ends <ms> later without an answer or a result (a crash).
+    const input = { questions: [{ question: "tea or coffee?", header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    void askPerson("AskUserQuestion", input, toolUseId);
+    await sleep(Number(match[1]));
+    process.exit(1);
   } else if (prompt === "history") {
     say(`${continuing ? "Resumed" : "Fresh agent"} context: ${received}`);
   } else if (prompt.startsWith("model")) {
@@ -309,8 +484,133 @@ async function turn(prompt, images = [], uuid = null) {
   } else if ((match = prompt.match(/^background (\d+) (.+)$/s))) {
     say("Background work started.");
     const [, delay, text] = match;
-    out({ type: "system", subtype: "task_started", task_id: "fake-task", description: "background work", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "fake-task", run_id: "fake-task-run", task_type: "local_bash", description: "background work", is_backgrounded: true, session_id: sessionId });
+    inBackground(() => out({ type: "system", subtype: "task_progress", task_id: "fake-task", usage: { total_tokens: 1234, tool_uses: 1, duration_ms: Number(delay) / 2 }, session_id: sessionId }), Number(delay) / 2);
     inBackground(() => enqueue(() => selfStartedTurn(text)), Number(delay));
+  } else if ((match = prompt.match(/^tasks (\d+) (\d+)$/))) {
+    // <n> background tasks that move to a phase "review" and report their usage halfway through <ms>, with a progress line
+    // "Running task <i>" and the tool Bash, and end together after it with the summary "task <i>", each on timers of its
+    // own so that stop_task ends one alone. Those that completed are reported in a turn of their own, as "background" is;
+    // when none did, there is nothing to report.
+    const [count, ms] = [Number(match[1]), Number(match[2])];
+    say(`Started ${count} tasks.`);
+    let completed = 0;
+    for (let i = 1; i <= count; i++) {
+      const taskId = `task-${i}`;
+      startTask(taskId);
+      out({ type: "system", subtype: "task_started", task_id: taskId, run_id: `${taskId}-run`, tool_use_id: `toolu_task_${i}`, task_type: "local_bash", description: `task ${i}`, is_backgrounded: true, session_id: sessionId });
+      inBackground(() => {
+        out({ type: "system", subtype: "task_updated", task_id: taskId, patch: { workflow_phase: "review", description: `task ${i}, reviewing` }, session_id: sessionId });
+        out({ type: "system", subtype: "task_progress", task_id: taskId, description: `Running task ${i}`, last_tool_name: "Bash", usage: { total_tokens: 1000 * i, tool_uses: i, duration_ms: ms / 2 }, session_id: sessionId });
+      }, ms / 2, taskId);
+      inBackground(() => { completed += 1; endTask(taskId, "completed", { summary: `task ${i}` }); }, ms, taskId);
+    }
+    inBackground(() => { if (completed) enqueue(() => selfStartedTurn(`${completed} of ${count} tasks done.`, [])); }, ms);
+  } else if ((match = prompt.match(/^tasks-stubborn (\d+)$/))) {
+    // <n> background tasks that never end by themselves and ignore stop_task: it is answered, and they go on. Only an
+    // interrupt that does not spare background work, or the process's end, ends them.
+    const count = Number(match[1]);
+    say(`Started ${count} stubborn tasks.`);
+    for (let i = 1; i <= count; i++) {
+      startTask(`task-${i}`, { stubborn: true });
+      out({ type: "system", subtype: "task_started", task_id: `task-${i}`, run_id: `task-${i}-run`, tool_use_id: `toolu_task_${i}`, task_type: "local_bash", description: `stubborn task ${i}`, is_backgrounded: true, session_id: sessionId });
+    }
+  } else if ((match = prompt.match(/^workflow (\S+) (\d+)$/))) {
+    // A workflow named <name>, as Claude Code 2.1.304 reports one: ONE task of type local_workflow carrying its name,
+    // with a run id of its own and no is_backgrounded field (the binary sets that only for agents and commands). Each of
+    // its progress reports lists its phases and agents (workflow_progress) and names the current agent in its
+    // description, with the running sum of the agents' tokens in usage: both agents of phase Say start at once, say:1 is
+    // done halfway through <ms>, both are done at <ms>, when it completes with a summary and an output file, as the probe's
+    // notice did; all on timers of its own so that stop_task ends it. A moment after it completes, a turn of its own
+    // reports it, as "background" does. The turn calls the Workflow tool as Claude Code does, a script run inline whose
+    // meta names the workflow, around the task's start, and the tool answers that it started in the background. The real
+    // binary asks permission for the call first; this scenario does not (the permission path is covered elsewhere and is
+    // not what it is about).
+    const [name, ms] = [match[1], Number(match[2])];
+    // Every task has an id of its own: the first workflow of a process is wf-1, the next wf-2, and so on.
+    const n = ++workflows;
+    const [taskId, runId, toolUseId] = [`wf-${n}`, `wf-${n}-run`, `toolu_wf_${n}`];
+    say("Workflow started.");
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "Workflow", input: { script: `export const meta = {\n  name: '${name}',\n  description: 'Workflow ${name}',\n  phases: [{ title: 'Say' }],\n}\nphase('Say')\nawait parallel([1, 2].map(index => () => agent(\`Reply with exactly: agent \${index} ok\`, { label: \`say:\${index}\` })))\n` } }] }, session_id: sessionId });
+    startTask(taskId);
+    out({ type: "system", subtype: "task_started", task_id: taskId, run_id: runId, tool_use_id: toolUseId, task_type: "local_workflow", workflow_name: name, description: `Workflow ${name}`, session_id: sessionId });
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Workflow started in the background (task ${taskId}).` }] }, session_id: sessionId });
+    const agent = (index, state, done = {}) => ({ type: "workflow_agent", index, label: `say:${index}`, phaseIndex: 1, phaseTitle: "Say", agentId: `agent-${index}`, model: "claude-fable-5-1", state, attempt: 1, promptPreview: `Reply with exactly: agent ${index} ok`, ...done });
+    const finished = (index) => ({ tokens: 20388, toolCalls: 0, durationMs: ms / 2, resultPreview: `agent ${index} ok` });
+    const progress = (current, usage, agents) => out({ type: "system", subtype: "task_progress", task_id: taskId, run_id: runId, tool_use_id: toolUseId, description: `Say: ${current}`, last_tool_name: current, summary: `Workflow ${name}`, usage, workflow_progress: [{ type: "workflow_phase", index: 1, title: "Say" }, ...agents], session_id: sessionId });
+    progress("say:1", { total_tokens: 0, tool_uses: 0, duration_ms: 42 }, [agent(1, "start"), agent(2, "start")]);
+    // Halfway, say:2 is at work: Claude Code's `progress` state, with its tokens and tool calls so far.
+    inBackground(() => progress("say:1", { total_tokens: 20388, tool_uses: 0, duration_ms: ms / 2 }, [agent(1, "done", finished(1)), agent(2, "progress", { tokens: 8000, toolCalls: 1 })]), ms / 2, taskId);
+    inBackground(() => {
+      progress("say:2", { total_tokens: 40776, tool_uses: 0, duration_ms: ms }, [agent(1, "done", finished(1)), agent(2, "done", finished(2))]);
+      endTask(taskId, "completed", { summary: `Dynamic workflow "Workflow ${name}" completed`, output_file: `/tmp/${name}.output` });
+      inBackground(() => enqueue(() => selfStartedTurn(`Workflow ${name} done.`, [])), WORKFLOW_REPORT_DELAY_MS);
+    }, ms, taskId);
+  } else if ((match = prompt.match(/^nested-agent (\d+)$/))) {
+    // A background subagent and the command it runs, as Claude Code 2.1.304 reports them (the send-now probe): the
+    // subagent agent-1 (local_agent, spawn_depth 1) says what it does now and the tool it last used; its command cmd-1
+    // (local_bash, a foreground call of the subagent's) names it as its parent and is owned by it. At <ms> the command
+    // ends, then the subagent, each with its description as its summary and the subagent with an output file, and a turn
+    // of its own reports it. stop_task on the subagent kills it as an interrupt did in the probe: its command is stopped
+    // first, then task_updated says killed and the notice says stopped.
+    const ms = Number(match[1]);
+    say("Agent started.");
+    // As Claude Code 2.1.304 keeps it, the subagent's output file is a link to its transcript, JSON lines written as it
+    // works (a message, or one content block of one, a line), whose last assistant message is its report; the file is
+    // named only in the subagent's notice.
+    const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-claude-"));
+    const transcript = path.join(dir, "subagents", "agent-agent-1.jsonl");
+    const report = path.join(dir, "tasks", "agent-1.output");
+    fs.mkdirSync(path.dirname(transcript)); fs.mkdirSync(path.dirname(report));
+    const said = (entry) => fs.appendFileSync(transcript, `${JSON.stringify({ ...entry, agentId: "agent-1-agent", sessionId })}\n`);
+    said({ type: "user", message: { role: "user", content: "Run the checks with Bash, then reply: done" } });
+    said({ type: "assistant", message: { id: "msg_agent_1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_cmd_1", name: "Bash", input: { command: "bun test" } }] } });
+    said({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_cmd_1", content: "12 pass, 0 fail" }] } });
+    fs.symlinkSync(transcript, report);
+    const ended = (status) => {
+      endTask("cmd-1", status, { summary: "Run the checks command", output_file: "" });
+      if (status === "stopped") out({ type: "system", subtype: "task_updated", task_id: "agent-1", patch: { status: "killed", end_time: Date.now() }, session_id: sessionId });
+      if (status === "completed") said({ type: "assistant", message: { id: "msg_agent_2", role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: "The checks pass: 12 tests, no failures." }] } });
+      endTask("agent-1", status, { summary: "Run the checks", output_file: report });
+    };
+    startTask("agent-1", { onStop: () => ended("stopped") });
+    startTask("cmd-1");
+    out({ type: "system", subtype: "task_started", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", task_type: "local_agent", subagent_type: "general-purpose", description: "Run the checks", is_backgrounded: true, spawn_depth: 1, prompt: "Run the checks with Bash, then reply: done", session_id: sessionId });
+    out({ type: "system", subtype: "task_progress", task_id: "agent-1", run_id: "agent-1-run", tool_use_id: "toolu_agent_1", subagent_type: "general-purpose", description: "Running Run the checks", last_tool_name: "Bash", usage: { total_tokens: 22304, tool_uses: 1, duration_ms: 4659 }, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "cmd-1", run_id: "cmd-1-run", tool_use_id: "toolu_cmd_1", task_type: "local_bash", description: "Run the checks command", is_backgrounded: false, parent_task_id: "agent-1", owned_by_subagent: true, session_id: sessionId });
+    // The subagent's own message, which alone names its model (agent_id and the call it runs under on the envelope).
+    out({ type: "assistant", agent_id: "agent-1-agent", parent_tool_use_id: "toolu_agent_1", message: { id: "msg_agent_1", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_cmd_1", name: "Bash", input: { command: "bun test" } }] }, session_id: sessionId });
+    inBackground(() => { ended("completed"); enqueue(() => selfStartedTurn("Agent agent-1 done.", [])); }, ms, "agent-1");
+  } else if ((match = prompt.match(/^away-summary (.+)$/s))) {
+    // The summary Claude Code gives when the person comes back after being away (its field unprobed; `summary` here), then a reply.
+    out({ type: "system", subtype: "away_summary", summary: match[1], session_id: sessionId });
+    say("Welcome back.");
+  } else if (prompt === "notify-unknown") {
+    // A task ends that was never seen to start, then the turn answers.
+    out({ type: "system", subtype: "task_notification", task_id: "ghost", status: "failed", session_id: sessionId });
+    say("A task nobody saw start has ended.");
+  } else if (prompt === "tasks-malformed") {
+    // Task notices with fields of the wrong type or far too long, and two that name no usable task; then the turn answers.
+    out({ type: "system", subtype: "task_started", task_id: "odd", run_id: 7, tool_use_id: "u".repeat(300), description: 42, subagent_type: { name: "x" }, is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "long", description: "d".repeat(2000), is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_progress", task_id: "odd", usage: { total_tokens: -5, tool_uses: 2.7, duration_ms: "soon" }, session_id: sessionId });
+    out({ type: "system", subtype: "task_updated", task_id: "long", patch: { phase: "p".repeat(1000), description: { text: "x" } }, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: "", description: "no id", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_started", task_id: { id: 1 }, description: "an object for an id", is_backgrounded: true, session_id: sessionId });
+    say("Malformed tasks reported.");
+  } else if (prompt === "ask-user-unrecordable") {
+    // Claude asks the person with an input that is not an object, which Jolo cannot record as a dialog; says what it was told.
+    turns = 2;
+    const toolUseId = `toolu_${++counter}`;
+    const decision = await askPerson("AskUserQuestion", ["not", "an", "object"], toolUseId);
+    if (state.interrupted) return;
+    say(decision.behavior === "allow" ? "Allowed." : `No answer: ${decision.message}`);
+  } else if (prompt === "task-updated-stop") {
+    // A background task whose update names its phase and says it was stopped, with no notice of its end; then the turn answers.
+    out({ type: "system", subtype: "task_started", task_id: "patched", description: "patched task", is_backgrounded: true, session_id: sessionId });
+    out({ type: "system", subtype: "task_updated", task_id: "patched", patch: { phase: "build", status: "stopped" }, session_id: sessionId });
+    say("A task was stopped.");
   } else if ((match = prompt.match(/^background-slow (\d+) (\d+) (.+)$/s))) {
     say("Background work started.");
     const [, delay, ms, text] = match;
@@ -318,7 +618,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       await sleep(Number(ms));
       if (self.interrupted) return;
@@ -335,8 +635,7 @@ async function turn(prompt, images = [], uuid = null) {
       void subagentAsks({ command: "echo background" });
       const asked = lastQuestion;
       setTimeout(() => {
-        out({ type: "control_cancel_request", request_id: asked });
-        const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+        takeBack(asked);
         setTimeout(() => enqueue(() => selfStartedTurn("Background agent finished: withdrawn")), 100);
       }, Number(ms));
     }, Number(delay));
@@ -365,6 +664,18 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(async () => {
       const decision = await subagentAsks({ command: "echo background" });
       setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${decision.behavior}`)), Number(work));
+    }, Number(delay));
+  } else if ((match = prompt.match(/^background-dialog (\d+) (\d+)$/))) {
+    // As background-permission, but the background subagent asks the person "tea or coffee?" (AskUserQuestion) and
+    // reports the answer, or why there was none.
+    say("Background agent started.");
+    const [, delay, work] = match;
+    const question = "tea or coffee?";
+    const input = { questions: [{ question, header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
+    setTimeout(async () => {
+      const decision = await subagentAsks(input, { tool: "AskUserQuestion", toolUseId: "toolu_bg_ask", person: true });
+      const answer = decision.behavior === "allow" ? decision.updatedInput?.answers?.[question] : decision.message;
+      setTimeout(() => enqueue(() => selfStartedTurn(`Background agent finished: ${answer}`)), Number(work));
     }, Number(delay));
   } else if ((match = prompt.match(/^race-self (.+)$/s))) {
     say(`You said: ${match[1]}`);
@@ -404,7 +715,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Report part one, " } }, session_id: sessionId });
       await sleep(Number(match[1]));
@@ -454,7 +765,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "task-a", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       for (let waited = 0; waited < 2000 && !self.interrupted; waited += 50) await sleep(50);
       if (self.interrupted) return;
@@ -467,7 +778,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "task-b", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       say("report B");
       current = null;
       result(1);
@@ -477,7 +788,7 @@ async function turn(prompt, images = [], uuid = null) {
     say("Background work started.");
     setTimeout(() => enqueue(async () => {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Agent"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Agent"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_fg", name: "Agent", input: { description: "Check it", subagent_type: "Explore", prompt: "Check it" } }] }, session_id: sessionId });
       out({ type: "assistant", parent_tool_use_id: "toolu_fg", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "child-read", name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
       out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "checked" }] }, session_id: sessionId });
@@ -512,7 +823,7 @@ async function turn(prompt, images = [], uuid = null) {
     say("Background work started.");
     setTimeout(() => enqueue(async () => {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, session_id: sessionId });
       for (let i = 0; i < Number(match[1]); i++) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "." } }, session_id: sessionId });
@@ -677,7 +988,7 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(() => enqueue(async () => {
       batch = [];
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Read"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Read"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       for (let call = 0; call < 3; call++) {
         out({ type: "stream_event", event: { type: "message_start", message: { role: "assistant" } }, session_id: sessionId });
         out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `toolu_m${call}`, name: "Read", input: { file_path: "notes.txt" } }] }, session_id: sessionId });
@@ -710,7 +1021,7 @@ async function turn(prompt, images = [], uuid = null) {
     setTimeout(() => enqueue(async () => {
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_own", name: "Bash", input: { command: "echo own" } }] }, session_id: sessionId });
       const decision = await ask("Bash", { command: "echo own" }, { toolUseId: "toolu_own" });
       if (self.interrupted) return;
@@ -769,7 +1080,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       out({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }, session_id: sessionId });
       for (let waited = 0; waited < 4000 && !self.interrupted; waited += 50) await sleep(50);
       if (self.interrupted) return;
@@ -801,7 +1112,7 @@ async function turn(prompt, images = [], uuid = null) {
       out({ type: "system", subtype: "task_notification", task_id: "fake-task", status: "completed", session_id: sessionId });
       const self = { interrupted: false, child: null };
       current = self;
-      out({ type: "system", subtype: "init", session_id: sessionId, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
+      out({ type: "system", subtype: "init", session_id: sessionId, mcp_servers: INIT_MCP, capabilities: CAPABILITIES, tools: ["Bash"], permissionMode: "default", cwd: process.cwd(), model: "fake", user_message_uuids: [] });
       const decision = await ask("Bash", { command: "echo later" });
       if (self.interrupted) return;
       say(`Background step: ${decision.behavior}`);
@@ -834,8 +1145,7 @@ async function turn(prompt, images = [], uuid = null) {
     await sleep(300);
     say("Still working. ");
     await sleep(300);
-    out({ type: "control_cancel_request", request_id: asked });
-    const resolve = pending.get(asked); pending.delete(asked); resolve?.({ behavior: "withdrawn" });
+    takeBack(asked);
     await sleep(200);
     say("Done.");
   } else if ((match = prompt.match(/^zero-result-compact (\d+) (.+)$/s))) {
@@ -885,6 +1195,8 @@ async function turn(prompt, images = [], uuid = null) {
   result(turns, uuid);
 }
 
+/** The requests the host has answered, by request id. */
+const answered = new Set();
 let buffered = "";
 const decoder = new TextDecoder();
 for await (const chunk of Bun.stdin.stream()) {
@@ -894,10 +1206,13 @@ for await (const chunk of Bun.stdin.stream()) {
     const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);
     if (!line.trim()) continue;
     const message = JSON.parse(line);
-    if (message.type === "control_request" && message.request?.subtype === "initialize") { sparesBackground = message.request.perTaskStopAffordance === true; forwardsNested = message.request.forwardNestedSubagentToolCalls === true; }
+    if (message.type === "control_request" && message.request?.subtype === "initialize") { sparesBackground = message.request.perTaskStopAffordance === true && !NO_STOP_TASK; forwardsNested = message.request.forwardNestedSubagentToolCalls === true; }
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: COMMANDS, models: MODELS } } });
     else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_request" && message.request?.subtype === "interrupt") interrupt(message.request_id, message.request.cancel_queued === true, message.request.for_user_message_uuids ?? null);
+    else if (message.type === "control_request" && message.request?.subtype === "stop_task") stopTask(message.request_id, message.request.task_id);
+    else if (message.type === "control_request" && message.request?.subtype === "get_task_output") answerTaskOutput(message.request_id, message.request.task_id);
+    else if (message.type === "control_request" && message.request?.subtype === "mcp_status") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { mcpServers: MCP_SERVERS } } });
     else if (message.type === "control_request" && message.request?.subtype === "cancel_async_message") {
       // Withdraw one queued message by its id; one already taken up is not withdrawn.
       const entry = waiting.find((candidate) => candidate.uuid === message.request.message_uuid && !candidate.cancelled);
@@ -905,7 +1220,14 @@ for await (const chunk of Bun.stdin.stream()) {
       if (entry) lifecycle(entry.uuid, "cancelled");
       out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { cancelled: Boolean(entry) } } });
     }
-    else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
+    else if (message.type === "control_response") {
+      // Each request is answered once: a second answer is a host bug, and leaving makes the test that caused it fail.
+      const requestId = message.response?.request_id;
+      if (answered.has(requestId)) { process.stderr.write(`fake-claude: second control response for ${requestId}\n`); process.exit(70); }
+      if (withdrawn.has(requestId)) { process.stderr.write(`fake-claude: control response for ${requestId}, which was taken back\n`); process.exit(70); }
+      answered.add(requestId);
+      const resolve = pending.get(requestId); if (resolve) { pending.delete(requestId); resolve(message.response.response); }
+    }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
     else if (message.type === "user") { const entry = { cancelled: false, uuid: message.uuid ?? null }; waiting.push(entry); lifecycle(entry.uuid, "queued"); enqueue(async () => { waiting.splice(waiting.indexOf(entry), 1); if (entry.cancelled) return; lifecycle(entry.uuid, "started"); await turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image"), message.uuid ?? null).catch((error) => { process.stderr.write(`fake-claude: ${error?.stack ?? error}\n`); process.exit(70); }); lifecycle(entry.uuid, stoppedMessages.delete(entry.uuid) ? "cancelled" : "completed"); }); }
   }

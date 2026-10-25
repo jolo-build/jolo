@@ -1,7 +1,8 @@
 /** Keep conversation identity when the composer chooses a different answerer.
  * Read the current revision before switching; a conflict leaves the draft intact. */
 export async function sessionForSend({ call, sessionId, agentId, prompt, newSession, session: known = undefined }) {
-  if (!sessionId) return newSession(prompt.slice(0, 80), { agentId });
+  // Untitled: the engine names it, from its answerer's title or the prompt's first characters (see RunService.start).
+  if (!sessionId) return newSession('', { agentId });
   if (agentId === undefined) return known ?? { id: sessionId };
   if (known && (known.agentId ?? null) === agentId) return known;
   const { session } = await call('session.page', { sessionId });

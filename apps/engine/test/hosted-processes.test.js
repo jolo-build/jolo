@@ -51,3 +51,20 @@ test('a burst of output faster than the reader steps is read in full, while a re
   await expect((async () => { for await (const _ of stuck.messages()) await Bun.sleep(1500); })()).rejects.toThrow('queue exceeded limit');
   await stuck.settle();
 }, 10_000);
+
+test('a vendor that answers after its stdin ends has the grace its caller gives the guardian, and the default otherwise', async () => {
+  // Answers 2.2 s after its stdin ends: past the guardian's default 1.5 s grace, inside a raised one.
+  const vendor = `process.stdin.on('end', () => setTimeout(() => { console.log(JSON.stringify({ late: true })); process.exit(0); }, 2200)); process.stdin.resume();`;
+  const run = async (env) => {
+    const link = spawnLineChild({ argv: [process.execPath, '--eval', vendor], cwd: process.cwd(), env: { PATH: process.env.PATH, ...env }, signal: new AbortController().signal, log, agentId: 'test' });
+    link.end();
+    const messages = [];
+    try { for await (const message of link.messages()) messages.push(message); }
+    finally { await link.child.exited; await link.settle(); }
+    return { messages, exitCode: link.child.exitCode };
+  };
+  expect(await run({ JOLO_GUARDIAN_EOF_GRACE_MS: '10000' })).toEqual({ messages: [{ late: true }], exitCode: 0 });
+  const stopped = await run({});
+  expect(stopped.messages).toEqual([]);
+  expect(stopped.exitCode).not.toBe(0);
+}, 15_000);

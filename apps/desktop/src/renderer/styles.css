@@ -173,6 +173,8 @@ strong { font-weight: 550; }
 .compact-pane .task-meta { font-size: 10px; }
 .compact-pane .transcript, .compact-pane .compose-column { padding-inline: 14px; }
 .compact-pane .transcript { padding-block: 18px 30px; gap: 18px; }
+.compact-pane .message-tools { height: 18px; line-height: 18px; }
+.compact-pane .message-tools .message-copy { width: 18px; height: 18px; padding: 2px; }
 .compact-pane .compose-wrap { padding-block: 8px 10px; }
 .compact-pane .composer { padding: 10px 12px; border-radius: 14px; }
 .compact-pane .composer textarea { min-height: 44px; max-height: min(160px, 25vh); font-size: 13px; }
@@ -302,6 +304,15 @@ strong { font-weight: 550; }
 .sidebar .sidebar-chat { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 28px; padding: 4px 30px 4px 13px; margin: 0; text-align: left; font-size: 12px; line-height: 20px; background: transparent; }
 .sidebar .sidebar-chat:is(:hover, :focus-visible) { background: transparent; }
 .sidebar-chat :is(.task-title, .recent-chat-title) { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A task being named: a muted bar with a soft sweep where its title will be, until the title arrives. Its colors are
+   mixed from the muted text, not --subtle and --hover: those are the header's and a selected row's own backgrounds. */
+.title-shimmer { position: relative; display: inline-block; vertical-align: middle; width: 160px; max-width: 70%; height: 10px; border-radius: 5px; overflow: hidden; background: color-mix(in srgb, var(--muted) 16%, transparent); }
+.title-shimmer > span { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--muted) 18%, transparent), transparent); background-size: 200% 100%; animation: title-shimmer 1.4s ease-in-out infinite; }
+:is(.header-task-title, .pane-task-name) .title-shimmer { height: 12px; border-radius: 6px; }
+/* The window header's title sizes itself to its content, so a percentage there would be 70% of the bar's own width. */
+.header-task-title .title-shimmer { max-width: 100%; }
+@keyframes title-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .title-shimmer > span { animation: none; background: none; } }
 .sidebar-task-progress { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; justify-content: center; align-items: center; width: 26px; height: 26px; color: var(--muted); }
 /* A row's state sits where its options button appears; hovering swaps it for the button. */
 .sidebar-chat-row:has(.task-more):is(:hover, :has(:focus-visible)) .sidebar-task-progress { opacity: 0; }
@@ -337,16 +348,10 @@ strong { font-weight: 550; }
 .main { grid-column: 2; grid-row: 1; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
 .task-header { display: flex; align-items: center; gap: 12px; padding: 12px 28px 0; }
 .task-header .task-meta { flex: 1; min-width: 0; }
-/* The header's right end: a conversation's child tasks, or a child's way back to the task that started it. */
-.child-tasks-toggle, .parent-task-link { flex: none; gap: 5px; padding: 3px 6px; margin: -3px -6px -3px 0; color: var(--muted); font-size: 11px; line-height: 18px; }
-.child-tasks-toggle:hover, .parent-task-link:hover, .child-tasks-toggle[aria-expanded="true"] { color: var(--text); }
-.child-tasks-toggle.needs { color: var(--red); }
+/* The header's right end: a child's way back to the task that started it. */
+.parent-task-link { flex: none; gap: 5px; padding: 3px 6px; margin: -3px -6px -3px 0; color: var(--muted); font-size: 11px; line-height: 18px; }
+.parent-task-link:hover { color: var(--text); }
 .parent-task-link > span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.child-tasks-menu { width: 292px; max-height: min(420px, calc(100vh - 120px)); }
-.child-tasks-menu button { min-height: 40px; }
-.child-task-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.child-task-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.child-tasks-menu .icon.needs { color: var(--red); }
 .task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; color: var(--muted); font-size: 11px; line-height: 18px; }
 .task-worktree { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
 .task-worktree > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -377,12 +382,25 @@ h1 { font-size: 19px; font-weight: 550; line-height: 1.4; letter-spacing: -.55px
 .empty-transcript .empty-state { padding: 0 0 2px; }
 .empty-state p.empty-tagline { font-size: 14px; line-height: 22px; }
 .empty-transcript .empty-state button { margin: 14px auto 0; }
-.message { min-width: 0; overflow-wrap: anywhere; }
+.message { position: relative; min-width: 0; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; max-width: 92%; background: var(--hover); border-radius: 9px; padding: 8px 16px; font-size: 14px; line-height: 22px; }
 .message-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-bottom: 9px; text-transform: capitalize; }
 .message-text { white-space: pre-wrap; }
 .message.assistant { line-height: 1.6; font-size: 14px; }
 .message.evicted { font-size: 12px; color: var(--muted); font-style: italic; }
+/* A message's copy button and time sit in the transcript's gap below it, so nothing moves when they show: on hover or keyboard focus, always on a touch screen.
+   One line whatever the message's width (a short bubble's row would otherwise wrap over it), and left out of a selection, so copying across messages copies only what was said. */
+.message-tools { position: absolute; top: 100%; left: 0; display: flex; align-items: center; gap: 6px; height: 22px; color: var(--muted); font-size: 11px; line-height: 22px; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: none; }
+.message.user .message-tools { left: auto; right: 0; }
+.message-tools .message-copy { width: 22px; height: 22px; padding: 4px; color: var(--muted); }
+.message-tools .message-copy:hover { color: var(--text); }
+/* The exact time is a small tip above `3m ago` the moment the time is hovered: a title's tooltip would come a second late. */
+.message-time { position: relative; }
+.message-time-exact { display: none; position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 1; padding: 3px 7px; border-radius: 6px; color: var(--text); background: var(--panel); box-shadow: 0 2px 10px #0003, 0 0 0 1px var(--border); line-height: 16px; white-space: nowrap; pointer-events: none; }
+.message.user .message-time-exact { left: auto; right: 0; }
+.message-time:hover .message-time-exact { display: block; }
+.message-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .message:not(:hover, :has(:focus-visible)) .message-tools { opacity: 0; } }
 .activity-group > summary { list-style: none; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: default; padding: 3px 0; }
 .activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-pending { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; color: var(--muted); }
@@ -412,6 +430,23 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .subagent-steps { margin: 0; padding: 0; list-style: none; max-height: 168px; overflow: auto; font: 11px/1.65 var(--mono); color: var(--muted); }
 .subagent-steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-report { min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+/* A delegation call stands on its own line too: the child it is about, what that child is doing, and a quiet way into it. */
+.delegation-block { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.delegation-block > details { flex: 1; }
+details.block.delegation-details summary .delegation-title { flex: 0 1 auto; color: var(--text); }
+details.block.delegation-details summary .delegation-words { flex: 0 3 auto; }
+.delegation-open { flex: none; padding: 0 6px; margin-right: -6px; font-size: 12px; color: var(--muted); }
+.delegation-open:hover, .delegation-open:focus-visible { color: var(--text); }
+/* A Workflow call is a compact card where the call is, as Claude Code's transcript shows one: its name with a chevron
+   into the Activity panel, its kind, agents and elapsed time muted, and a square per agent; plain, nothing lit. */
+.workflow-call { display: flex; flex-direction: column; gap: 6px; max-width: 440px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.workflow-call-head { display: flex; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding: 0; border-radius: 0; text-align: left; }
+.workflow-call-head:hover { background: transparent; }
+.workflow-call-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text); }
+.workflow-call-head .activity-disclosure { flex: none; }
+.workflow-call-meta { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.workflow-call-meta > span { flex: none; white-space: nowrap; }
+.workflow-call-meta > .workflow-call-reply { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .screenshot { display: block; max-width: 100%; max-height: 300px; margin-top: 10px; border: 1px solid var(--border); border-radius: 7px; }
 /* Find in page: a small bar under the header, gone the moment it closes; the matches are highlights, not markup. */
 .find-bar { position: absolute; top: 10px; right: 16px; z-index: 70; display: flex; align-items: center; gap: 2px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 24px light-dark(rgba(0,0,0,.12), rgba(0,0,0,.5)); color: var(--muted); }
@@ -548,6 +583,12 @@ details.block.subagent-block summary .subagent-meta { flex: none; color: var(--m
 .stop-progress { display: block; flex: none; }
 .resume-note { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 12px; color: var(--muted); margin: 0 15px 12px; }
 .resume-note button { color: var(--accent); }
+/* Background work, quiet as the resume note: the text opens the Activity panel, the stop is the one accent. */
+.activity-line { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 12px; color: var(--muted); margin: 0 15px 12px; }
+.activity-line button { padding: 3px 7px; }
+.activity-line-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The transcript fade must not paint over the line either. */
+.activity-line + .compose-dock::before { display: none; }
 .permission-notice { flex: none; width: 100%; padding-top: 6px; overflow: hidden; container-type: inline-size; font-size: 12px; }
 .permission-notice-row { display: flex; align-items: center; gap: 12px; }
 .permission-notice-content { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
@@ -781,6 +822,93 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .check-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
 .check-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 11px var(--mono); }
 .check-row > span { flex: none; font-size: 11px; }
+/* Activity: the conversation's background work, as Claude Code's own panel lays it out (D2, D3): running tasks, then the
+   finished ones under Finished N; a workflow as a card, any other task as a row; muted secondary lines, nothing lit. */
+.activity-panel { display: flex; flex: 1; flex-direction: column; gap: 12px; padding: 16px; min-height: 0; overflow: auto; overscroll-behavior: contain; font-size: 12px; }
+.activity-panel > * { flex: none; }
+.activity-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.activity-heading strong { font-weight: 600; }
+.activity-heading > span { font-size: 11px; }
+.activity-actions { display: flex; align-items: center; gap: 4px; }
+.activity-actions .icon-button { padding: 4px; color: var(--muted); }
+.activity-panel .panel-note { display: flex; align-items: center; gap: 8px; padding: 0; }
+.activity-heading button, .activity-panel .panel-note button { font-size: 11px; padding: 3px 9px; }
+.activity-list { list-style: none; margin: 0; padding: 0; }
+/* The sidebar's task rows carry task-row too: each rule here names the panel or a class only the panel uses. */
+.activity-panel .item-head { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 13px; }
+.activity-panel .item-head > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A running task's stop: a square icon at the head's right end, muted like the heading's Clear finished. */
+.activity-panel .item-head .stop-task { flex: none; padding: 4px; color: var(--muted); }
+/* A task's output: a chevron after the elapsed time turns as its pane opens under the row, the output in mono, scrolling
+   past a few lines; notes about it (loading, the process gone, its file) muted. */
+.activity-panel .item-head .task-output-toggle { flex: none; padding: 4px; color: var(--muted); }
+.activity-panel .task-output-toggle[aria-expanded="true"] .activity-disclosure { transform: rotate(90deg); }
+.activity-panel .task-output-pane { margin-top: 4px; }
+.activity-panel .task-output { margin: 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--subtle); color: var(--text); font: 11px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-panel .task-output-note { margin: 2px 0 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-elapsed, .activity-panel .card-meta, .activity-task-meta, .phase-head { color: var(--muted); font-variant-numeric: tabular-nums; }
+.activity-elapsed { flex: none; font-size: 12px; }
+.workflow-card { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.workflow-title { font-weight: 500; }
+.activity-panel .card-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.workflow-description { margin: 6px 0 0; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.workflow-phases { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.phases-label { color: var(--muted); }
+.workflow-phase { display: flex; flex-direction: column; gap: 5px; padding-left: 8px; }
+.phase-head { display: flex; justify-content: space-between; gap: 10px; }
+.phase-head > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phase-squares { display: flex; flex-wrap: wrap; gap: 4px; }
+/* One square per agent, in a phase's row of squares and leading each agent's row of its table: done muted, running
+   highlighted, failed red; pending (and stopped) only outlined. */
+:is(.phase-squares span, .agent-square) { width: 6px; height: 6px; border-radius: 2px; border: 1px solid var(--muted); }
+:is(.phase-squares span, .agent-square)[data-status="done"] { background: var(--muted); }
+:is(.phase-squares span, .agent-square)[data-status="running"] { background: var(--highlight); border-color: var(--highlight); }
+:is(.phase-squares span, .agent-square)[data-status="failed"] { background: var(--red); border-color: var(--red); }
+.activity-list > .task-row { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.activity-list > .task-row:last-child { border-bottom: 0; }
+.activity-task-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finished-tasks > summary { display: flex; align-items: center; gap: 6px; list-style: none; padding: 2px 0; color: var(--muted); cursor: default; }
+.finished-tasks[open] > summary { margin-bottom: 4px; }
+.finished-tasks[open] > summary > .activity-disclosure { transform: rotate(90deg); }
+/* What a task does now (its progress line, mono as a subagent's now-line is) and how it ended (its summary and output
+   file), muted on one line each; a task under the task that started it is indented, after a muted ↳. */
+.activity-panel .activity-now { font: 11px/1.6 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-panel :is(.activity-summary, .activity-output) { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-list > [data-nested] { margin-left: 16px; }
+/* The conversation's child tasks, under a muted heading like Finished N: rows as the task rows are, the title a plain
+   button that opens the child, its Needs you marked in red as the sidebar marks it. */
+.activity-panel .activity-section-label { padding: 2px 0; color: var(--muted); font-size: inherit; font-weight: inherit; }
+.activity-panel .child-task-open { display: block; min-width: 0; padding: 0; border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.activity-panel .child-task-open:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .child-task-open:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .child-needs { display: inline-flex; align-items: center; gap: 4px; color: var(--red); }
+.activity-panel .activity-nest { color: var(--muted); }
+/* A phase whose agents are listed: its head and squares are the summary, its chevron turns as it opens to a table of
+   its agents (see below). */
+.activity-panel details.workflow-phase { display: block; }
+.activity-panel details.workflow-phase > summary { display: flex; flex-direction: column; gap: 5px; list-style: none; cursor: default; }
+.activity-panel details.workflow-phase > summary::-webkit-details-marker { display: none; }
+.activity-panel .phase-title { display: flex; align-items: center; gap: 4px; }
+.activity-panel .phase-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-panel details.workflow-phase[open] .activity-disclosure { transform: rotate(90deg); }
+/* An open phase's agents, as Claude Code's panel lists them: one grid whose header and rows are `display: contents`, so
+   Agent, Model, Tokens and Time line up across agents, Tokens and Time right-aligned in tabular figures. A row leads
+   with its status square; its result preview takes a quiet line of its own under it, indented to the label, cut to
+   one line until the row is clicked, then shown whole. Nothing lit, no stripes, no rules between rows. */
+.activity-panel .phase-agents { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; column-gap: 12px; row-gap: 4px; align-items: baseline; margin: 8px 0 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.activity-panel :is(.phase-agents-head, .phase-agent) { display: contents; }
+.activity-panel .phase-agents-head > * { color: var(--muted); font-size: 11px; }
+.activity-panel .phase-agents .num { text-align: right; }
+.activity-panel .phase-agent > * { color: var(--muted); white-space: nowrap; }
+.activity-panel .phase-agent > .phase-agent-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.activity-panel .agent-square { display: inline-block; vertical-align: middle; margin: -2px 6px 0 0; }
+.activity-panel .agent-toggle { display: block; width: 100%; padding: 0; border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.activity-panel .agent-toggle:hover { background: none; }
+.activity-panel .agent-toggle:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.activity-panel .phase-agent > .phase-agent-result { grid-column: 1 / -1; min-width: 0; padding-left: 12px; overflow: hidden; text-overflow: ellipsis; font: 11px/1.6 var(--mono); }
+.activity-panel .phase-agent[data-expanded] > .phase-agent-result { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* How a workflow ended, its summary and output file, set apart below its phases. */
+.activity-panel .workflow-ending { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
 .terminal { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
 .terminal-status { flex: none; padding: 6px 16px 8px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* xterm's fit reads the host's computed width, so its padding must sit outside it or the last columns are cut off. */
@@ -811,6 +939,19 @@ details.tool-output > summary { gap: 4px; font-size: 11px; }
 .permission-scope { display: flex; gap: 9px; align-items: center; font-size: 12px; color: var(--muted); }
 .permission-scope { flex-wrap: wrap; }
 .permission-scope select { font-size: 12px; line-height: 20px; padding: 5px 34px 5px 12px; }
+.dialog-modal { width: min(560px, calc(100vw - 40px)); }
+.dialog-question { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.dialog-question legend { display: flex; flex-direction: column; gap: 5px; padding: 0; margin-bottom: 4px; font-size: 14px; overflow-wrap: anywhere; }
+.dialog-option { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; }
+.dialog-option > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.dialog-option input:is([type=radio], [type=checkbox]) { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+.dialog-other { align-items: center; }
+.dialog-other label { flex: none; display: flex; align-items: center; gap: 9px; }
+.dialog-other input:is([type=radio], [type=checkbox]) { margin: 0; }
+.dialog-other input[type=text] { flex: 1; padding: 5px 8px; font-size: 12px; }
+.plan-body { max-height: min(50vh, 420px); overflow: auto; overscroll-behavior: contain; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); font-size: 13px; }
+.dialog-modal textarea { min-height: 56px; resize: vertical; padding: 8px 10px; border-radius: 6px; background: var(--field-background, var(--field)); font-size: 12px; }
+.dialog-modal .command:last-child { margin-bottom: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 3px; }
 .task-dialog { display: flex; flex-direction: column; gap: 16px; }
 .task-dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }

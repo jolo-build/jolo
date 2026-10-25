@@ -18,7 +18,10 @@ import { currentModelLabel, parseModelCommand } from "./model-config.js";
 import { SessionMenu } from "./sessions.jsx";
 import { parseSessionCommand } from "../sessions.js";
 import { sessionLoader } from "./session-loader.js";
-import { applyPermissionEvent, finished, seedPermissions, touchesPermissions } from "./permission-queue.js";
+import { applyPermissionEvent, finished, isDialog, requestKey, seedPermissions, touchesPermissions } from "./permission-queue.js";
+import { createDialogAnswer, dialogHint, dialogKey, dialogPlaceholder } from "./dialog-answer.js";
+import { activityLine, backgroundTasks, newerActivity } from "@jolo/client/activity";
+import { backgroundStatus, backgroundStopKey } from "./background-stop.js";
 import { ThemeMenu } from "./themes.jsx";
 import { parseThemeCommand, executeThemeCommand } from "../themes/commands.js";
 import { createThemeStore } from "../themes/store.js";
@@ -55,7 +58,31 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   // Every request of this chat still waiting on the user; the oldest is the one shown.
   const [permissions, setPermissions] = useState([]);
   const permission = permissions[0] ?? null;
+  // The dialog shown, when the oldest request is one, and how far its answer has got; a new dialog starts afresh.
+  const dialog = isDialog(permission) ? permission : null;
+  const [dialogState, setDialogState] = useState(null);
+  const answering = dialog ? (dialogState?.dialogId === dialog.dialogId ? dialogState : createDialogAnswer(dialog)) : null;
   const [status, setStatus] = useState(initialStatus);
+  // What the conversation's Claude process does in the background (its newest `session.activity` from any source), the
+  // stop of that work in progress, and a clock that keeps the line's elapsed time moving while it shows.
+  const [activity, setActivity] = useState(/** @type {import("@jolo/client/activity").Activity | null} */ (null));
+  const [stop, setStop] = useState(/** @type {import("./background-stop.js").StopState} */ ({ phase: "idle" }));
+  const [clock, setClock] = useState(Date.now());
+  const noteActivity = (next) => setActivity((current) => newerActivity(current, next));
+  const background = backgroundTasks(activity);
+  const backgroundLine = activityLine(activity, { now: clock });
+  useEffect(() => {
+    if (!background.length) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [background.length > 0]);
+  useEffect(() => {
+    // The work a stop was about has ended (or the closed process is gone): the next Ctrl+X starts afresh.
+    if (background.length || stop.phase === "idle" || stop.phase === "stopping") return;
+    if (stop.phase === "closing") setStatus("Claude's process closed; its background work ended.");
+    else if (stop.phase === "asking") setStatus("Background work ended; nothing left to force stop."); // the question would otherwise stay up
+    setStop({ phase: "idle" });
+  }, [background.length, stop.phase]);
   const [showTools, setShowTools] = useState(false);
   const [changes, setChanges] = useState([]);
   const [welcomeOpen, setWelcomeOpen] = useState(!restored);
@@ -100,8 +127,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         setLoadingSession(false);
         if (page.hasOlder) setStatus("Showing the most recent messages in this session.");
         for (const m of page.messages) if (m.committedBytes > 0) void projection.fill(m.id);
-        if (page.pendingPermissions?.length) {
-          setPermissions((queue) => seedPermissions(queue, page.pendingPermissions, settled, (runId) => finished(projection.runs.get(runId)?.state)));
+        client.call("session.activity", { sessionId: initialSession.id }).then((result) => { if (!disposed && result.activity) noteActivity(result.activity); }).catch(() => {}); // an engine without the method has no activity to show
+        const pending = [...(page.pendingPermissions ?? []), ...(page.pendingDialogs ?? [])];
+        if (pending.length) {
+          setPermissions((queue) => seedPermissions(queue, pending, settled, (runId) => finished(projection.runs.get(runId)?.state)));
           setWelcomeOpen(false);
         }
       },
@@ -115,9 +144,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
         onChooseAgent(event.payload.session.agentId ?? null);
       }
       if (loader) loader.event(event); else projection.applyEvent(event);
-      if (event.type === "permission.resolved") settled.add(event.payload.permissionId);
-      if (event.type === "permission.requested") setWelcomeOpen(false);
+      if (event.type === "permission.resolved" || event.type === "dialog.resolved") settled.add(requestKey(event.payload));
+      if (event.type === "permission.requested" || event.type === "dialog.requested") setWelcomeOpen(false);
       if (touchesPermissions(event)) setPermissions((queue) => applyPermissionEvent(queue, event));
+      if (event.type === "session.activity") noteActivity(event.payload);
       if (event.type === "files.changed") setChanges((list) => [...list, ...event.payload.changes].slice(-50));
       if (event.type === "run.verification") setStatus(`verification: ${event.payload.status}`);
     });
@@ -125,6 +155,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       if (!sessionRef.current || preview.sessionId !== sessionRef.current.id) return;
       if (loader) loader.preview(preview); else projection.applyPreview(preview);
     });
+    const offActivity = client.onActivity?.((notification) => { if (sessionRef.current && notification.sessionId === sessionRef.current.id) noteActivity(notification.activity); });
     const offClose = client.onClose(() => { setStatus("engine connection lost"); });
     const offReconnect = client.onReconnect?.(async () => {
       try {
@@ -137,7 +168,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       } catch (error) { setStatus(error.message); }
     });
     if (loader) void loader.load();
-    return () => { disposed = true; loader?.dispose(); offEvent(); offPreview(); offClose(); offReconnect?.(); };
+    return () => { disposed = true; loader?.dispose(); offEvent(); offPreview(); offActivity?.(); offClose(); offReconnect?.(); };
   }, [client, projection, initialSession]);
 
   const activeRun = () => {
@@ -149,7 +180,8 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const send = async (prompt) => {
     let current = sessionRef.current;
     if (!current) {
-      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: prompt.slice(0, 80), ...(agentId ? { agentId } : {}) });
+      // Untitled: the engine names it, from its answerer's title or the prompt's first characters.
+      const created = await client.call("session.create", { projectId: project.projectId, workspaceId: project.workspaceId, title: "", ...(agentId ? { agentId } : {}) });
       current = created.session;
       sessionRef.current = current;
       setSession(current);
@@ -197,7 +229,14 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
     }
     if (loadingSession) { setStatus("Loading session…"); return; }
     if (!prompt && welcomeOpen) { if (projection.messages.size || lastRun()) setWelcomeOpen(false); return; }
-    if (!prompt) { const run = lastRun(); if (run?.state === "paused" && run.pauseReason !== "permission") client.call("run.resume", { runId: run.id }).catch((error) => setStatus(error.message)); return; }
+    if (!prompt) {
+      // Enter resumes a paused run, unless a permission request of it is still open: answering that resumes it. A run paused on
+      // Claude's question with nobody to answer it has no such request (the pause closed the question), so Enter resumes it too.
+      const run = lastRun();
+      const awaitsPermission = run?.pauseReason === "permission" && permissions.some((request) => request.runId === run.id && !isDialog(request));
+      if (run?.state === "paused" && !awaitsPermission) client.call("run.resume", { runId: run.id }).catch((error) => setStatus(error.message));
+      return;
+    }
     setWelcomeOpen(false);
     dispatchPrompt({ type: "submit", prompt });
     setStatus("connected");
@@ -219,9 +258,51 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       leave();
       return;
     }
+    // Ctrl+X stops the conversation's background work; once a stop left tasks running, it asks before closing the process,
+    // and while it asks the next key is the answer, whatever else is open.
+    if (stop.phase === "asking" || (key.ctrl && chunk === "x")) {
+      const sessionId = sessionRef.current?.id;
+      const stale = stop.phase === "left" && !background.some((task) => stop.taskIds?.includes(task.taskId));
+      const action = backgroundStopKey(stop, { running: background.length, stopping: stop.phase === "stopping" || stop.phase === "closing", newWork: stale }, key.ctrl && chunk === "x" ? "" : chunk);
+      const show = (/** @type {import("./background-stop.js").StopState} */ next) => { setStop(next); const text = backgroundStatus(next); if (text) setStatus(text); };
+      if (action.type === "stop" && sessionId) {
+        show({ phase: "stopping" });
+        client.call("session.stopBackground", { sessionId }).then((result) => show({ phase: "left", result, taskIds: background.map((task) => task.taskId) })).catch((error) => { setStop({ phase: "idle" }); setStatus(error.message); });
+      } else if (action.type === "ask") show({ ...stop, phase: "asking" });
+      else if (action.type === "cancel") show({ ...stop, phase: "left" });
+      else if (action.type === "force" && sessionId) {
+        show({ phase: "closing" });
+        client.call("session.closeProcess", { sessionId }).then(({ closing }) => { if (!closing) { setStop({ phase: "idle" }); setStatus("The conversation has no Claude process."); } }).catch((error) => { setStop({ phase: "idle" }); setStatus(error.message); });
+      }
+      return;
+    }
     if (key.pageUp || key.pageDown) return;
     // A late keyboard capability reply is terminal metadata, never draft text.
     if (/^\[\?\d+u$/.test(chunk)) return;
+    if (dialog && answering) {
+      // A pasted answer or feedback, line breaks and all, is draft text; a lone line break is Enter, handled below.
+      if (chunk && /[\r\n]/.test(chunk) && !/^[\r\n]+$/.test(chunk)) { dispatchPrompt({ type: "paste", chunk }); return; }
+      const action = dialogKey(answering, { chunk, key: key.return || !/^[\r\n]+$/.test(chunk ?? "") ? key : { ...key, return: true }, draft: input });
+      if (action.type !== "edit") {
+        if (action.type === "state") {
+          setDialogState(action.state);
+          // The typed answer went to the question just left; the next one starts empty, so its number keys pick options.
+          if (action.state.index !== answering.index) dispatchPrompt({ type: "clear" });
+        }
+        if (action.type === "resolve" || action.type === "dismiss") {
+          const { dialogId } = dialog;
+          const drop = () => setPermissions((queue) => queue.filter((request) => requestKey(request) !== dialogId));
+          dispatchPrompt({ type: "clear" });
+          // Already settled elsewhere, or lapsed with its run: it is not waiting on anyone, so it must not hold the prompt.
+          (action.type === "resolve" ? client.call("dialog.resolve", { dialogId, response: action.response }) : client.call("dialog.dismiss", { dialogId, message: action.message }))
+            .then(drop).catch((error) => { setStatus(error.message); if (error.code === "conflict" || error.code === "not_found") drop(); });
+        }
+        return;
+      }
+      if (key.upArrow || key.downArrow || key.pageUp || key.pageDown) return; // the prompt history is not an answer
+      dispatchPrompt({ type: "edit", chunk, key });
+      return;
+    }
     if (permission) {
       const decision = { 1: "deny", 2: "allow_once", 3: "allow_run", 4: "allow_project" }[chunk];
       if (decision) {
@@ -288,7 +369,7 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   // usePaste turns on bracketed-paste mode so terminals wrap pasted text; the full
   // paste — newlines and all — lands in the draft here and never reaches useInput.
   usePaste((text) => {
-    if (permission || themeBusy) return;
+    if ((permission && !dialog) || themeBusy) return;
     steering.clear();
     dispatchPrompt({ type: "paste", chunk: text });
   }, { isActive: (modelConfig === null && sessionMenu === null && !themeMenu) || Boolean(permission) });
@@ -299,8 +380,10 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
   const queuedRuns = [...projection.runs.values()].filter(run => run.state === "queued" && (run.prompt || run.promptPreview)); // not Claude's own turns
   const queueRows = rows >= 16 ? Math.min(3, queuedRuns.length) : 0;
   const commandRows = commands.length ? Math.min(5, commands.length, Math.max(1, rows - 9)) : 0;
-  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows));
-  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0)));
+  const dialogRows = answering ? 1 : 0; // the live line that says how to answer the dialog shown
+  const activityRows = backgroundLine && rows >= 16 ? 1 : 0; // the line naming the process's background work
+  const promptRows = Math.min(input.split("\n").length, 6, Math.max(1, rows - 8 - layout.changesRows - queueRows - commandRows - dialogRows - activityRows));
+  const previewRows = Math.min(4, Math.max(0, rows - 8 - layout.changesRows - queueRows - (promptRows - 1) - (commandRows ? commandRows + 1 : 0) - dialogRows - activityRows));
   const visible = previewRows > 0 ? live.slice(-previewRows) : [];
   const modelSelected = async (message, target) => {
     const wanted = (target?.id === "jolo" || target?.preset) ? null : target?.id;
@@ -332,11 +415,13 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       {themeMenu ? <ThemeMenu rows={rows} columns={columns} paused={Boolean(permission)} onClose={() => setThemeMenu(false)} /> : sessionMenu ? <SessionMenu client={client} project={project} currentId={session?.id} command={sessionMenu} rows={rows} columns={columns} paused={Boolean(permission)} onRestore={onRestore} onDelete={() => onRestore(null)} onClose={() => setSessionMenu(null)} /> : modelConfig ? <ModelConfig client={client} initialTarget={modelConfig.target} currentAgentId={agentId} rows={rows} columns={columns} paused={Boolean(permission)} onClose={modelSelected} /> : layout.tooSmall ? <Text wrap="truncate-end">Enlarge terminal · Ctrl+C exits</Text> : <Box flexDirection="column" width="100%">
       {previewRows > 0 && <Box flexDirection="column"><TranscriptLines lines={visible} /></Box>}
       {layout.changesRows > 0 && <Text dimColor wrap="truncate-end">changes: {[...new Set(changes.map((c) => c.newPath ?? c.path))].join(", ").slice(0, width)}</Text>}
+      {activityRows > 0 && <Text dimColor wrap="truncate-end">{clean(backgroundLine.text)} · Ctrl+X stop</Text>}
       <Box width={Math.min(columns, 48)} height={1}><Progress compact run={run} tools={run ? projection.toolsFor(run.id) : []} message={run ? projection.messagesFor(run.id).at(-1) : null} /></Box>
       {commandRows > 0 && <CommandMenu commands={commands} index={selectedCommand} count={commandRows} />}
       {queuedRuns.slice(0, queueRows).map((queued, index) => <Text key={queued.id} dimColor wrap="truncate-end">{index === 0 ? `Queued · ${queuedRuns.length}` : '  '} › {clean(queued.prompt ?? queued.promptPreview ?? '').replace(/\s+/g, ' ')}</Text>)}
       {mentioningModel && !commands.length && dismissedCommand !== input && <Text dimColor wrap="truncate-end">{mentionError || (!mentionReport || mentionReport.loading ? 'Loading child-task models…' : mentionReport.notes[0] || 'No matching child-task models')}</Text>}
-      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} />
+      {answering && <Text color="warning" wrap="truncate-end">{clean(dialogHint(answering, input))}</Text>}
+      <Prompt maxRows={promptRows} running={Boolean(activeRun())} value={input} cursor={promptState.cursor} model={currentModelLabel(settings, { ...session, agentId })} columns={columns} placeholder={answering ? dialogPlaceholder(answering) : undefined} />
       {status !== "connected" && !status.startsWith("verification:") && <Text dimColor wrap="truncate-end">{clean(status)}</Text>}
       {welcomeOpen && promptState.history.length > 0 && <Text dimColor wrap="truncate-end">Enter view chat · ↑/↓ prompts</Text>}
       </Box>}

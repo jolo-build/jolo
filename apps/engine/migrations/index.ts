@@ -20,6 +20,8 @@ import chatModels from "./0015_chat_models.ts";
 import runChangeEvents from "./0016_run_change_events.ts";
 import pinnedSessions from "./0017_pinned_sessions.ts";
 import sessionAgentModel from "./0018_session_agent_model.ts";
+import dialogs from "./0019_dialogs.ts";
+import sessionActivity from "./0020_session_activity.ts";
 
 export interface Migration {
   readonly version: number;
@@ -58,4 +60,6 @@ export const migrations: readonly Migration[] = Object.freeze([
   { version: 16, name: "0016_run_change_events.sql", sql: runChangeEvents, historicalVariants: [{ name: "0016_session_agent_model.sql", sql: sessionAgentModel }] },
   { version: 17, name: "0017_pinned_sessions.sql", sql: pinnedSessions, alreadyAppliedAs: 15 },
   { version: 18, name: "0018_session_agent_model.sql", sql: sessionAgentModel, alreadyAppliedAs: 16 },
+  { version: 19, name: "0019_dialogs.sql", sql: dialogs },
+  { version: 20, name: "0020_session_activity.sql", sql: sessionActivity },
 ]);

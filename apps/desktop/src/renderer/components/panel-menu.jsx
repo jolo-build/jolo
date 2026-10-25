@@ -4,6 +4,7 @@ import { Icon } from './icon.jsx';
 export const CONTEXT_PANELS = [
   ['changes', 'Changes', 'changes'], ['browser', 'Browser', 'browser'], ['files', 'Files', 'file'],
   ['terminal', 'Terminal', 'terminal'], ['plans', 'Plans', 'plan'], ['schedules', 'Schedules', 'clock'], ['checks', 'Checks', 'circleCheck'],
+  ['activity', 'Activity', 'agents'],
 ];
 
 export function PanelMenu({ selected, panels, disabled, details, onSelect, onHide, onOpenChange, extra = [], onExtra = null, compact = false }) {

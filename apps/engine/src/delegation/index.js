@@ -2,12 +2,42 @@ import { ProtocolError, TERMINAL_RUN_STATES } from '@jolo/protocol';
 import { modelMentions, modelMentionSelector } from '@jolo/protocol/model-mentions';
 import { newId, now } from '../storage/records.js';
 
-const MAX_MODELS = 16, MAX_CHILDREN = 16, MAX_ACTIVE = 4;
+const MAX_MODELS = 16, MAX_CHILDREN = 16;
+/** The most children of one parent turn that may be working at once. */
+export const MAX_ACTIVE = 4;
+/**
+ * How soon a wait (here, and a plan task's in the orchestrator) looks again at a process that is idle but not yet
+ * through: a finished task's report is due, or a turn it began waits for its run. Nothing is announced when either ends.
+ */
+export const SETTLE_RECHECK_MS = 1_000;
 const ended = run => !run || TERMINAL_RUN_STATES.includes(run.state) || run.state === 'paused';
+/**
+ * Whether a child's conversation waits on the person, so its parent has to say so and send them to it: a run asks for a
+ * permission, or its newest run paused for them. A paused run that a later prompt superseded is over: nothing resumes it.
+ * @param {{ state: string }[]} runs the conversation's runs, oldest first
+ */
+const waitsOnPerson = runs => runs.some(r => r.state === 'awaiting_permission') || runs.at(-1)?.state === 'paused';
+/** A parent run that ends in one of these stops its children, and its own waits on them. */
+const STOPPED_STATES = ['cancelled', 'failed', 'interrupted', 'paused'];
 
-/** Only user submissions can register models. Agent tools receive aliases and cannot invent providers. */
-export function createDelegationService({ storage, runs, catalog, agentModels, providerFactory }) {
+/**
+ * Stop the background tasks of a conversation's process, whatever state its runs are in: Stop ends a turn but spares
+ * them (spec 5.5, stop cascades). Not waited on; a failure is logged.
+ * @param {{ get(sessionId: string): any } | null} links @param {string} sessionId @param {any} log
+ */
+export function stopBackgroundWork(links, sessionId, log) {
+  const link = links?.get(sessionId);
+  if (link) (async () => link.stopBackground())().catch(error => log.warn('could not stop the background work of a conversation', { sessionId, error: String(error?.message ?? error) }));
+}
+
+/**
+ * Only user submissions can register models. Agent tools receive aliases and cannot invent providers.
+ * `links` are the hosted agents' processes, by conversation (what a child's process is doing); `settings` bound a wait.
+ */
+export function createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links, settings, log }) {
   const repository = storage.delegations;
+  /** Parents waiting in delegation_status, each `{ sessionId, parentRunId, wake(final, reason) }`; see `status`. */
+  const waiters = new Set();
   async function models(source = null) {
     const presets = source?.startsWith('agent:') ? [] : (await providerFactory.presets()).presets;
     const sources = [
@@ -47,23 +77,49 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     if (repository.parent(runId)) throw new ProtocolError('permission_denied', 'A delegated task cannot create more child tasks');
     return run;
   }
-  function view(row, includeOutput = false) {
+  /**
+   * The child conversation's latest answer: the last text of its newest completed run that has one. A child that carries
+   * on after background work answers again in a run of its own, and that answer replaces the first; what a run that
+   * failed or was stopped said is not an answer.
+   */
+  function latestAnswer(sessionId) {
+    for (const run of storage.listRunsForSession(sessionId).toReversed()) {
+      if (run.state !== 'completed') continue;
+      const message = storage.listMessagesForRun(run.id).filter(m => m.role === 'assistant' && m.kind === 'text' && m.committedBytes > 0).at(-1);
+      if (message) return { runId: run.id, message };
+    }
+    return null;
+  }
+  /**
+   * Done: every run of the child's conversation has ended, its newest not paused for the person (an older paused run a
+   * later prompt superseded is over), and its process (if one is running) has nothing left to do: no turn, no background
+   * work, no report of finished work about to begin.
+   */
+  function isDone(run, link) {
+    if (!run) return true;
+    const all = storage.listRunsForSession(run.sessionId), newest = all.at(-1);
+    const over = r => !r || TERMINAL_RUN_STATES.includes(r.state) || (r.state === 'paused' && r.id !== newest?.id);
+    return over(run) && all.every(over) && !link?.working;
+  }
+  /** `wakeReason` is why the wait of a status call ended; none when it made no wait. */
+  function view(row, includeOutput = false, wakeReason = null) {
     const run = storage.getRun(row.childRunId), session = run && storage.getSession(run.sessionId);
+    const link = run ? links.get(run.sessionId) : null;
+    // The answer goes last, after a failure's text, which has no bound: a tool result shown cut short (600 characters) still
+    // says the state, why the wait ended, the activity, and whether it is done.
     const result = { id: row.id, parentRunId: row.parentRunId, runId: row.childRunId, sessionId: run?.sessionId ?? '',
       title: session?.title ?? 'Deleted task', modelAlias: row.modelAlias, state: run?.state ?? 'interrupted',
-      failure: run?.failure ?? null, execution: run?.execution ?? null, createdAt: row.createdAt, output: '', truncated: false };
-    if (includeOutput && run && ended(run)) {
-      // The final text is the child result; tool transcripts remain in the child's own conversation.
-      const message = storage.listMessagesForRun(run.id).filter(m => m.role === 'assistant' && m.kind === 'text' && m.committedBytes > 0).at(-1);
-      if (message) {
-        const artifact = storage.getArtifact(message.artifactId);
-        if (artifact) {
-          const length = Math.min(message.committedBytes, 32 * 1024);
-          result.output = storage.readArtifact(artifact, 0, length).buffer.toString('utf8').replace(/\uFFFD$/, '');
-          result.truncated = message.committedBytes > length;
-        }
-      }
+      ...(wakeReason ? { wakeReason } : {}), execution: run?.execution ?? null, createdAt: row.createdAt,
+      activity: link?.activity.state ?? null, done: isDone(run, link), partial: false, failure: run?.failure ?? null, output: '', truncated: false };
+    // The final text is the child result; tool transcripts remain in the child's own conversation.
+    const answer = includeOutput && run ? latestAnswer(run.sessionId) : null;
+    const artifact = answer && storage.getArtifact(answer.message.artifactId);
+    if (artifact) {
+      const length = Math.min(answer.message.committedBytes, 32 * 1024);
+      result.output = storage.readArtifact(artifact, 0, length).buffer.toString('utf8').replace(/\uFFFD$/, '');
+      result.truncated = answer.message.committedBytes > length;
     }
+    result.partial = result.output !== '' && !result.done;
     return result;
   }
   function scopedRow(runId, id) {
@@ -72,20 +128,34 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
     if (!row) throw new ProtocolError('not_found', 'Unknown delegated task in this conversation');
     return row;
   }
+  /** Stop the children of a stopped parent: their runs, and the background work of their processes, ended runs' too. */
   function cancelChildren(run) {
-    if (!['cancelled', 'failed', 'interrupted', 'paused'].includes(run.state)) return;
+    if (!STOPPED_STATES.includes(run.state)) return;
     for (const row of repository.rows(run.sessionId, { parentRunId: run.id })) {
       const child = storage.getRun(row.childRunId);
-      if (child && !TERMINAL_RUN_STATES.includes(child.state) && child.state !== 'cancelling') runs.cancel({ runId: child.id });
+      if (!child) continue;
+      if (!TERMINAL_RUN_STATES.includes(child.state) && child.state !== 'cancelling') runs.cancel({ runId: child.id });
+      stopBackgroundWork(links, child.sessionId, log);
     }
   }
-  runs.settled.on('run', cancelChildren);
+  /** Tell the parents waiting on a conversation's child that something happened there; `final` ends their wait, for `reason`. */
+  const tell = (sessionId, final, reason) => { for (const waiter of [...waiters]) if (waiter.sessionId === sessionId) waiter.wake(final, reason); };
+  const onSettled = run => {
+    cancelChildren(run);
+    // A parent that completed may still be listening: Claude Code moves a long tool call to the background and ends its turn.
+    if (STOPPED_STATES.includes(run.state)) for (const waiter of [...waiters]) if (waiter.parentRunId === run.id) waiter.wake(true, 'parent_stopped');
+    tell(run.sessionId, false);
+  };
+  runs.settled.on('run', onSettled);
   // Cancellation propagates immediately, while the parent executor is still unwinding.
   const onEvent = event => {
     if (event.type === 'run.state' && event.payload.state === 'cancelling') {
       const run = storage.getRun(event.runId);
       if (run) cancelChildren({ ...run, state: 'cancelled' });
     }
+    if (event.type === 'session.activity' && event.payload.state === 'idle') tell(event.sessionId, false);
+    // A child asking the person needs its parent to say so: the wait is over.
+    if (event.type === 'dialog.requested' || event.type === 'permission.requested') tell(event.sessionId, true, 'asking');
   };
   storage.events.on('event', onEvent);
   return {
@@ -136,27 +206,62 @@ export function createDelegationService({ storage, runs, catalog, agentModels, p
         return { delegation: view(row) };
       });
     },
-    async status(runId, { delegationId, waitMs = 0 }) {
+    /**
+     * Wait up to `waitMs` (at most the delegation.maxWaitMs setting) until the child is done or has a newer answer, or
+     * asks the person something, or the parent's run is stopped or `signal` stops the call. Spends no model turns meanwhile.
+     * The result's `wakeReason` says which of these ended the wait.
+     */
+    async status(runId, { delegationId, waitMs = 0 }, signal = null) {
       const row = scopedRow(runId, delegationId);
-      if (waitMs && !ended(storage.getRun(row.childRunId))) await new Promise(resolve => {
-        const done = () => { clearTimeout(timer); runs.settled.removeListener('run', settled); resolve(null); };
-        const settled = run => { if (run.id === row.childRunId || run.id === runId) done(); };
-        const timer = setTimeout(done, Math.min(waitMs, 25_000));
-        runs.settled.on('run', settled);
+      const child = storage.getRun(row.childRunId);
+      const limit = Math.min(waitMs, settings.get().delegation.maxWaitMs);
+      let wakeReason = null;
+      if (child && limit > 0 && !signal?.aborted) await new Promise(resolve => {
+        const answered = latestAnswer(child.sessionId)?.runId ?? null;
+        let timer = null, recheck = null;
+        const finish = reason => {
+          wakeReason ??= reason;
+          clearTimeout(timer); clearTimeout(recheck);
+          waiters.delete(waiter);
+          signal?.removeEventListener('abort', stop);
+          resolve(null);
+        };
+        const stop = () => finish('stopped');
+        const check = () => {
+          clearTimeout(recheck);
+          const link = links.get(child.sessionId), run = storage.getRun(child.id);
+          // Read the runs again: one that ended without a word (cancelled, failed) is done all the same, and a child's
+          // conversation that waits on the person (a run asked before the wait began, or its newest run paused for them,
+          // a later continuation included) needs its parent to say so.
+          if (isDone(run, link)) return finish('done');
+          if (waitsOnPerson(storage.listRunsForSession(child.sessionId))) return finish('asking');
+          if ((latestAnswer(child.sessionId)?.runId ?? null) !== answered) return finish('answer');
+          if (link?.working && link.activity.state === 'idle') recheck = setTimeout(check, SETTLE_RECHECK_MS);
+        };
+        const waiter = { sessionId: child.sessionId, parentRunId: runId, wake: (final, reason) => { if (waiters.has(waiter)) final ? finish(reason) : check(); } };
+        // Listening before the first look, so nothing that happens in between is missed.
+        waiters.add(waiter);
+        timer = setTimeout(() => finish('timeout'), limit);
+        signal?.addEventListener('abort', stop, { once: true });
+        check();
       });
-      return { delegation: view(row, true) };
+      return { delegation: view(row, true, wakeReason) };
     },
     cancel(runId, delegationId) {
       const row = scopedRow(runId, delegationId), child = storage.getRun(row.childRunId);
       if (child && !TERMINAL_RUN_STATES.includes(child.state)) runs.cancel({ runId: child.id });
+      if (child) stopBackgroundWork(links, child.sessionId, log);
       return { delegation: view(row, true) };
     },
-    close() { runs.settled.removeListener('run', cancelChildren); storage.events.removeListener('event', onEvent); },
+    close() {
+      for (const waiter of [...waiters]) waiter.wake(true);
+      runs.settled.removeListener('run', onSettled); storage.events.removeListener('event', onEvent);
+    },
   };
 }
 
 export function delegationInstructions(storage, run) {
   const models = storage.delegations?.models(run.sessionId) ?? [];
   if (!models.length) return '';
-  return `The user selected these models for child-task delegation in this conversation:\n${models.map(m => `${m.alias}: ${m.name} (^${m.selector})`).join('\n')}\nUse Jolo's delegate_task with modelAlias and a unique requestId to start a child on the selected model. Supply a self-contained prompt with the relevant context; the child shares the workspace but has its own conversation. Use delegation_status with waitMs to collect its result, then summarize the result for the user. Do not substitute a vendor-native subagent or invent a model. A mention makes the model available; follow the user's request about whether to delegate. Children cannot delegate again. Stop children you no longer need with delegation_cancel.`;
+  return `The user selected these models for child-task delegation in this conversation:\n${models.map(m => `${m.alias}: ${m.name} (^${m.selector})`).join('\n')}\nUse Jolo's delegate_task with modelAlias and a unique requestId to start a child on the selected model. Supply a self-contained prompt with the relevant context; the child shares the workspace but has its own conversation. A child may keep working after its first answer (background agents, workflows, long commands), and may answer again when that work ends: use delegation_status with waitMs to wait until it reports done, then summarize its output for the user; while partial is true, its output is not final. Do not substitute a vendor-native subagent or invent a model. A mention makes the model available; follow the user's request about whether to delegate. Children cannot delegate again. Stop children you no longer need with delegation_cancel.`;
 }

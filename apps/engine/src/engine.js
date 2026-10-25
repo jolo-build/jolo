@@ -3,15 +3,17 @@ import { createExecutorRouter } from "./agents/executor.js";
 import { createRpcHandlers } from "./rpc/handlers.js";
 // Engine composition: ownership, storage, run service, endpoint, RPC server, lifetime.
 import path from 'node:path';
-import { PROTOCOL_VERSION, SCHEMA_VERSION } from "@jolo/protocol";
+import { PROTOCOL_VERSION, SCHEMA_VERSION, activityPayload } from "@jolo/protocol";
 import { Storage, newId } from "./storage/index.js";
 import { RunService } from "./runs/service.js";
+import { createTitleService } from "./titles.js";
 import { createAgentExecutor } from "./agent/loop.js";
 import { SettingsService } from "./settings.js";
 import { CredentialService } from "./credentials/index.js";
 import { ChatSync } from './account/chat-sync.js';
 import { AccountService } from './account/service.js';
 import { PermissionService } from "./permissions/service.js";
+import { createDialogService } from "./dialogs/service.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { ToolDispatcher, resolveToolEnvironment } from "./tools/dispatcher.js";
 import { createProviderCatalog } from './providers/presets.js';
@@ -46,6 +48,24 @@ export { OwnershipError, SchemaError } from "./storage/index.js";
 
 
 /**
+ * What a conversation's process is doing, as it changes. A new state or a task started or ended is kept for replay, and
+ * stored as the conversation's activity so its finished tasks outlive the process and the engine; progress alone is only
+ * sent to those listening now. A conversation deleted meanwhile has no one to tell and nothing to keep.
+ * @param {import('./storage/index.js').Storage} storage
+ * @param {import('node:events').EventEmitter | undefined} previews
+ * @param {string} sessionId @param {any} activity @param {string} reason
+ */
+export function recordActivity(storage, previews, sessionId, activity, reason) {
+  if (!storage.getSession(sessionId)) return;
+  const payload = activityPayload(activity);
+  if (reason === 'progress') { previews?.emit('activity', { sessionId, activity: payload }); return; }
+  storage.transaction(() => {
+    storage.appendEvent({ sessionId, type: 'session.activity', payload });
+    storage.saveSessionActivity(sessionId, payload);
+  });
+}
+
+/**
  * The account options are separate from `fetchImpl` because tests and the desktop stub the account
  * server without touching model traffic.
  * @param {{ paths: any, build?: string, idleMs?: number, migrationsDir?: string, env?: Record<string, string | undefined>, fetchImpl?: import('./providers/transport.js').FetchLike, accountFetchImpl?: import('./providers/transport.js').FetchLike, accountSecrets?: any, log?: any }} options
@@ -65,6 +85,7 @@ export function createEngine(options) {
   let credentials = null;
   let account = null;
   let permissions = null;
+  let dialogs = null;
   let dispatcher = null;
   let browser = null;
   let supervisor = null;
@@ -112,6 +133,7 @@ export function createEngine(options) {
     credentials = new CredentialService({ log, env: options.env ?? process.env, catalog: providerCatalog });
     account = new AccountService({ storage, paths, lifetime, env: options.env ?? process.env, fetchImpl: options.accountFetchImpl, secrets: options.accountSecrets });
     permissions = new PermissionService({ storage });
+    dialogs = createDialogService({ storage });
     account.chatSync = new ChatSync({ account, storage, paths, permissions });
     void account.chatSync.run();
     const registry = new ToolRegistry();
@@ -137,27 +159,32 @@ export function createEngine(options) {
     const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
     // One Claude process per conversation, kept between turns so the background work it started gets to finish.
     const emptyResultGraceMs = Number((options.env ?? process.env).JOLO_EMPTY_RESULT_GRACE_MS ?? EMPTY_RESULT_GRACE_MS);
-    hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId) });
+    hostedLinks = createHostedLinks({ log, idleMs: Number((options.env ?? process.env).JOLO_HOSTED_IDLE_MS ?? HOSTED_LINK_IDLE_MS), emptyGraceMs: emptyResultGraceMs, lifetime, onUnsolicited: link => continueConversation(link.sessionId, link.agentId),
+      onActivity: (sessionId, activity, reason) => recordActivity(storage, runs?.previews, sessionId, activity, reason),
+      // A new process starts from the tasks the conversation's last one left (see recordActivity).
+      history: sessionId => storage.getSessionActivity(sessionId) });
     const executor = createExecutorRouter({ storage, dispatcher, catalog, permissions, supervisor, build, log,
-      mcpConfig, links: hostedLinks, emptyResultGraceMs,
+      mcpConfig, links: hostedLinks, emptyResultGraceMs, dialogs,
       providerFactory, settings: settingsService, native: jolo,
       interactiveClients: () => server?.interactiveClientCount ?? 0, revoke: runId => capabilityTokens.revoke(runId) });
-    runs = new RunService({ storage, executor, lifetime, log, captureProvider: (session, execution) => {
+    // A task named by its first prompt is then named by its answerer, on that answerer's cheapest model.
+    const titles = createTitleService({ storage, providerFactory, catalog, agentModels, supervisor, log, env: options.env ?? process.env });
+    runs = new RunService({ storage, executor, lifetime, log, titles, captureProvider: (session, execution) => {
       const answerer = execution?.preset ? SELF_MENTION : execution?.agentId ?? session.agentId;
       return !answerer || answerer === SELF_MENTION ? providerFactory.capture(session, execution) : null;
     }, workspaceBusy: id => worktrees.isBusy(id),
     // A turn the agent began by itself while a run held its conversation waits; offer it again once the conversation is free.
     sessionIdle: sessionId => hostedLinks?.reoffer(sessionId) });
-    delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory });
+    delegations = createDelegationService({ storage, runs, catalog, agentModels, providerFactory, links: hostedLinks, settings: settingsService, log });
     const interrupted = runs.reconcile();
     if (interrupted) log.warn("marked runs interrupted from a previous boot", { count: interrupted });
     // Plans are reconciled after runs, so a task whose run has just been called interrupted is seen as such.
-    plans = createOrchestrator({ storage, runs, catalog, log });
+    plans = createOrchestrator({ storage, runs, catalog, log, links: hostedLinks });
     const stopped = plans.reconcile();
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv, log });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
@@ -190,6 +217,7 @@ export function createEngine(options) {
         if (delegations) await step("delegations", () => delegations.close());
         if (server) await step("rpc", () => server.close());
         if (runs) await step("runs", () => runs.stopAll());
+        if (plans) await step("plans", () => plans.close());
         if (hostedLinks) await step("hosted agents", () => hostedLinks.closeAll());
         if (search) await step("search", () => search.close());
         if (agents) await step("agents", () => agents.dispose());

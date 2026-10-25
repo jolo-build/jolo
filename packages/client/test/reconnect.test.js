@@ -8,10 +8,11 @@ function connection(stream = 'db1', statusCursor = '0') {
     hello: { eventStreamId: stream }, subscriptions, calls,
     get closed() { return closed; },
     onClose(fn) { listeners.close = fn; }, onEvent(fn) { listeners.event = fn; },
-    onPreview(fn) { listeners.preview = fn; }, onNotification() {},
+    onPreview(fn) { listeners.preview = fn; }, onActivity(fn) { listeners.activity = fn; }, onNotification() {},
     async call(method, params) { calls.push({ method, params }); return { cursor: statusCursor }; },
     async subscribe(params) { subscriptions.push(params); return { subscribed: true }; },
     event(seq) { listeners.event?.({ eventSeq: seq }); },
+    activity(sessionId) { listeners.activity?.({ sessionId, activity: { state: 'background', tasks: [], truncated: false, updatedAt: 'now' } }); },
     drop() { closed = true; listeners.close?.(new Error('lost connection')); },
     async close() { closed = true; },
   };
@@ -31,6 +32,20 @@ test('reconnect resumes the observed cursor without replaying calls', async () =
     expect(next.subscriptions[0]).toEqual({ after: '12', sessionId: 'session' });
     expect(next.calls).toEqual([]);
     next.event('13'); expect(seen).toEqual(['12', '13']);
+  } finally { await client.close(); }
+});
+
+test('activity ticks reach the subscriber before and after a reconnect', async () => {
+  const first = connection(), next = connection(); let opens = 0;
+  const client = await connectResumable({ open: async () => ++opens === 1 ? first : next, retryBaseMs: 1 });
+  try {
+    const seen = [];
+    await client.subscribe({ after: '1' }, { onActivity: tick => seen.push(tick.sessionId) });
+    first.activity('a');
+    first.drop();
+    await until(() => next.subscriptions.length);
+    next.activity('b');
+    expect(seen).toEqual(['a', 'b']);
   } finally { await client.close(); }
 });
 

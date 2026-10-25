@@ -116,7 +116,7 @@ test('scoped links distinguish duplicate keys and never send credentials to a li
 test('run request deduplication precedes task lookup and failed lookup cannot admit work',async()=>{
   const saved={id:'old',taskReferences:[{key:'JOLO-1',revision:1}]}; let lookups=0, starts=0;
   // Only the three services run.start reaches; the rest of the engine is not built for this test.
-  const handlers=createRpcHandlers(/** @type {import('../src/rpc/handlers.js').RpcDependencies} */ ({storage:{findRunByRequest:(_s,id)=>id==='retry'?saved:null},tasks:{resolve:async()=>{lookups++;throw new Error('revoked');}},runs:{start:()=>{starts++;}}}));
+  const handlers=createRpcHandlers(/** @type {import('../src/rpc/handlers.js').RpcDependencies} */ ({storage:{findRunByRequest:(_s,id)=>id==='retry'?saved:null,getSession:()=>null},tasks:{resolve:async()=>{lookups++;throw new Error('revoked');}},runs:{start:()=>{starts++;}}}));
   expect(await handlers['run.start']({sessionId:'s',requestId:'retry',prompt:'#JOLO-1'})).toEqual({run:saved,deduplicated:true});
   expect(lookups).toBe(0);
   await expect(handlers['run.start']({sessionId:'s',requestId:'new',prompt:'#JOLO-1'})).rejects.toThrow('revoked');

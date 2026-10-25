@@ -2,8 +2,20 @@ import { expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { installBrowserHost } from '../src/main/browser-host.js';
 import { createAttentionService } from '../src/main/attention-service.js';
+import { noticeFrom, withoutAnswered } from '../src/renderer/engine-context.jsx';
 import { projectAX } from '../src/main/ax-projection.js';
+import { readFileSync } from 'node:fs';
+import { METHOD_NAMES } from '@jolo/protocol';
 const log = { info() {}, warn() {} };
+
+test('the renderer may call the engine methods for background work and dialogs, and only methods the engine has', () => {
+  // The main process cannot be imported outside Electron; its allow-list is read from the source, as the preload test reads its own.
+  const source = readFileSync(new URL('../src/main/index.js', import.meta.url), 'utf8');
+  const list = (source.match(/const RENDERER_METHODS = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '').replace(/\/\/.*$/gm, '');
+  const methods = [...list.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
+  expect(methods).toEqual(expect.arrayContaining(['session.activity', 'session.stopBackground', 'session.stopTask', 'session.closeProcess', 'session.clearFinished', 'session.taskOutput', 'session.mcpStatus', 'delegation.list', 'dialog.resolve', 'dialog.dismiss']));
+  expect(methods.filter(method => !METHOD_NAMES.includes(method))).toEqual([]);
+});
 
 test('browser attachment rejects unsafe URLs and keeps concurrent workspaces separate', () => {
   const contents = new EventEmitter(), sessions = new Map(), attached = [];
@@ -60,14 +72,19 @@ function attentionFixture({ focused = true, read } = {}) {
     close() { this.closed = true; }
   }
   const pending = [{ permissionId: 'approval', runId: 'r', summary: 'run command' }];
+  /** A question Claude asks, as its dialog.requested event and the page's pendingDialogs show it. @type {{ dialogId: string, runId: string, tool: string, input: any, toolUseId: string | null }} */
+  const question = { dialogId: 'dlg', runId: 'r', tool: 'AskUserQuestion', input: { questions: [{ question: 'tea or coffee?', header: 'Choice', options: [], multiSelect: false }] }, toolUseId: null };
+  const dialogs = [question];
   // Partial doubles again, including the Notification class above, which implements only the three
   // members the service uses and records what it was asked to show.
-  const service = createAttentionService({ bridge: { rawCall: read ?? (async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: pending }) },
+  const service = createAttentionService({ bridge: { rawCall: read ?? (async method => method === 'board.list' ? { projects: [row] } : { pendingPermissions: pending, pendingDialogs: dialogs }) },
     window: /** @type {any} */ ({ isDestroyed: () => false, isFocused: () => focused, webContents: { send: (_channel, notice) => notices.push(notice) } }),
     app: /** @type {any} */ ({ dock: { setBadge() {} }, setBadgeCount() {}, getName: () => 'Jolo' }), Notification: /** @type {any} */ (Notification), log });
   const requested = { type: 'permission.requested', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', summary: 'run command' } };
   const resolved = { type: 'permission.resolved', runId: 'r', sessionId: 's', payload: { permissionId: 'approval', decision: 'allow_run' } };
-  return { service, notices, notifications, pending, row, requested, resolved };
+  const asked = { type: 'dialog.requested', runId: 'r', sessionId: 's', payload: question };
+  const answered = { type: 'dialog.resolved', runId: 'r', sessionId: 's', payload: { dialogId: 'dlg', state: 'answered' } };
+  return { service, notices, notifications, pending, dialogs, question, row, requested, resolved, asked, answered };
 }
 
 test('a decision cancels a notice still waiting on a board read', async () => {
@@ -107,6 +124,98 @@ test('approving closes the OS notification and a late OS failure cannot restore 
     f.notifications[0].emit('failed', {}, 'late failure');
     expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(0);
   } finally { f.service.dispose(); }
+});
+
+test('a question Claude asks is told like an approval, and withdrawn once answered', async () => {
+  const f = attentionFixture();
+  try {
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(1);
+    expect(f.notices[0]).toMatchObject({ kind: 'approval', dialogId: 'dlg', permissionId: null, title: 'repo needs your answer', body: 'tea or coffee?' });
+    f.dialogs.length = 0;
+    f.service.onEvent(f.answered);
+    await Bun.sleep(1);
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+    expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(1);
+  } finally { f.service.dispose(); }
+});
+
+test('a plan says it is ready for review, a question too long to send names its tool, and both may sound', async () => {
+  const f = attentionFixture({ focused: false });
+  try {
+    f.dialogs[0] = { ...f.question, tool: 'ExitPlanMode', input: { plan: 'Rename the module' } };
+    f.service.onEvent({ ...f.asked, payload: f.dialogs[0] });
+    await Bun.sleep(1);
+    expect(f.notifications[0].options).toEqual({ title: 'repo needs your answer', body: 'Plan ready for your review', silent: false });
+    f.service.onEvent(f.answered);
+    expect(f.notifications[0].closed).toBe(true);
+    f.dialogs[0] = { ...f.question, dialogId: 'dlg2', input: { truncated: true, preview: '{"questions":[{"question":"tea or' } };
+    f.service.onEvent({ ...f.asked, payload: f.dialogs[0] });
+    await Bun.sleep(1);
+    expect(f.notifications[1].options).toEqual({ title: 'repo needs your answer', body: 'AskUserQuestion', silent: false });
+  } finally { f.service.dispose(); }
+});
+
+test('a question already answered by the time it is read produces no notice', async () => {
+  const f = attentionFixture();
+  try {
+    f.dialogs.length = 0;
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(0);
+  } finally { f.service.dispose(); }
+});
+
+test('answering a question cancels its notice still waiting on a board read', async () => {
+  /** @type {(value: any) => void} the board read's resolve, captured by the promise below */
+  let release;
+  // The page still lists the question, as if it was read before the answer arrived.
+  const f = attentionFixture({ focused: false, read: async method => method === 'board.list' ? new Promise(resolve => { release = resolve; }) : { pendingPermissions: [], pendingDialogs: f.dialogs } });
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.answered);
+    release({ projects: [f.row] });
+    await Bun.sleep(1);
+    expect(f.notices.filter(notice => !notice.dismiss)).toHaveLength(0);
+    expect(f.notifications).toHaveLength(0);
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+  } finally { f.service.dispose(); }
+});
+
+test('a question replayed while still open is told once', async () => {
+  const f = attentionFixture();
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.asked);
+    await Bun.sleep(1);
+    expect(f.notices).toHaveLength(1);
+  } finally { f.service.dispose(); }
+});
+
+test('a question is withdrawn when its run ends, and answering a permission of that run does not withdraw it', async () => {
+  /** @type {(value: any) => void} the board read's resolve, captured by the promise below */
+  let release;
+  const f = attentionFixture({ read: async method => method === 'board.list' ? new Promise(resolve => { release = resolve; }) : { pendingPermissions: [], pendingDialogs: f.dialogs } });
+  try {
+    f.service.onEvent(f.asked);
+    f.service.onEvent(f.resolved);
+    release({ projects: [f.row] });
+    await Bun.sleep(1);
+    expect(f.notices.filter(notice => !notice.dismiss)).toMatchObject([{ dialogId: 'dlg' }]);
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'cancelled' } });
+    expect(f.notices).toContainEqual({ dismiss: true, dialogId: 'dlg' });
+  } finally { f.service.dispose(); }
+});
+
+test('the app drops the notice of a question once it is answered, and only that notice', () => {
+  const news = { kind: 'approval', projectId: 'p', rootPath: '/repo', sessionId: 's', tone: 'needs', at: 1 };
+  const question = noticeFrom({ ...news, permissionId: null, dialogId: 'dlg', title: 'repo needs your answer', body: 'tea or coffee?' });
+  const approval = noticeFrom({ ...news, permissionId: 'approval', title: 'repo needs your approval', body: 'run command' });
+  const engine = { key: 'engine', tone: 'needs', title: 'Local engine stopped', body: '' };
+  // Main's dismissal { dismiss: true, dialogId } and the dialog.resolved event's payload both name the question by its id.
+  expect(withoutAnswered([question, approval, engine], { dialogId: 'dlg' })).toEqual([approval, engine]);
+  expect(withoutAnswered([question, approval, engine], { permissionId: 'approval' })).toEqual([question, engine]);
 });
 
 test('commands covered by a standing approval generate no approval notices', async () => {
@@ -156,6 +265,49 @@ test('a finished task says nothing its title already says', async () => {
   } finally { f.service.dispose(); }
 });
 
+test('a run that answered while its process still runs background work is not announced as done', async () => {
+  /** What `session.activity` answers for the conversation, by test step; a throw stands for an engine that cannot say. */
+  let activity = /** @type {any} */ ({ state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() });
+  const asked = [];
+  const f = attentionFixture({ focused: false, read: async (method, params) => {
+    if (method === 'board.list') return { projects: [f.row] };
+    if (method === 'session.activity') { asked.push(params); if (activity instanceof Error) throw activity; return { activity }; }
+    return { pendingPermissions: [], pendingDialogs: [] };
+  } });
+  try {
+    Object.assign(f.row, { session: { id: 's', title: 'look around' } });
+    const completed = { type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } };
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(asked).toEqual([{ sessionId: 's' }]);
+    expect(f.notifications[0].options).toMatchObject({ title: 'repo · look around: answered · background work running', silent: true });
+    // Once its process is idle or answering again, or nothing says what it does, a finished run is done.
+    for (const [state, title] of [['idle', 'repo · look around: done'], ['working', 'repo · look around: done']]) {
+      activity = { ...activity, state };
+      f.service.onEvent(completed);
+      await Bun.sleep(1);
+      expect(f.notifications.at(-1).options.title).toBe(title);
+    }
+    activity = null; // no process
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(f.notifications.at(-1).options.title).toBe('repo · look around: done');
+    activity = new Error('unknown method');
+    f.service.onEvent(completed);
+    await Bun.sleep(1);
+    expect(f.notifications.at(-1).options.title).toBe('repo · look around: done');
+    expect(f.notifications).toHaveLength(5);
+  } finally { f.service.dispose(); }
+});
+
+test('the answered-with-background-work notice is muted in the app', async () => {
+  const f = attentionFixture({ read: async method => method === 'board.list' ? { projects: [f.row] } : method === 'session.activity' ? { activity: { state: 'background', tasks: [], truncated: false, updatedAt: new Date().toISOString() } } : { pendingPermissions: [], pendingDialogs: [] } });
+  try {
+    f.service.onEvent({ type: 'run.state', runId: 'r', sessionId: 's', payload: { state: 'completed' } });
+    await Bun.sleep(1);
+    expect(f.notices).toMatchObject([{ title: 'repo: answered · background work running', tone: 'muted' }]);
+  } finally { f.service.dispose(); }
+});
 
 test('browser uses native isolated mouse zoom and bounded keyboard shortcuts', () => {
   const contents = new EventEmitter();

@@ -28,6 +28,10 @@ test('large Unicode messages stream in bounded previews without losing bytes', a
     }
     const messages = f.storage.listMessagesForSession(run.sessionId, { limit: 100 }).messages;
     expect(messages).toHaveLength(2);
+    // Each message.started says when its message was created, the stored row's own time, so a client need not guess it.
+    const started = f.storage.listEvents({ sessionId: run.sessionId, limit: 10_000 }).filter(event => event.type === 'message.started');
+    expect(started.map(event => event.payload.createdAt)).toEqual(messages.map(message => message.createdAt));
+    for (const event of started) expect(event.payload.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     for (const message of messages) {
       let offset = 0;
       const chunks = previews.filter(preview => preview.messageId === message.id);

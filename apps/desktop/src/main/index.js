@@ -57,6 +57,8 @@ const RENDERER_METHODS = new Set([
   "engine.status", "project.open", "project.linkFolder", "project.remove", "chat.create", "session.create", "session.list", "session.page",
   "session.rename", "session.archive", "session.pin", "session.delete", "session.setAgent", "session.setModel", "session.setAgentModel",
   "delegation.models",
+  // What a conversation's agent process is doing in the background, and stopping it; Claude's questions to the person.
+  "session.activity", "session.stopBackground", "session.stopTask", "session.closeProcess", "session.clearFinished", "session.taskOutput", "session.mcpStatus", "delegation.list", "dialog.resolve", "dialog.dismiss",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
   'account.status', 'account.sync', 'account.login', 'account.cancel', 'account.logout',
@@ -123,6 +125,7 @@ class EngineBridge {
       await client.subscribe({ after }, {
         onEvent: (event) => { this.lastSeq = event.eventSeq; this.relay.push("event", event); this.attention?.onEvent(event); },
         onPreview: (preview) => this.relay.push("preview", preview),
+        onActivity: (activity) => this.relay.push("activity", activity),
       });
       this.notify({ connected: true, started, status });
       void this.attention?.refresh();

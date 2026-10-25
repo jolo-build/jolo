@@ -1,5 +1,5 @@
 // Bounded relay between the engine socket and the renderer IPC hop.
-// Credits return only after the renderer acknowledges a batch; a stalled renderer drops previews,
+// Credits return only after the renderer acknowledges a batch; a stalled renderer drops previews and activity ticks,
 // buffers durable events up to a cap, and then requires a resync instead of unbounded queueing.
 
 const MAX_OUTSTANDING_BATCHES = 8;
@@ -44,11 +44,11 @@ export function createRelay({ send, log }) {
   return {
     push(kind, value) {
       // A preview or a terminal chunk is one string in a small envelope: sizing it by that string spares
-      // every chunk a second serialization on its way to the window. Events are measured as they are.
+      // every chunk a second serialization on its way to the window. Events and activity ticks are measured as they are.
       const bytes = kind === "preview" && typeof value.text === "string" ? value.text.length + 128
         : kind === "terminal" && typeof value.data === "string" ? value.data.length + 128
         : JSON.stringify(value).length;
-      if (!canSend() && kind === "preview") { previewsDropped += 1; return; } // transient; commits will fill the gap
+      if (!canSend() && (kind === "preview" || kind === "activity")) { previewsDropped += 1; return; } // transient; commits and the next tick fill the gap
       if (!canSend() && kind === "terminal") { terminalDropped = true; return; } // the renderer re-attaches from a snapshot (§16.1)
       if (kind === "event" && queue.length >= MAX_BUFFERED_EVENTS) {
         // The renderer is not consuming; keep durable state in the engine and demand a resync later.

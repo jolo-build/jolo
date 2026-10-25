@@ -3,6 +3,7 @@ import { PermissionRepository } from "./permissions.js";
 import { PlanRepository } from "./plans.js";
 import { ScheduleRepository } from "./schedules.js";
 import { DelegationRepository } from "./delegations.js";
+import { DialogRepository } from "./dialogs.js";
 // Storage service: the only module that touches SQLite.
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
@@ -15,7 +16,7 @@ import { ArtifactStore } from "./artifacts.js";
 export { OwnershipError, SchemaError } from "./db.js";
 
 export { newId } from "./records.js";
-import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInvocation, mapWorkspace, mapArtifact } from "./records.js";
+import { newId, now, mapSession, mapRun, mapProject, mapMessage, mapItem, mapInvocation, mapWorkspace, mapArtifact, automaticTitle } from "./records.js";
 
 // A live turn owns the chat until it settles; otherwise its newest prompt owns the status.
 const SESSION_ACTIVITY_RUN = `SELECT id FROM runs WHERE session_id = s.id
@@ -39,6 +40,7 @@ export class Storage {
     this.plans = new PlanRepository(this);
     this.schedules = new ScheduleRepository(this);
     this.delegations = new DelegationRepository(this);
+    this.dialogs = new DialogRepository(this);
     this.eventRepository = new EventRepository(this.db);
     this.eventRepository.bootstrap();
     this.eventRepository.prune();
@@ -396,12 +398,54 @@ export class Storage {
     return this.getSession(id);
   }
 
-  /** Name an empty task from its first prompt without changing its activity order. */
+  /** Name an empty task from its first prompt without changing its activity order; true when it was named here. */
   assignSessionTitle(id, prompt) {
-    const title = Array.from(prompt.replace(/\s+/g, ' ').trim()).slice(0, 80).join('');
-    if (!title) return;
+    const title = automaticTitle(prompt);
+    if (!title) return false;
     const result = this.db.query("UPDATE sessions SET title = ?2, revision = revision + 1 WHERE id = ?1 AND TRIM(title) = '' AND deleted_at IS NULL").run(id, title);
     if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
+    return result.changes > 0;
+  }
+
+  /**
+   * Put a task's generated title in place while its title is still blank (it is being named): a rename by the person
+   * in the meantime wins, and a deleted task stays as it was. True when the title changed.
+   */
+  replaceBlankTitle(id, title) {
+    return this.transaction(() => {
+      const result = this.db.query("UPDATE sessions SET title = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1 AND TRIM(title) = '' AND deleted_at IS NULL").run(id, title, now());
+      if (result.changes) this.appendEvent({ sessionId: id, type: 'session.updated', payload: { session: this.getSession(id) } });
+      return result.changes > 0;
+    });
+  }
+
+  // ---- what a conversation's agent process did ----------------------------------------------
+  // The latest activity snapshot of a conversation (activityPayload: its running tasks and finished ones, bounded to a
+  // frame), kept so that its finished tasks outlive the process and the engine.
+
+  /** Keep a conversation's latest activity snapshot in place of the one before. */
+  saveSessionActivity(sessionId, payload) {
+    this.db.query("INSERT INTO session_activity (session_id, payload, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(session_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at")
+      .run(sessionId, JSON.stringify(payload), now());
+  }
+
+  /** A conversation's latest activity snapshot, or null when it never had one. */
+  getSessionActivity(sessionId) {
+    const row = this.db.query("SELECT payload FROM session_activity WHERE session_id = ?1").get(sessionId);
+    return row ? JSON.parse(row.payload) : null;
+  }
+
+  /** Delete a conversation's finished tasks from its stored snapshot; how many went (0 without a snapshot). */
+  clearFinishedActivity(sessionId) {
+    return this.transaction(() => {
+      const payload = this.getSessionActivity(sessionId);
+      if (!payload) return 0;
+      const kept = payload.tasks.filter(task => task.status === 'running');
+      const cleared = payload.tasks.length - kept.length;
+      // Nothing finished is left, so none is left out either.
+      if (cleared) this.saveSessionActivity(sessionId, { ...payload, tasks: kept, truncated: false });
+      return cleared;
+    });
   }
 
   /** Older workspace tasks missed automatic naming; recover only genuinely empty names. */
@@ -514,9 +558,10 @@ export class Storage {
     return this.statements.nextMessageOrdinal.get(sessionId).ordinal;
   }
 
-  insertMessage({ sessionId, runId, role, kind = "text", artifactId, ordinal }) {
+  /** `createdAt: null` records a message whose time is not known (a synced one): it is read back with none. */
+  insertMessage({ sessionId, runId, role, kind = "text", artifactId, ordinal, createdAt = undefined }) {
     const id = newId("msg");
-    this.statements.insertMessage.run(id, sessionId, runId, ordinal, role, kind, artifactId, now());
+    this.statements.insertMessage.run(id, sessionId, runId, ordinal, role, kind, artifactId, createdAt === null ? "" : createdAt ?? now());
     return this.getMessage(id);
   }
 
@@ -789,6 +834,12 @@ export class Storage {
 
   close() {
     this.artifacts.closeAll();
+    // bun:sqlite defers closing while a prepared statement is alive, so the exclusive lock would outlast close() and
+    // refuse the next Storage on this database in this process (a restart in a test, a reopened profile). These
+    // statements live as long as this object, so they are finalized here; the ones the query cache let go of are
+    // finalized only when collected, hence the collection once the connection is closed. close() runs at shutdown.
+    for (const statement of Object.values(this.statements ?? {})) statement.finalize();
     this.db.close();
+    Bun.gc(true);
   }
 }

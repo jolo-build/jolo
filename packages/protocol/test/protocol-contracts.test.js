@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseParams, parseEvent, MethodSchemas } from '../src/schemas.js';
+import { parseParams, parseEvent, parseResult, MethodSchemas } from '../src/schemas.js';
 test('request validation rejects unknown nested fields instead of stripping their meaning', () => {
   const base = { sessionId: 's', requestId: 'r', prompt: 'continue', execution: { agentId: 'codex', model: 'm'.repeat(200) } };
   expect(parseParams('run.start', base).ok).toBe(true);
@@ -21,4 +21,29 @@ test('budget patches preserve omitted fields and accept an explicit disabled hos
   }
   expect(parseParams('settings.update', { budgets: { hostedToolDeadlineMs: 0 } }).ok).toBe(false);
   expect(parseParams('settings.update', { budgets: { toolDeadlineMs: null } }).ok).toBe(false);
+});
+
+test('a task\'s output and the MCP servers\' status have their own methods, and an ended process its own error code', async () => {
+  const { ERROR_CODES, McpServerSchema, toRpcError, ProtocolError } = await import('../src/schemas.js');
+  expect(parseParams('session.taskOutput', { sessionId: 's', taskId: 'task-1' }).ok).toBe(true);
+  expect(parseParams('session.taskOutput', { sessionId: 's' }).ok).toBe(false);
+  expect(MethodSchemas['session.taskOutput'].result.parse({ output: 'line 1\n', totalBytes: 7, truncated: false })).toEqual({ output: 'line 1\n', totalBytes: 7, truncated: false });
+  expect(MethodSchemas['session.taskOutput'].result.safeParse({ output: 'x'.repeat(200 * 1024 + 1), totalBytes: 1, truncated: true }).success).toBe(false); // the engine keeps the last 200 KiB
+  // Where the output came from: the process, or the task's output file when the process cannot serve it; an older engine says neither.
+  for (const source of /** @type {const} */ (['process', 'file'])) expect(MethodSchemas['session.taskOutput'].result.parse({ output: 'a\n', totalBytes: 2, truncated: false, source })).toEqual({ output: 'a\n', totalBytes: 2, truncated: false, source });
+  expect(MethodSchemas['session.taskOutput'].result.safeParse({ output: 'a\n', totalBytes: 2, truncated: false, source: 'disk' }).success).toBe(false);
+  expect(parseParams('session.mcpStatus', { sessionId: 's' }).ok).toBe(true);
+  const servers = [{ name: 'probe', status: 'connected', source: 'user', error: null }, { name: 'pencil', status: 'failed', source: 'user', error: 'ENOENT' }];
+  expect(MethodSchemas['session.mcpStatus'].result.parse({ servers })).toEqual({ servers });
+  expect(MethodSchemas['session.mcpStatus'].result.parse({ servers: null })).toEqual({ servers: null });
+  expect(McpServerSchema.safeParse({ name: 'n'.repeat(201), status: 'connected', source: null, error: null }).success).toBe(false);
+  expect(ERROR_CODES).toContain('no_process');
+  expect(toRpcError(new ProtocolError('no_process', 'the process that ran it has ended')).data.code).toBe('no_process');
+});
+test('a delegation from an engine of the same protocol that predates activity, done and partial still parses', () => {
+  const older = { id: 'd', parentRunId: 'p', runId: 'r', sessionId: 's', title: 'child', modelAlias: 'm1', state: 'completed', failure: null, execution: null, createdAt: new Date().toISOString(), output: 'ok', truncated: false };
+  expect(parseResult('delegation.list', { delegations: [older] }).ok).toBe(true);
+  expect(parseResult('delegation.call', { delegation: older }).ok).toBe(true);
+  expect(parseResult('delegation.list', { delegations: [{ ...older, activity: 'background', done: false, partial: true }] }).ok).toBe(true);
+  expect(parseResult('delegation.list', { delegations: [{ ...older, done: 'yes' }] }).ok).toBe(false);
 });
