@@ -15,7 +15,7 @@
 // as the message arrives), "ask-on-stop" has a background subagent ask just as the turn is interrupted, "ask-user
 // <question>" asks the person <question> with AskUserQuestion and says what they answered, "ask-user-withdraw <ms>" takes
 // that question back <ms> later, "ask-user-exit <ms>" leaves (exit 1) <ms> after asking, the question unanswered,
-// "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
+// "ask-user-two" asks two questions at once ("tea or coffee?", then "milk or sugar?") and says both answers, "exit-plan <title>" asks the person to approve a plan titled <title> with ExitPlanMode
 // and says whether it was approved or sent back, "workflow <name> <ms>" starts a workflow named <name> as one background
 // task (task_type local_workflow, no is_backgrounded field, ids wf-1, wf-2, ... in a process) whose progress reports carry its phases and agents
 // (workflow_progress): at once both agents of phase "Say" (say:1, say:2, model claude-fable-5-1) have started (0 tokens, as the real binary's first
@@ -459,6 +459,16 @@ async function turn(prompt, images = [], uuid = null) {
     if (state.interrupted) return;
     takeBack(asked);
     say("Never mind the question.");
+  } else if (prompt === "ask-user-two") {
+    const questions = [["tea or coffee?", "tea", "coffee"], ["milk or sugar?", "milk", "sugar"]].map(([question, ...labels]) => ({ question, header: "Choice", options: labels.map((label) => ({ label, description: "" })), multiSelect: false }));
+    const input = { questions };
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "AskUserQuestion", input }] }, session_id: sessionId });
+    const decision = await askPerson("AskUserQuestion", input, toolUseId);
+    if (state.interrupted) return;
+    const answers = questions.map(({ question }) => decision.updatedInput?.answers?.[question] ?? "(none)");
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Answered: ${answers.join(" / ")}` }] }, session_id: sessionId });
+    say(`You answered: ${answers.join(" / ")}`);
   } else if ((match = prompt.match(/^ask-user-exit (\d+)$/))) {
     // Claude asks the person, then its process ends <ms> later without an answer or a result (a crash).
     const input = { questions: [{ question: "tea or coffee?", header: "Choice", options: [{ label: "tea", description: "" }, { label: "coffee", description: "" }], multiSelect: false }] };
