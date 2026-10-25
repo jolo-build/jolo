@@ -34,3 +34,19 @@ test('CLI whoami refreshes account status and logout reports local-only revocati
   await runAccountCommand({ command: 'logout', flags: {}, client, write: line => output.push(line) });
   expect(output.at(-1)).toBe('Signed out locally.');
 });
+
+test('jolo remote reports, toggles, and refuses before the device has web prompts', async () => {
+  const remote = { enabled: true, connected: true, approvals: false, error: null };
+  const ready = { ...signedIn, device: { name: 'Laptop', scopes: ['account:read', 'chats:sync', 'prompts:run'] }, remote };
+  const calls = [], output = [];
+  const client = { call: async (method, params) => { calls.push({ method, params }); return method === 'account.remote' ? { ...ready, remote: { ...remote, ...params } } : ready; } };
+  expect(await runAccountCommand({ command: 'remote', flags: {}, client, write: line => output.push(line) })).toBe(0);
+  expect(output.at(-1)).toContain('on · connected');
+  expect(await runAccountCommand({ command: 'remote', action: 'off', flags: { approvals: true }, client, write: line => output.push(line) })).toBe(0);
+  expect(calls.at(-1)).toEqual({ method: 'account.remote', params: { enabled: false, approvals: true } });
+  expect(output.at(-1)).toContain('Approve from the web: on');
+  expect(await runAccountCommand({ command: 'remote', action: 'maybe', flags: {}, client, write: line => output.push(line) })).toBe(2);
+  const bare = { call: async () => ({ ...signedIn, device: { name: 'Laptop', scopes: ['account:read'] } }) };
+  expect(await runAccountCommand({ command: 'remote', action: 'on', flags: {}, client: bare, write: line => output.push(line) })).toBe(1);
+  expect(output.at(-1)).toContain('jolo login --remote');
+});

@@ -17,6 +17,8 @@
     "X_PIXEL_ID": "rf82t",
     "X_REGISTRATION_EVENT_ID": "tw-rf82t-rf84j"
   },
+  "durable_objects": { "bindings": [{ "name": "ACCESS_RELAY", "class_name": "AccountRelay" }] },
+  "migrations": [{ "tag": "v1-account-relay", "new_sqlite_classes": ["AccountRelay"] }],
   "assets": {
     "directory": "../apps/access/public",
     "binding": "ASSETS",
@@ -34,6 +36,7 @@
       "routes": [],
       "triggers": { "crons": [] },
       "ratelimits": [{ "name": "ACCESS_RATE_LIMIT", "namespace_id": "2026091002", "simple": { "limit": 20, "period": 60 } }],
+      "durable_objects": { "bindings": [{ "name": "ACCESS_RELAY", "class_name": "AccountRelay" }] },
       "vars": {
         "ACCESS_ORIGIN": "http://127.0.0.1:8788",
         "ENVIRONMENT": "development"

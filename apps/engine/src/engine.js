@@ -1,6 +1,6 @@
 import { TaskService } from './account/tasks.js';
 import { createExecutorRouter } from "./agents/executor.js";
-import { createRpcHandlers } from "./rpc/handlers.js";
+import { createRpcHandlers, permissionResolver } from "./rpc/handlers.js";
 // Engine composition: ownership, storage, run service, endpoint, RPC server, lifetime.
 import path from 'node:path';
 import { PROTOCOL_VERSION, SCHEMA_VERSION, activityPayload } from "@jolo/protocol";
@@ -11,6 +11,7 @@ import { createAgentExecutor } from "./agent/loop.js";
 import { SettingsService } from "./settings.js";
 import { CredentialService } from "./credentials/index.js";
 import { ChatSync } from './account/chat-sync.js';
+import { RemotePrompts } from './account/remote-prompts.js';
 import { AccountService } from './account/service.js';
 import { PermissionService } from "./permissions/service.js";
 import { createDialogService } from "./dialogs/service.js";
@@ -185,6 +186,8 @@ export function createEngine(options) {
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
     const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv, log });
+    account.remotePrompts = new RemotePrompts({ account, storage, chatSync: account.chatSync, handlers, resolvePermission: permissionResolver({ storage, permissions, runs }), log });
+    account.remotePrompts.refresh();
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
@@ -210,7 +213,7 @@ export function createEngine(options) {
       };
       try {
         lifetime.stop();
-        if (account) { await step('chat sync', () => account.chatSync.stop()); await step('account', () => account.stop()); }
+        if (account) { if (account.remotePrompts) await step('web prompts', () => account.remotePrompts.stop()); await step('chat sync', () => account.chatSync.stop()); await step('account', () => account.stop()); }
         // Stop the scheduler before anything else with a worker: a beat landing mid-shutdown would
         // start a run that runs.stopAll then interrupts, while the slot has already advanced.
         if (schedules) await step("schedules", () => schedules.stop());

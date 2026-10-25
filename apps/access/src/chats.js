@@ -5,9 +5,9 @@ import { renderMarkdown } from './tasks/markdown.js';
 import { chatsPage } from './chat-pages.js';
 
 const redirect = path => new Response(null, { status: 303, headers: { Location: path } });
-const transcript = chat => `${chat.context ? `<p class="fine">Project: ${e(chat.context.project.name)} · Folder: ${e(chat.context.workspace.name)}</p>` : ''}${chat.messages.map(m => `<article class="synced-message"><p class="fine">${e(m.role === 'user' ? 'You' : 'Assistant')}</p><div class="markdown-body">${renderMarkdown(m.text)}</div></article>`).join('')}`;
+const transcript = (chat, link = false) => `${chat.context ? `<p class="fine">Project: ${link ? `<a href="/chats?project=${e(chat.context.project.id)}">${e(chat.context.project.name)}</a>` : e(chat.context.project.name)} · Folder: ${e(chat.context.workspace.name)}${chat.context.workspace.branch ? ` · Branch: <code>${e(chat.context.workspace.branch)}</code>` : ''}</p>` : ''}${chat.messages.map(m => `<article class="synced-message"><p class="fine">${e(m.role === 'user' ? 'You' : 'Assistant')}</p><div class="markdown-body">${renderMarkdown(m.text)}</div></article>`).join('')}`;
 
-export function chatRoutes({ env, config, repository, session }) {
+export function chatRoutes({ env, config, repository, session, prompts }) {
   const db = env.ACCESS_DB;
   return async request => {
     const url = new URL(request.url), api = url.pathname.startsWith('/api/chats');
@@ -68,7 +68,7 @@ export function chatRoutes({ env, config, repository, session }) {
     }
     if (request.method !== 'GET') return Response.json({ error: 'Method not allowed.' }, { status: 405 });
     if (id) {
-      const row = await db.prepare('SELECT content,revision,share_token FROM synced_chats WHERE account_id=?1 AND id=?2').bind(actor.id,id).first();
+      const row = await db.prepare('SELECT content,revision,share_token,folder_id FROM synced_chats WHERE account_id=?1 AND id=?2').bind(actor.id,id).first();
       if (!row) return Response.json({ error: 'Chat not found.' }, { status: 404 });
       const chat = JSON.parse(row.content);
       if (api) return Response.json({ chat, revision: row.revision, shared: Boolean(row.share_token) });
@@ -79,7 +79,8 @@ export function chatRoutes({ env, config, repository, session }) {
       const shareBlock = row.share_token
         ? `<div class="chat-share"><p class="fine">Anyone with the link can read this conversation.${fresh ? ` <code class="chat-share-link">${e(`${config.origin}/shared/${fresh}`)}</code>` : ''}</p><form method="post" action="/chats/${e(id)}/unshare"><input type="hidden" name="csrf" value="${e(actor.csrf)}"><button class="button secondary" type="submit">Stop sharing</button></form></div>`
         : `<div class="chat-share"><form method="post" action="/chats/${e(id)}/share"><input type="hidden" name="csrf" value="${e(actor.csrf)}"><button class="button secondary" type="submit">Share a read-only link</button></form><p class="fine">Creates a public link anyone can open — nothing else on your account is shared.</p></div>`;
-      return new Response(appPage(chat.title, `<h1>${e(chat.title)}</h1><p class="fine">Synced conversation · Files and running agents remain on the original device.</p>${shareBlock}${transcript(chat)}`, { active: 'chats', kind: 'synced-chats-page' }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      const panel = await prompts.chatPanel(actor, { id, folderId: row.folder_id, error: url.searchParams.get('prompt_error') });
+      return new Response(appPage(chat.title, `<h1>${e(chat.title)}</h1><p class="fine">Synced conversation · Files and running agents remain on the original device.</p>${shareBlock}${transcript(chat, true)}${panel.html}`, { active: 'chats', kind: 'synced-chats-page', refresh: panel.refresh ? 4 : 0 }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
     if (!api) {
       const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
@@ -87,14 +88,35 @@ export function chatRoutes({ env, config, repository, session }) {
       const cursor = /^(\d{1,16}):([a-f0-9-]{36})$/.exec(before);
       const timestamp = cursor ? Number(cursor[1]) : null;
       if (before && (!cursor || !Number.isSafeInteger(timestamp))) return Response.json({ error: 'Invalid chat cursor.' }, { status: 400 });
-      const rows = (await db.prepare(`SELECT id,title,updated_at,json_array_length(content,'$.messages') AS message_count
-        FROM synced_chats WHERE account_id=?1 AND (?2='' OR instr(lower(title),lower(?2))>0)
+      const projectId = url.searchParams.get('project') ?? '';
+      if (projectId && projectId !== 'none' && !/^[a-f0-9-]{36}$/.test(projectId)) return Response.json({ error: 'Invalid project.' }, { status: 400 });
+      const page = body => new Response(body, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      if (!projectId && !query && !before) {
+        // With one max() aggregate SQLite takes bare columns from that row: the latest project name.
+        const projects = (await db.prepare(`SELECT project_id AS id, project_name AS name, max(updated_at) AS updated_at, count(*) AS chat_count,
+          (SELECT group_concat(name, char(10)) FROM (SELECT DISTINCT folder_name AS name FROM synced_chats WHERE account_id=?1 AND project_id=p.project_id)) AS folder_names
+          FROM synced_chats p WHERE account_id=?1 AND project_id IS NOT NULL GROUP BY project_id ORDER BY updated_at DESC`).bind(actor.id).all()).results;
+        // Accounts with no project chats keep the single dated list instead of one lone group.
+        if (projects.length) {
+          const unfiled = await db.prepare('SELECT count(*) AS chat_count, max(updated_at) AS updated_at FROM synced_chats WHERE account_id=?1 AND project_id IS NULL').bind(actor.id).first();
+          return page(chatsPage({ projects, unfiled, total: projects.reduce((sum, p) => sum + p.chat_count, unfiled.chat_count) }));
+        }
+      }
+      const filter = `account_id=?1 AND (?2='' OR instr(lower(title),lower(?2))>0) AND (?5='' OR (?5='none' AND project_id IS NULL) OR project_id=?5)`;
+      const rows = (await db.prepare(`SELECT id,title,updated_at,json_array_length(content,'$.messages') AS message_count,project_name,folder_id,folder_name,folder_branch
+        FROM synced_chats WHERE ${filter}
         AND (?3 IS NULL OR updated_at<?3 OR (updated_at=?3 AND id<?4))
-        ORDER BY updated_at DESC,id DESC LIMIT 51`).bind(actor.id,query,timestamp,cursor?.[2] ?? '').all()).results;
-      const count = await db.prepare("SELECT count(*) AS total FROM synced_chats WHERE account_id=?1 AND (?2='' OR instr(lower(title),lower(?2))>0)").bind(actor.id,query).first();
+        ORDER BY updated_at DESC,id DESC LIMIT 51`).bind(actor.id,query,timestamp,cursor?.[2] ?? '',projectId).all()).results;
+      const count = await db.prepare(`SELECT count(*) AS total FROM synced_chats WHERE ${filter}`).bind(actor.id,query,null,null,projectId).first();
+      const project = projectId === 'none' ? { id: 'none' } : projectId
+        ? { id: projectId, name: (await db.prepare('SELECT project_name AS name FROM synced_chats WHERE account_id=?1 AND project_id=?2 ORDER BY updated_at DESC LIMIT 1').bind(actor.id,projectId).first())?.name ?? 'Project' }
+        : null;
       const chats = rows.slice(0,50), last = chats.at(-1);
       const next = rows.length > 50 ? `${last.updated_at}:${last.id}` : null;
-      return new Response(chatsPage({ chats, total: count.total, query, next, before }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      const folders = project && project.id !== 'none' && !query && !before
+        ? (await db.prepare('SELECT folder_id AS id, folder_name AS name, folder_branch AS branch, max(updated_at) FROM synced_chats WHERE account_id=?1 AND project_id=?2 GROUP BY folder_id ORDER BY max(updated_at) DESC').bind(actor.id,projectId).all()).results : [];
+      const start = await prompts.projectPanel(actor, folders, url.searchParams.get('prompt_error'));
+      return page(chatsPage({ chats, total: count.total, query, next, before, project, start }));
     }
     const after = url.searchParams.get('after') ?? '';
     const rows = (await db.prepare('SELECT id,title,revision,updated_at FROM synced_chats WHERE account_id=?1 AND id>?2 ORDER BY id LIMIT 51').bind(actor.id,after.slice(0,36)).all()).results;

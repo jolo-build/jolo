@@ -28,3 +28,17 @@ test('task approval is explicit and pending upgrades keep the approval screen vi
   const upgrading=render({...signedIn,state:'pending',pending:{userCode:'ABCD-EFGH'}});
   expect(upgrading).toContain('Approve this device'); expect(upgrading).toContain('Cancel sign-in');
 });
+
+test('web prompts explain their reach before approval and report the connection once on', () => {
+  const signedIn = { ...initial, state: 'signed_in', account: { name: 'Developer', email: 'dev@example.com' }, device: { name: 'Laptop', scopes: ['account:read', 'chats:sync', 'prompts:run'] }, sync: { enabled: true, lastSyncedAt: '2026-10-23T00:00:00.000Z', error: null } };
+  expect(render({ ...signedIn, remote: { enabled: false, connected: false, error: null } })).toContain('existing permissions');
+  expect(render({ ...signedIn, remote: { enabled: true, connected: true, error: null } })).toContain('Online');
+  expect(render({ ...signedIn, remote: { enabled: true, connected: false, error: 'This device was removed from your account.' } })).toContain('removed from your account');
+});
+
+test('approving from the web is a separate switch shown only while web prompts are on', () => {
+  const signedIn = { ...initial, state: 'signed_in', account: { name: 'Developer', email: 'dev@example.com' }, device: { name: 'Laptop', scopes: ['account:read', 'chats:sync', 'prompts:run'] } };
+  expect(render({ ...signedIn, remote: { enabled: false, connected: false, approvals: false, error: null } })).not.toContain('Approve from the web');
+  expect(render({ ...signedIn, remote: { enabled: true, connected: true, approvals: false, error: null } })).toContain('wait for you on this device');
+  expect(render({ ...signedIn, remote: { enabled: true, connected: true, approvals: true, error: null } })).toContain('allowed once or denied');
+});

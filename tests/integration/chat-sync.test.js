@@ -107,6 +107,34 @@ test('same-named projects stay distinct and workspaces retain separate folder ma
   expect(a.ids()).toHaveLength(3); expect(b.ids()).toHaveLength(3);
 });
 
+test('the web groups synced chats by project and folder, keeps unfiled chats, and searches within a project', async () => {
+  const f = await setup(), a = f.device();
+  const signals = localProject(a, 'signals'), other = localProject(a, 'other');
+  const titled = (local, title) => { const id = projectChat(a, local, title); a.sync.restore({ ...chat(title), title }, id); };
+  titled(signals, 'Direct work');
+  const worktree = a.storage.insertWorkspace({ projectId: signals.project.id, mode: 'worktree', path: path.join(a.sync.paths.dataDir, 'signals-feature'), branch: 'feature/<b>' });
+  titled({ ...signals, workspace: worktree }, 'Feature work');
+  titled(other, 'Other work');
+  a.sync.restore(chat('No folder'));
+  await a.sync.cycle();
+  const page = async query => { const response = await f.web.send(`/chats${query}`); return { status: response.status, html: await response.text() }; };
+  const overview = await page('');
+  expect(overview.html).toContain('signals'); expect(overview.html).toContain('other');
+  expect(overview.html).toContain('2 chats'); expect(overview.html).toContain('Chats without a project');
+  expect(overview.html).not.toContain('Feature work');
+  const projectId = a.sync.export(a.ids().find(id => a.sync.export(id).messages[0].text === 'Direct work')).context.project.id;
+  const project = await page(`?project=${projectId}`);
+  expect(project.html).toContain('Direct work'); expect(project.html).toContain('Feature work'); expect(project.html).not.toContain('Other work');
+  expect(project.html).toContain('signals-feature'); expect(project.html).toContain('feature/&lt;b&gt;');
+  expect((await page(`?project=${projectId}&q=feature`)).html).not.toContain('Direct work');
+  const unfiled = await page('?project=none');
+  expect(unfiled.html).toContain('Plan &amp; review'); expect(unfiled.html).not.toContain('Direct work');
+  expect((await page('?q=work')).html).toContain('Other work');
+  expect((await page('?project=../x')).status).toBe(400);
+  const detail = await f.web.send(`/chats/${(await (await f.call()).json()).chats.find(c => c.title === 'Direct work').id}`);
+  expect(await detail.text()).toContain(`/chats?project=`);
+});
+
 test('an existing legacy standalone restore gains the original project association in place', async () => {
   const f = await setup(), a = f.device(), b = f.device();
   const source = localProject(a, 'original-project'), id = projectChat(a, source, 'Legacy task');

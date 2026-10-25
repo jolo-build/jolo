@@ -73,9 +73,11 @@ const USAGE = `usage:
   jolo provider set fake                development mode only
   jolo auth set openai        (reads the API key from stdin, never from arguments)
   jolo auth status openai
-  jolo login [--tasks] [--no-open] [--server <url>] [--device-name <name>] [--json]
+  jolo login [--tasks] [--remote] [--no-open] [--server <url>] [--device-name <name>] [--json]
   jolo logout [--json]                  sign out of your Jolo account on this profile
   jolo whoami [--json]                  show your Jolo account
+  jolo remote [on|off|status] [--approvals|--no-approvals] [--json]
+                                        run prompts sent from the Jolo website on this device
   jolo theme list | show [id] | use <id>
   jolo theme create <id> [--from <id>] [--set color=#RRGGBB] [--use]
   jolo theme install <file-or-https-url> [--force] [--use]
@@ -758,7 +760,7 @@ async function commandAuth({ positional, flags }) {
 async function commandAccount({ positional, flags }) {
   const command = positional[0];
   const { client } = await attachEngine(flags, { clientKind: command === 'whoami' ? 'headless' : 'tui' });
-  try { return await runAccountCommand({ command, flags, client }); }
+  try { return await runAccountCommand({ command, action: positional[1], flags, client }); }
   finally { await client.close(); }
 }
 
@@ -837,7 +839,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === undefined || (command && !/^[a-z]+$/.test(command) && (command.startsWith("/") || command.startsWith(".") || command.startsWith("~")))) {
     try { return await commandInteractive(parsed); } catch (error) { err(`error: ${error?.message ?? error}`); return EXIT.failed; }
   }
-  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, dialog: commandDialog, background: commandBackground, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, schedule: commandSchedule, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
+  const commands = { theme: commandTheme, login: commandAccount, logout: commandAccount, whoami: commandAccount, remote: commandAccount, run: commandRun, attach: commandAttach, cancel: commandCancel, resume: commandResume, revert: commandRevert, permission: commandPermission, dialog: commandDialog, background: commandBackground, status: commandStatus, board: commandBoard, agent: commandAgent, worktree: commandWorktree, plan: commandPlan, schedule: commandSchedule, session: commandSession, provider: commandProvider, model: commandModel, auth: commandAuth, demo: commandDemo, engine: commandEngine, update: (parsed) => commandUpdate(parsed, { build: BUILD }) };
   if (!commands[command]) { err(USAGE); return EXIT.usage; }
   try {
     return await commands[command](parsed);

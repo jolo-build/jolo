@@ -96,6 +96,10 @@ export function createRepository(db, now = Date.now) {
         db.prepare('DELETE FROM device_flows WHERE expires_at <= ?').bind(now()),
         db.prepare('DELETE FROM devices WHERE expires_at <= ?').bind(now()),
         db.prepare('DELETE FROM mail_outbox WHERE created_at <= ?').bind(now() - 14 * 86400_000),
+        // A device that never answered, or went quiet mid-run, cannot leave a prompt active forever.
+        db.prepare(`UPDATE remote_prompts SET status='expired', error='The device did not respond.', updated_at=?1 WHERE status IN ('pending','delivered') AND updated_at <= ?2`).bind(now(), now() - 120_000),
+        db.prepare(`UPDATE remote_prompts SET status='expired', error='No update from the device for a day.', updated_at=?1 WHERE status IN ('accepted','running','awaiting_permission') AND updated_at <= ?2`).bind(now(), now() - 86400_000),
+        db.prepare('DELETE FROM remote_prompts WHERE created_at <= ?').bind(now() - 30 * 86400_000),
       ]);
     },
   };

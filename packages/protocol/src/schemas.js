@@ -1160,7 +1160,7 @@ export const SettingsSchema = z.object({
 const CredentialProvider = PresetId;
 
 export const AccountIdentitySchema = z.object({ id: Id, name: z.string().min(1).max(500), email: z.string().min(1).max(500) });
-export const AccountDeviceSchema = z.object({ id: Id, name: z.string().min(1).max(500), expiresAt: IsoTimestamp, scopes: z.array(z.enum(['account:read', 'tasks:read', 'chats:sync'])).default(['account:read']) });
+export const AccountDeviceSchema = z.object({ id: Id, name: z.string().min(1).max(500), expiresAt: IsoTimestamp, scopes: z.array(z.enum(['account:read', 'tasks:read', 'chats:sync', 'prompts:run'])).default(['account:read']) });
 export const AccountStatusSchema = z.object({
   state: z.enum(['signed_out', 'pending', 'signed_in']),
   origin: z.string().url().max(2048),
@@ -1170,6 +1170,7 @@ export const AccountStatusSchema = z.object({
   source: z.enum(['none', 'session', 'keychain']),
   note: z.string().max(500).nullable(),
   sync: z.object({ enabled: z.boolean(), lastSyncedAt: z.string().nullable(), error: z.string().nullable() }).optional(),
+  remote: z.object({ enabled: z.boolean(), connected: z.boolean(), approvals: z.boolean().default(false), error: z.string().nullable() }).optional(),
 });
 
 export const TERMINAL_LIMITS = Object.freeze({ maxCols: 240, maxRows: 100, scrollbackLines: 2000, snapshotBytes: 230 * 1024, inputBytes: 64 * 1024 });
@@ -1180,8 +1181,9 @@ Object.assign(MethodSchemas, {
   'task.list': { params: z.object({team:z.union([z.literal('personal'),z.string().uuid()]).optional(),q:z.string().max(100).default(''),before:z.number().int().positive().optional()}), result:z.object({tasks:z.array(WebTaskSummarySchema.extend({url:z.string().url()})).max(20),next:z.number().int().positive().nullable()}) },
   'task.get': { params: z.object({team:z.union([z.literal('personal'),z.string().uuid()]).optional(),key:z.string().regex(/^[A-Z][A-Z0-9]{1,23}-[1-9][0-9]{0,14}$/i)}), result:z.object({task:WebTaskSchema.extend({url:z.string().url()})}) },
   'account.status': { params: z.object({ refresh: z.boolean().default(false) }), result: AccountStatusSchema },
-  'account.login': { params: z.object({ chats: z.boolean().optional(), tasks: z.boolean().optional(), origin: z.string().url().max(2048).optional(), deviceName: z.string().min(1).max(100).optional() }), result: AccountStatusSchema },
+  'account.login': { params: z.object({ chats: z.boolean().optional(), remote: z.boolean().optional(), tasks: z.boolean().optional(), origin: z.string().url().max(2048).optional(), deviceName: z.string().min(1).max(100).optional() }), result: AccountStatusSchema },
   'account.sync': { params: z.object({ enabled: z.boolean() }), result: AccountStatusSchema },
+  'account.remote': { params: z.object({ enabled: z.boolean().optional(), approvals: z.boolean().optional() }), result: AccountStatusSchema },
   'account.cancel': { params: z.object({}), result: AccountStatusSchema },
   'account.logout': { params: z.object({}), result: AccountStatusSchema },
   "terminal.open": {

@@ -12,11 +12,13 @@ export function taskKey(value) {
   const key = String(value ?? '').toUpperCase();
   return TASK_KEY_PATTERN.test(key) && Number.isSafeInteger(Number(key.split('-')[1])) ? key : null;
 }
+// `prompts:run` lets the web send prompts to this device; it is only useful with chat sync.
+export const ACCOUNT_SCOPES = Object.freeze(['account:read', 'tasks:read', 'chats:sync', 'prompts:run']);
 export function accountScopes(value = 'account:read') {
   if (typeof value !== 'string') return null;
   const scopes = value.trim().split(/\s+/);
-  if (!scopes.includes('account:read') || scopes.some(s => !['account:read', 'tasks:read', 'chats:sync'].includes(s)) || new Set(scopes).size !== scopes.length) return null;
-  return ['account:read', 'tasks:read', 'chats:sync'].filter(s => scopes.includes(s)).join(' ');
+  if (!scopes.includes('account:read') || scopes.some(s => !ACCOUNT_SCOPES.includes(s)) || new Set(scopes).size !== scopes.length) return null;
+  return ACCOUNT_SCOPES.filter(s => scopes.includes(s)).join(' ');
 }
 
 // Only explicit prose references attach tasks. Preserve offsets while masking

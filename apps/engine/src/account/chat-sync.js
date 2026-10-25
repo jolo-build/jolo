@@ -25,6 +25,11 @@ export class ChatSync {
     if (enabled) void this.run();
     return this.account.snapshot();
   }
+  /** Whether this conversation, as it is now, is on the account server; `run()` reports no failures. */
+  synced(id) {
+    const saved = (this.storage.getPreference(`chat-sync-map:${this.identity()}`) ?? {})[id];
+    try { return Boolean(saved?.hash) && saved.hash === digest(this.export(id)); } catch { return false; }
+  }
   run() {
     if (this.running) return this.running;
     this.running = this.cycle().catch(error => { this.error = error.message; }).finally(() => { this.running = null; });
