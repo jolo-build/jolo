@@ -177,7 +177,7 @@ const ask = (toolName, input, extra = {}) => new Promise((resolve) => {
   out({ type: "control_request", request_id: requestId, request: { subtype: "can_use_tool", tool_name: toolName, display_name: toolName, input, description: extra.description ?? toolName, permission_suggestions: [], tool_use_id: extra.toolUseId } });
 });
 /** A question that needs the person, as Claude Code 2.1.304 sends AskUserQuestion in host mode: an ordinary can_use_tool
- * marked requires_user_interaction, answered inside the permission answer (see docs/superpowers/specs/claude-dialogs.md). */
+ * marked requires_user_interaction, answered inside the permission answer (see apps/engine/src/agents/README.md, "Dialogs"). */
 const askPerson = (toolName, input, toolUseId) => new Promise((resolve) => {
   const requestId = `req-${++counter}`;
   pending.set(requestId, resolve);

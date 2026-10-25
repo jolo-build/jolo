@@ -4,7 +4,7 @@
 // marked requires_user_interaction; initialize.supportedDialogKinds changes nothing for them. The answer travels inside
 // the permission answer: allow with the tool's input plus the person's response (AskUserQuestion: `answers`, keyed by
 // the question's text, each the chosen option's label), or deny with a message. `{ behavior: "cancelled" }` is refused
-// as invalid. Shapes recorded against Claude Code 2.1.304 in docs/superpowers/specs/claude-dialogs.md.
+// as invalid. Shapes recorded against Claude Code 2.1.304 in this directory's README.md, "Dialogs".
 
 /** Tools whose request is a question for the person, whether or not Claude marks it as one. */
 export const DIALOG_TOOLS = Object.freeze(["AskUserQuestion", "ExitPlanMode"]);
