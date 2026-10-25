@@ -284,7 +284,11 @@ function App({ client, project, initialSession, cursor, onExit, restored = false
       if (chunk && /[\r\n]/.test(chunk) && !/^[\r\n]+$/.test(chunk)) { dispatchPrompt({ type: "paste", chunk }); return; }
       const action = dialogKey(answering, { chunk, key: key.return || !/^[\r\n]+$/.test(chunk ?? "") ? key : { ...key, return: true }, draft: input });
       if (action.type !== "edit") {
-        if (action.type === "state") setDialogState(action.state);
+        if (action.type === "state") {
+          setDialogState(action.state);
+          // The typed answer went to the question just left; the next one starts empty, so its number keys pick options.
+          if (action.state.index !== answering.index) dispatchPrompt({ type: "clear" });
+        }
         if (action.type === "resolve" || action.type === "dismiss") {
           const { dialogId } = dialog;
           const drop = () => setPermissions((queue) => queue.filter((request) => requestKey(request) !== dialogId));

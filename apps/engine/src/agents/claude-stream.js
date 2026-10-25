@@ -333,6 +333,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       contentPromise.catch(() => {});
 
       const state = {
+        exited: false, // the process ended during this run
         blocks: new Map(), // stream block index -> { kind, messageId }
         subagents: new Map(), // subagent call id -> { model, last, steps, bytes, capped }
         usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
@@ -482,7 +483,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           signal.removeEventListener("abort", stop);
           deciding.delete(message.request_id);
           settleWaiting();
-          if (withdrawn.signal.aborted && !signal.aborted && !deciding.size) ctx.transition("tools"); // nobody is waited on now
+          if (withdrawn.signal.aborted && !signal.aborted && !deciding.size && !state.exited) ctx.transition("tools"); // nobody is waited on now
         }
       };
       // The main thread's turn is over but a question is still open: the run is only waiting on the user now. Its budgets
@@ -751,6 +752,9 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         }
       }
       const ended = await handle.done;
+      // A process that exited asks nothing any more: what it left open (a question, a permission) is withdrawn, so it is
+      // marked cancelled rather than shown again to someone who can no longer answer it.
+      if (ended.exited) { state.exited = true; for (const { withdrawn } of deciding.values()) withdrawn.abort(); }
       for (const timer of joloCalls.values()) clearTimeout(timer);
       clearTimeout(state.emptyTimer);
       if (ended.failure) state.failure = String(ended.failure?.message ?? ended.failure);

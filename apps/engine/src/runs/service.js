@@ -16,7 +16,7 @@ export class RunService {
    * runs, so both are optional. `sessionIdle` hears when a conversation has no run queued or in progress.
    * `titles` names a task from its first prompt when it claims the task; otherwise, or without it, the task is named
    * after the prompt's first characters at once.
-   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean, titles?: { claims: (session: any) => boolean, suggest: (session: any, prompt: string) => Promise<string | null> } | null }} options
+   * @param {{ storage: import("../storage/index.js").Storage, executor: { name?: string, execute: (ctx: any) => Promise<{ outcome: string }> }, lifetime: any, log: any, maxActive?: number, maxQueued?: number, shutdownMs?: number, captureProvider?: (session: any, execution: any) => any, sessionIdle?: (sessionId: string) => void, workspaceBusy?: (workspaceId: string) => boolean, titles?: { claims: (session: any, execution?: any) => boolean, suggest: (session: any, prompt: string, execution?: any) => Promise<string | null> } | null }} options
    */
   constructor(options) {
     this.storage = options.storage;
@@ -98,7 +98,7 @@ export class RunService {
       // A task still unnamed is named by its answerer when the title service claims it: the title stays blank meanwhile
       // (clients show it being named), and the service writes the prompt's first characters itself if naming fails.
       // Otherwise the first characters name it at once, as they always did.
-      const claimed = !String(session.title ?? "").trim() && prompt.trim() !== "" && Boolean(this.titles?.claims(session));
+      const claimed = !String(session.title ?? "").trim() && prompt.trim() !== "" && Boolean(this.titles?.claims(session, execution));
       if (!claimed) this.storage.assignSessionTitle(sessionId, prompt);
       const run = this.storage.insertRun({ sessionId, requestId, prompt, execution: execution ?? null, attachments: images, taskReferences });
       const providerConfig = this.captureProvider?.(session, execution);
@@ -107,7 +107,7 @@ export class RunService {
       this.storage.appendEvent({ sessionId, runId: run.id, type: "run.state", payload: { state: run.state, revision: run.revision, agentId: run.execution?.agentId ?? null, promptPreview: prompt.slice(0, 500), ...(images.length ? { attachments: images } : {}), ...(run.taskReferences?.length ? { taskReferences: run.taskReferences } : {}) } });
       // Never awaited, and it cannot fail the run. Asked on a later turn of the event loop, so the run is queued and
       // started before any title work begins.
-      if (claimed) this.storage.afterCommit(() => setTimeout(() => void this.titles?.suggest(session, prompt), 0));
+      if (claimed) this.storage.afterCommit(() => setTimeout(() => void this.titles?.suggest(session, prompt, execution), 0));
       return { run, deduplicated: false };
     });
     if (!result.deduplicated) {

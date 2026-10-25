@@ -29,3 +29,60 @@ Every chat transport receives Jolo's browser instructions on first and resumed t
 Chat opens share the same workspace browse grant as the Browser button, without a separate consent dialog; see the [inline browser security policy](../../../../SECURITY.md#inline-browser-control). An agent cannot replace another workspace's open browser. It receives a busy error until the user closes or explicitly switches that browser.
 
 The host serializes operations per tab and expires element references after navigation. Use the refs returned by `browser_snapshot`; use `tabId` from `browser_tabs` when several tabs are attached. Closing the pane or cancelling the run stops pending browser input. Run `bun run desktop:smoke --browser-chat` to verify that chat opens a closed browser pane and controls its page, or `bun run desktop:browser-smoke` to check the individual controls against local Chromium pages. The hosted MCP path is covered by the integration tests. For an explicit live-agent check using its installed CLI and existing login, run `bun run desktop:smoke --real-browser-agent codex` (or `claude` / `grok`); this uses the agent's account against a disposable local page and checks both first and resumed turns.
+
+## Claude Code over stream-json
+
+The facts below were probed against Claude Code 2.1.304, started as `claudeArgv` in `claude-stream.js` starts it (`--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --replay-user-messages --permission-prompts host --permission-prompt-tool stdio`), with `initialize` declaring `perTaskStopAffordance: true` and `forwardNestedSubagentToolCalls: true`. Recheck them when the supported Claude Code version moves.
+
+The design they serve: Jolo is a bridge for Claude Code. What Claude Code shows or asks, Jolo shows or asks; what its own interface lets a person do (stop the turn, stop background work, stop one task, answer a question), Jolo lets them do. Nothing Claude starts is hidden and nothing is killed behind the person's back. One process per conversation is kept across turns, so the process has a state of its own (`idle`, `working`, `background`) built from its task events, separate from run state: a run can be completed while its process is still `background`. A task or a delegation is never shown as finished while Claude has work running for it, and spend is controlled by making work visible, a Stop that works at every level, and caps the person sets, not by Jolo changing what the model may do.
+
+### Dialogs
+
+AskUserQuestion and plan approval (ExitPlanMode) arrive as ordinary `can_use_tool` requests marked `requires_user_interaction: true`, whatever `initialize.supportedDialogKinds` declares, so Jolo declares none (`claude-dialogs.js`):
+
+```json
+{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Do you prefer tea or coffee?","header":"Drink","options":[{"label":"Tea","description":"…"},{"label":"Coffee","description":"…"}],"multiSelect":false}]},"tool_use_id":"toolu_…","requires_user_interaction":true}
+```
+
+- Answer: `{"behavior":"allow","updatedInput":{...input,"answers":{"Do you prefer tea or coffee?":"Coffee"}}}`, keyed by the question text, each value the chosen option's label. Allowing the input unchanged tells Claude "The user did not answer the questions."
+- Plan approval: `input` is `{ plan, planFilePath }`; approve with `allow` and the input, reject with `deny`.
+- Dismiss: `{"behavior":"deny","message":"…"}`; Claude gets the message as the tool result.
+- `{"behavior":"cancelled"}` is refused as an invalid permission result, and Claude asks again.
+
+`request_user_dialog` exists in the binary (`{ dialog_kind, payload, tool_use_id? }`, answered `{ behavior: "completed" | "cancelled", result? }`), but only for kinds such as `enum_prompt`, `refusal_fallback_prompt` and auto-mode or overage prompts, never for the tools above. A host must not answer a kind it did not declare; `cancelled` there is a real dismissal. Claude withdraws a pending dialog with `control_cancel_request`. MCP elicitation is its own request, `{ subtype: "elicitation", mcp_server_name, message, mode?: "form" | "url", url?, requested_schema?, ... }`, answered `{ action: "accept" | "decline" | "cancel", content? }` (read from the binary, not probed live).
+
+### Stop
+
+`{ subtype: "interrupt", cancel_queued: true }` ends the turn (`result` `error_during_execution`, after a `[Request interrupted by user]` replay) and answers `{ still_queued: [], cancelled: [] }`. A background command (`local_bash`, `is_backgrounded: true`) survives it with or without `perTaskStopAffordance`; with the declaration a background subagent survives it too, and the binary documents the same for workflows. Without the declaration an interrupt kills background agents and workflows, but still not commands. So only `stop_task { task_id }` (success, then `task_notification` `stopped`, within about 0.2 s) or closing the process ends a background command.
+
+Other lifecycle facts: after stdin closes, `--print` keeps the process open for background work (subagents and workflows until they finish, other work up to `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`, ten minutes by default). SIGTERM kills Bash process trees, runs SessionEnd hooks and exits 143; SIGKILL leaves a background shell orphaned. Hence the close order: `stop_task`, interrupt, end of input, SIGTERM, SIGKILL. `--max-budget-usd` covers subagents and ends with `error_max_budget_usd`.
+
+### Send now
+
+`initialize` advertises `interrupt_send_now_v1`: `{ subtype: "interrupt", send_now: true, message_uuid? }` answers `send_now: "nothing_waiting" | "delivering" | "stopped"` and ends no background task. In every probed case (a foreground `Bash`, a foreground subagent, an MCP call) it answered `stopped`: the waiting tool call is rejected, the turn ends interrupted, and the queued message is answered about two seconds later. That is what Jolo's `run.sendNow` produces by cancelling the run and starting the queued one, so Jolo's queue stays in Jolo. Results carry `user_message_uuids`, the client messages the turn answered.
+
+### Task events
+
+- `task_started` `{ task_id, run_id, tool_use_id, description, task_type, is_backgrounded }`; `task_type` is `local_bash`, `local_agent` or `local_workflow`. A foreground tool call is a task too (`is_backgrounded: false`); a subagent's carries `spawn_depth`, and a task under a subagent `owned_by_subagent: true` with `parent_task_id`. A workflow's `task_started` has no `is_backgrounded` and adds `workflow_name` (the script's `meta.name`) and `prompt` (the script).
+- `task_progress` `{ task_id, usage: { total_tokens, tool_uses, duration_ms }, last_tool_name, description }`.
+- `task_updated` `{ task_id, patch }`; `patch.status` can be `"killed"` (a subagent ended by an interrupt), followed by `task_notification` `stopped`.
+- `task_notification` `{ task_id, status: "completed" | "stopped" | "failed", output_file, summary, usage }`; an agent's `summary` only says `Agent "…" finished`.
+- `background_tasks_changed` `{ tasks: [{ task_id, run_id, task_type, description }] }` lists what is running.
+
+### Workflows
+
+A workflow is one task (`local_workflow`), and its `task_progress` carries `workflow_progress`, an ordered array the activity ledger keeps as a bounded summary:
+
+```json
+[{"type":"workflow_phase","index":1,"title":"Say"},
+ {"type":"workflow_agent","index":1,"label":"say:1","phaseIndex":1,"phaseTitle":"Say","agentId":"…","model":"…","state":"done","attempt":1,"promptPreview":"…","tokens":20388,"toolCalls":0,"durationMs":3428,"resultPreview":"agent 1 ok"}]
+```
+
+One `workflow_agent` entry per agent the script has called; `agentId`, `tokens`, `toolCalls`, `durationMs` and `resultPreview` appear once known, and a queued agent has `queuedAt` and `state: "start"` without `agentId`. Only `start` and `done` were seen, so any other state is drawn as failed. The task's `description` names the current phase and agent (`"Say: say:1"`), and its `usage.total_tokens` is the sum over its agents. The Workflow tool returns at once, so the turn ends while the workflow runs and Claude reports its end in a turn of its own. A Workflow launch reaches the host as a plain `can_use_tool` (no `requires_user_interaction`).
+
+### Task output and MCP status
+
+- `get_task_output { task_id }` answers `{ output, total_bytes, truncated }` during the task and after it while the process lives, with `[exited with code N]` appended once a command ends. It serves shell and Monitor tasks only; for an agent it answers an error (`no shell or Monitor task with that task_id`).
+- A task's `output_file` (`…/tasks/<task_id>.output`, outside the process's `TMPDIR`, outliving the process) is plain text for a shell task and pretty-printed JSON for a workflow. For an agent it is a link to the subagent transcript, `~/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl`, whose last `assistant` entry's text is the report (an agent stopped mid-call leaves none).
+- `mcp_status` answers `{ mcpServers: [{ name, status, config, scope, source, error? }] }`, `status` one of `pending`, `connected`, `failed`, `needs-auth`. Every turn's `system/init` carries `mcp_servers: [{ name, status, source }]` as well, so the latest init list stands in when `mcp_status` has no answer.
+- `away_summary` was not observed; its payload field is unprobed.

@@ -7,6 +7,19 @@
 // at once, and is only logged. A crash mid-naming is recovered at startup by Storage.repairUntitledSessions.
 import { collectSummary } from "./providers/retry.js";
 import { probeAgent } from "./agents/models.js";
+import { SELF_MENTION } from "./agents/mentions.js";
+
+/**
+ * Who answers a run, as RunService routes it: a preset picked for the run is Jolo's own provider, else the run's agent,
+ * else the conversation's. The title goes to the same answerer, so a prompt never reaches a provider the run does not.
+ * `agentModel` is the model chosen for that agent, when one was. @returns {{ agentId: string | null, agentModel: string | null }}
+ */
+const answererOf = (session, execution) => {
+  const agentId = execution?.preset ? null : execution?.agentId ?? session.agentId ?? null;
+  if (!agentId || agentId === SELF_MENTION) return { agentId: null, agentModel: null };
+  const own = execution?.agentId === agentId ? execution.model ?? null : null;
+  return { agentId, agentModel: own ?? (agentId === session.agentId ? session.agentModel?.model ?? null : null) };
+};
 
 /** The instructions for the title model. */
 export const TITLE_INSTRUCTIONS = 'You name conversations. Given the first message of a conversation with a coding assistant, reply with a short title for it: three to seven words, in the language of the message, no quotes, no trailing period. Reply with the title and nothing else.';
@@ -108,15 +121,16 @@ const reasonOf = (error) => String(error?.message ?? error).slice(0, 300);
 const effortFor = (model) => (model?.thinkingMode === "adaptive" && EFFORT_PREFERENCE.find((effort) => Array.isArray(model.efforts) && model.efforts.includes(effort))) || null;
 
 /**
- * `claims(session)` says, cheaply and synchronously, whether the service names this task: its answerer is a configured
+ * `claims(session, execution)` says, cheaply and synchronously, whether the service names this task: its answerer (the
+ * first run's, given its `execution`, see answererOf) is a configured
  * Jolo provider (not the demo provider, not a local Ollama listing) or Claude Code. It stays true while the task is
  * being named, so a second prompt in that time does not write its own first characters over the blank title.
- * `suggest(session, prompt)` asks the answerer for a title for the first prompt and writes it while the title is blank;
+ * `suggest(session, prompt, execution)` asks that answerer for a title for the first prompt and writes it while the title is blank;
  * when that fails it names the task after the prompt's first characters. One attempt per task at a time: a second call
  * while one is under way does nothing. It never throws: its promise settles with the title written, or null.
  * `JOLO_AUTO_TITLE=0` (or `off`) turns the service off, and then there is none.
  * @param {{ storage: any, providerFactory?: any, catalog?: any, agentModels?: any, supervisor?: any, log?: any, env?: Record<string, string | undefined>, timeoutMs?: number }} deps
- * @returns {{ claims: (session: any) => boolean, suggest: (session: any, prompt: string) => Promise<string | null> } | null}
+ * @returns {{ claims: (session: any, execution?: any) => boolean, suggest: (session: any, prompt: string, execution?: any) => Promise<string | null> } | null}
  */
 export function createTitleService({ storage, providerFactory, catalog, agentModels, supervisor, log, env = process.env, timeoutMs = TIMEOUT_MS }) {
   if (/^(?:0|off)$/i.test(String(env?.JOLO_AUTO_TITLE ?? "").trim())) return null;
@@ -126,8 +140,8 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
   const note = (message, fields) => (log?.debug ?? log?.info)?.call(log, message, fields);
 
   /** A task Jolo answers: its own provider, on the cheapest model that provider lists. */
-  const fromProvider = async (session, text, signal) => {
-    const captured = providerFactory?.capture(session, null);
+  const fromProvider = async (session, execution, text, signal) => {
+    const captured = providerFactory?.capture(session, execution);
     if (!captured) return null; // nothing is configured; the task's run says so itself
     if (captured.endpoint?.protocol === "fake") return null; // the demo provider has no model to name a task with
     // A local model server (an Ollama listing; the catalog has no other mark of "local") answers one request at a time,
@@ -166,8 +180,8 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
    * The model is the task's own when that is already small; with none chosen, the `haiku` alias, without listing; with
    * a larger one chosen, the first small model Claude lists, else the alias.
    */
-  const fromClaude = async (session, manifest, text, deadline) => {
-    const chosen = session.agentModel?.model ?? catalog.config?.(manifest)?.model ?? CLAUDE_SMALL_ALIAS;
+  const fromClaude = async (agentModel, manifest, text, deadline) => {
+    const chosen = agentModel ?? catalog.config?.(manifest)?.model ?? CLAUDE_SMALL_ALIAS;
     let listed = null;
     if (!smallChat(chosen)) try { listed = await agentModels.list(manifest.id); } catch { /* the alias stands in */ }
     const pick = cheapestModel(listed?.models, chosen).id;
@@ -196,19 +210,20 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
   };
 
   return {
-    claims(session) {
+    claims(session, execution = null) {
       try {
         if (!session?.id) return false;
+        const { agentId } = answererOf(session, execution);
         // Codex, ACP agents and Antigravity are not asked yet: their tasks are named after the prompt at once.
-        if (session.agentId) return catalog?.get(session.agentId)?.transport === "claude-stream";
-        const captured = providerFactory?.capture(session, null);
+        if (agentId) return catalog?.get(agentId)?.transport === "claude-stream";
+        const captured = providerFactory?.capture(session, execution);
         return Boolean(captured) && captured.endpoint?.protocol !== "fake" && captured.endpoint?.listing !== "ollama";
       } catch {
         return false;
       }
     },
 
-    async suggest(session, prompt) {
+    async suggest(session, prompt, execution = null) {
       const sessionId = session?.id ?? null;
       if (!sessionId || naming.has(sessionId)) return null; // the attempt under way names it, or falls back
       try { if (String(storage.getSession(sessionId)?.title ?? "x").trim()) return null; } // named meanwhile, or gone
@@ -221,11 +236,12 @@ export function createTitleService({ storage, providerFactory, catalog, agentMod
         const text = Array.from(String(prompt ?? "").trim()).slice(0, PROMPT_MAX).join("");
         if (!text) return null;
         let answer;
-        if (!session.agentId) answer = await fromProvider(session, text, controller.signal);
+        const { agentId, agentModel } = answererOf(session, execution);
+        if (!agentId) answer = await fromProvider(session, execution, text, controller.signal);
         else {
-          const manifest = catalog.get(session.agentId);
+          const manifest = catalog.get(agentId);
           if (manifest.transport !== "claude-stream") throw new Error(`${manifest.displayName} is not asked for titles`);
-          answer = await fromClaude(session, manifest, text, deadline);
+          answer = await fromClaude(agentModel, manifest, text, deadline);
         }
         if (answer === null) throw new Error("this task's provider is not asked for titles");
         if (controller.signal.aborted) throw controller.signal.reason;

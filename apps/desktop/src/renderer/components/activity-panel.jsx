@@ -71,7 +71,8 @@ export function TaskOutputView({ task, state }) {
 /**
  * A task's output, read from the conversation's process (`load`) while the panel is on screen (`visible`): when the pane
  * opens or the panel is shown again, then, while the task runs, OUTPUT_REFRESH_MS after each read has settled (one at a
- * time, so a slow answer never piles reads up or lands out of order), and once more when it ends. Nothing is read while
+ * time, so a slow answer never piles reads up or lands out of order), once more when it ends, and again when the file it
+ * was written to becomes known, which Claude may say only after the end (an agent's output is read from it). Nothing is read while
  * the panel is hidden: each read is a question to Claude and up to TASK_OUTPUT_MAX through the bridge.
  * @param {{ task: TaskRecord, load: (taskId: string) => Promise<{ output: string, totalBytes: number, truncated: boolean }>, visible: boolean }} props
  */
@@ -88,7 +89,7 @@ function TaskOutput({ task, load, visible }) {
       .finally(() => { if (current && running) timer = setTimeout(read, OUTPUT_REFRESH_MS); });
     void read();
     return () => { current = false; if (timer) clearTimeout(timer); };
-  }, [task.taskId, running, visible]);
+  }, [task.taskId, running, visible, task.outputFile]);
   return <TaskOutputView task={task} state={state} />;
 }
 

@@ -83,6 +83,22 @@ test("a question Claude asks is answered by its option's number, in the person's
   finally { await t.close(); }
 }, 60_000);
 
+test("with several questions, a typed answer moves on to an empty draft, where the next question's number keys pick", async () => {
+  const t = await boot();
+  try {
+    await t.ready();
+    await t.prompt("ask-user-two");
+    await t.seen("Question 1 of 2");
+    t.type("espresso"); await waitFor(() => t.draft().includes("espresso"));
+    t.type(ENTER);
+    await t.seen("Question 2 of 2");
+    await waitFor(() => !t.draft().includes("espresso"), { label: "draft cleared" });
+    t.type("2");
+    await t.seen("You answered: espresso / sugar");
+  } catch (error) { console.error(t.text()); throw error; }
+  finally { await t.close(); }
+}, 60_000);
+
 test("a plan Claude asks to approve is shown in full, approved with Enter, or sent back with typed feedback", async () => {
   const t = await boot();
   try {

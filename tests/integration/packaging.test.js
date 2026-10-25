@@ -29,15 +29,17 @@ afterAll(async () => {
  * @param {string[]} command
  * @param {{ home?: string, env?: Record<string, string>, cwd?: string }} [options]
  */
+// Automatic titles are off for every packaged command, since whichever one starts the engine sets them for it: the
+// tests count one run's model requests, and a title is a second one to the same provider.
 function run(command, { home, env = {}, cwd } = {}) {
-  const proc = Bun.spawnSync(command, { cwd: cwd ?? ROOT, env: { ...process.env, JOLO_IDLE_MS: "1500", OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: "session", ...env }, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawnSync(command, { cwd: cwd ?? ROOT, env: { ...process.env, JOLO_IDLE_MS: "1500", OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: "session", JOLO_AUTO_TITLE: "0", ...env }, stdout: "pipe", stderr: "pipe" });
   return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 async function runModelTask(jolo, home, repo, prompt) {
   const configured = run([jolo, 'provider', 'set', 'openai', '--model', 'smoke-model', '--context-window', '64000', '--max-output', '4000', '--base-url', modelServer.baseUrl, '--home', home]);
   expect(configured.code).toBe(0);
-  const child = Bun.spawn([jolo, 'run', prompt, '--json', '--path', repo, '--home', home], { env: { ...process.env, OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session' }, stdout: 'pipe', stderr: 'pipe' });
+  const child = Bun.spawn([jolo, 'run', prompt, '--json', '--path', repo, '--home', home], { env: { ...process.env, OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session', JOLO_AUTO_TITLE: '0' }, stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { stdout, stderr, code };
 }

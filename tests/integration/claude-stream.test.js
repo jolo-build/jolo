@@ -1605,6 +1605,18 @@ describe("Claude's questions to the person reach Jolo as dialogs", () => {
   }, 30_000);
 });
 
+describe('A Claude process that exits with a question open', () => {
+  test('closes the question, so reopening the conversation shows nothing left to answer', async () => {
+    const { client, events, session } = await boot();
+    const { run } = await client.call('run.start', { sessionId: session.id, requestId: 'ask-exit', prompt: 'ask-user-exit 300' });
+    const asked = await waitFor(() => events.find(e => e.type === 'dialog.requested' && e.runId === run.id), { label: 'dialog requested' });
+    await waitFor(() => events.some(e => e.type === 'run.state' && e.runId === run.id && e.payload.state === 'failed'), { label: 'failed' });
+    expect(events.some(e => e.type === 'dialog.resolved' && e.payload.dialogId === asked.payload.dialogId && e.payload.state === 'cancelled')).toBe(true);
+    expect((await client.call('session.page', { sessionId: session.id, limit: 10 })).pendingDialogs ?? []).toEqual([]);
+    await expect(client.call('dialog.resolve', { dialogId: asked.payload.dialogId, response: {} })).rejects.toMatchObject({ code: 'conflict' });
+  }, 30_000);
+});
+
 describe('A delegated Claude child', () => {
   test('a delegated child that keeps working after its first answer is done only when its process is idle, and the follow-up is its answer', async () => {
     const { client, events, parent } = await bootWithParent();

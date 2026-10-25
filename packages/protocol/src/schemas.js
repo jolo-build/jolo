@@ -1052,12 +1052,14 @@ export const DelegationSchema = z.object({
   wakeReason: z.enum(['done', 'answer', 'asking', 'parent_stopped', 'stopped', 'timeout']).optional(),
   failure: z.string().nullable(), execution: RunExecutionSchema.nullable(),
   createdAt: IsoTimestamp, output: z.string(), truncated: z.boolean(),
+  // The three below came after protocol 1.1 shipped, so an engine of that protocol from before them omits them; a client
+  // reads a missing one as unknown (no activity, not done, not partial). This engine always sends them.
   /** What the child's agent process is doing; null when it has none running. */
-  activity: z.enum(['idle', 'working', 'background']).nullable(),
+  activity: z.enum(['idle', 'working', 'background']).nullable().optional(),
   /** Its runs have ended and its process is idle: `output` is its answer. */
-  done: z.boolean(),
+  done: z.boolean().optional(),
   /** `output` is there but the child is not done: it may still be followed by another answer. */
-  partial: z.boolean(),
+  partial: z.boolean().optional(),
 });
 
 Object.assign(MethodSchemas, {

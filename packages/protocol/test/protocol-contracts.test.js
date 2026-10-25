@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseParams, parseEvent, MethodSchemas } from '../src/schemas.js';
+import { parseParams, parseEvent, parseResult, MethodSchemas } from '../src/schemas.js';
 test('request validation rejects unknown nested fields instead of stripping their meaning', () => {
   const base = { sessionId: 's', requestId: 'r', prompt: 'continue', execution: { agentId: 'codex', model: 'm'.repeat(200) } };
   expect(parseParams('run.start', base).ok).toBe(true);
@@ -39,4 +39,11 @@ test('a task\'s output and the MCP servers\' status have their own methods, and 
   expect(McpServerSchema.safeParse({ name: 'n'.repeat(201), status: 'connected', source: null, error: null }).success).toBe(false);
   expect(ERROR_CODES).toContain('no_process');
   expect(toRpcError(new ProtocolError('no_process', 'the process that ran it has ended')).data.code).toBe('no_process');
+});
+test('a delegation from an engine of the same protocol that predates activity, done and partial still parses', () => {
+  const older = { id: 'd', parentRunId: 'p', runId: 'r', sessionId: 's', title: 'child', modelAlias: 'm1', state: 'completed', failure: null, execution: null, createdAt: new Date().toISOString(), output: 'ok', truncated: false };
+  expect(parseResult('delegation.list', { delegations: [older] }).ok).toBe(true);
+  expect(parseResult('delegation.call', { delegation: older }).ok).toBe(true);
+  expect(parseResult('delegation.list', { delegations: [{ ...older, activity: 'background', done: false, partial: true }] }).ok).toBe(true);
+  expect(parseResult('delegation.list', { delegations: [{ ...older, done: 'yes' }] }).ok).toBe(false);
 });
