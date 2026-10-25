@@ -37,7 +37,8 @@ export function renderBoardDetail(row, { now = Date.now() } = {}) {
   lines.push(label("where you left off", row.summary));
   if (row.actions.length) {
     row.actions.forEach((action, index) => {
-      const preview = clip(action.preview.startsWith(action.name) ? action.preview.slice(action.name.length) : action.preview, 90);
+      const head = action.preview.split("\n", 1)[0]; // a hosted tool's preview continues with its input lines; the board shows the head
+      const preview = clip(head.startsWith(action.name) ? head.slice(action.name.length) : head, 90);
       lines.push(label(index === 0 ? "last actions" : "", `${time(action.at)} ${pad(action.name, 14)} ${preview}${action.status === "running" ? "  (running)" : action.status !== "ok" ? `  (${action.status})` : ""}`));
     });
   }

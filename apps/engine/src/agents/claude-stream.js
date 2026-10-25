@@ -9,7 +9,10 @@
 //
 // Every shape below was read from the installed binary and confirmed against a live session; see the
 // initialize/can_use_tool/control_response forms in the engine's agents README.
-import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice } from "./hosted.js";
+import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, insideWorkspace, recall, runChoice, TOOL_DISPLAY_MAX_BYTES } from "./hosted.js";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import nodePath from "node:path";
 import { compactRequested, createSummarizer, handoffPrompt, slashCommand } from "./handoff.js";
 import { randomUUID } from "node:crypto";
 import { compactingAfter, createHostedLinks, EMPTY_RESULT_GRACE_MS, HAND_BACK, isSubagentRequest, retryDelay, turnNotice } from "./claude-link.js";
@@ -39,6 +42,145 @@ const SUBAGENT_MORE = `${SUBAGENT_LINE}… more steps not shown\n`;
 
 /** The head of a subagent call: what it is for and which kind of agent runs it, kept short enough to stay whole. */
 const subagentDisplay = (name, input) => `${name} ${JSON.stringify({ subagent_type: input?.subagent_type, description: input?.description, model: input?.model, prompt: String(input?.prompt ?? "").slice(0, 600) })}`;
+
+/** How long a value in a tool call's head may be before it is cut. */
+const TOOL_HEAD_VALUE_MAX = 160;
+
+/**
+ * A value for a head: on one line, and cut to TOOL_HEAD_VALUE_MAX characters (code points, so a character written as two
+ * code units is never split) with an ellipsis at its end.
+ * @param {string} value
+ */
+const headValue = (value) => {
+  const chars = Array.from(value.replace(/[\r\n]+/g, " "));
+  return chars.length > TOOL_HEAD_VALUE_MAX ? `${chars.slice(0, TOOL_HEAD_VALUE_MAX - 1).join("")}…` : chars.join("");
+};
+
+/**
+ * A path for a head, cut like headValue but in the middle, so that its file's name survives: `src/long…/name.js`. A name
+ * too long by itself keeps its end (its extension).
+ * @param {string} value
+ */
+const headPath = (value) => {
+  const chars = Array.from(value.replace(/[\r\n]+/g, " "));
+  if (chars.length <= TOOL_HEAD_VALUE_MAX) return chars.join("");
+  const slash = chars.lastIndexOf(nodePath.sep);
+  const tail = slash < 0 ? chars : chars.slice(slash);
+  if (tail.length >= TOOL_HEAD_VALUE_MAX - 1) return `…${chars.slice(-(TOOL_HEAD_VALUE_MAX - 1)).join("")}`;
+  return `${chars.slice(0, TOOL_HEAD_VALUE_MAX - 1 - tail.length).join("")}…${tail.join("")}`;
+};
+
+/** Text cut to at most `max` bytes of UTF-8, in whole characters, with an ellipsis when cut. @param {string} text @param {number} max */
+const withinBytes = (text, max) => {
+  if (Buffer.byteLength(text) <= max) return text;
+  let size = 0, end = 0;
+  for (const char of text) {
+    const bytes = Buffer.byteLength(char);
+    if (size + bytes > max - 3) break; // room for the ellipsis
+    size += bytes;
+    end += char.length;
+  }
+  return `${text.slice(0, end)}…`;
+};
+
+/**
+ * The directories a tool call's paths are shown relative to: the working directory as given and as resolved, since Claude
+ * Code names files under the one it resolved. @param {string} cwd @returns {string[]}
+ */
+export const displayRoots = (cwd) => {
+  let resolved = cwd;
+  try { resolved = realpathSync(cwd); } catch { /* gone: as given */ }
+  return [...new Set([cwd, resolved])];
+};
+
+/** `file` relative to the first of `roots` it is under (`.` for the root itself), or null. @param {string} file @param {string[]} roots */
+const underRoot = (file, roots) => {
+  for (const root of roots) {
+    if (file === root) return ".";
+    if (file.startsWith(root.endsWith(nodePath.sep) ? root : root + nodePath.sep)) return nodePath.relative(root, file) || ".";
+  }
+  return null;
+};
+
+/**
+ * A path as a tool call's head shows it, resolved first (so a path that only looks under the working directory, through
+ * `..`, is not taken for one under it): relative to the working directory (`.` for itself) when under it, also when named
+ * through a link to it (its folder resolved; the file itself may not exist yet), else from the home directory (`~/…`)
+ * when under that, else in full. A relative path is shown as given.
+ * @param {string} given @param {string[]} roots @param {string} home
+ */
+const shownPath = (given, roots, home) => {
+  if (!nodePath.isAbsolute(given)) return given;
+  const file = nodePath.resolve(given);
+  const inside = underRoot(file, roots);
+  if (inside !== null) return inside;
+  try {
+    const resolved = underRoot(nodePath.join(realpathSync(nodePath.dirname(file)), nodePath.basename(file)), roots);
+    if (resolved !== null) return resolved;
+  } catch { /* its folder is not there: as given */ }
+  if (home && file.startsWith(home + nodePath.sep)) return `~/${nodePath.relative(home, file)}`;
+  return file;
+};
+
+/**
+ * The line a Claude Code tool call shows in the transcript, as Claude Code shows it: the tool and the one argument that
+ * tells what it does (`Read src/a.js`, `Bash: <its description>`, `Search "x" in docs`), its paths relative to the
+ * working directory (`cwd`, one or several spellings of it). What the call holds besides goes on the lines below the head,
+ * shown when the call is opened: a command in full (`$ <command>`), the todo list's or a skill's input. A subagent's
+ * head, a workflow's and Jolo's own tools' keep their raw input, which the desktop reads back; so does any other tool,
+ * and a call whose telling field is missing or not text. A line made here stays within TOOL_DISPLAY_MAX_BYTES, newline included.
+ * @param {string} name @param {any} input @param {{ cwd?: string | string[], home?: string }} [where]
+ */
+export function toolDisplay(name, input, { cwd = [], home = homedir() } = {}) {
+  if (SUBAGENT_TOOLS.has(name)) return subagentDisplay(name, input);
+  const raw = `${name} ${JSON.stringify(input ?? {})}`;
+  const roots = (Array.isArray(cwd) ? cwd : [cwd]).filter((root) => typeof root === "string" && nodePath.isAbsolute(root));
+  // A field counts when it is text that is not only blank.
+  const text = (/** @type {string} */ field) => (typeof input?.[field] === "string" && input[field].trim() ? input[field] : null);
+  const place = (/** @type {string} */ file) => headPath(shownPath(file, roots, home));
+  const count = (/** @type {string} */ field) => (Number.isInteger(input?.[field]) && input[field] > 0 ? input[field] : null);
+  /** @type {string | null} */
+  let head = null;
+  let below = "";
+  switch (name) {
+    case "Read": {
+      const file = text("file_path");
+      if (!file) break;
+      const [offset, limit] = [count("offset"), count("limit")];
+      const lines = limit ? ` (lines ${offset ?? 1}–${(offset ?? 1) + limit - 1})` : offset ? ` (from line ${offset})` : "";
+      head = `Read ${place(file)}${lines}`;
+      break;
+    }
+    case "Edit": case "MultiEdit": case "NotebookEdit": {
+      const file = text(name === "NotebookEdit" ? "notebook_path" : "file_path");
+      if (file) head = `Edit ${place(file)}`;
+      break;
+    }
+    case "Write": { const file = text("file_path"); if (file) head = `Write ${place(file)}`; break; }
+    case "LS": { const file = text("path"); if (file) head = `List ${place(file)}`; break; }
+    case "Bash": {
+      const command = text("command");
+      if (!command) break;
+      const first = command.split("\n").find((line) => line.trim()) ?? command;
+      head = `Bash: ${headValue(text("description") ?? first.trim())}`;
+      below = `$ ${command.split("\n").join("\n> ")}`; // its further lines marked as its own, never read as its output
+      break;
+    }
+    case "Grep": case "Glob": {
+      const pattern = text("pattern");
+      if (!pattern) break;
+      const where = text("path");
+      head = `${name === "Grep" ? `Search "${headValue(pattern)}"` : `Glob ${headValue(pattern)}`}${where ? ` in ${place(where)}` : ""}`;
+      break;
+    }
+    case "WebFetch": { const url = text("url"); if (url) head = `Fetch ${headValue(url)}`; break; }
+    case "WebSearch": { const query = text("query"); if (query) head = `Web search "${headValue(query)}"`; break; }
+    case "TodoWrite": head = "Todo list"; below = JSON.stringify(input ?? {}); break;
+    case "Skill": { const skill = text("skill"); if (skill) { head = `Skill ${headValue(skill)}`; below = JSON.stringify(input); } break; }
+  }
+  if (head === null) return raw; // as before: the turn bounds it
+  return withinBytes(below ? `${head}\n${below}` : head, TOOL_DISPLAY_MAX_BYTES - 1);
+}
 
 /** A run that carries a turn the process began by itself rather than a message of the user's. */
 export const CONTINUATION_PREFIX = "continue:";
@@ -173,6 +315,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         fresh = true;
       }
       const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace, scratch: link ? () => link.scratchDir : null });
+      const shownFrom = { cwd: displayRoots(workspace.path) }; // a tool call's paths are shown from the workspace
       if (!link || (continuation && !link.pending)) {
         // A continuation with nothing left to continue: the process has gone, or another run took its turn.
         turn.finish({ usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null } });
@@ -531,7 +674,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           case "assistant": {
             for (const block of message.message?.content ?? []) {
               if (block.type === "tool_use" && SUBAGENT_TOOLS.has(block.name)) { phase("tools"); mainTools.add(block.id); subagentCalls.add(block.id); settleWaiting(); state.subagents.set(block.id, { model: null, last: null, steps: 0, bytes: 0, capped: false }); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: subagentDisplay(block.name, block.input), outputMax: SUBAGENT_DISPLAY_MAX, resultMax: SUBAGENT_DISPLAY_MAX }); }
-              else if (block.type === "tool_use") { phase("tools"); mainTools.add(block.id); settleWaiting(); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: `${block.name} ${JSON.stringify(block.input ?? {})}` }); }
+              else if (block.type === "tool_use") { phase("tools"); mainTools.add(block.id); settleWaiting(); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: toolDisplay(block.name, block.input, shownFrom) }); }
               else if (block.type === "text" && block.text && ![...state.blocks.values()].some((entry) => entry.kind === "text")) {
                 const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, block.text); ctx.finishMessage(messageId, "complete"); // no partial stream arrived for this block
               }

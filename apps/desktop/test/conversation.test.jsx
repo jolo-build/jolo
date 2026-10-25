@@ -445,3 +445,32 @@ test('the transcript\'s lines come from its messages and runs alone, so an activ
   expect(workflowCalls).toEqual([{ id: 'wf', name: 'demo', window: { from: Date.parse('2026-10-24T10:00:00.000Z') - 5000, to: Infinity } }]);
   expect(groupMessages(messages, runs)).toEqual({ groups, workflowCalls });
 });
+
+describe('a tool line as Claude Code shows it', () => {
+  /** A finished tool message of `text`. @param {string} text @param {PartialMessage} [overrides] */
+  const call = (text, overrides = {}) => ({ id: `tool-${text.length}-${text.slice(0, 8)}`, role: 'tool', kind: 'tool', runId: 'run', text, status: 'complete', renderedBytes: 0, committedBytes: 0, ...overrides });
+  /** Each tool block's head, its icon and its words. @param {string} html */
+  const heads = (html) => [...html.matchAll(/<details class="block tool"><summary[^>]*>(<svg[\s\S]*?<\/svg>)<span>([\s\S]*?)<\/span><svg class="icon activity-disclosure"/g)].map(([, icon, words]) => ({ icon, words }));
+  const head = (/** @type {string} */ text, /** @type {PartialMessage} */ overrides = {}) => heads(render(call(text, overrides)))[0];
+
+  test('a command shows its description as its head; the command itself and its output stay for when it is opened', () => {
+    const html = render(call('Bash: List the files\n$ ls -la\napp.js\n'));
+    expect(heads(html)[0].words).toBe('Bash: List the files');
+    // Closed, neither the command nor its output is drawn (opening it shows them, which a static render cannot).
+    expect(html).not.toContain('$ ls -la');
+    expect(html).not.toContain('app.js');
+  });
+
+  test('each new head has the icon its tool had before', () => {
+    const icon = (/** @type {string} */ text) => head(`${text}\n`).icon;
+    const pairs = [
+      ['Read src/a.js', 'Read {"file_path":"src/a.js"}'], ['Edit src/a.js', 'Edit {"file_path":"src/a.js"}'], ['Write src/a.js', 'Write {"file_path":"src/a.js"}'],
+      ['Bash: List the files', 'Bash {"command":"ls"}'], ['Search "x" in src', 'Grep {"pattern":"x"}'], ['Glob *.ts', 'Glob {"pattern":"*.ts"}'],
+      ['Fetch https://example.com', 'WebFetch {"url":"https://example.com"}'], ['Web search "bun"', 'WebSearch {"query":"bun"}'], ['List src', 'LS {"path":"src"}'],
+      ['Todo list', 'TodoWrite {"todos":[]}'], ['Skill review', 'Skill {"skill":"review"}'],
+    ];
+    for (const [now, before] of pairs) expect([now, icon(now)]).toEqual([now, icon(before)]);
+    // and they are not all one icon: a command, a file, a search, an edit, the web, a plan.
+    expect(new Set(pairs.map(([now]) => icon(now))).size).toBeGreaterThanOrEqual(6);
+  });
+});

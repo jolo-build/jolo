@@ -152,3 +152,12 @@
 
 ### Final
 - Full suite (`TMPDIR=/tmp/jt bun run test`), typecheck, `bun run desktop:smoke`, `--background-work`; one capped real-binary run of the workflow probe (Task 5 Step 0) recorded; changelog lines per task.
+
+## Added 2026-10-25: tool result summaries
+
+Claude Code's transcript ends a tool line with a one-word result (`Read 300 lines`, `Found 12 matches`). Jolo's tool
+messages keep only a 600-byte preview of the result, so a renderer-side count is wrong. To do it: `tool.completed`
+carries `messageId` and a `summary` the engine computes from the whole result in `onToolResult` (skipped on
+`is_error`; Glob's own `(Showing N of M …)` total when present), the projection keeps it on the message, and the stored
+message row gets a `summary` column or the summary is appended to the message as a marked last line so history shows it
+too. Then the desktop and TUI append it to the head, muted.

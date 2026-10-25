@@ -3,7 +3,8 @@
 // end to end without the real CLI or its API. Shapes mirror what the real binary sent in a live session.
 // Like the real binary in streaming-input mode, one process answers as many turns as the host feeds it and
 // leaves when its stdin closes; it never exits on its own after a turn.
-// Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call, "write <file>" for a
+// Behaviour is scripted by the prompt text: "run <cmd>" asks permission for a Bash call ("run-described <description>\n<cmd>"
+// for one with a description), "write <file>" for a
 // Write, "read <file>" for a Read, "fail" ends in an error result, "model" reports the model, effort and fast mode
 // it was started with, "background <ms> <text>" answers at once and then, <ms> later, starts a turn of its own with
 // <text> (what a finished background task does), "zero-result <text>" sends an empty result before the real
@@ -385,9 +386,12 @@ async function turn(prompt, images = [], uuid = null) {
     }
   } else if (prompt === 'image-check') {
     say(`Images received: ${images.map(image => `${image.source.media_type}:${Buffer.from(image.source.data, 'base64').length}`).join(', ')}`);
-  } else if ((match = prompt.match(/^run (.+)$/s))) {
+  } else if ((match = prompt.match(/^run (.+)$/s)) || (match = prompt.match(/^run-described ([^\n]+)\n(.+)$/s))) {
+    // "run <cmd>" asks for a Bash call with no description; "run-described <description>\n<cmd>" with one, as Claude Code
+    // gives most of its commands.
     turns = 2;
-    const outcome = await tool("Bash", { command: match[1] }, async (input) => {
+    const described = prompt.startsWith("run-described ");
+    const outcome = await tool("Bash", described ? { command: match[2], description: match[1] } : { command: match[1] }, async (input) => {
       // Spawned, not run synchronously, so an interrupt from the host can still be read and acted on.
       const proc = Bun.spawn(["/bin/sh", "-c", input.command], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
       state.child = proc;

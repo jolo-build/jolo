@@ -77,6 +77,14 @@ describe("the headless CLI with a hosted Claude", () => {
     } finally { await client.close(); }
   }, 30_000);
 
+  test("a tool Claude calls is named by its head line alone, never the command or input shown below it", async () => {
+    const { home, repo } = boot();
+    const run = follow(["run", "run echo cli-head-ok", "--agent", "claude", "--path", repo], home);
+    expect(await run.done).toBe(3); // paused: nobody is there to allow the command
+    expect(run.stderr()).toContain("→ Bash: echo cli-head-ok\n");
+    expect(run.stderr()).not.toContain("$ echo cli-head-ok");
+  }, 60_000);
+
   test("at a terminal, a question Claude asks is printed with how to answer it and the run waits; jolo dialog answer sends the chosen option back", async () => {
     const { home, repo } = boot();
     const run = followAtTerminal(["run", "ask-user tea or coffee?", "--agent", "claude", "--path", repo], home);

@@ -109,7 +109,8 @@ export async function followRun(client, { session, cursor, json, startRun, run: 
       if (run && event.runId !== run.id) return;
       emit(json, { type: "event", event });
       projection.applyEvent(event);
-      if (!json && event.type === "tool.started") err(`→ ${event.payload.preview}`);
+      // A tool's head line alone: what a tool shows when opened (a command in full, its input) stays in the transcript.
+      if (!json && event.type === "tool.started") err(`→ ${String(event.payload.preview).split("\n", 1)[0]}`);
       if (!json && event.type === "tool.completed" && event.payload.status !== "ok") err(`← ${event.payload.name}: ${event.payload.status}${event.payload.errorCode ? ` (${event.payload.errorCode})` : ""}`);
       if (!json && event.type === "provider.attempt" && event.payload.status === "retrying") err(`provider retry: ${event.payload.reason ?? ""}`);
       if (event.type === "permission.requested" && !json) err(`permission needed: ${event.payload.summary} (cwd ${event.payload.cwd}); approve with: jolo permission allow ${event.payload.permissionId}`);

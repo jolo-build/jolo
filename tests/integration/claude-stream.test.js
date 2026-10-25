@@ -268,8 +268,8 @@ describe("Claude Code through its structured stream", () => {
     expect(events.some((e) => e.type === "run.state" && e.runId === run.id && e.payload.state === "awaiting_permission")).toBe(true);
     const messages = await messagesOf(run.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "tool", "text"]);
-    expect(await text(messages[1])).toContain('Bash {"command":"echo hosted-ok"}');
-    expect(await text(messages[1])).toContain("hosted-ok");
+    // The command's line, as Claude Code shows it (its first line, with no description), and the command itself below it.
+    expect(await text(messages[1])).toBe("Bash: echo hosted-ok\n$ echo hosted-ok\nhosted-ok\n");
     expect(await text(messages[2])).toBe("The command printed: hosted-ok");
     const started = events.find((e) => e.type === "tool.started" && e.runId === run.id);
     const completed = events.find((e) => e.type === "tool.completed" && e.runId === run.id);
@@ -281,6 +281,9 @@ describe("Claude Code through its structured stream", () => {
     expect(again.state).toBe("completed");
     expect(events.filter((e) => e.type === "permission.requested")).toHaveLength(1);
     expect(await text((await messagesOf(again.id)).at(-1))).toBe("The command printed: covered-by-grant");
+    // A command Claude describes is named by its description.
+    const described = await runTo("req_cmd3", "run-described Print a greeting\necho described-ok");
+    expect(await text((await messagesOf(described.id)).find((m) => m.kind === "tool"))).toBe("Bash: Print a greeting\n$ echo described-ok\ndescribed-ok\n");
   }, 40_000);
 
   test("edits inside the workspace are allowed by the task's grant; outside it, and a declined command, are refused in Claude's own words", async () => {
@@ -288,6 +291,7 @@ describe("Claude Code through its structured stream", () => {
     const inside = await runTo("req_write", `write ${path.join(repo, "made.txt")} hello from claude`);
     expect(inside.state).toBe("completed");
     expect(readFileSync(path.join(repo, "made.txt"), "utf8")).toBe("hello from claude");
+    expect((await text((await messagesOf(inside.id)).find((m) => m.kind === "tool"))).split("\n")[0]).toBe("Write made.txt"); // its file, from the workspace
     expect(events.some((e) => e.type === "permission.requested")).toBe(false); // no dialog for an in-workspace edit
 
     const outside = await runTo("req_escape", `write ${path.join(home, "escaped.txt")} nope`);

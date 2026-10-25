@@ -20,7 +20,7 @@ function liveSummary(run, actions, pending) {
     case "queued": return "Queued behind another task.";
     case "preparing": return "Starting up.";
     case "model": return last ? `Thinking after ${last.name}.` : "Thinking about the request.";
-    case "tools": return last ? `Running ${last.name}: ${clip(last.preview.slice(last.name.length), 120)}` : "Running tools.";
+    case "tools": return last ? `Running ${last.name}: ${clip(last.preview.split("\n", 1)[0].slice(last.name.length), 120)}` : "Running tools.";
     case "cancelling": return "Stopping.";
     default: return run.failure ? `${run.state}: ${run.failure}` : run.state;
   }
