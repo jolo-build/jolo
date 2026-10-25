@@ -10,7 +10,7 @@
   "dependencies": {
     "@jolo/protocol": "workspace:*",
     "@jolo/launcher": "workspace:*",
-    "zod": "4.5.4",
+    "zod": "4.6.7",
     "@xterm/headless": "6.0.0",
     "@xterm/addon-serialize": "0.14.0"
   }
