@@ -14,7 +14,8 @@ const prefix = path.join(temporary, 'install prefix');
 const home = path.join(temporary, 'home');
 const project = path.join(temporary, 'project');
 const executable = path.join(prefix, 'bin/jolo');
-const environment = { ...process.env, PATH: '/usr/bin:/bin', JOLO_IDLE_MS: '1500', OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session' };
+// The smoke counts the model calls one run makes, so the chat's automatic title (one more call to the same provider) is off.
+const environment = { ...process.env, PATH: '/usr/bin:/bin', JOLO_IDLE_MS: '1500', OPENAI_API_KEY: SMOKE_MODEL_KEY, JOLO_CREDENTIALS: 'session', JOLO_AUTO_TITLE: '0' };
 let server;
 const modelServer = startSmokeModel();
 
