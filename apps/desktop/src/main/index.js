@@ -61,7 +61,7 @@ const RENDERER_METHODS = new Set([
   "session.activity", "session.stopBackground", "session.stopTask", "session.closeProcess", "session.clearFinished", "session.taskOutput", "session.mcpStatus", "delegation.list", "dialog.resolve", "dialog.dismiss",
   "run.start", "run.cancel", "run.sendNow", "run.snapshot", "artifact.read", "attachment.create", "attachment.write",
   "settings.get", "settings.update", "credential.set", "credential.status", "provider.presets", "provider.models",
-  'account.status', 'account.sync', 'account.login', 'account.cancel', 'account.logout',
+  'account.status', 'account.sync', 'account.remote', 'account.login', 'account.cancel', 'account.logout',
   'task.list', 'task.get',
   "permission.resolve", "run.resume", "workspace.diff", "patch.revert", "board.list", "board.tasks", "board.viewed",
   "workspace.create", "workspace.list", "workspace.remove", "workspace.readFile", "workspace.files", "workspace.searchInFiles", "workspace.changes",

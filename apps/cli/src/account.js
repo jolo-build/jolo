@@ -9,7 +9,8 @@ export async function openAccountBrowser(url, { platform = process.platform, env
 }
 
 /**
- * Run `jolo login`, `jolo logout` or `jolo whoami` against a connected engine.
+ * Run `jolo login`, `jolo logout`, `jolo whoami` or `jolo remote` against a connected engine.
+ * `action` is `remote`'s `on`, `off` or `status`.
  *
  * Everything after `client` exists so the tests can watch the command without a terminal, a
  * browser or a real clock. Nothing here reads what those collaborators return, so the types
@@ -17,6 +18,7 @@ export async function openAccountBrowser(url, { platform = process.platform, env
  *
  * @param {{
  *   command: string,
+ *   action?: string,
  *   flags: Record<string, any>,
  *   client: { call: (method: string, params?: any) => Promise<any> },
  *   write?: (line: string) => unknown,
@@ -26,10 +28,23 @@ export async function openAccountBrowser(url, { platform = process.platform, env
  * }} options
  * @returns {Promise<number>} exit code
  */
-export async function runAccountCommand({ command, flags, client, write = line => process.stdout.write(line + '\n'), openBrowser = openAccountBrowser, sleep = ms => Bun.sleep(ms), signals = process }) {
+export async function runAccountCommand({ command, action = undefined, flags, client, write = line => process.stdout.write(line + '\n'), openBrowser = openAccountBrowser, sleep = ms => Bun.sleep(ms), signals = process }) {
   if (command === 'whoami') {
     const status = await client.call('account.status', { refresh: true });
     write(flags.json ? JSON.stringify(status) : status.state === 'signed_in' ? `${status.account.name} <${status.account.email}>\n${status.origin}${status.note ? '\n' + status.note : ''}` : status.state === 'pending' ? `Sign-in pending. Code: ${status.pending.userCode}\n${status.pending.verificationUriComplete}` : 'Not signed in to Jolo.');
+    return EXIT.completed;
+  }
+  if (command === 'remote') {
+    if (action !== undefined && !['on', 'off', 'status'].includes(action)) { write('Usage: jolo remote [on|off|status] [--approvals|--no-approvals] [--json]'); return EXIT.usage; }
+    let status = await client.call('account.status', {});
+    if (status.state !== 'signed_in' || !status.device?.scopes?.includes('prompts:run')) {
+      write(flags.json ? JSON.stringify({ type: 'remote.unavailable', ...status }) : 'Web prompts are not set up on this device. Run jolo login --remote.');
+      return EXIT.failed;
+    }
+    const change = { ...(action === 'on' ? { enabled: true } : action === 'off' ? { enabled: false } : {}), ...(flags.approvals ? { approvals: true } : flags['no-approvals'] ? { approvals: false } : {}) };
+    if (Object.keys(change).length) status = await client.call('account.remote', change);
+    const remote = status.remote;
+    write(flags.json ? JSON.stringify(remote) : `Web prompts: ${remote.enabled ? remote.connected ? 'on · connected' : 'on · connecting' : 'off'}\nApprove from the web: ${remote.approvals ? 'on (allow once or deny)' : 'off'}${remote.error ? `\n${remote.error}` : ''}`);
     return EXIT.completed;
   }
   if (command === 'logout') {
@@ -38,11 +53,11 @@ export async function runAccountCommand({ command, flags, client, write = line =
     return EXIT.completed;
   }
   let status = await client.call('account.status', {});
-  if (status.state === 'signed_in' && (!flags.tasks || status.device.scopes?.includes('tasks:read'))) {
+  if (status.state === 'signed_in' && (!flags.tasks || status.device.scopes?.includes('tasks:read')) && (!flags.remote || status.device.scopes?.includes('prompts:run'))) {
     write(flags.json ? JSON.stringify({ type: 'account.signed_in', ...status }) : `Already signed in as ${status.account.email}. Run jolo logout to switch accounts.`);
     return EXIT.completed;
   }
-  status = await client.call('account.login', { ...(flags.tasks ? { tasks: true } : {}), ...(flags.server ? { origin: flags.server } : {}), ...(flags['device-name'] ? { deviceName: flags['device-name'] } : {}) });
+  status = await client.call('account.login', { ...(flags.tasks ? { tasks: true } : {}), ...(flags.remote ? { remote: true } : {}), ...(flags.server ? { origin: flags.server } : {}), ...(flags['device-name'] ? { deviceName: flags['device-name'] } : {}) });
   write(flags.json ? JSON.stringify({ type: 'account.pending', ...status }) : `Open ${status.pending.verificationUriComplete}\n\nDevice code: ${status.pending.userCode}\nApprove only if the browser shows this same code.\nWaiting for sign-in… (Ctrl+C to cancel)`);
   let interrupted = false;
   const interrupt = () => { interrupted = true; };

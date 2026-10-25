@@ -34,8 +34,28 @@ const UNSERVED_TASKS = new Set(["local_agent", "local_workflow"]);
  * }} RpcDependencies
  */
 
+/**
+ * Apply a person's answer to a permission request, and let runs paused on it go on. Interactive
+ * clients reach this through `permission.resolve`; web prompts through their own, narrower path.
+ */
+export function permissionResolver({ storage, permissions, runs }) {
+  return params => {
+    const permission = permissions.resolve(params);
+    const run = storage.getRun(permission.runId);
+    if (run?.state === "paused" && run.pauseReason === "permission" && permission.state === "allowed") runs.resume({ runId: run.id });
+    // A standing answer also answered other questions: runs paused on them go on as well.
+    for (const other of permission.settled ?? []) {
+      const paused = storage.getRun(other.runId);
+      if (paused?.id === run?.id || paused?.state !== "paused" || paused.pauseReason !== "permission") continue;
+      try { runs.resume({ runId: paused.id }); } catch { /* it stays paused, to be resumed by hand */ }
+    }
+    return { permissionId: permission.id, decision: permission.decision, revision: permission.revision, runId: permission.runId };
+  };
+}
+
 /** @param {RpcDependencies} deps */
 export function createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks, permissions, dialogs, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, hostedLinks = null, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer, toolEnv, log = null }) {
+  const resolvePermission = permissionResolver({ storage, permissions, runs });
   /**
    * The one write path behind rename, archive and delete: each names only the field it changes.
    * @param {{ sessionId: string, expectedRevision: number, title?: string, state?: string, deleted?: boolean }} request
@@ -160,6 +180,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     'task.get': params => tasks.get(params),
     'account.status': params => account.status(params),
     'account.sync': (params, conn) => { requireInteractive(conn, 'Chat sync must be changed by an interactive client.'); return account.chatSync.configure(params.enabled); },
+    'account.remote': (params, conn) => { requireInteractive(conn, 'Web prompts must be changed by an interactive client.'); return account.remotePrompts.configure(params); },
     'account.login': (params, conn) => { requireInteractive(conn, 'Account sign-in must be started by an interactive client.'); return account.login(params); },
     'account.cancel': (_params, conn) => { requireInteractive(conn); return account.cancel(); },
     'account.logout': (_params, conn) => { requireInteractive(conn); return account.logout(); },
@@ -444,16 +465,7 @@ export function createRpcHandlers({ storage, settingsService, providerFactory, a
     "browser.result": (params, conn) => browser.result(conn, params),
     "permission.resolve": (params, conn) => {
       requireInteractive(conn, "only an interactive client can submit a user's decision");
-      const permission = permissions.resolve(params);
-      const run = storage.getRun(permission.runId);
-      if (run?.state === "paused" && run.pauseReason === "permission" && permission.state === "allowed") runs.resume({ runId: run.id });
-      // A standing answer also answered other questions: runs paused on them go on as well.
-      for (const other of permission.settled ?? []) {
-        const paused = storage.getRun(other.runId);
-        if (paused?.id === run?.id || paused?.state !== "paused" || paused.pauseReason !== "permission") continue;
-        try { runs.resume({ runId: paused.id }); } catch { /* it stays paused, to be resumed by hand */ }
-      }
-      return { permissionId: permission.id, decision: permission.decision, revision: permission.revision, runId: permission.runId };
+      return resolvePermission(params);
     },
     // The person's answer to a question an agent asked them, or their refusal to answer; the first settlement wins.
     "dialog.resolve": ({ dialogId, response }, conn) => {

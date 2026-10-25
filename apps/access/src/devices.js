@@ -1,5 +1,6 @@
 import { accountScopes } from '../../../packages/protocol/src/tasks.js';
 import { deviceApprovalPage, deviceEntryPage, deviceResultPage, devicesPage } from './pages.js';
+import { relayFor } from './relay.js';
 import { DEVICE_SECONDS, deviceUserCode, formValue, hashToken, randomToken, readForm } from './security.js';
 
 const html = (body, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -48,7 +49,7 @@ export function deviceRoutes({ env, config, repository, session, now }) {
     }
     if (path === '/api/device/logout' && request.method === 'POST') {
       const found = await bearer(request);
-      if (found) await repository.revokeDevice(found.device_id, found.id);
+      if (found) { await repository.revokeDevice(found.device_id, found.id); await relayFor(env, found.id)?.disconnect(found.device_id); }
       return new Response(null, { status: 204 });
     }
     if (path === '/device' && request.method === 'GET') {
@@ -71,6 +72,7 @@ export function deviceRoutes({ env, config, repository, session, now }) {
         const id = formValue(form, 'device_id');
         if (!id || id.length > 100) return failure('invalid_request');
         await repository.revokeDevice(id, account.id);
+        await relayFor(env, account.id)?.disconnect(id);
         return redirect('/devices');
       }
       const code = deviceUserCode(formValue(form, 'user_code')), decision = formValue(form, 'decision');

@@ -1,6 +1,7 @@
 import { authenticate, authorization } from './auth.js';
 import { authenticateGoogle, googleAuthorization } from './google-auth.js';
 import { chatRoutes } from './chats.js';
+import { promptRoutes } from './prompts.js';
 import { deviceRoutes } from './devices.js';
 import { taskRoutes } from './tasks/routes.js';
 import { createRepository } from './storage.js';
@@ -29,7 +30,8 @@ export function createAccessApp(env, options = {}) {
     const token = readToken(request, 'session', config.secure);
     return token && repository ? repository.getSession(await hashToken(token)) : null;
   };
-  const handleChats = chatRoutes({ env, config, repository, session });
+  const prompts = promptRoutes({ env, config, repository, session, now });
+  const handleChats = chatRoutes({ env, config, repository, session, prompts });
   const handleDevices = deviceRoutes({ env, config, repository, session, now });
   const handleTasks = taskRoutes({ env, config, repository, session, now, mailFetch: options.mailFetch });
   const failedSignIn = error => {
@@ -43,7 +45,7 @@ export function createAccessApp(env, options = {}) {
     const url = new URL(request.url);
     if (url.origin !== config.origin) return html(errorPage(421), 421);
     const path = url.pathname;
-    if ((path === '/styles.css' || path === '/theme.js' || path === '/x-pixel.js' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
+    if ((path === '/styles.css' || path === '/theme.js' || path === '/x-pixel.js' || path === '/prompt-live.js' || path.startsWith('/assets/')) && ['GET', 'HEAD'].includes(request.method)) {
       return env.ASSETS?.fetch(request) ?? html(errorPage(404), 404);
     }
     if (request.method === 'GET' && path === '/health') {
@@ -70,6 +72,8 @@ export function createAccessApp(env, options = {}) {
         return response;
       }
     }
+    const promptResponse = await prompts.handle(request);
+    if (promptResponse) return promptResponse;
     const deviceResponse = await handleDevices(request);
     if (deviceResponse) return deviceResponse;
     const chatResponse = await handleChats(request);
@@ -151,12 +155,16 @@ export function createAccessApp(env, options = {}) {
     async fetch(request, context) {
       try {
         const response = await route(request, context);
+        // An accepted WebSocket must reach the client as-is; copying the response would drop it.
+        if (response.status === 101) return response;
         return protect(response, config.secure, marketingResponses.has(response));
       }
       catch { return protect(html(errorPage(503), 503), config.secure); }
     },
   };
 }
+
+export { AccountRelay } from './relay.js';
 
 const applications = new WeakMap();
 export default {
