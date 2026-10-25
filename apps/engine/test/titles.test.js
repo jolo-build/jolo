@@ -54,14 +54,14 @@ function runFixture(deps = {}) {
   const f = storageFixture();
   const service = createTitleService({ storage: f.storage, log: quiet, env: {}, ...deps });
   const asked = [];
-  const titles = service && { claims: (session) => service.claims(session), suggest: (session, prompt) => { const promise = service.suggest(session, prompt); asked.push(promise); return promise; } };
+  const titles = service && { claims: (session, execution) => service.claims(session, execution), suggest: (session, prompt, execution) => { const promise = service.suggest(session, prompt, execution); asked.push(promise); return promise; } };
   const runs = new RunService({ storage: f.storage, log: quiet, titles, lifetime: { workStarted() {}, workFinished() {} }, executor: { execute: async () => ({ outcome: 'completed' }) } });
   let sequence = 0;
   return {
     ...f, service, runs, asked,
     /** The suggestions started so far, once the deferred ones have begun: RunService asks after the run is queued. */
     async settle() { await new Promise((resolve) => setTimeout(resolve, 0)); return Promise.all(asked); },
-    start: (session, prompt) => runs.start({ sessionId: session.id, requestId: `request-${sequence++}`, prompt }).run,
+    start: (session, prompt, execution = undefined) => runs.start({ sessionId: session.id, requestId: `request-${sequence++}`, prompt, execution }).run,
     async close() { await runs.stopAll(); f.close(); },
   };
 }
@@ -219,6 +219,42 @@ describe('whether the service will name a task', () => {
       expect(claims(fakeFactory(), f.chat({ agentId: 'gone' }), { get: () => { throw new Error('no manifest for agent gone'); } })).toBe(false);
       expect(claims({ capture: () => { throw new Error('bad settings'); } })).toBe(false);
     } finally { f.close(); }
+  });
+
+  test('asks whoever answers the first run, not the conversation\'s default: a model or agent chosen for the run decides', () => {
+    const f = storageFixture();
+    try {
+      const chat = f.chat(), claudeChat = f.chat({ agentId: 'claude' });
+      const local = fakeFactory({ protocol: 'openai-chat', listing: 'ollama' }), cloud = fakeFactory();
+      // The default is a cloud provider; a run on a local preset is answered there, and so is never named by the cloud.
+      const providerFactory = { ...cloud, capture: (session, execution) => (execution?.preset === 'local' ? local : cloud).capture() };
+      const service = createTitleService({ storage: f.storage, log: quiet, env: {}, providerFactory, catalog: claude });
+      expect(service.claims(chat)).toBe(true);
+      expect(service.claims(chat, { preset: 'local', agentId: null, model: 'llama', effort: null })).toBe(false);
+      // An agent picked for the run answers it: Codex is not asked, Claude Code is, and a preset picked for a Claude chat is Jolo's.
+      expect(service.claims(chat, { agentId: 'codex', model: null, effort: null })).toBe(false);
+      expect(service.claims(chat, { agentId: 'claude', model: null, effort: null })).toBe(true);
+      expect(service.claims(claudeChat, { preset: 'local', agentId: null, model: 'llama', effort: null })).toBe(false);
+      expect(service.claims(claudeChat, { agentId: 'jolo', model: null, effort: null })).toBe(true);
+    } finally { f.close(); }
+  });
+});
+
+describe('a first run on another answerer than the default', () => {
+  test('is named after its prompt at once when that answerer is not asked, and the default provider is never sent the prompt', async () => {
+    const cloud = fakeFactory(), local = fakeFactory({ protocol: 'openai-chat', listing: 'ollama' });
+    const captured = [];
+    const providerFactory = { ...cloud, capture: (session, execution) => { captured.push(execution?.preset ?? null); return (execution?.preset === 'local' ? local : cloud).capture(); } };
+    const f = runFixture({ providerFactory });
+    try {
+      const session = f.chat();
+      f.start(session, 'Summarize the build log', { preset: 'local', agentId: null, model: 'llama', effort: null });
+      await f.settle();
+      expect(f.asked).toHaveLength(0);
+      expect(f.storage.getSession(session.id).title).toBe('Summarize the build log');
+      expect(captured.every((preset) => preset === 'local')).toBe(true);
+      expect(cloud.created).toEqual([]);
+    } finally { await f.close(); }
   });
 });
 
