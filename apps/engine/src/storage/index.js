@@ -834,6 +834,12 @@ export class Storage {
 
   close() {
     this.artifacts.closeAll();
+    // bun:sqlite defers closing while a prepared statement is alive, so the exclusive lock would outlast close() and
+    // refuse the next Storage on this database in this process (a restart in a test, a reopened profile). These
+    // statements live as long as this object, so they are finalized here; the ones the query cache let go of are
+    // finalized only when collected, hence the collection once the connection is closed. close() runs at shutdown.
+    for (const statement of Object.values(this.statements ?? {})) statement.finalize();
     this.db.close();
+    Bun.gc(true);
   }
 }
