@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseWorkflowCall, workflowTasksFor } from '../src/renderer/workflow-call.js';
+import { parseWorkflowCall, workflowCardShown, workflowLaunched, workflowTasksFor } from '../src/renderer/workflow-call.js';
 
 /** A Workflow call's tool message as the engine shows it: the head line, the input as JSON, then the reply. */
 const call = (/** @type {Record<string, any>} */ input, reply = '') => `Workflow ${JSON.stringify(input)}\n${reply}`;
@@ -29,6 +29,14 @@ test('a head the engine cut mid-script still gives the name, quoted either way',
   // Cut within an escape: still the name.
   const head = call({ script: `${script("'cut'")}"` });
   expect(parseWorkflowCall(head.slice(0, head.lastIndexOf('\\') + 1))?.name).toBe('cut');
+});
+
+test('a re-run of a script Claude Code saved for a run is named by the saved file, cut or not', () => {
+  const saved = '/Users/me/.claude/projects/-repo/646c7630/workflows/scripts/sdd-task-wf_084c7ded-94d.js';
+  expect(parseWorkflowCall(call({ scriptPath: saved, args: { n: 13, name: 'not this' } }, 'Workflow launched in background. Task ID: whb4jhsf7'))).toEqual({ name: 'sdd-task', reply: 'Workflow launched in background. Task ID: whb4jhsf7' });
+  expect(parseWorkflowCall(call({ scriptPath: 'C:\\Users\\me\\scripts\\review-round-2-wf_c6544024-ce7.js' }))?.name).toBe('review-round-2');
+  const head = `Workflow ${JSON.stringify({ scriptPath: saved, args: { title: 'x'.repeat(5000) } })}`;
+  expect(parseWorkflowCall(head.slice(0, 4096))?.name).toBe('sdd-task');
 });
 
 test('a script file, or a script without a name, is still a workflow call, with no name', () => {
@@ -129,7 +137,40 @@ test('no task for an unknown name, a null name, a task that is not a workflow, o
   const command = flow('demo', 1, { taskType: 'local_bash' });
   const workflow = flow('demo', 2);
   expect(workflowTasksFor([{ name: 'review', window: null }, { name: null, window: null }, { name: null, window: window(0) }, { name: 'demo', window: null }, { name: 'demo', window: null }], activity([workflow, command])))
-    .toEqual([null, null, null, workflow, null]); // the command named alike is not a workflow
+    .toEqual([null, null, null, workflow, null]); // the command named alike is not a workflow; the named card took the one workflow first
   expect(workflowTasksFor([{ name: 'demo', window: null }, { name: null, window: null }], null)).toEqual([null, null]);
   expect(workflowTasksFor([], activity([workflow]))).toEqual([]);
+});
+
+test('a card with no name takes the oldest workflow task its own run left, after the named cards took theirs', () => {
+  const named = flow('demo', 10);
+  const other = flow('quick', 20);
+  const outside = flow('late', 200);
+  expect(workflowTasksFor([{ name: null, window: window(5, 40) }, { name: 'demo', window: window(5, 40) }, { name: null, window: window(5, 40) }], activity([outside, other, named])))
+    .toEqual([other, named, null]);
+});
+
+test('a card stays while its workflow runs; with no task, while the call goes on or while its run goes on after the launch', () => {
+  const launched = 'Workflow launched in background. Task ID: whb4jhsf7';
+  expect(workflowCardShown(flow('demo', 1), { status: 'complete', reply: launched, runGoing: false })).toBe(true);
+  for (const status of ['completed', 'failed', 'stopped']) expect(workflowCardShown(flow('demo', 1, { status }), { status: 'complete', reply: launched, runGoing: true })).toBe(false);
+  expect(workflowCardShown(null, { status: 'streaming', reply: '', runGoing: true })).toBe(true);
+  // The launch answered and the task is a moment away: the card stays while the run goes on, and not after.
+  expect(workflowCardShown(null, { status: 'complete', reply: launched, runGoing: true })).toBe(true);
+  expect(workflowCardShown(null, { status: 'complete', reply: launched, runGoing: false })).toBe(false);
+  // An empty, interrupted call shows nothing; nor does a reply that is not the launch.
+  expect(workflowCardShown(null, { status: 'complete', reply: 'SyntaxError: Unexpected token (3:4)', runGoing: true })).toBe(false);
+  expect(workflowCardShown(null, { status: 'interrupted', reply: '', runGoing: false })).toBe(false);
+});
+
+test('a reply says the workflow started in either wording the tool uses', () => {
+  expect(workflowLaunched('Workflow launched in background. Task ID: whb4jhsf7')).toBe(true);
+  expect(workflowLaunched('Workflow started in the background (task wf-1).')).toBe(true);
+  expect(workflowLaunched('scriptPath must be a script path this tool returned')).toBe(false);
+});
+
+test('only Claude Code\'s own run id shape marks a saved script: a script of the user\'s own named alike has no name from its path', () => {
+  expect(parseWorkflowCall(call({ scriptPath: '/repo/tools/sync-wf_2026-10.js' }))?.name).toBeNull();
+  expect(parseWorkflowCall(call({ scriptPath: '/repo/tools/sync-wf_abcdefgh-xyz.js' }))?.name).toBeNull();
+  expect(parseWorkflowCall(call({ scriptPath: '/x/workflows/scripts/nightly-sync-wf_0a1b2c3d-4e5.js' }))?.name).toBe('nightly-sync');
 });
