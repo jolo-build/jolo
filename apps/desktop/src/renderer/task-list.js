@@ -7,7 +7,8 @@
  * task changed (`ok` once the tool said it changed it), the whole list written at once (TodoWrite, older builds), or a
  * read that changes nothing. `snapshot` is the list as Claude kept it after the call, which the engine adds to the
  * reply (see the engine's claude-tasks.js), with when the engine read it (`order`: its time and read number, null on a
- * line from before the engine stamped them); `streaming` is a call still going.
+ * line from before the engine stamped them); `streaming` is a call still going. A snapshot can also come from the
+ * conversation's activity, which carries the list the engine last read.
  * @typedef {{ tasks: ListedTask[], order: [number, number] | null }} TaskSnapshot
  * @typedef {{ snapshot: TaskSnapshot | null, streaming: boolean }} TaskCallBase
  * @typedef {TaskCallBase & ({ kind: 'create', id: string | null, subject: string, activeForm: string | null }
@@ -42,6 +43,17 @@ function snapshotOf(reply) {
   /** @type {any} */
   let value;
   try { value = JSON.parse(line.slice(SNAPSHOT_LINE.length)); } catch { return null; }
+  return snapshotFrom(value);
+}
+
+/**
+ * A list as the engine gives it, each task checked, with when the engine read it; null when it does not read. It is
+ * `{ at, seq, tasks }` (a reply's snapshot line, or the list the conversation's activity carries), or a bare array from
+ * before the engine stamped its reads.
+ * @param {any} value
+ * @returns {TaskSnapshot | null}
+ */
+export function snapshotFrom(value) {
   const stamped = !Array.isArray(value) && Number.isFinite(value?.at) && Number.isFinite(value?.seq);
   const tasks = Array.isArray(value) ? value : value?.tasks;
   if (!Array.isArray(tasks)) return null;
@@ -108,16 +120,23 @@ export function parseTaskCall(text, streaming = false) {
  * under a stand-in id, and a made task whose id is already listed starts a new list, since a new Claude session numbers
  * its tasks from #1 again; an update changes its task once the tool said so, or while its call is still going, and a
  * deleted task leaves. A failed call changes nothing.
+ *
+ * `listed` is the list as the engine last read it, which the conversation's activity carries whatever calls are loaded.
+ * It is the base when it was read after every list in the calls; on a tie the calls' own copy of the same read is kept
+ * (it stands at position -1). The calls apply on top of it as on their own newest list, since every loaded call is later.
  * @param {TaskCall[]} calls in transcript order
+ * @param {TaskSnapshot | null} [listed]
  * @returns {ListedTask[]}
  */
-export function taskListFrom(calls) {
+export function taskListFrom(calls, listed = null) {
   let base = -1;
   calls.forEach((call, index) => {
     if (call.snapshot && (base < 0 || newer(call.snapshot, index, /** @type {TaskSnapshot} */ (calls[base].snapshot), base))) base = index;
   });
+  const own = base < 0 ? null : calls[base].snapshot;
+  const start = listed && (!own || newer(listed, -1, own, base)) ? listed : own;
   /** @type {ListedTask[]} */
-  let tasks = base < 0 ? [] : /** @type {TaskSnapshot} */ (calls[base].snapshot).tasks.map(task => ({ ...task }));
+  let tasks = start ? start.tasks.map(task => ({ ...task })) : [];
   calls.forEach((call, index) => {
     if (index === base || !(call.streaming || (index > base && !call.snapshot))) return;
     if (call.kind === 'write') tasks = call.tasks.map((task, at) => ({ id: `todo:${index}:${at}`, ...task }));

@@ -27,7 +27,9 @@
 // subagent's transcript written as it works (JSON lines, its last assistant message the report) and named in its notice through the
 // link Claude Code makes to it (tasks/agent-1.output, in a directory of its own under TMPDIR), and
 // stop_task on the subagent kills it (task_updated status "killed"), and
-// anything else just answers in prose. A second control response to one request, or one to a request it took back,
+// anything else just answers in prose. "task-create <subject>" makes a task in Claude's own task list with TaskCreate,
+// writing it to its file under CLAUDE_CONFIG_DIR first ("task-create-fail <subject>" is a call the tool refused). A
+// second control response to one request, or one to a request it took back,
 // makes the fixture exit 70. "away-summary <text>" sends a system away_summary with <text> as its summary, then a reply. It answers
 // get_task_output for a task it started (its description, two lines, and the exit line once it ended; an unknown task is an
 // error, and so is an agent's, in Claude Code's words, since it serves commands and monitors only) and mcp_status with three servers (connected, failed, needs-auth), which every init lists too. The other scenarios
@@ -1174,6 +1176,24 @@ async function turn(prompt, images = [], uuid = null) {
     say("Working on it.");
     for (let waited = 0; waited < 10_000 && !state.interrupted; waited += 50) await sleep(50); // an interrupt ends it at once
     if (!state.interrupted) say("not stopped");
+  } else if ((match = prompt.match(/^task-create(-fail)? (.+)$/s))) {
+    // Claude's own task list: TaskCreate needs no permission. Like Claude Code, the task is written to its file under
+    // CLAUDE_CONFIG_DIR/tasks/<session id>/ before the call is answered; without that directory set, nothing is written,
+    // so the fixture never touches a real ~/.claude. "task-create-fail <subject>" is a call the tool refused.
+    const [, failed, subject] = match;
+    const taskFiles = require("node:fs"), taskPaths = require("node:path");
+    const toolUseId = `toolu_${++counter}`;
+    out({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: toolUseId, name: "TaskCreate", input: { subject, description: subject, activeForm: `Doing ${subject}` } }] }, session_id: sessionId });
+    const dir = process.env.CLAUDE_CONFIG_DIR ? taskPaths.join(process.env.CLAUDE_CONFIG_DIR, "tasks", sessionId) : null;
+    let reply = "InputValidationError: the task list is not available";
+    if (!failed && dir) {
+      taskFiles.mkdirSync(dir, { recursive: true });
+      const id = String(taskFiles.readdirSync(dir).filter((name) => name.endsWith(".json")).length + 1);
+      taskFiles.writeFileSync(taskPaths.join(dir, `${id}.json`), JSON.stringify({ id, subject, description: subject, activeForm: `Doing ${subject}`, status: "pending", blocks: [], blockedBy: [] }));
+      reply = `Task #${id} created successfully: ${subject}`;
+    }
+    out({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: reply, ...(failed || !dir ? { is_error: true } : {}) }] }, session_id: sessionId });
+    say(failed ? "The task was not made." : "Task made.");
   } else if ((match = prompt.match(/^slow (\d+) (.+)$/s))) {
     await sleep(Number(match[1]));
     if (!state.interrupted) say(match[2]);

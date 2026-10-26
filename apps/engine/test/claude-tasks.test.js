@@ -1,9 +1,11 @@
-// Claude Code's own task list read back from disk, to ride on a task call's reply (see agents/claude-tasks.js).
+// Claude Code's own task list read back from disk, to ride on a task call's reply and on the conversation's activity
+// (see agents/claude-tasks.js).
 import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import nodePath from 'node:path';
-import { readTaskList, TASK_LIST_LINE, taskListDirectory, withTaskList } from '../src/agents/claude-tasks.js';
+import { ClaudeTaskListSchema, CLAUDE_TASKS_MAX, CLAUDE_TASK_TEXT_MAX } from '@jolo/protocol';
+import { readTaskList, TASK_LIST_LINE, taskListDirectory, taskSnapshot, withTaskList } from '../src/agents/claude-tasks.js';
 
 const scratch = () => mkdtempSync(nodePath.join(tmpdir(), 'jolo-tasks-'));
 /** Write task files into a directory. @param {string} dir @param {Record<string, any>} files */
@@ -59,32 +61,62 @@ test('a reply carries the list stamped with its read time and number, each read 
   const dir = scratch();
   try {
     put(dir, { '1.json': { id: '1', subject: 'Read', status: 'pending' } });
-    const first = carried(withTaskList('Task #1 created successfully: Read', dir, made('Read'), () => 1000));
+    const read = taskSnapshot('Task #1 created successfully: Read', dir, made('Read'), () => 1000);
+    const first = carried(withTaskList('Task #1 created successfully: Read', read));
     expect(first).toMatchObject({ at: 1000, tasks: [{ id: '1', subject: 'Read', activeForm: null, status: 'pending' }] });
+    // The reply's line is that same read, so the activity that carries it ties with the line exactly.
+    expect(first).toEqual(/** @type {any} */ (read));
     put(dir, { '1.json': { id: '1', subject: 'Read', status: 'completed' } });
-    const second = carried(withTaskList('Updated task #1 status', dir, moved('1'), () => 1000));
+    const second = /** @type {any} */ (taskSnapshot('Updated task #1 status', dir, moved('1'), () => 1000));
     expect(second.seq).toBeGreaterThan(first.seq);
     expect(second.tasks[0].status).toBe('completed');
+    expect(carried(withTaskList('Updated task #1 status', second))).toEqual(second);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('with no list read, the reply stays as it is', () => {
+  expect(withTaskList('Task #1 created successfully: Read', null)).toBe('Task #1 created successfully: Read');
 });
 
 test('a list that disagrees with the call is not sent: it is not this session\'s', () => {
   const dir = scratch();
   try {
     put(dir, { '1.json': { id: '1', subject: 'Unrelated CLI task', status: 'pending' } });
-    expect(withTaskList('Task #1 created successfully: Read', dir, made('Read'))).toBe('Task #1 created successfully: Read');
-    expect(withTaskList('Task #2 created successfully: Read', dir, made('Read'))).toBe('Task #2 created successfully: Read');
-    expect(withTaskList('Updated task #7 status', dir, moved('7'))).toBe('Updated task #7 status');
+    expect(taskSnapshot('Task #1 created successfully: Read', dir, made('Read'))).toBeNull();
+    expect(taskSnapshot('Task #2 created successfully: Read', dir, made('Read'))).toBeNull();
+    expect(taskSnapshot('Updated task #7 status', dir, moved('7'))).toBeNull();
     // A deleted task is rightly gone from the list.
-    expect(withTaskList('Updated task #7 deleted', dir, moved('7', 'deleted'))).toContain(TASK_LIST_LINE);
+    expect(taskSnapshot('Updated task #7 deleted', dir, moved('7', 'deleted'))).toMatchObject({ tasks: [{ id: '1' }] });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a list that cannot be read leaves the reply as it is', () => {
+test('a list that cannot be read gives no list', () => {
   const dir = scratch();
   try {
-    expect(withTaskList('Updated task #1 status', nodePath.join(dir, 'missing'), moved('1'))).toBe('Updated task #1 status');
-    expect(withTaskList('Updated task #1 status', null, moved('1'))).toBe('Updated task #1 status');
+    expect(taskSnapshot('Updated task #1 status', nodePath.join(dir, 'missing'), moved('1'))).toBeNull();
+    expect(taskSnapshot('Updated task #1 status', null, moved('1'))).toBeNull();
     expect(readTaskList(nodePath.join(dir, 'missing'))).toBeNull();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('what the list reads stays inside the bounds the conversation\'s activity takes, its ids cut like its text', () => {
+  const dir = scratch();
+  try {
+    for (let id = 1; id <= 150; id++) put(dir, { [`${id}.json`]: { id: String(id), subject: `Task ${id}`, status: 'pending' } });
+    put(dir, {
+      '148.json': { id: 'i'.repeat(1000), subject: 'S'.repeat(1000), status: 'in_progress' },
+      '149.json': { id: '', subject: 'No id of its own', status: 'pending' },
+      '150.json': { id: '150', subject: '   ', status: 'pending' },
+    });
+    const tasks = /** @type {any[]} */ (readTaskList(dir));
+    expect(tasks.length).toBeLessThanOrEqual(CLAUDE_TASKS_MAX);
+    const long = tasks.find((task) => task.status === 'in_progress');
+    expect(long.id).toBe('i'.repeat(CLAUDE_TASK_TEXT_MAX));
+    expect(long.subject).toHaveLength(CLAUDE_TASK_TEXT_MAX);
+    expect(tasks.find((task) => task.subject === 'No id of its own').id).toBe('149'); // the file's number
+    expect(tasks.some((task) => task.id === '150')).toBe(false); // a blank subject is no task
+    const read = taskSnapshot('Task #149 created successfully: No id of its own', dir, made('No id of its own'));
+    expect(read).not.toBeNull();
+    expect(ClaudeTaskListSchema.safeParse({ runId: 'run-1', ...read }).success).toBe(true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

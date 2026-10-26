@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, TASK_PATH_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_TITLE_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX, ACTIVITY_PAYLOAD_MAX_BYTES, DialogSchema, MessageSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity } from "../src/index.js";
+import { encodeFrame, createFrameDecoder, FRAME_MAX_BYTES, parseEnvelope, parseParams, parseEvent, compareSeq, toRpcError, ProtocolError, EventPayloadSchemas, GATED_EVENT_TYPES, ActivitySchema, TaskRecordSchema, TASK_HISTORY_LIMIT, TASK_TEXT_MAX, TASK_ID_MAX, TASK_PATH_MAX, WORKFLOW_PHASES_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_TITLE_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PREVIEW_MAX, ACTIVITY_PAYLOAD_MAX_BYTES, DialogSchema, MessageSchema, DIALOG_INPUT_EVENT_MAX, activityPayload, NotificationSchema, parseActivity, parseResult, ClaudeTaskListSchema, CLAUDE_TASKS_MAX, CLAUDE_TASK_TEXT_MAX } from "../src/index.js";
 
 const fixtures = JSON.parse(readFileSync(new URL("../fixtures/wire.json", import.meta.url), "utf8"));
 
@@ -237,6 +237,61 @@ describe("schemas", () => {
       const event = { engineBootId: 'boot_' + 'b'.repeat(59), eventSeq: '9'.repeat(19), sessionId: 's'.repeat(64), runId: null, type: 'session.activity', payload, at };
       expect(() => encodeFrame({ jsonrpc: '2.0', method: 'event', params: event })).not.toThrow();
       expect(() => encodeFrame({ jsonrpc: '2.0', method: 'activity', params: { sessionId: 's'.repeat(64), activity: payload } })).not.toThrow();
+    });
+
+    test("Claude's task list counts toward the frame and is kept whole: finished tasks go first", () => {
+      // About 24 KiB of task list, the most the engine sends, beside a history far past a frame.
+      const list = { runId: 'r'.repeat(128), at: Date.now(), seq: 7, tasks: /** @type {any[]} */ ([]) };
+      while (bytes(list) < 24 * 1024 - 500) list.tasks.push({ id: String(list.tasks.length + 1), subject: 's'.repeat(CLAUDE_TASK_TEXT_MAX), activeForm: 'a'.repeat(150), status: 'completed' });
+      expect(list.tasks.length).toBeLessThanOrEqual(CLAUDE_TASKS_MAX);
+      expect(ClaudeTaskListSchema.safeParse(list).success).toBe(true);
+      const tasks = Array.from({ length: TASK_HISTORY_LIMIT }, (_, i) => taskOf(i % 40 === 7 ? 'running' : 'completed', null, 'あ'));
+      const without = activityPayload(activityOf(tasks));
+      const payload = activityPayload({ ...activityOf(tasks), taskList: list });
+      expect(payload.taskList).toEqual(list);
+      expect(payload.tasks.filter(t => t.status === 'running')).toHaveLength(5);
+      const kept = payload.tasks.filter(t => t.status !== 'running').map(t => t.taskId);
+      const finished = tasks.filter(t => t.status !== 'running').map(t => t.taskId);
+      expect(kept).toEqual(finished.slice(-kept.length)); // the newest finished ones, the oldest left out
+      expect(kept.length).toBeLessThan(without.tasks.filter(t => t.status !== 'running').length); // the list takes their room
+      expect(payload.truncated).toBe(true);
+      expect(bytes(payload)).toBeLessThanOrEqual(ACTIVITY_PAYLOAD_MAX_BYTES);
+      expect(ActivitySchema.safeParse(payload).success).toBe(true);
+    });
+  });
+  describe("Claude's task list on an activity", () => {
+    const updatedAt = new Date().toISOString();
+    /** @type {any} */
+    const list = { runId: 'run-1', at: 1_700_000_000_000, seq: 3, tasks: [{ id: '1', subject: 'Read config', activeForm: 'Reading config', status: 'in_progress' }, { id: '2', subject: 'Write tests', activeForm: null, status: 'pending' }] };
+    const activity = { state: /** @type {const} */ ('working'), tasks: [], truncated: false, updatedAt };
+
+    test("an activity payload carries the list when there is one, and no key when there is none", () => {
+      expect(activityPayload({ state: 'working', tasks: [], updatedAt, taskList: list })).toEqual({ ...activity, taskList: list });
+      expect(activityPayload({ state: 'working', tasks: [], updatedAt })).not.toHaveProperty('taskList');
+      expect(activityPayload({ state: 'working', tasks: [], updatedAt, taskList: null })).not.toHaveProperty('taskList');
+    });
+
+    test("an activity, a session.activity answer and a session.activity event keep a list that reads; one from an older engine has none", () => {
+      expect(parseActivity({ sessionId: 's1', activity: { ...activity, taskList: list } })).toEqual({ ok: true, value: { sessionId: 's1', activity: { ...activity, taskList: list } } });
+      expect(parseResult('session.activity', { activity: { ...activity, taskList: list } })).toEqual({ ok: true, value: { activity: { ...activity, taskList: list } } });
+      expect(parseResult('session.activity', { activity: { ...activity, taskList: null } })).toEqual({ ok: true, value: { activity: { ...activity, taskList: null } } });
+      expect(parseActivity({ sessionId: 's1', activity })).toEqual({ ok: true, value: { sessionId: 's1', activity } });
+      const event = { engineBootId: 'boot', eventSeq: '1', sessionId: 's1', runId: null, type: 'session.activity', payload: { ...activity, taskList: list }, at: updatedAt };
+      expect(parseEvent(event)).toMatchObject({ ok: true, value: { payload: { taskList: list } } });
+    });
+
+    test("a list past its bounds, or with a task that does not read, fails the activity and its event", () => {
+      const task = { id: '1', subject: 'Read config', activeForm: null, status: 'pending' };
+      const { runId: _runId, ...unowned } = list;
+      for (const taskList of [
+        { ...list, tasks: Array.from({ length: CLAUDE_TASKS_MAX + 1 }, (_, i) => ({ ...task, id: String(i + 1) })) },
+        { ...list, tasks: [{ ...task, status: 'deleted' }] }, unowned, { ...list, runId: '' },
+        { ...list, tasks: [{ ...task, id: 'i'.repeat(CLAUDE_TASK_TEXT_MAX + 1) }] }, { ...list, tasks: [{ ...task, subject: '' }] }, { ...list, seq: -1 }, { ...list, at: 1.5 },
+      ]) {
+        expect(parseActivity({ sessionId: 's1', activity: { ...activity, taskList } }).ok).toBe(false);
+        expect(parseEvent({ engineBootId: 'boot', eventSeq: '1', sessionId: 's1', runId: null, type: 'session.activity', payload: { ...activity, taskList }, at: updatedAt }).ok).toBe(false);
+      }
+      expect(ClaudeTaskListSchema.safeParse({ ...list, tasks: Array.from({ length: CLAUDE_TASKS_MAX }, (_, i) => ({ ...task, id: String(i + 1), subject: 's'.repeat(CLAUDE_TASK_TEXT_MAX) })) }).success).toBe(true);
     });
   });
   test("a dialog's tool and the input its event carries are bounded; the record keeps any input", () => {

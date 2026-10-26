@@ -4,6 +4,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import nodePath from "node:path";
+import { CLAUDE_TASKS_MAX, CLAUDE_TASK_TEXT_MAX } from "@jolo/protocol";
 
 /** The tool calls that change the list; reading calls (TaskGet, TaskList) change nothing to show. */
 export const TASK_LIST_TOOLS = new Set(["TaskCreate", "TaskUpdate"]);
@@ -12,8 +13,9 @@ export const TASK_LIST_LINE = "Task list: ";
 /** Room for a task call's reply with its list; the list itself is held to TASK_LIST_BYTES, well inside. */
 export const TASK_REPLY_MAX = 32 * 1024;
 const TASK_LIST_BYTES = 24 * 1024;
-const MAX_TASKS = 100;
-const MAX_TEXT = 200;
+// The conversation's activity carries the list too, and its schema takes no more than these.
+const MAX_TASKS = CLAUDE_TASKS_MAX;
+const MAX_TEXT = CLAUDE_TASK_TEXT_MAX;
 const STATUSES = new Set(["pending", "in_progress", "completed"]);
 /** Each list read gets the next number, so the desktop can tell the newest read when replies arrive out of order. */
 let reads = 0;
@@ -54,8 +56,10 @@ export function readTaskList(directory) {
     let task;
     try { task = JSON.parse(readFileSync(nodePath.join(directory, numbered[at]), "utf8")); } catch { continue; }
     const subject = cut(task?.subject);
+    // The id is cut like the other text; one that is blank or missing is the file's number.
+    const id = cut(task?.id == null ? null : String(task.id)) ?? numbered[at].replace(/\.json$/, "");
     if (!subject || !STATUSES.has(task?.status)) continue;
-    newest.push({ id: String(task.id ?? numbered[at].replace(/\.json$/, "")), subject, activeForm: cut(task.activeForm), status: task.status });
+    newest.push({ id, subject, activeForm: cut(task.activeForm), status: task.status });
   }
   const tasks = newest.reverse();
   while (tasks.length > 1 && Buffer.byteLength(JSON.stringify(tasks)) > TASK_LIST_BYTES) tasks.shift();
@@ -82,15 +86,23 @@ function agrees(tasks, reply, { name, input }) {
 }
 
 /**
- * A task call's reply with the list after it on a line of its own, stamped with when it was read and its read number, or
- * the reply as it is when the list cannot be read or does not agree with the call.
- * @param {string} reply
+ * The list as Claude keeps it after a task call, stamped with when it was read and its read number, or null when the list
+ * cannot be read or does not agree with the call.
+ * @param {string} reply the tool's reply
  * @param {string | null} directory
  * @param {{ name: string, input: any }} call the task call the reply answers
  * @param {() => number} [now]
+ * @returns {{ at: number, seq: number, tasks: { id: string, subject: string, activeForm: string | null, status: string }[] } | null}
  */
-export function withTaskList(reply, directory, call, now = Date.now) {
+export function taskSnapshot(reply, directory, call, now = Date.now) {
   const tasks = readTaskList(directory);
-  if (!tasks || !agrees(tasks, reply, call)) return reply;
-  return `${reply}\n${TASK_LIST_LINE}${JSON.stringify({ at: now(), seq: ++reads, tasks })}`;
+  if (!tasks || !agrees(tasks, reply, call)) return null;
+  return { at: now(), seq: ++reads, tasks };
 }
+
+/**
+ * A task call's reply with the list after it on a line of its own (see taskSnapshot), or the reply as it is with no list.
+ * @param {string} reply
+ * @param {{ at: number, seq: number, tasks: any[] } | null} snapshot
+ */
+export const withTaskList = (reply, snapshot) => (snapshot ? `${reply}\n${TASK_LIST_LINE}${JSON.stringify(snapshot)}` : reply);

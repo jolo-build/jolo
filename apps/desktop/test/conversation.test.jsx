@@ -483,7 +483,10 @@ describe("Claude's task list", () => {
   const made = (/** @type {string} */ id, /** @type {string} */ subject, runId = 'run') => tool(`c${id}`, runId, `TaskCreate ${JSON.stringify({ subject, activeForm: `Doing ${subject}` })}\nTask #${id} created successfully: ${subject}`);
   const moved = (/** @type {string} */ id, /** @type {string} */ status, runId = 'run') => tool(`u${id}${status}`, runId, `TaskUpdate ${JSON.stringify({ taskId: id, status })}\nUpdated task #${id} status`);
   const user = (runId = 'run') => ({ id: `q-${runId}`, role: 'user', kind: 'text', runId, text: 'go', status: 'complete', renderedBytes: 2, committedBytes: 2 });
-  const view = (/** @type {any[]} */ messages, /** @type {any[]} */ runs) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map(runs.map(run => [run.id, run])) }, hasProject: true }))} />);
+  /** `activity` is the conversation's activity, which carries the list as the engine last read it. */
+  const view = (/** @type {any[]} */ messages, /** @type {any[]} */ runs, /** @type {any} */ activity = null) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map(runs.map(run => [run.id, run])) }, hasProject: true, activity }))} />);
+  /** An activity carrying Claude's task list as the engine read it after a call of run `runId`. */
+  const carrying = (/** @type {string} */ runId, /** @type {any[]} */ tasks, at = 5000, seq = 3) => ({ state: 'working', tasks: [], truncated: false, updatedAt: '2026-10-26T10:00:00.000Z', taskList: { runId, at, seq, tasks } });
 
   test('its calls make no line of their own; each is kept with its run', () => {
     const { groups, taskCalls } = groupMessages([user(), made('1', 'Read'), tool('ls', 'run', 'Bash {"command":"ls"}\n'), moved('1', 'in_progress')], new Map());
@@ -532,6 +535,36 @@ describe("Claude's task list", () => {
   test('gone once a later run leaves the list alone', () => {
     const markup = view([user('a'), made('1', 'Read', 'a'), user('b')], [{ id: 'a', state: 'completed' }, { id: 'b', state: 'completed' }]);
     expect(markup).not.toContain('claude-tasks');
+  });
+
+  test('pinned from the list the activity carries when none of its calls is loaded', () => {
+    const list = [{ id: '1', subject: 'Read', status: 'completed' }, { id: '2', subject: 'Write', activeForm: 'Writing', status: 'in_progress' }];
+    const markup = view([user()], [{ id: 'run', state: 'model' }], carrying('run', list));
+    expect(markup).toContain('aria-label="Tasks, 1 of 2 done"');
+    expect(markup).toContain('Writing');
+    expect(markup.indexOf('claude-tasks')).toBeLessThan(markup.indexOf('run-note'));
+  });
+
+  test('not pinned when the list the activity carries is from a run before the latest', () => {
+    const markup = view([user('a'), user('b')], [{ id: 'a', state: 'completed' }, { id: 'b', state: 'model' }], carrying('a', [{ id: '1', subject: 'Read', status: 'pending' }]));
+    expect(markup).not.toContain('claude-tasks');
+  });
+
+  test("a loaded list line the engine read later than the activity's list is the one shown", () => {
+    const line = [{ id: '1', subject: 'From the transcript', status: 'in_progress' }];
+    const only = tool('u1', 'run', `TaskUpdate ${JSON.stringify({ taskId: '1', status: 'in_progress' })}\nUpdated task #1 status\nTask list: ${JSON.stringify({ at: 6000, seq: 4, tasks: line })}`);
+    const markup = view([user(), only], [{ id: 'run', state: 'model' }], carrying('run', [{ id: '1', subject: 'From the activity', status: 'pending' }], 5000, 3));
+    expect(markup).toContain('From the transcript');
+    expect(markup).not.toContain('From the activity');
+  });
+
+  test("pinned when only an older run's calls are loaded but the activity's list is from the latest run", () => {
+    const list = [{ id: '1', subject: 'Read', status: 'completed' }, { id: '2', subject: 'Ship', activeForm: 'Shipping', status: 'in_progress' }];
+    // The older run's call carries the list as the engine read it then, before the latest run changed it.
+    const older = tool('c1', 'a', `TaskCreate ${JSON.stringify({ subject: 'Read' })}\nTask #1 created successfully: Read\nTask list: ${JSON.stringify({ at: 1000, seq: 1, tasks: [{ id: '1', subject: 'Read', status: 'pending' }] })}`);
+    const markup = view([user('a'), older, user('b')], [{ id: 'a', state: 'completed' }, { id: 'b', state: 'tools' }], carrying('b', list));
+    expect(markup).toContain('aria-label="Tasks, 1 of 2 done"');
+    expect(markup).toContain('Shipping');
   });
 });
 

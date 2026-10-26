@@ -10,7 +10,7 @@ import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
 import { delegationChild, delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
 import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
 import { parseWorkflowCall, workflowCardShown, workflowLaunched, workflowTasksFor } from "../workflow-call.js";
-import { parseTaskCall, taskListFrom, taskProgress, taskStatusWords } from "../task-list.js";
+import { parseTaskCall, snapshotFrom, taskListFrom, taskProgress, taskStatusWords } from "../task-list.js";
 import { TERMINAL } from "@jolo/client/run-state";
 import { relativeTime } from "@jolo/client/board";
 import { ChangeSummary } from './change-summary.jsx';
@@ -524,9 +524,14 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     if (group.type === "activity" && before?.type === "activity" && before.runId === group.runId) groups[groups.length - 1] = { ...before, messages: [...before.messages, ...group.messages] };
     else groups.push(group);
   }
-  // Claude's task list stays under the conversation while the latest run is the one that last changed it.
-  const taskList = useMemo(() => taskListFrom(grouped.taskCalls.map(entry => entry.call)), [grouped]);
-  if (lastRun && taskList.length > 0 && grouped.taskCalls.at(-1)?.runId === lastRun.id) groups.push({ type: 'tasks', id: `tasks:${lastRun.id}` });
+  // Claude's task list stays under the conversation while the latest run is the one that last changed it, by the loaded
+  // calls or by the list the activity carries. That list is keyed by its run and stamp, so an activity tick that leaves
+  // it alone keeps the same list, and the memoised TaskListBlock does not render again.
+  const carried = activity?.taskList ?? null;
+  const engineList = useMemo(() => (carried ? { runId: carried.runId, snapshot: snapshotFrom(carried) } : null), [carried?.runId, carried?.at, carried?.seq]);
+  const taskList = useMemo(() => taskListFrom(grouped.taskCalls.map(entry => entry.call), engineList?.snapshot ?? null), [grouped, engineList]);
+  const listTouched = grouped.taskCalls.at(-1)?.runId === lastRun?.id || engineList?.runId === lastRun?.id;
+  if (lastRun && taskList.length > 0 && listTouched) groups.push({ type: 'tasks', id: `tasks:${lastRun.id}` });
   if (lastRun && !["completed", "paused", "cancelled"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
   for (const card of changeCards) {
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);

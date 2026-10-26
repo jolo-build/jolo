@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test';
-import { parseTaskCall, taskListFrom, taskProgress, taskStatusWords } from '../src/renderer/task-list.js';
+import { parseTaskCall, snapshotFrom, taskListFrom, taskProgress, taskStatusWords } from '../src/renderer/task-list.js';
 
 /** A task tool call's line as the engine shows it: the tool, its input as JSON, then the reply. */
 const line = (/** @type {string} */ tool, /** @type {any} */ input, reply = '') => `${tool} ${JSON.stringify(input)}\n${reply}`;
 /** The list line the engine adds to a task call's reply, stamped with its read time and number. @param {any[]} tasks */
 const listed = (tasks, at = 1000, seq = 1) => `\nTask list: ${JSON.stringify({ at, seq, tasks })}`;
+/** The same list as the conversation's activity carries it, read the way a reply's line is. @param {any[]} tasks */
+const carried = (tasks, at = 1000, seq = 1) => /** @type {any} */ (snapshotFrom({ at, seq, tasks }));
 const create = (/** @type {string} */ subject, /** @type {string} */ id, after = '') => /** @type {any} */ (parseTaskCall(line('TaskCreate', { subject, activeForm: `${subject}ing` }, `Task #${id} created successfully: ${subject}${after}`)));
 const update = (/** @type {string} */ taskId, /** @type {any} */ fields, after = '') => /** @type {any} */ (parseTaskCall(line('TaskUpdate', { taskId, ...fields }, `Updated task #${taskId} status${after}`)));
 const shape = (/** @type {any[]} */ tasks) => tasks.map(task => [task.id, task.subject, task.status]);
@@ -105,4 +107,38 @@ test("an older build's TodoWrite replaces the whole list", () => {
 
 test('each status reads in words for a screen reader', () => {
   expect(['completed', 'in_progress', 'pending'].map(status => taskStatusWords(/** @type {any} */ (status)))).toEqual(['done', 'in progress', 'not started']);
+});
+
+test("the list the activity carries is the base when the engine read it after every line, and calls after it apply on top", () => {
+  const loaded = update('1', { status: 'in_progress' }, listed([{ id: '1', subject: 'Read', status: 'in_progress' }], 1000, 1));
+  const engine = carried([{ id: '1', subject: 'Read', status: 'completed' }, { id: '2', subject: 'Write', status: 'pending' }], 2000, 5);
+  expect(shape(taskListFrom([loaded], engine))).toEqual([['1', 'Read', 'completed'], ['2', 'Write', 'pending']]);
+  // A call with no list of its own after the loaded line, and one still going, apply on top of the engine's list.
+  const going = /** @type {any} */ (parseTaskCall(line('TaskUpdate', { taskId: '2', status: 'in_progress' }), true));
+  expect(shape(taskListFrom([loaded, create('Test', '3'), going], engine))).toEqual([['1', 'Read', 'completed'], ['2', 'Write', 'in_progress'], ['3', 'Test', 'pending']]);
+});
+
+test("a tie keeps the transcript's own copy of the read, and an older list the activity carries changes nothing", () => {
+  const loaded = update('1', { status: 'completed' }, listed([{ id: '1', subject: 'From the transcript', status: 'completed' }], 3000, 9));
+  expect(shape(taskListFrom([loaded], carried([{ id: '1', subject: 'From the activity', status: 'pending' }], 3000, 9)))).toEqual([['1', 'From the transcript', 'completed']]);
+  expect(shape(taskListFrom([loaded], carried([{ id: '1', subject: 'Older', status: 'pending' }], 2000, 12)))).toEqual([['1', 'From the transcript', 'completed']]);
+  expect(shape(taskListFrom([loaded], carried([{ id: '1', subject: 'Same time, earlier read', status: 'pending' }], 3000, 8)))).toEqual([['1', 'From the transcript', 'completed']]);
+});
+
+test("with no task call loaded, the list the activity carries is the list", () => {
+  const engine = carried([{ id: '1', subject: 'Read', status: 'completed' }, { id: '2', subject: 'Write', activeForm: 'Writing', status: 'in_progress' }]);
+  expect(taskListFrom([], engine)).toEqual([{ id: '1', subject: 'Read', activeForm: null, status: 'completed' }, { id: '2', subject: 'Write', activeForm: 'Writing', status: 'in_progress' }]);
+  expect(taskListFrom([], null)).toEqual([]);
+});
+
+test("a list from an earlier Claude session, then a made #1 with no list of its own, starts a new list", () => {
+  const engine = carried([{ id: '1', subject: 'A', status: 'completed' }, { id: '2', subject: 'B', status: 'completed' }]);
+  expect(shape(taskListFrom([create('C', '1')], engine))).toEqual([['1', 'C', 'pending']]);
+});
+
+test("the activity's list is checked as a reply's line is", () => {
+  expect(snapshotFrom({ at: 1500, seq: 7, tasks: [{ id: 3, subject: 'Read', status: 'completed' }, { id: '4', status: 'pending' }, { id: '5', subject: 'Odd', status: 'deleted' }, { id: '6', subject: ' Write ', activeForm: '', status: 'pending' }] }))
+    .toEqual({ order: [1500, 7], tasks: [{ id: '3', subject: 'Read', activeForm: null, status: 'completed' }, { id: '6', subject: 'Write', activeForm: null, status: 'pending' }] });
+  expect(snapshotFrom({ at: 1, seq: 1 })).toBeNull();
+  expect(snapshotFrom(null)).toBeNull();
 });

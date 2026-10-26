@@ -21,7 +21,7 @@ import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
 import { dialogControlResponse, isDialogRequest } from './claude-dialogs.js';
-import { TASK_LIST_TOOLS, TASK_REPLY_MAX, taskListDirectory, withTaskList } from './claude-tasks.js';
+import { TASK_LIST_TOOLS, TASK_REPLY_MAX, taskListDirectory, taskSnapshot, withTaskList } from './claude-tasks.js';
 
 export { insideWorkspace };
 
@@ -549,8 +549,12 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
         const taskCall = taskListCalls.get(block.tool_use_id);
         taskListCalls.delete(block.tool_use_id);
         // The list is found as Claude finds it: from the environment Claude is started with, not the engine's own.
-        const shown = taskCall && !block.is_error ? withTaskList(preview, taskListDirectory({ env: hostedEnvironment(supervisor, TASK_TOOLS_ENV), sessionId: link?.state.claudeSessionId }), taskCall) : preview;
+        const listed = taskCall && !block.is_error ? taskSnapshot(preview, taskListDirectory({ env: hostedEnvironment(supervisor, TASK_TOOLS_ENV), sessionId: link?.state.claudeSessionId }), taskCall) : null;
+        const shown = withTaskList(preview, listed);
         turn.toolFinished(block.tool_use_id, { text: state.subagents.has(block.tool_use_id) ? `\n${shown}` : shown, isError: Boolean(block.is_error) });
+        // The same read goes with the conversation's activity, which a client has however little of the transcript it
+        // loaded; only after the reply is out, so no client holds the list before the reply it came with.
+        if (listed) link?.setTaskList({ runId: run.id, ...listed });
         if (mainTools.delete(block.tool_use_id)) settleWaiting();
       };
 

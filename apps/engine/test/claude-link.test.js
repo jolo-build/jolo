@@ -1466,3 +1466,85 @@ test('Claude is not asked for an agent\'s or a workflow\'s output, which it neve
     await link.close({ reason: 'test', graceful: false });
   });
 });
+
+/** Claude's own task list as the stream hands it to a link after a task call, with the Jolo run whose call it followed. */
+const claudeList = (runId = 'run-1', seq = 1) => ({ runId, at: 1_761_400_000_000 + seq, seq, tasks: [{ id: '1', subject: 'Read config', activeForm: 'Reading config', status: /** @type {const} */ ('in_progress') }] });
+
+test('Claude\'s task list set in a turn rides on every activity from then on, reported as a change of the tasks', async () => {
+  const reports = [];
+  const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => reports.push({ activity, reason }) });
+  const link = open(registry);
+  await turn(link, 'hello', { init: true });
+  expect(link.activity).not.toHaveProperty('taskList');
+  const going = turn(link, 'slow 700 done');
+  await waitFor(() => link.activity.state === 'working');
+  const before = reports.length;
+  const list = claudeList();
+  link.setTaskList(list);
+  expect(link.activity.taskList).toEqual(list);
+  await sleep(300); // past the coalescing
+  expect(reports.slice(before).map(({ activity, reason }) => [reason, activity.state, activity.taskList])).toEqual([['tasks', 'working', list]]);
+  expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(link.activity)).success).toBe(true);
+  await going;
+  // The turn's end is reported at once, and still carries the list.
+  expect(reports.at(-1)).toMatchObject({ reason: 'state', activity: { state: 'idle', taskList: list } });
+  await registry.closeAll();
+});
+
+test('a new process starts from the stored task list, so its own first reports keep it', async () => {
+  const store = new Map();
+  const registry = createHostedLinks({ log, history: (sessionId) => store.get(sessionId) ?? null, onActivity: (sessionId, activity, reason) => { if (reason !== 'progress') store.set(sessionId, activityPayload(activity)); } });
+  const link = open(registry);
+  await turn(link, 'hello', { init: true });
+  const list = claudeList();
+  link.setTaskList(list);
+  // Closed while the change waits out the coalescing: it is reported before the link is forgotten.
+  await link.close({ reason: 'test', graceful: false });
+  await waitFor(() => store.get('session')?.taskList !== undefined);
+  expect(store.get('session').taskList).toEqual(list);
+  const next = open(registry);
+  expect(next.activity.taskList).toEqual(list);
+  await turn(next, 'hello', { init: true });
+  expect(store.get('session').taskList).toEqual(list); // not erased by the new process's reports
+  await registry.closeAll();
+});
+
+test('a stored task list that does not read is left out of every report', async () => {
+  const reports = [];
+  const registry = createHostedLinks({ log, history: () => ({ ...stored([storedTask('a', 'completed')]), taskList: /** @type {any} */ ({ runId: '' }) }), onActivity: (sessionId, activity, reason) => reports.push({ activity, reason }) });
+  const link = open(registry);
+  expect(link.activity).not.toHaveProperty('taskList');
+  await turn(link, 'hello', { init: true });
+  expect(reports.length).toBeGreaterThan(0);
+  for (const { activity } of reports) {
+    expect(activity).not.toHaveProperty('taskList');
+    expect(EventPayloadSchemas['session.activity'].safeParse(activityPayload(activity)).success).toBe(true);
+  }
+  await registry.closeAll();
+});
+
+test('with no process, session.activity answers the stored task list, and clearing finished tasks keeps it in the row and its event', async () => {
+  const { createRpcHandlers } = await import('../src/rpc/handlers.js');
+  const { Storage } = await import('../src/storage/index.js');
+  const list = claudeList();
+  const kept = { ...stored([storedTask('a', 'completed'), storedTask('b', 'running')]), taskList: list };
+  const answering = createRpcHandlers(/** @type {any} */ ({ storage: { getSession: (id) => ({ id }), getSessionActivity: () => kept }, hostedLinks: createHostedLinks({ log }), log }));
+  const { activity } = await answering['session.activity']({ sessionId: 's' });
+  expect(activity.taskList).toEqual(list);
+  expect(activity.tasks.map((t) => [t.taskId, t.status])).toEqual([['a', 'completed'], ['b', 'stopped']]);
+  await withTempDir(async (dir) => {
+    const storage = new Storage({ databasePath: path.join(dir, 'db'), artifactsDir: path.join(dir, 'artifacts'), bootId: 'test' });
+    try {
+      const project = storage.upsertProject({ identity: dir, rootPath: dir });
+      const workspace = storage.ensureDirectWorkspace(project.id, dir);
+      const session = storage.createSession({ projectId: project.id, workspaceId: workspace.id, title: 'chat', agentId: 'claude' });
+      const events = [];
+      storage.events.on('event', (event) => events.push(event));
+      storage.saveSessionActivity(session.id, kept);
+      const handlers = createRpcHandlers(/** @type {any} */ ({ storage, hostedLinks: createHostedLinks({ log }), log }));
+      expect(await handlers['session.clearFinished']({ sessionId: session.id }, { kind: 'test' })).toEqual({ cleared: 2 });
+      expect(storage.getSessionActivity(session.id).taskList).toEqual(list);
+      expect(events.filter((event) => event.type === 'session.activity').map((event) => event.payload.taskList)).toEqual([list]);
+    } finally { storage.close(); }
+  });
+});

@@ -18,7 +18,7 @@ import path from 'node:path';
 import { chmodSync, closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
-  TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
+  ClaudeTaskListSchema, TASK_HISTORY_LIMIT, TASK_ID_MAX, TASK_PATH_MAX, TASK_TEXT_MAX, WORKFLOW_AGENTS_MAX, WORKFLOW_LABEL_MAX, WORKFLOW_MODEL_MAX, WORKFLOW_PHASES_MAX,
   WORKFLOW_PREVIEW_MAX, WORKFLOW_TITLE_MAX, TASK_OUTPUT_MAX, MCP_SERVERS_MAX,
 } from '@jolo/protocol';
 import { spawnLineChild } from '../processes/line-child.js';
@@ -50,7 +50,7 @@ export const ENDED_SUMMARY = 'The process ended before it finished';
  * A conversation's stored activity as it reads once its process is gone: idle, and each task the snapshot still had
  * running stopped, at the snapshot's time, with ENDED_SUMMARY unless it had a summary of its own. The stored snapshot is
  * left as it was.
- * @param {{ state: string, tasks: TaskRecord[], updatedAt: string, truncated?: boolean }} activity
+ * @param {{ state: string, tasks: TaskRecord[], updatedAt: string, truncated?: boolean, taskList?: ClaudeTaskList | null }} activity
  */
 export function endedActivity(activity) {
   return {
@@ -302,12 +302,20 @@ function summarizeWorkflow(entries, description) {
  *   agents: { total: number, running: number, done: number, failed: number, list: WorkflowAgent[] }, current: string | null }} WorkflowSummary
  */
 /**
- * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing.
- * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], updatedAt: string }} Activity
+ * Claude's own task list (the one its TaskCreate and TaskUpdate keep) as the engine last read it after a task call, with
+ * when it read it (`at`, `seq`) and the Jolo run whose call it followed (`runId`, not a task's own run id).
+ * @typedef {{ runId: string, at: number, seq: number,
+ *   tasks: { id: string, subject: string, activeForm: string | null, status: 'pending' | 'in_progress' | 'completed' }[] }} ClaudeTaskList
+ */
+/**
+ * What the process is doing: answering a run's turn, running background tasks with no turn, or nothing. `taskList` is
+ * Claude's task list, once a task call has changed it.
+ * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], updatedAt: string, taskList?: ClaudeTaskList }} Activity
  */
 /**
  * Why an activity is reported, the strongest change since the last report first: its state changed, a task started or
- * ended (its status changed), or only a task's usage, phase, description or workflow summary did.
+ * ended (its status changed) or Claude's task list changed, or only a task's usage, phase, description or workflow
+ * summary did.
  * @typedef {'state' | 'tasks' | 'progress'} ActivityReason
  */
 
@@ -361,7 +369,7 @@ export function removeScratch(dir, log, context = {}) {
  * long a question to a process (a task's output, the MCP servers' status) waits for its answer.
  * @param {{ spawn?: typeof spawnLineChild, log: any, idleMs?: number, interruptMs?: number, emptyGraceMs?: number, stopGraceMs?: number, requestTimeoutMs?: number, scratchRoot?: string, lifetime?: any,
  *   onUnsolicited?: (link: any) => boolean | Promise<boolean>, onActivity?: (sessionId: string, activity: Activity, reason: ActivityReason) => void,
- *   history?: (sessionId: string) => { state: string, tasks: TaskRecord[], updatedAt: string } | null }} options
+ *   history?: (sessionId: string) => { state: string, tasks: TaskRecord[], updatedAt: string, taskList?: ClaudeTaskList | null } | null }} options
  * `onUnsolicited` is told when a process starts a turn by itself and answers true when a run will take it
  */
 export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED_LINK_IDLE_MS, interruptMs = INTERRUPT_GRACE_MS, emptyGraceMs = EMPTY_RESULT_GRACE_MS, stopGraceMs = STOP_TASK_GRACE_MS, requestTimeoutMs = CONTROL_REQUEST_TIMEOUT_MS, scratchRoot = tmpdir(), onUnsolicited = () => false, lifetime = null, onActivity = () => {}, history = () => null }) {
@@ -541,9 +549,15 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
   /** @type {'tasks' | 'progress' | null} how its tasks changed since the last report */
   let tasksChange = null;
   let activityTimer = null;
+  // Every activity carries Claude's task list, so a client pins it however little of the conversation it loaded. A new
+  // process starts from the stored list, or its first report would erase it; a stored list that does not read is left
+  // out, since every report would carry it.
+  const seededList = ClaudeTaskListSchema.safeParse(seed?.taskList);
+  /** @type {ClaudeTaskList | null} */
+  let taskList = seededList.success ? /** @type {ClaudeTaskList} */ (seededList.data) : null;
   const activityState = () => (current ? 'working' : running() ? 'background' : 'idle');
-  /** @returns {Activity} */
-  const snapshotActivity = () => ({ state: activityState(), tasks: [...tasks.values()].map((task) => ({ ...task, usage: { ...task.usage } })), updatedAt: activityAt });
+  /** The task list is replaced whole and never changed, so a snapshot shares it. @returns {Activity} */
+  const snapshotActivity = () => ({ state: activityState(), tasks: [...tasks.values()].map((task) => ({ ...task, usage: { ...task.usage } })), updatedAt: activityAt, ...(taskList ? { taskList } : {}) });
   const reportActivity = () => {
     if (activityTimer) { clearTimeout(activityTimer); activityTimer = null; }
     const activity = snapshotActivity();
@@ -972,6 +986,15 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
       for (const [taskId, task] of tasks) if (task.status !== 'running') { dropTask(taskId); cleared += 1; }
       if (cleared) { activityAt = new Date().toISOString(); tasksChange = 'tasks'; reportActivity(); }
       return cleared;
+    },
+    /**
+     * Claude's task list as a run's task call left it: every activity carries it from now on, and it is reported (so
+     * stored) as a change of the tasks is.
+     * @param {ClaudeTaskList} list
+     */
+    setTaskList(list) {
+      taskList = list;
+      activityChanged('tasks');
     },
     /** Whether what waits for a run is only a background subagent's question, with the main thread idle. */
     get pendingQuestionOnly() {

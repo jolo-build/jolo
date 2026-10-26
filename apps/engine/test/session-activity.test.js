@@ -83,3 +83,19 @@ test('an activity whose process is gone reads idle, a task it left running stopp
   expect(ENDED_SUMMARY).toBe('The process ended before it finished');
   expect(stored.tasks[1].status).toBe('running'); // the stored snapshot itself is left as it was
 });
+
+/** Claude's own task list as an activity carries it, with the Jolo run whose task call it followed. */
+const taskList = { runId: 'run-1', at: 1_761_400_000_000, seq: 4, tasks: [{ id: '1', subject: 'Read config', activeForm: 'Reading config', status: /** @type {const} */ ('in_progress') }] };
+
+test('Claude\'s task list is stored and announced with the activity that carries it, and outlives clearing and the process', () => {
+  const f = fixture();
+  try {
+    const activity = { state: 'working', tasks: [task('a', 'completed'), task('b', 'running')], updatedAt: '2026-10-24T10:02:00.000Z', taskList };
+    recordActivity(f.storage, new EventEmitter(), f.session.id, activity, 'tasks');
+    expect(f.storage.getSessionActivity(f.session.id).taskList).toEqual(taskList);
+    expect(f.events.map((event) => [event.type, event.payload.taskList])).toEqual([['session.activity', taskList]]);
+    expect(f.storage.clearFinishedActivity(f.session.id)).toBe(1);
+    expect(f.storage.getSessionActivity(f.session.id).taskList).toEqual(taskList);
+    expect(endedActivity(f.storage.getSessionActivity(f.session.id)).taskList).toEqual(taskList);
+  } finally { f.close(); }
+});
