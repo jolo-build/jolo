@@ -68,6 +68,17 @@ test('task progress marks working, waiting and failed states, and leaves settled
   const parent = renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'task', title: 'Task', run: { state: 'completed' } }, childTasks: [{ sessionId: 'child', attention: 'needs_you' }] }))} />);
   expect(parent).toContain('aria-label="A child task needs you"');
 });
+test('a settled task whose background work still runs keeps the spinner, and a child that needs the user still wins', () => {
+  const row = (state, extra = {}) => renderToStaticMarkup(<SidebarTask {...(/** @type {import('react').ComponentProps<typeof SidebarTask>} */ ({ task: { sessionId: 'task', title: 'Task', run: { state }, attention: 'running', reason: 'background' }, ...extra }))} />);
+  for (const state of ['completed', 'cancelled']) {
+    expect(row(state)).toContain('aria-label="Working in background"');
+    expect(row(state)).toContain('title="Task\nWorking in background');
+    expect(row(state)).toContain('activity-spin');
+  }
+  const parent = row('completed', { childTasks: [{ sessionId: 'child', attention: 'needs_you' }] });
+  expect(parent).toContain('aria-label="A child task needs you"');
+  expect(parent).not.toContain('activity-spin');
+});
 test('empty folders remain visible', () => {
   expect(render({ workspaceId: 'beta' })).toContain('Hide tasks in beta');
 });

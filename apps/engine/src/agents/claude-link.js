@@ -372,6 +372,8 @@ export function createHostedLinks({ spawn = spawnLineChild, log, idleMs = HOSTED
     get size() { return links.size; },
     /** Whether any process is answering a turn or has background work running: work the engine must not drop. */
     get working() { return [...links.values()].some((link) => link.working); },
+    /** The conversations whose process runs background work with no turn under way. */
+    backgroundSessions() { return [...links.values()].filter((link) => link.background).map((link) => link.sessionId); },
     /**
      * Start the process for a conversation. `prepare` is given the private scratch directory the process will
      * run with and answers its argv and environment.
@@ -959,6 +961,8 @@ function createLink({ sessionId, workspaceId, agentId, identity, cwd, prepare, s
     get working() { return alive && (current !== null || buffer !== null || running() > 0 || reportDue !== null); },
     /** What the process is doing, with the tasks it runs and its recently finished ones; told to `onActivity` as it changes. */
     get activity() { return snapshotActivity(); },
+    /** Background work runs with no turn under way: the Activity panel's 'background', without copying the tasks. */
+    get background() { return alive && activityState() === 'background'; },
     /**
      * Forget the finished tasks (Clear finished): how many went; the running ones stay. The change is reported at once,
      * not coalesced, so that it is stored before the process could end and a new one start from the old record.
