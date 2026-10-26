@@ -6,7 +6,8 @@ import { useTaskDrag } from '../task-drag.jsx';
 import { Icon } from './icon.jsx';
 
 // Keep one spinner throughout a turn: tool/model transitions must not flicker. A row shows a glyph, at its end, only
-// when its state asks for a look; done, stopped and ready rows show none, and their state stays in the tooltip.
+// when its state asks for a look; done, stopped and ready rows show none, and their state stays in the tooltip. A settled
+// run whose background work still runs keeps the spinner.
 const progress = {
   queued: ['clock', 'Queued'], preparing: ['spinner', 'Working'], model: ['spinner', 'Working'], tools: ['spinner', 'Working'],
   cancelling: ['spinner', 'Stopping'], awaiting_permission: ['shield', 'Needs approval'], paused: ['pause', 'Paused'],
@@ -60,7 +61,8 @@ export function SidebarChatRow({ task, target, selected, onOpen, onMenu, agentNa
   // A blank title on a task that has a run means it is being named; a blank one without a run is new.
   const naming = !task.title && Boolean(task.run);
   const title = naming ? 'Naming…' : task.title || (standalone ? 'New chat' : 'New task');
-  const own = progress[task.run?.state] ?? (task.attention === 'needs_you' ? ['alert', 'Needs you'] : [null, 'Ready']);
+  const own = task.reason === 'background' ? ['spinner', 'Working in background']
+    : progress[task.run?.state] ?? (task.attention === 'needs_you' ? ['alert', 'Needs you'] : [null, 'Ready']);
   const asks = ['alert', 'shield'].includes(own[0]);
   const needs = task.attention === 'needs_you' || childNeeds;
   const [icon, status] = childNeeds && !asks ? ['alert', 'A child task needs you'] : own;

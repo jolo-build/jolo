@@ -14,7 +14,9 @@ function fixture() {
   cleanups.push(() => { storage.close(); rmSync(root, { recursive: true, force: true }); });
   const project = storage.upsertProject({ identity: root, rootPath: root });
   const workspace = storage.ensureDirectWorkspace(project.id, root);
-  const board = createBoard({ storage, env: { git: null, path: '' }, log: null });
+  // The sessions whose live process runs background work, as the hosted links would answer them.
+  const background = [];
+  const board = createBoard({ storage, env: { git: null, path: '' }, log: null, background: () => background });
   const chat = () => storage.createSession({ projectId: project.id, workspaceId: workspace.id, title: 'Chat' });
   let sequence = 0;
   const run = (session, state) => {
@@ -25,7 +27,7 @@ function fixture() {
     return next;
   };
   const row = async () => (await board.list()).projects.find(row => row.workspaceId === workspace.id);
-  return { storage, board, chat, run, row };
+  return { storage, board, chat, run, row, workspace, background };
 }
 
 for (const problem of ['paused', 'failed', 'interrupted']) {
@@ -68,4 +70,51 @@ test('another chat waiting for the user keeps the folder alert', async () => {
   const waiting = run(chat(), 'paused');
   run(chat(), 'model');
   expect(await row()).toMatchObject({ attention: 'needs_you', working: true, run: { id: waiting.id } });
+});
+
+test('a settled chat whose process runs background work shows as working, and stops the moment the work does', async () => {
+  const { storage, board, chat, run, row, workspace, background } = fixture();
+  const session = chat();
+  run(session, 'completed');
+  const task = () => board.tasks().tasks.find(task => task.sessionId === session.id);
+  background.push(session.id);
+  expect(task()).toMatchObject({ attention: 'running', reason: 'background', run: { state: 'completed' } });
+  // The folder is marked working; its attention stays the runs' own.
+  expect(await row()).toMatchObject({ working: true, attention: 'done' });
+
+  background.length = 0;
+  expect(task()).toMatchObject({ attention: 'done', reason: 'completed' });
+  expect(await row()).toMatchObject({ working: false, attention: 'done' });
+  board.viewed(workspace.id);
+  expect(task()).toMatchObject({ attention: 'idle', reason: 'completed' });
+
+  // A cancelled run is settled too.
+  storage.updateRunState(run(session, 'queued').id, 'cancelled');
+  background.push(session.id);
+  expect(task()).toMatchObject({ attention: 'running', reason: 'background', run: { state: 'cancelled' } });
+});
+
+test('background work never hides a chat that needs the user, nor a turn under way', async () => {
+  const { board, chat, run, background } = fixture();
+  const task = (session) => board.tasks().tasks.find(task => task.sessionId === session.id);
+  for (const [state, reason] of [['failed', 'failed'], ['paused', 'paused_user'], ['awaiting_permission', 'awaiting_permission']]) {
+    const session = chat();
+    run(session, state);
+    background.push(session.id);
+    expect(task(session)).toMatchObject({ attention: 'needs_you', reason });
+  }
+  const working = chat();
+  run(working, 'model');
+  background.push(working.id);
+  expect(task(working)).toMatchObject({ attention: 'running', reason: 'model' });
+});
+
+test('an archived chat with background work still running does not mark its folder working', async () => {
+  const { storage, chat, run, row, background } = fixture();
+  const session = chat();
+  run(session, 'completed');
+  background.push(session.id);
+  expect(await row()).toMatchObject({ working: true });
+  storage.updateSession(session.id, { state: 'archived' });
+  expect(await row()).toMatchObject({ working: false });
 });

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { installBrowserHost } from '../src/main/browser-host.js';
 import { createAttentionService } from '../src/main/attention-service.js';
-import { noticeFrom, withoutAnswered } from '../src/renderer/engine-context.jsx';
+import { noticeFrom, refreshesBoard, withoutAnswered } from '../src/renderer/engine-context.jsx';
 import { projectAX } from '../src/main/ax-projection.js';
 import { readFileSync } from 'node:fs';
 import { METHOD_NAMES } from '@jolo/protocol';
@@ -15,6 +15,12 @@ test('the renderer may call the engine methods for background work and dialogs, 
   const methods = [...list.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
   expect(methods).toEqual(expect.arrayContaining(['session.activity', 'session.stopBackground', 'session.stopTask', 'session.closeProcess', 'session.clearFinished', 'session.taskOutput', 'session.mcpStatus', 'delegation.list', 'dialog.resolve', 'dialog.dismiss']));
   expect(methods.filter(method => !METHOD_NAMES.includes(method))).toEqual([]);
+});
+
+test('a chat\'s background work starting or ending reads the board again, as a run changing state does', () => {
+  expect(refreshesBoard('session.activity')).toBe(true);
+  expect(refreshesBoard('run.state')).toBe(true);
+  expect(refreshesBoard('dialog.resolved')).toBe(false);
 });
 
 test('browser attachment rejects unsafe URLs and keeps concurrent workspaces separate', () => {

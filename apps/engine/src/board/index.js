@@ -31,12 +31,17 @@ function liveNextStep(run, pending) {
   return null;
 }
 
-function attentionFor(run, workspace) {
+/**
+ * `background` is whether the chat's live process runs background work with no turn under way. It counts as running
+ * once its run has settled, but never hides a run that needs the user.
+ */
+function attentionFor(run, workspace, background = false) {
   if (!run) return { attention: "idle", reason: null };
   if (run.state === "awaiting_permission") return { attention: "needs_you", reason: "awaiting_permission" };
   if (run.state === "paused") return { attention: "needs_you", reason: `paused_${run.pauseReason ?? "user"}` };
   if (run.state === "failed" || run.state === "interrupted") return { attention: "needs_you", reason: run.state };
   if (RUNNING.has(run.state)) return { attention: "running", reason: run.state };
+  if (background) return { attention: "running", reason: "background" };
   const seen = workspace.lastViewedAt && workspace.lastViewedAt >= run.updatedAt;
   return { attention: seen ? "idle" : "done", reason: run.state };
 }
@@ -52,9 +57,11 @@ function taskAnswerer({ session, run }) {
 }
 
 /**
- * @param {{ storage: any, env: { git: string | null, path: string }, log: any }} deps
+ * `background` answers the sessions whose live process runs background work with no turn under way. It is read from the
+ * running processes only, never from storage, so nothing stays marked working after a crash or a restart.
+ * @param {{ storage: any, env: { git: string | null, path: string }, log: any, background?: () => string[] }} deps
  */
-export function createBoard({ storage, env, log }) {
+export function createBoard({ storage, env, log, background = () => [] }) {
   const gitCache = new Map(); // workspace path -> { at, value }
   storage.events.on("event", event => {
     const invalidate = event.type === "files.changed" || event.type === "workspace.removed" ||
@@ -89,7 +96,8 @@ export function createBoard({ storage, env, log }) {
     return value;
   };
 
-  const buildRow = (project, workspace) => {
+  /** `busy` holds the workspaces where an open chat runs background work. */
+  const buildRow = (project, workspace, busy) => {
     const latest = storage.boardRunForWorkspace(workspace.id);
     const run = latest?.run ?? null;
     const session = run ? storage.getSession(run.sessionId) : project.preferences.standalone ? storage.listSessions({ projectId: project.id, limit: 1 })[0] : null;
@@ -106,7 +114,7 @@ export function createBoard({ storage, env, log }) {
       name: project.preferences.standalone ? 'Chat' : path.basename(project.rootPath) || project.rootPath,
       workspaceId: workspace.id,
       taskCount: storage.countSessionsForWorkspace(workspace.id, 'open'),
-      working: storage.workspaceHasWorkingRuns(workspace.id),
+      working: storage.workspaceHasWorkingRuns(workspace.id) || busy.has(workspace.id),
       workspace: { id: workspace.id, mode: workspace.mode, branch: workspace.branch, path: workspace.path },
       lastViewedAt: workspace.lastViewedAt,
       attention,
@@ -132,8 +140,10 @@ export function createBoard({ storage, env, log }) {
       let index = 0;
       const worker = async () => { while (index < workspaces.length) await gitInfo(workspaces[index++].path); };
       await Promise.all([worker(), worker()]);
+      // Background work marks the folder working, as an open chat's running run does; its attention stays the runs' own.
+      const busy = new Set(background().map((id) => storage.getSession(id)).filter((session) => session?.state === "open").map((session) => session.workspaceId));
       // A folder remains available even before its first chat is created.
-      const rows = storage.transaction(() => listed().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace))));
+      const rows = storage.transaction(() => listed().flatMap((project) => storage.listWorkspaces(project.id).map((workspace) => buildRow(project, workspace, busy))));
       rows.sort((a, b) => ATTENTION_ORDER[a.attention] - ATTENTION_ORDER[b.attention] || (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || a.name.localeCompare(b.name));
       return { projects: rows, generatedAt: new Date().toISOString() };
     },
@@ -146,8 +156,9 @@ export function createBoard({ storage, env, log }) {
     tasks({ limit = 200, workspaceId, before, state = 'open', standalone, pinned } = {}) {
       const generatedAt = new Date().toISOString();
       const entries = storage.listSessionActivity({ limit: limit + 1, workspaceId, before, state, standalone, pinned });
+      const busy = new Set(background());
       const rows = entries.slice(0, limit).map((entry) => {
-        const { attention, reason } = attentionFor(entry.run, entry.workspace);
+        const { attention, reason } = attentionFor(entry.run, entry.workspace, busy.has(entry.session.id));
         const stopped = entry.run && (TERMINAL_RUN_STATES.includes(entry.run.state) || entry.run.state === "paused");
         return {
           sessionId: entry.session.id,

@@ -16,7 +16,10 @@ const Context = createContext(null);
 /** How many notices stand at once: enough to catch up on, few enough to read (§5.6). */
 const NOTIFY_LIMIT = 4;
 
-const BOARD_EVENTS = new Set(["run.state", "permission.requested", "permission.resolved", "workspace.viewed", "workspace.created", "workspace.removed", "session.created", "session.updated", "session.deleted", "files.changed", "run.verification", "tool.started", "tool.completed"]);
+// session.activity is among them: a chat's background work starting or ending keeps its row and folder working or not.
+const BOARD_EVENTS = new Set(["run.state", "permission.requested", "permission.resolved", "workspace.viewed", "workspace.created", "workspace.removed", "session.created", "session.updated", "session.deleted", "session.activity", "files.changed", "run.verification", "tool.started", "tool.completed"]);
+/** Whether an event of this type can change the board, so that the board is read again. */
+export const refreshesBoard = (type) => BOARD_EVENTS.has(type);
 
 /** The notice for news from main. Its focus says what opening it shows, and which request's answer retires it. */
 export function noticeFrom(payload) {
@@ -99,7 +102,7 @@ export function EngineProvider({ children }) {
     const offEngine = window.jolo.onEngine((next) => { notified = true; receive(next); });
     void engineCall("engine.status", {}).then((status) => { if (!notified) receive({ connected: true, status }); }).catch((error) => { if (!notified) receive({ connected: false, error: error.message }); });
     const offEvents = window.jolo.onEvents((items) => {
-      if (!timer && items.some((item) => item.kind === "event" && BOARD_EVENTS.has(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
+      if (!timer && items.some((item) => item.kind === "event" && refreshesBoard(item.value.type))) timer = setTimeout(() => { timer = null; void refreshBoard(); }, 400);
       // A request that has been answered is no longer news, wherever it was answered.
       for (const item of items) {
         if (item.kind !== "event") continue;

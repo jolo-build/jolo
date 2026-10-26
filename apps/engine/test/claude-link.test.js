@@ -774,6 +774,30 @@ test('the link keeps a record of each background task with its usage and reports
   await registry.closeAll();
 });
 
+test('a conversation counts as running background work only while its tasks run with no turn under way', async () => {
+  const registry = createHostedLinks({ log });
+  const link = open(registry);
+  // What the registry answers at each message of the turn that starts the tasks: never background while the turn is under way.
+  const during = [];
+  const { done } = link.beginTurn({ signal: new AbortController().signal, handle: (message) => {
+    if (message.type === 'control_response' && message.response?.request_id === 'jolo-init') link.write(said('tasks 2 300'));
+    during.push([registry.backgroundSessions(), link.background, link.activity.tasks.some((task) => task.status === 'running')]);
+    return message.type === 'result';
+  } });
+  link.write({ type: 'control_request', request_id: 'jolo-init', request: { subtype: 'initialize', perTaskStopAffordance: true } });
+  await done;
+  expect(during.at(-1)[2]).toBe(true); // the tasks were already running when the turn ended
+  expect(during.every(([sessions, background]) => sessions.length === 0 && background === false)).toBe(true);
+  await waitFor(() => link.activity.state === 'background');
+  expect(link.background).toBe(true);
+  expect(registry.backgroundSessions()).toEqual(['session']);
+  await waitFor(() => link.activity.state === 'idle', 5000);
+  expect(link.background).toBe(false);
+  expect(registry.backgroundSessions()).toEqual([]);
+  await registry.closeAll();
+  expect(registry.backgroundSessions()).toEqual([]);
+});
+
 test('each activity report says why it was made: a new state, a task started or ended, or only progress', async () => {
   const seen = [];
   const registry = createHostedLinks({ log, onActivity: (sessionId, activity, reason) => seen.push({ reason, activity }) });

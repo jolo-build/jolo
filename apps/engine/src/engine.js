@@ -145,7 +145,8 @@ export function createEngine(options) {
     supervisor.reconcile();
     terminals = new TerminalService({ storage, supervisor, lifetime, log, shell: (options.env ?? process.env).JOLO_SHELL ?? null });
     dispatcher = new ToolDispatcher({ registry, permissions, storage, log, env: toolEnv, browser, supervisor, search, patchesDir: paths.patchesDir, schedules: () => schedules, delegations: () => delegations });
-    board = createBoard({ storage, env: toolEnv, log });
+    // Lazy: the hosted links are made further down, and the board only asks once a client lists it.
+    board = createBoard({ storage, env: toolEnv, log, background: () => hostedLinks?.backgroundSessions() ?? [] });
     worktrees = createWorktreeService({ storage, permissions, paths, env: toolEnv, terminals, log });
     try {
       const taken = await worktrees.reconcile(); // checkouts made but never handed over, before any client can list them (§14.1)
