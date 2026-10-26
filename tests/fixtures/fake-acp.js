@@ -18,6 +18,9 @@ if (!argv.includes("--acp")) {
   process.exit(64);
 }
 const stateDir = process.env.FAKE_ACP_STATE ?? null;
+// FAKE_ACP_SESSION=ineligible plays an agent like Gemini CLI on a retired personal sign-in: it offers sign-in methods,
+// then refuses every session with its vendor's own message.
+const INELIGIBLE = process.env.FAKE_ACP_SESSION === "ineligible";
 const configuredBrowser = params => {
   if (process.env.FAKE_DEVIN_CONFIG !== '1') { const server = params.mcpServers?.find(server => server.name === 'jolo'); return server?.args?.at(-1)?.split(',').includes('browser') ? server : null; }
   // Mirror Devin's actual behavior: ACP mcpServers is ignored; configuration comes from disk.
@@ -250,9 +253,10 @@ async function handle(message) {
     case "initialize":
       if (params.protocolVersion !== 1) return fail(-32602, "unsupported protocol version");
       client = params.clientCapabilities ?? {};
-      return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: [], agentInfo: { name: "fake-acp", version: "0.0.0" } });
+      return reply({ protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: process.env.FAKE_ACP_IMAGES === "1", audio: false, embeddedContext: false } }, authMethods: INELIGIBLE ? [{ id: "oauth-personal", name: "Log in with Google" }] : [], agentInfo: { name: "fake-acp", version: "0.0.0" } });
     case "session/new": {
       if (!client) return fail(-32002, "initialize first");
+      if (INELIGIBLE) return fail(-32000, "This sign-in is no longer supported for this account.");
       browserServer = configuredBrowser(params);
       const sessionId = `acp-${Math.random().toString(36).slice(2, 10)}`;
       sessions.set(sessionId, { cwd: params.cwd, history: [], loaded: false });
