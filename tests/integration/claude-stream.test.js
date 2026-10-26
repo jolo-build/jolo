@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { DEFAULT_EVENT_TYPES } from "@jolo/protocol";
+import { DEFAULT_EVENT_TYPES, compareSeq } from "@jolo/protocol";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 import { checkHostedBrowser } from './browser-agent-check.js';
 
@@ -390,6 +390,28 @@ describe("one Claude process per conversation", () => {
     durable.slice(1).forEach((activity, i) => expect(shape(activity)).not.toBe(shape(durable[i]))); // none for usage alone
     expect(toOlder).toEqual([]);
     await older.close();
+  }, 30_000);
+
+  test("a task call's list rides on its reply and on the conversation's activity, which goes out after the reply", async () => {
+    // Claude's config directory of its own, so the fixture writes its task files there and never to a real ~/.claude.
+    const config = tempHome(); homes.push(config);
+    const { client, events, session, runTo, messagesOf, text } = await boot({ env: { CLAUDE_CONFIG_DIR: config } });
+    const failed = await runTo('task-fail', 'task-create-fail Read config');
+    expect(failed.state).toBe('completed');
+    expect((await client.call('session.activity', { sessionId: session.id })).activity).not.toHaveProperty('taskList'); // a failed call sets no list
+    const run = await runTo('task', 'task-create Read config');
+    expect(run.state).toBe('completed');
+    const call = (await messagesOf(run.id)).find((message) => message.kind === 'tool');
+    const last = (await text(call)).trimEnd().split('\n').at(-1);
+    expect(last.startsWith('Task list: ')).toBe(true);
+    const read = JSON.parse(last.slice('Task list: '.length));
+    expect(read.tasks).toEqual([{ id: '1', subject: 'Read config', activeForm: 'Doing Read config', status: 'pending' }]);
+    // The same read, with the run whose call it followed.
+    expect((await client.call('session.activity', { sessionId: session.id })).activity.taskList).toEqual({ runId: run.id, ...read });
+    const carried = await waitFor(() => events.find((e) => e.type === 'session.activity' && e.sessionId === session.id && e.payload.taskList?.seq === read.seq), { label: 'the activity carrying the list', timeoutMs: 5000 });
+    expect(carried.payload.taskList).toEqual({ runId: run.id, ...read });
+    const finished = events.find((e) => e.type === 'message.finished' && e.payload.messageId === call.id);
+    expect(compareSeq(finished.eventSeq, carried.eventSeq)).toBeLessThan(0);
   }, 30_000);
 
   test('session activity is null for a conversation with no process and not_found for an unknown one', async () => {

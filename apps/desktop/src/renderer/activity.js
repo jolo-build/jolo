@@ -12,6 +12,10 @@ import { TERMINAL } from '@jolo/client/run-state';
  * the subagent), `progress` is its latest progress line and `lastTool` the tool it last used, and `summary` and
  * `outputFile` are what its notification said of its end, and `model` the model a background agent answers with, from its
  * own messages: each null until Claude says it, absent from an older engine.
+ *
+ * The activity's `taskList` is something else: Claude's own task list (TaskCreate, TaskUpdate) as the engine last read it
+ * after a task call, stamped as the reply's `Task list:` line is, with the Jolo run whose call it followed (`runId`, not
+ * a task's own run id). An older engine sends none.
  * @typedef {{
  *   taskId: string, runId: string | null, toolUseId: string | null, description: string, subagentType: string | null,
  *   taskType?: string | null, workflowName?: string | null,
@@ -26,7 +30,8 @@ import { TERMINAL } from '@jolo/client/run-state';
  * @typedef {{ label: string, phase: string | null, phaseIndex?: number | null, state: 'running' | 'done' | 'failed', model: string | null,
  *   tokens: number | null, toolCalls: number | null, durationMs: number | null, resultPreview: string | null }} WorkflowAgent
  * @typedef {{ phases: WorkflowPhase[], agents: { total: number, running: number, done: number, failed: number, list?: WorkflowAgent[] }, current: string | null }} WorkflowProgress
- * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], truncated: boolean, updatedAt: string }} Activity
+ * @typedef {{ runId: string, at: number, seq: number, tasks: import('./task-list.js').ListedTask[] }} ClaudeTaskList
+ * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], truncated: boolean, updatedAt: string, taskList?: ClaudeTaskList | null }} Activity
  */
 
 /** A workflow with more agents than this is badged `Large` (Claude Code's own threshold; a setting in Plan 3). */

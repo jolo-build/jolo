@@ -642,12 +642,37 @@ export const TaskRecordSchema = z.object({
   model: z.string().max(WORKFLOW_MODEL_MAX).nullable().optional(),
 });
 
+/** The most tasks of Claude's own task list an activity carries, and the most characters of each task's text. */
+export const CLAUDE_TASKS_MAX = 100;
+export const CLAUDE_TASK_TEXT_MAX = 200;
+const ClaudeTaskText = z.string().min(1).max(CLAUDE_TASK_TEXT_MAX);
+/**
+ * Claude's own task list (the one its TaskCreate and TaskUpdate keep), not the process's background `tasks`, as the engine
+ * last read it after a task call. `at` and `seq` are the stamps of that reply's `Task list:` line: when the engine read
+ * the list and its read number, which counts from 1 again when the engine restarts. `runId` is the Jolo run whose task
+ * call it followed, not a task's own run id.
+ */
+export const ClaudeTaskListSchema = z.object({
+  runId: Id,
+  at: z.number().int().nonnegative(),
+  seq: z.number().int().nonnegative(),
+  tasks: z.array(z.object({
+    id: ClaudeTaskText,
+    subject: ClaudeTaskText,
+    activeForm: ClaudeTaskText.nullable(),
+    status: z.enum(["pending", "in_progress", "completed"]),
+  })).max(CLAUDE_TASKS_MAX),
+});
+
 /** `truncated` says the process had finished tasks left out of these. */
 export const ActivitySchema = z.object({
   state: z.enum(["idle", "working", "background"]),
   tasks: z.array(TaskRecordSchema).refine((tasks) => tasks.length <= Math.max(TASK_HISTORY_LIMIT, runningCount(tasks)), { message: `at most ${TASK_HISTORY_LIMIT} tasks, unless more are running: running tasks are never dropped` }),
   truncated: z.boolean(),
   updatedAt: IsoTimestamp,
+  // Claude's task list as the engine last read it, with the run that changed it; none before a task call, and none from
+  // an older engine.
+  taskList: ClaudeTaskListSchema.nullable().optional(),
 });
 
 /**
@@ -710,9 +735,10 @@ const fitActivity = (payload) => {
 /**
  * A process's activity as it goes on the wire: every running task, and the newest finished ones up to
  * TASK_HISTORY_LIMIT in all, in the order they started; `truncated` when finished ones were left out. It fits in a frame
- * with room for the event or notification around it (see fitActivity), unless its running tasks alone do not.
+ * with room for the event or notification around it (see fitActivity), unless its running tasks alone do not. Claude's
+ * task list, when there is one, counts toward the frame and is never cut.
  */
-export const activityPayload = ({ state, tasks, updatedAt }) => {
+export const activityPayload = ({ state, tasks, updatedAt, taskList = null }) => {
   const running = runningCount(tasks);
   const room = Math.max(0, TASK_HISTORY_LIMIT - running); // for finished tasks
   let left = Math.max(0, tasks.length - running - room); // the oldest finished ones, left out
@@ -722,7 +748,7 @@ export const activityPayload = ({ state, tasks, updatedAt }) => {
     left -= 1;
     return false;
   });
-  return fitActivity({ state, tasks: kept, truncated, updatedAt });
+  return fitActivity({ state, tasks: kept, truncated, updatedAt, ...(taskList ? { taskList } : {}) });
 };
 
 /** A task as it is written down, before it has an identity. */

@@ -11,7 +11,11 @@
  *   startedAt: string, endedAt: string | null,
  *   usage: { totalTokens: number | null, toolUses: number | null, durationMs: number | null },
  * }} TaskRecord
- * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], truncated: boolean, updatedAt: string }} Activity
+ * Claude's own task list as the engine last read it after a task call, with the Jolo run whose call it followed; the
+ * terminal client shows none of it.
+ * @typedef {{ runId: string, at: number, seq: number,
+ *   tasks: { id: string, subject: string, activeForm: string | null, status: 'pending' | 'in_progress' | 'completed' }[] }} ClaudeTaskList
+ * @typedef {{ state: 'idle' | 'working' | 'background', tasks: TaskRecord[], truncated: boolean, updatedAt: string, taskList?: ClaudeTaskList | null }} Activity
  */
 
 const started = (/** @type {TaskRecord} */ task) => Date.parse(task.startedAt);

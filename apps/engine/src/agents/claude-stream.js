@@ -21,11 +21,18 @@ import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 import { readImages, claudeImageContent } from '../attachments.js';
 import { dialogControlResponse, isDialogRequest } from './claude-dialogs.js';
+import { TASK_LIST_TOOLS, TASK_REPLY_MAX, taskListDirectory, taskSnapshot, withTaskList } from './claude-tasks.js';
 
 export { insideWorkspace };
 
 const MUTATION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "TodoWrite", "TodoRead"]);
+// Claude's own task list (TaskCreate and the rest) touches nothing but that list, so it never asks.
+const READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS", "TodoWrite", "TodoRead", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate"]);
+/**
+ * A printing Claude Code leaves its task list tools out unless this is set; the desktop pins the list they keep under
+ * the conversation, as Claude's own app does.
+ */
+const TASK_TOOLS_ENV = { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" };
 const PROCESS_TOOLS = new Set(["Bash", "PowerShell"]);
 /** Claude's own subagents run inside one of these calls; older builds name it Task. */
 const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
@@ -175,7 +182,21 @@ export function toolDisplay(name, input, { cwd = [], home = homedir() } = {}) {
     }
     case "WebFetch": { const url = text("url"); if (url) head = `Fetch ${headValue(url)}`; break; }
     case "WebSearch": { const query = text("query"); if (query) head = `Web search "${headValue(query)}"`; break; }
-    case "TodoWrite": head = "Todo list"; below = JSON.stringify(input ?? {}); break;
+    case "TodoWrite": {
+      // Each item's text cut short, and its in-progress wording left out when the list would not fit, so the line's JSON
+      // is never cut and the pinned list can read it.
+      const todos = Array.isArray(input?.todos) ? input.todos : [];
+      const kept = (withActive) => JSON.stringify({ todos: todos.map((todo) => ({ content: typeof todo?.content === "string" ? todo.content.slice(0, 200) : todo?.content, status: todo?.status, ...(withActive && typeof todo?.activeForm === "string" ? { activeForm: todo.activeForm.slice(0, 200) } : {}) })) });
+      head = "Todo list"; below = kept(true);
+      if (Buffer.byteLength(below) > TOOL_DISPLAY_MAX_BYTES - 64) below = kept(false);
+      break;
+    }
+    case "TaskCreate": case "TaskUpdate": {
+      // Only what the pinned task list reads, each text cut short, so a long description never cuts the line's JSON.
+      const fields = name === "TaskCreate" ? ["subject", "activeForm"] : ["taskId", "status", "subject", "activeForm"];
+      const kept = Object.fromEntries(fields.filter((field) => input?.[field] !== undefined).map((field) => [field, typeof input[field] === "string" ? input[field].slice(0, 300) : input[field]]));
+      return `${name} ${JSON.stringify(kept)}`;
+    }
     case "Skill": { const skill = text("skill"); if (skill) { head = `Skill ${headValue(skill)}`; below = JSON.stringify(input); } break; }
   }
   if (head === null) return raw; // as before: the turn bounds it
@@ -304,7 +325,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             sessionId: session.id, workspaceId: workspace.id, agentId: manifest.id, identity, cwd: workspace.path,
             prepare: (scratchDir) => ({
               argv: claudeArgv(binary, [...extraArgs, '--append-system-prompt', instructions(scratchDir), ...(Object.keys(mcpServers).length ? ['--mcp-config', JSON.stringify({ mcpServers })] : [])], remembered),
-              env: hostedEnvironment(supervisor, { TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir }),
+              env: hostedEnvironment(supervisor, { ...TASK_TOOLS_ENV, TMPDIR: scratchDir, TMP: scratchDir, TEMP: scratchDir }),
             }),
             onClosed: () => { revoke(owner); storage.expireRunGrants(owner); }, // what was allowed for its background work ends with it
           });
@@ -431,6 +452,8 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       };
       /** The main thread's subagent calls (Agent/Task) among its tools. */
       const subagentCalls = new Set();
+      /** The main thread's calls that change Claude's task list, by id, with their input: their replies carry the list after them. */
+      const taskListCalls = new Map();
       const deny = (requestId) => link.write({ type: "control_response", response: { request_id: requestId, subtype: "success", response: STOPPED } });
       /** Questions for the person this run has answered, by request id: each is answered once, even if Claude asks again. */
       const answeredDialogs = new Set();
@@ -521,8 +544,17 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
       const onToolResult = (block) => {
         const text = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.map((part) => part?.text ?? "").join("\n") : JSON.stringify(block.content ?? "");
         // A subagent's report starts after a blank line, so none of its lines can be read as progress.
-        const shown = browserPreview(text);
+        const preview = browserPreview(text);
+        // A task call's reply carries the list as Claude keeps it after the call, which the desktop pins.
+        const taskCall = taskListCalls.get(block.tool_use_id);
+        taskListCalls.delete(block.tool_use_id);
+        // The list is found as Claude finds it: from the environment Claude is started with, not the engine's own.
+        const listed = taskCall && !block.is_error ? taskSnapshot(preview, taskListDirectory({ env: hostedEnvironment(supervisor, TASK_TOOLS_ENV), sessionId: link?.state.claudeSessionId }), taskCall) : null;
+        const shown = withTaskList(preview, listed);
         turn.toolFinished(block.tool_use_id, { text: state.subagents.has(block.tool_use_id) ? `\n${shown}` : shown, isError: Boolean(block.is_error) });
+        // The same read goes with the conversation's activity, which a client has however little of the transcript it
+        // loaded; only after the reply is out, so no client holds the list before the reply it came with.
+        if (listed) link?.setTaskList({ runId: run.id, ...listed });
         if (mainTools.delete(block.tool_use_id)) settleWaiting();
       };
 
@@ -675,7 +707,12 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           case "assistant": {
             for (const block of message.message?.content ?? []) {
               if (block.type === "tool_use" && SUBAGENT_TOOLS.has(block.name)) { phase("tools"); mainTools.add(block.id); subagentCalls.add(block.id); settleWaiting(); state.subagents.set(block.id, { model: null, last: null, steps: 0, bytes: 0, capped: false }); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: subagentDisplay(block.name, block.input), outputMax: SUBAGENT_DISPLAY_MAX, resultMax: SUBAGENT_DISPLAY_MAX }); }
-              else if (block.type === "tool_use") { phase("tools"); mainTools.add(block.id); settleWaiting(); turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: toolDisplay(block.name, block.input, shownFrom) }); }
+              else if (block.type === "tool_use") {
+                phase("tools"); mainTools.add(block.id); settleWaiting();
+                const taskList = TASK_LIST_TOOLS.has(block.name);
+                if (taskList) taskListCalls.set(block.id, { name: block.name, input: block.input });
+                turn.toolStarted({ callId: block.id, name: block.name, input: block.input, display: toolDisplay(block.name, block.input, shownFrom), ...(taskList ? { resultMax: TASK_REPLY_MAX } : {}) });
+              }
               else if (block.type === "text" && block.text && ![...state.blocks.values()].some((entry) => entry.kind === "text")) {
                 const messageId = ctx.startMessage("assistant", "text"); turn.appendBounded(messageId, block.text); ctx.finishMessage(messageId, "complete"); // no partial stream arrived for this block
               }
