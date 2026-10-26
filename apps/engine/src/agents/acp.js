@@ -302,7 +302,8 @@ export function createAcpExecutor({ storage, dispatcher, catalog, permissions, s
           let created;
           try { created = await request("session/new", { cwd: workspace.path, mcpServers }); }
           catch (error) {
-            const hint = (init.authMethods ?? []).length ? ` (sign in with ${manifest.displayName}'s own CLI first)` : "";
+            // An agent with sign-in methods may be signed out, or signed in to an account it no longer serves.
+            const hint = (init.authMethods ?? []).length ? " (check its sign-in)" : "";
             throw new Error(`could not open a session${hint}: ${error?.message ?? error}`);
           }
           if (typeof created?.sessionId !== "string") throw new Error("did not return a session id");

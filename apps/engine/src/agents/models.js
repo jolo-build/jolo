@@ -22,6 +22,9 @@ const CACHE_TTL_MS = Number(process.env.JOLO_MODELS_TTL_MS) || 5 * 60_000;
 const COMMAND_TRANSPORTS = new Set(["claude-stream", "codex-app-server"]);
 
 const text = (value, fallback = "") => (typeof value === "string" && value ? value : fallback);
+/** What an agent said about its own failure, under its name: Settings shows the note beside Jolo's own controls,
+ *  where a vendor's message (an expired plan, a retired sign-in) would otherwise read as Jolo's. */
+const fromAgent = (manifest, said, fallback) => `${manifest.displayName}: ${text(said, fallback)}`;
 const efforts = (list) => [...new Set((Array.isArray(list) ? list : []).map((entry) => (typeof entry === "string" ? entry : text(entry?.reasoningEffort ?? entry?.id ?? entry?.value))).filter(Boolean))];
 
 /**
@@ -169,7 +172,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log, 
       open: (send) => send({ type: "control_request", request_id: "jolo-models", request: { subtype: "initialize" } }),
       ask: (message) => {
         if (message.type !== "control_response" || message.response?.request_id !== "jolo-models") return null; // it may greet first
-        if (message.response.subtype === "error") return { models: [], note: text(message.response.error, "Claude Code refused the request") };
+        if (message.response.subtype === "error") return { models: [], note: fromAgent(manifest, message.response.error, "refused the request") };
         const listed = message.response.response?.models;
         const commands = claudeCommands(message.response.response?.commands); // the same reply names its slash commands
         if (!Array.isArray(listed)) return { models: [], commands, note: "Claude Code did not report a model list" };
@@ -197,14 +200,14 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log, 
       open: (send) => send({ id: 1, method: "initialize", params: { clientInfo: { name: "jolo", title: "Jolo", version: build }, capabilities: { experimentalApi: false } } }),
       ask: (message, send) => {
         if (message.id === 1) {
-          if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: text(message.error.message, "Codex refused to start") };
+          if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: fromAgent(manifest, message.error.message, "refused to start") };
           send({ method: "initialized" });
           send({ id: 2, method: "model/list", params: {} });
           return null;
         }
         if (message.id === 4) return { models: collected, commands: codexCommands(message.error ? null : message.result), note: null }; // an older server without skills/list still has the fixed two
         if (message.id !== 2 && message.id !== 3) return null;
-        if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: text(message.error.message, "Codex did not report a model list") };
+        if (message.error) return { models: [], commands: [...CODEX_COMMANDS], note: fromAgent(manifest, message.error.message, "did not report a model list") };
         for (const entry of message.result?.data ?? []) {
           if (!text(entry?.id) || entry.hidden) continue;
           // Codex calls fast mode the "priority" service tier, and lists the tiers each model offers.
@@ -226,12 +229,12 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log, 
     open: (send) => send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false }, clientInfo: { name: "jolo", title: "Jolo", version: build } } }),
     ask: (message, send) => {
       if (message.id === 1) {
-        if (message.error) return { models: [], note: text(message.error.message, "the agent refused to start") };
+        if (message.error) return { models: [], note: fromAgent(manifest, message.error.message, "refused to start") };
         send({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: tmpdir(), mcpServers: [] } });
         return null;
       }
       if (message.id !== 2) return null;
-      if (message.error) return { models: [], note: text(message.error.message, "the agent would not open a session") };
+      if (message.error) return { models: [], note: fromAgent(manifest, message.error.message, "would not open a session") };
       const selector = modelSelector(message.result?.configOptions);
       const options = message.result?.configOptions;
       const thoughtLevel = (Array.isArray(options) ? options : []).find(option => option?.category === "thought_level" && option.type === "select");

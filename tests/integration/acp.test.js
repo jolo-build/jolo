@@ -56,17 +56,17 @@ test('Devin can use private scratch files, keep a preview, and clean up on compl
 }, 30_000);
 
 /** A profile with an ACP agent played by the fixture, so nothing here reaches any vendor's CLI or account. */
-async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
+async function boot({ clientKind = "test", agentId = 'fixture-acp', session: sessionMode = '' } = {}) {
   const home = tempHome(); homes.push(home);
   const repo = path.join(home, "repo");
   mkdirSync(repo, { recursive: true });
   writeFileSync(path.join(repo, "notes.txt"), "alpha\n");
   const launcher = path.join(home, "fake-acp");
-  writeFileSync(launcher, `#!/bin/sh\nFAKE_DEVIN_CONFIG=${agentId === 'devin' ? '1' : '0'} FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))} exec "${process.execPath}" "${FAKE}" "$@"\n`);
+  writeFileSync(launcher, `#!/bin/sh\nFAKE_DEVIN_CONFIG=${agentId === 'devin' ? '1' : '0'} FAKE_ACP_SESSION=${sessionMode} FAKE_ACP_STATE=${JSON.stringify(path.join(home, "acp-state"))} exec "${process.execPath}" "${FAKE}" "$@"\n`);
   chmodSync(launcher, 0o755);
   const agentsDir = path.join(home, "data", "t", "agents");
   mkdirSync(agentsDir, { recursive: true });
-  writeFileSync(path.join(agentsDir, `${agentId}.json`), JSON.stringify({ id: agentId, displayName: "Fixture Agent", binary: launcher, args: ["--acp"], transport: "acp" }));
+  writeFileSync(path.join(agentsDir, `${agentId}.json`), JSON.stringify({ id: agentId, displayName: "Fixture Agent", binary: launcher, args: ["--acp"], transport: "acp", ...(sessionMode ? { modelArgs: ["-m", "{model}"] } : {}) }));
   const engine = await startEngine({ home, ...(agentId === 'devin' ? { env: { XDG_CONFIG_HOME: path.join(home, 'config') } } : {}) });
   engines.push(engine);
   const client = await engine.connect({ clientKind });
@@ -86,6 +86,15 @@ async function boot({ clientKind = "test", agentId = 'fixture-acp' } = {}) {
 }
 
 describe("an agent hosted through the Agent Client Protocol", () => {
+  test('an agent that will not open a session is quoted under its own name, in Settings and in the failed run', async () => {
+    const { client, runTo } = await boot({ session: 'ineligible' });
+    const report = await client.call('agent.models', { agentId: 'fixture-acp' });
+    expect(report).toMatchObject({ models: [], source: 'none', note: 'Fixture Agent: This sign-in is no longer supported for this account.' });
+    const run = await runTo('ineligible', 'hello');
+    expect(run.state).toBe('failed');
+    expect(run.failure).toBe('Fixture Agent: could not open a session (check its sign-in): This sign-in is no longer supported for this account.');
+  }, 30_000);
+
   test('successful file creation and replacement are acknowledged without a parse error or retry', async () => {
     const { client, repo, runTo, messagesOf, text, events } = await boot({ agentId: 'devin' });
     try {
