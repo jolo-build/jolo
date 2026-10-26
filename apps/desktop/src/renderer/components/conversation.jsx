@@ -9,7 +9,7 @@ import { basename, runLabel, screenshotArtifactId } from "../presentation.js";
 import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
 import { delegationChild, delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
 import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
-import { parseWorkflowCall, workflowTasksFor } from "../workflow-call.js";
+import { parseWorkflowCall, workflowCardShown, workflowLaunched, workflowTasksFor } from "../workflow-call.js";
 import { TERMINAL } from "@jolo/client/run-state";
 import { relativeTime } from "@jolo/client/board";
 import { ChangeSummary } from './change-summary.jsx';
@@ -214,6 +214,9 @@ const WorkflowCallBlock = memo(function WorkflowCallBlock(/** @type {WorkflowCal
   </div>;
 });
 
+/** The run states in which work is going on: its note's icon turns. */
+const WORKING_RUN_STATES = ['preparing', 'model', 'tools', 'cancelling'];
+
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
   const working = status === "streaming";
   if (!text.trim()) return <div className={`reasoning-pending${working ? '' : ' deferred'}`} role="status"><ActivityIcon name={working ? 'think' : 'spinner'} active /><span>{working ? "Thinking…" : "Loading reasoning…"}</span></div>;
@@ -305,7 +308,10 @@ export function groupMessages(messages, runs) {
     // A provider may complete a thinking block without a displayable summary.
     // Keep pending artifact loads visible, but never leave an empty disclosure.
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
-    const workflowCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
+    const parsedWorkflow = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
+    // A call that answered with anything but its launch (an error, a refusal) started nothing: it is one of its run's
+    // actions, with no card and no claim on a task, and Claude says what went wrong in its own words.
+    const workflowCall = parsedWorkflow && (message.status === "streaming" || !parsedWorkflow.reply || workflowLaunched(parsedWorkflow.reply)) ? parsedWorkflow : null;
     const delegationCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseDelegationCall(message.text) : null;
     let childLine = null;
     if (delegationCall && delegationCall.name !== "delegate_task") {
@@ -459,12 +465,27 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
   // parsed in them, so only the Workflow cards, whose tasks it carries, render again.
   const groupingKey = `${messages.map(m => `${m.id}\u0001${m.status}\u0001${m.renderedBytes ?? 0}\u0001${m.committedBytes ?? 0}\u0001${m.evicted ? 1 : 0}\u0001${m.loadError ? 1 : 0}`).join('\u0002')}\u0003${runs.map(run => `${run.id}\u0001${run.state ?? ''}\u0001${run.createdAt ?? ''}\u0001${run.updatedAt ?? ''}`).join('\u0002')}`;
   const grouped = useMemo(() => groupMessages(messages, projection?.runs), [groupingKey]);
-  const groups = [...grouped.groups];
   // Each Workflow call's card is about the task of its workflow's name that started during its run (see workflowTasksFor).
   const workflowTasks = useMemo(() => {
     const callTasks = workflowTasksFor(grouped.workflowCalls, activity);
     return new Map(grouped.workflowCalls.map((slot, index) => [slot.id, callTasks[index]]));
   }, [grouped, activity]);
+  // A Workflow card stays only while it is worth showing (see workflowCardShown). Where one leaves, the actions of its run
+  // on either side of it read as one group again, as they would have with no card between them.
+  /** @type {any[]} */
+  const groups = [];
+  for (const group of grouped.groups) {
+    if (group.type === "workflow") {
+      const run = projection?.runs.get(group.runId);
+      // A paused run is not going: one a later prompt superseded never resumes, and its launch's task is long gone.
+      const runGoing = Boolean(run && (WORKING_RUN_STATES.includes(run.state) || ['queued', 'awaiting_permission'].includes(run.state)));
+      const shown = workflowCardShown(workflowTasks.get(group.id) ?? null, { status: group.message.status, reply: group.call.reply, runGoing });
+      if (!shown) continue;
+    }
+    const before = groups.at(-1);
+    if (group.type === "activity" && before?.type === "activity" && before.runId === group.runId) groups[groups.length - 1] = { ...before, messages: [...before.messages, ...group.messages] };
+    else groups.push(group);
+  }
   if (lastRun && !["completed", "paused", "cancelled"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
   for (const card of changeCards) {
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
@@ -506,10 +527,13 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
           const card = changeCards.find(card => card.runId === group.runId);
           return <ChangeSummary key={group.id} runId={group.runId} files={card.files} initialCounts={card.counts} onCounts={counts => recordCounts(group.runId, counts)} onLoadDiff={loadRunDiff} onReview={onReview} />;
         }
-        if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={['preparing', 'model', 'tools', 'cancelling'].includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
+        if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={WORKING_RUN_STATES.includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
         if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} wakeReason={group.wakeReason} onOpenSession={onOpenSession} />;
-        if (group.type === "workflow") return <WorkflowCallBlock key={group.id} call={group.call} task={workflowTasks.get(group.id) ?? null} onOpenActivity={onOpenActivity} />;
+        if (group.type === "workflow") {
+          // Only a card still worth showing is in the groups: once its workflow ended, the Activity panel is where it is.
+          return <WorkflowCallBlock key={group.id} call={group.call} task={workflowTasks.get(group.id) ?? null} onOpenActivity={onOpenActivity} />;
+        }
         if (group.type === "activity") return <ActivityGroup key={group.id} messages={group.messages} runState={projection?.runs.get(group.runId)?.state} identity={identityFor(projection?.runs.get(group.runId))} guest={guestFor(projection?.runs.get(group.runId))} hasRunStatus={Boolean(activeRun && activeRun.id === group.runId)} />;
         const message = group.message;
         if (message.evicted) return <div key={message.id} className="message evicted">Older text was released from memory.</div>;

@@ -13,6 +13,11 @@ const CLOSES = new Set(['}', ']', ')']);
 const WORD = /[\w$]+/y;
 const COLON = /\s*:\s*/y;
 const STRING_COLON = /\s*:\s*"/y;
+// A script Claude Code saved for a run, which a later call re-runs by its path: `<meta name>-wf_<run id>.js`, the run id
+// always eight hex digits, a dash and three more, so a script of the user's own named alike is not taken for one.
+const SAVED_SCRIPT = /(?:^|[\\/])([^\\/]+)-wf_[0-9a-f]{8}-[0-9a-f]{3}\.js$/i;
+// The Workflow tool's answer when it started the workflow: it runs in the background from there.
+const LAUNCHED = /\b(?:launched|started) in (?:the )?background\b/i;
 
 /** The match of a sticky pattern at `at`, or null. @param {RegExp} pattern @param {string} text @param {number} at */
 const stickAt = (pattern, text, at) => { pattern.lastIndex = at; return pattern.exec(text); };
@@ -109,10 +114,16 @@ function cutScript(json) {
   try { return JSON.parse(`"${match[1].replace(/\\u[0-9a-fA-F]{0,3}$/, '')}"`); } catch { return null; }
 }
 
+/** The workflow name in the file name of a script Claude Code saved for a run; null for any other path. @param {unknown} path */
+function savedScriptName(path) {
+  return typeof path === 'string' ? SAVED_SCRIPT.exec(path)?.[1] ?? null : null;
+}
+
 /**
- * The workflow an input names: its own `name` (a saved workflow), else its script's meta name. From a head the engine cut,
- * a script's meta name when it has a script, and its top-level `name` only when it has none, since a `name` the cut
- * input shows first may be one of its arguments'.
+ * The workflow an input names: its own `name` (a saved workflow), else its script's meta name, else the name in the file
+ * name of a script Claude Code saved for an earlier run (a `scriptPath` re-run). From a head the engine cut, a script's
+ * meta name when it has a script, and its top-level `name` or saved script path only when it has none, since a `name`
+ * the cut input shows first may be one of its arguments'.
  * @param {string} json
  */
 function inputName(json) {
@@ -121,16 +132,17 @@ function inputName(json) {
   try { input = JSON.parse(json); }
   catch {
     const script = cutScript(json);
-    return script === null ? topLevelField(json, 'name') : metaName(script);
+    return script === null ? topLevelField(json, 'name') ?? savedScriptName(topLevelField(json, 'scriptPath')) : metaName(script);
   }
   if (typeof input?.name === 'string' && input.name) return input.name;
-  return typeof input?.script === 'string' ? metaName(input.script) : null;
+  if (typeof input?.script === 'string') return metaName(input.script);
+  return savedScriptName(input?.scriptPath);
 }
 
 /**
  * A `Workflow` tool call as the transcript shows it; null for any other tool line. Its name is the input's `name` when
- * it has one, else the `name:` of its script's `meta` literal, read from the head the engine may have cut; null when
- * neither is there (a `scriptPath` call, say). Its reply is the text after the head, trimmed: empty while the call is
+ * it has one, else the `name:` of its script's `meta` literal, read from the head the engine may have cut, else the name
+ * in the file name of a script Claude Code saved for a run; null when none is there (a script file of the user's own). Its reply is the text after the head, trimmed: empty while the call is
  * still going, then the tool's answer or its error.
  * @param {string} text the tool message's text (head line, then the reply)
  * @returns {{ name: string | null, reply: string } | null}
@@ -144,7 +156,8 @@ export function parseWorkflowCall(text) {
 
 /**
  * A Workflow call as the cards ask for their tasks: the workflow's name (see parseWorkflowCall) and the window its task can
- * have started in, which is its run's (as the conversation builds it, in ms), or null when its run is not known.
+ * have started in, which is its run's (as the conversation builds it, in ms), or null when its run is not known. A call
+ * that failed is no card, so it is not among them and claims nothing.
  * @typedef {{ name: string | null, window: { from: number, to: number } | null }} WorkflowCallSlot
  */
 
@@ -153,7 +166,9 @@ export function parseWorkflowCall(text) {
  * card finds its task by the workflow's name, among the activity's workflow tasks, each name's oldest first: first every
  * call whose run is known takes the oldest unclaimed task of its name that started within its run's window (so a card
  * never takes a task of an earlier process, or one that started after its run ended), then every call whose run is not
- * known takes the oldest unclaimed task of its name of those left. A null name takes nothing.
+ * known takes the oldest unclaimed task of its name of those left, and last every call with no name whose run is known
+ * takes the oldest unclaimed workflow task of any name that started within its run. A null name of an unknown run takes
+ * nothing.
  * @param {WorkflowCallSlot[]} calls in transcript order
  * @param {import('./activity.js').Activity | null} activity
  * @returns {(TaskRecord | null)[]}
@@ -182,5 +197,32 @@ export function workflowTasksFor(calls, activity) {
   calls.forEach(({ name, window }, index) => {
     if (name !== null && !window) found[index] = take(name, () => true);
   });
+  // A call with no name (a script file of the user's own) takes the oldest workflow task left that started in its run.
+  calls.forEach(({ name, window }, index) => {
+    if (name !== null || !window) return;
+    const inRun = (/** @type {TaskRecord} */ task) => Date.parse(task.startedAt) >= window.from && Date.parse(task.startedAt) <= window.to;
+    const oldest = [...byName.entries()].map(([taskName, tasks]) => ({ taskName, task: tasks.find(inRun) }))
+      .filter(entry => entry.task).sort((a, b) => Date.parse(/** @type {TaskRecord} */ (a.task).startedAt) - Date.parse(/** @type {TaskRecord} */ (b.task).startedAt))[0];
+    if (oldest) found[index] = take(oldest.taskName, task => task === oldest.task);
+  });
   return found;
+}
+
+/** Whether a Workflow call's reply says it started the workflow. @param {string} reply */
+export const workflowLaunched = reply => LAUNCHED.test(reply);
+
+/**
+ * Whether a Workflow call keeps its card in the chat, as Claude's own app shows them: while its workflow runs. A
+ * finished, failed or stopped workflow leaves the chat (the Activity panel keeps it). With no task: a call still going
+ * keeps its card, and so does one whose run still goes on after the tool said it started the workflow, since the task
+ * comes in a moment later. A call whose workflow started once and whose task the activity no longer has (an earlier
+ * process) shows nothing. (A call that failed to start is no card at all; see the conversation's grouping.)
+ * @param {TaskRecord | null} task the card's task (see workflowTasksFor)
+ * @param {{ status: string, reply: string, runGoing: boolean }} call the call message's status, the tool's reply, and
+ * whether the call's run is still going
+ */
+export function workflowCardShown(task, { status, reply, runGoing }) {
+  if (task) return task.status === 'running';
+  if (status === 'streaming') return true;
+  return Boolean(reply) && workflowLaunched(reply) && runGoing;
 }

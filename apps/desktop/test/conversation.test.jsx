@@ -333,20 +333,49 @@ describe('a Workflow call', () => {
     for (const absent of ['<details', '<pre', 'stop-task', '1 action', 'Workflow {']) expect(html).not.toContain(absent);
   });
 
-  test('a stopped workflow’s card says Stopped, and its agents read stopped', () => {
-    const [card] = cards(page([workflowTool('call', 'demo')], [flow({ status: 'stopped', startedAt: '2026-10-24T10:00:00.000Z', endedAt: '2026-10-24T10:02:33.000Z' })]));
-    expect(card).toStartWith('<div class="workflow-call" data-state="stopped">');
-    expect(meta(card)).toEqual(['Workflow', '2 agents', '02:33', 'Stopped']);
-    expect(squares(card)).toEqual(['stopped', 'stopped']);
+  test('a workflow that ended leaves the chat, done, failed or stopped: the Activity panel keeps it', () => {
+    for (const status of ['completed', 'failed', 'stopped']) {
+      const html = page([workflowTool('call', 'demo')], [flow({ status, startedAt: '2026-10-24T10:00:00.000Z', endedAt: '2026-10-24T10:02:33.000Z' })]);
+      expect(html).not.toContain('workflow-call');
+      expect(html).not.toContain('Workflow {'); // nor does its raw tool line stand in for it
+    }
   });
 
-  test('a call with no task of its name says Workflow and the first line of its reply, the whole on hover, with no squares', () => {
-    const html = page([workflowTool('call', 'demo', 'SyntaxError: Unexpected token (3:4)\n    at line 3')], [flow({ name: 'other' })]);
-    const [card] = cards(html);
+  test('a call still going whose task has not come in keeps a card naming the workflow', () => {
+    const going = { ...workflowTool('call', 'demo', ''), status: 'streaming' };
+    const [card] = cards(page([going], [flow({ name: 'other' })]));
     expect(card).toStartWith('<div class="workflow-call" data-state="unknown"><button type="button" class="workflow-call-head" aria-label="Show demo in Activity"><span class="workflow-call-title">demo</span>');
-    expect(meta(card)).toEqual(['Workflow', 'SyntaxError: Unexpected token (3:4)']);
-    expect(card).toContain('<span class="workflow-call-reply" title="SyntaxError: Unexpected token (3:4)\n    at line 3">SyntaxError: Unexpected token (3:4)</span>');
+    expect(meta(card)).toEqual(['Workflow']);
     expect(card).not.toContain('phase-squares');
+  });
+
+  test('a launched call whose task has not come in keeps its card while its run goes on, and leaves once the run ended', () => {
+    const live = new Map([['run', { id: 'run', state: 'tools', createdAt: new Date().toISOString() }]]);
+    expect(cards(page([workflowTool('call', 'demo')], [], live))).toHaveLength(1);
+    // A paused run is not going: one a later prompt superseded never resumes.
+    const paused = new Map([['run', { id: 'run', state: 'paused', createdAt: new Date().toISOString() }]]);
+    expect(page([workflowTool('call', 'demo')], [], paused)).not.toContain('workflow-call');
+    const ended = new Map([['run', { id: 'run', state: 'completed', createdAt: new Date(Date.now() - 60_000).toISOString(), updatedAt: new Date().toISOString() }]]);
+    expect(page([workflowTool('call', 'demo')], [], ended)).not.toContain('workflow-call');
+  });
+
+  test('a call that failed to start is one of its run\'s actions, with no card and no claim on the task its retry started', () => {
+    const live = new Map([['run', { id: 'run', state: 'tools', createdAt: new Date(Date.now() - 60_000).toISOString() }]]);
+    const failed = workflowTool('bad', 'demo', '<tool_use_error>Workflow "demo" not found</tool_use_error>');
+    const html = page([failed, workflowTool('good', 'demo')], [flow()], live);
+    const found = cards(html);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toStartWith('<div class="workflow-call" data-state="running">');
+    expect(html).toContain('1 action');
+    expect(html.indexOf('1 action')).toBeLessThan(html.indexOf('workflow-call'));
+  });
+
+  test('where a card leaves, the actions of its run on either side of it read as one group', () => {
+    const bash = (/** @type {string} */ id) => ({ id, role: 'tool', kind: 'tool', runId: 'run', text: 'Bash {"command":"ls"}\n', status: 'complete', renderedBytes: 0, committedBytes: 0 });
+    const html = page([bash('one'), workflowTool('wf', 'demo'), bash('two')], [flow({ status: 'completed', endedAt: new Date().toISOString() })]);
+    expect(html).not.toContain('workflow-call');
+    expect(html).toContain('2 actions');
+    expect(html).not.toContain('1 action<');
   });
 
   test('two calls of one name claim its two tasks in order: the first card shows the older task', () => {
@@ -363,10 +392,13 @@ describe('a Workflow call', () => {
       ['early', { id: 'early', state: 'completed', createdAt: at(0), updatedAt: at(20) }],
       ['late', { id: 'late', state: 'completed', createdAt: at(100), updatedAt: at(130) }],
     ]);
-    const found = cards(page([workflowTool('a', 'demo', undefined, 'early'), workflowTool('b', 'demo', undefined, 'late')], [flow({ startedAt: at(101) })], runs));
-    expect(found).toHaveLength(2);
-    expect(found[0]).toStartWith('<div class="workflow-call" data-state="unknown">');
-    expect(found[1]).toStartWith('<div class="workflow-call" data-state="running">');
+    const between = { id: 'between', role: 'assistant', kind: 'text', runId: 'late', text: 'Second go.', status: 'complete', renderedBytes: 10, committedBytes: 10 };
+    const html = page([workflowTool('a', 'demo', undefined, 'early'), between, workflowTool('b', 'demo', undefined, 'late')], [flow({ startedAt: at(101) })], runs);
+    const found = cards(html);
+    // The early card finds no task of its run, so it shows nothing; the late card, after the text between them, shows the running task.
+    expect(found).toHaveLength(1);
+    expect(found[0]).toStartWith('<div class="workflow-call" data-state="running">');
+    expect(html.indexOf('Second go.')).toBeLessThan(html.indexOf('workflow-call'));
     // A run still going has no end yet: its card takes a task that started since.
     const going = new Map([['early', { id: 'early', state: 'tools', createdAt: at(0), updatedAt: at(1) }]]);
     expect(cards(page([workflowTool('a', 'demo', undefined, 'early')], [flow({ startedAt: at(101) })], going))[0]).toStartWith('<div class="workflow-call" data-state="running">');
@@ -377,7 +409,7 @@ describe('a Workflow call', () => {
     expect(cards(page([workflowTool('a', 'demo')], [task], new Map([['run', { id: 'run', usage: {} }]])))[0]).toStartWith('<div class="workflow-call" data-state="running">');
     // Known with its times, the same run's window leaves out a task from long before it.
     const known = new Map([['run', { id: 'run', state: 'completed', createdAt: at(3600), updatedAt: at(3630) }]]);
-    expect(cards(page([workflowTool('a', 'demo')], [task], known))[0]).toStartWith('<div class="workflow-call" data-state="unknown">');
+    expect(cards(page([workflowTool('a', 'demo')], [task], known))).toHaveLength(0);
   });
 
   test('any other tool line is still a generic tool block, not a card', () => {
