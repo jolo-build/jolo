@@ -106,3 +106,31 @@ test('a head\'s value is cut to 160 characters, and the whole line stays within 
   expect(Buffer.byteLength(huge)).toBeLessThanOrEqual(TOOL_DISPLAY_MAX_BYTES - 1); // the newline the turn adds still fits
   expect(huge.startsWith(`Bash: echo ${'é'.repeat(154)}…\n$ echo é`)).toBe(true);
 });
+
+test("Claude's task list tools only touch that list, so they are read class and never ask", async () => {
+  const { classify } = await import("../src/agents/claude-stream.js");
+  for (const tool of ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TodoWrite"]) expect(classify(tool)).toBe("read");
+  expect(classify("Bash")).toBe("process");
+});
+
+test("a task call's line keeps only what the pinned list reads, each text cut, so a long description never cuts its JSON", async () => {
+  const { toolDisplay } = await import("../src/agents/claude-stream.js");
+  const made = toolDisplay("TaskCreate", { subject: "Read config", description: "d".repeat(10_000), activeForm: "Reading config" });
+  expect(made).toBe('TaskCreate {"subject":"Read config","activeForm":"Reading config"}');
+  const changed = toolDisplay("TaskUpdate", { taskId: "2", status: "completed", description: "d".repeat(10_000), subject: "s".repeat(1000) });
+  expect(JSON.parse(changed.slice("TaskUpdate ".length))).toEqual({ taskId: "2", status: "completed", subject: "s".repeat(300) });
+});
+
+test("a long TodoWrite list keeps its JSON whole: each item's text cut, and its in-progress wording dropped when it would not fit", async () => {
+  const { toolDisplay } = await import("../src/agents/claude-stream.js");
+  const todos = Array.from({ length: 12 }, (_, at) => ({ content: `Item ${at} ${'c'.repeat(300)}`, status: at < 3 ? 'completed' : 'pending', activeForm: `Doing ${at} ${'a'.repeat(300)}` }));
+  const shown = toolDisplay("TodoWrite", { todos });
+  const [head, below] = [shown.slice(0, shown.indexOf('\n')), shown.slice(shown.indexOf('\n') + 1)];
+  expect(head).toBe("Todo list");
+  const parsed = JSON.parse(below);
+  expect(parsed.todos).toHaveLength(12);
+  expect(parsed.todos[0].content).toHaveLength(200);
+  expect(parsed.todos[0].activeForm).toBeUndefined();
+  const short = JSON.parse(toolDisplay("TodoWrite", { todos: [{ content: 'Plan', status: 'pending', activeForm: 'Planning' }] }).split('\n')[1]);
+  expect(short.todos[0]).toEqual({ content: 'Plan', status: 'pending', activeForm: 'Planning' });
+});

@@ -10,6 +10,7 @@ import { editedFiles, parseSubagent, shortStep } from "../subagent.js";
 import { delegationChild, delegationWords, liveDelegation, parseDelegationCall } from "../delegation.js";
 import { formatElapsed, phaseSquares, plural, squaresInWords, statusWord, workflowSummary } from "../activity.js";
 import { parseWorkflowCall, workflowCardShown, workflowLaunched, workflowTasksFor } from "../workflow-call.js";
+import { parseTaskCall, taskListFrom, taskProgress, taskStatusWords } from "../task-list.js";
 import { TERMINAL } from "@jolo/client/run-state";
 import { relativeTime } from "@jolo/client/board";
 import { ChangeSummary } from './change-summary.jsx';
@@ -214,8 +215,40 @@ const WorkflowCallBlock = memo(function WorkflowCallBlock(/** @type {WorkflowCal
   </div>;
 });
 
-/** The run states in which work is going on: its note's icon turns. */
+/** The run states in which work is going on: its note's icon turns, and so does the task Claude is working on. */
 const WORKING_RUN_STATES = ['preparing', 'model', 'tools', 'cancelling'];
+
+/**
+ * A task's mark: a check once done, an empty ring before. A task in progress turns only while a run is going; once the
+ * run ended it keeps a still ring with a dot, since nothing works on it until Claude takes it up again.
+ * @param {{ status: string, working: boolean }} props
+ */
+function TaskMark({ status, working }) {
+  if (status === 'completed') return <Icon name="circleCheck" size={14} className="task-mark" />;
+  if (status === 'in_progress') return working ? <Icon name="spinner" size={14} className="task-mark activity-spin" /> : <span className="task-mark task-mark-started" aria-hidden="true" />;
+  return <span className="task-mark task-mark-pending" aria-hidden="true" />;
+}
+
+/**
+ * Claude's task list, pinned under the conversation as Claude's own app pins it: each task with its mark, the one in
+ * progress by what it is doing while a run is going (`working`), by its name once the run ended. Once every task is done
+ * it folds to one quiet line, opened by a click.
+ * @typedef {{ tasks: import('../task-list.js').ListedTask[], working: boolean }} TaskListBlockProps
+ */
+const TaskListBlock = memo(function TaskListBlock(/** @type {TaskListBlockProps} */ { tasks, working }) {
+  const { done, total, finished } = taskProgress(tasks);
+  const list = <ul className="claude-tasks-items">
+    {tasks.map(task => <li key={task.id} data-status={task.status}>
+      <TaskMark status={task.status} working={working} />
+      <span>{working && task.status === 'in_progress' && task.activeForm ? task.activeForm : task.subject}<span className="sr-only">, {taskStatusWords(task.status)}</span></span>
+    </li>)}
+  </ul>;
+  if (finished) return <details className="claude-tasks done">
+    <summary><Icon name="circleCheck" size={14} className="task-mark" /><span>{plural(total, 'task')} done</span><Icon name="chevron" size={12} className="activity-disclosure" /></summary>
+    {list}
+  </details>;
+  return <section className="claude-tasks" aria-label={`Tasks, ${done} of ${total} done`}>{list}</section>;
+});
 
 const ReasoningBlock = memo(function ReasoningBlock(/** @type {{ text: string, status: string }} */ { text, status }) {
   const working = status === "streaming";
@@ -291,7 +324,7 @@ const RUN_SLACK_MS = 5000;
  * The transcript's lines from its messages: a subagent, a delegated child, a Workflow call each on a line of their own (a
  * later call about a child whose line is shown joins the actions instead), the other tool calls and reasoning of a run
  * together in one collapsed group, and every other message as itself. `workflowCalls` names each Workflow call's card for
- * workflowTasksFor. Pure: the same messages and runs give the same lines.
+ * workflowTasksFor; `taskCalls` are Claude's task list calls, which make no line, each with its run. Pure: the same messages and runs give the same lines.
  * @param {any[]} messages @param {Map<string, any> | undefined} runs
  */
 export function groupMessages(messages, runs) {
@@ -299,6 +332,8 @@ export function groupMessages(messages, runs) {
   const groups = [];
   /** @type {(import('../workflow-call.js').WorkflowCallSlot & { id: string })[]} */
   const workflowCalls = [];
+  /** @type {{ runId: string | null, call: import('../task-list.js').TaskCall }[]} */
+  const taskCalls = [];
   // Each child's line is its delegate_task call's: by the delegation id its result names, else, while it has no result,
   // by its title. A later status or cancel call about a child whose line is here joins the actions instead of repeating
   // it, and hands the line the reason its wait ended; one whose child's line is not loaded keeps a line of its own.
@@ -308,6 +343,9 @@ export function groupMessages(messages, runs) {
     // A provider may complete a thinking block without a displayable summary.
     // Keep pending artifact loads visible, but never leave an empty disclosure.
     if (message.kind === "reasoning" && !message.evicted && !message.loadError && !message.text.trim() && message.status !== "streaming" && (message.renderedBytes ?? 0) >= (message.committedBytes ?? 0)) continue;
+    // Claude's task list calls make no line of their own: the list they keep is pinned under the conversation instead.
+    const taskCall = message.kind === "tool" && !message.evicted && !message.loadError ? parseTaskCall(message.text, message.status === "streaming") : null;
+    if (taskCall) { taskCalls.push({ runId: message.runId ?? null, call: taskCall }); continue; }
     const parsedWorkflow = message.kind === "tool" && !message.evicted && !message.loadError ? parseWorkflowCall(message.text) : null;
     // A call that answered with anything but its launch (an error, a refusal) started nothing: it is one of its run's
     // actions, with no card and no claim on a task, and Claude says what went wrong in its own words.
@@ -340,7 +378,7 @@ export function groupMessages(messages, runs) {
       else groups.push({ type: "activity", id: message.id, runId: message.runId, messages: [message] });
     } else groups.push({ type: "message", id: message.id, message });
   }
-  return { groups, workflowCalls };
+  return { groups, workflowCalls, taskCalls };
 }
 
 /**
@@ -486,6 +524,9 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
     if (group.type === "activity" && before?.type === "activity" && before.runId === group.runId) groups[groups.length - 1] = { ...before, messages: [...before.messages, ...group.messages] };
     else groups.push(group);
   }
+  // Claude's task list stays under the conversation while the latest run is the one that last changed it.
+  const taskList = useMemo(() => taskListFrom(grouped.taskCalls.map(entry => entry.call)), [grouped]);
+  if (lastRun && taskList.length > 0 && grouped.taskCalls.at(-1)?.runId === lastRun.id) groups.push({ type: 'tasks', id: `tasks:${lastRun.id}` });
   if (lastRun && !["completed", "paused", "cancelled"].includes(lastRun.state)) groups.push({ type: 'run-note', id: 'run-note', runId: lastRun.id });
   for (const card of changeCards) {
     const end = groups.findLastIndex(group => (group.runId ?? group.message?.runId) === card.runId);
@@ -530,6 +571,7 @@ export function Conversation({ projection, sessionId, history, hasProject, stand
         if (group.type === 'run-note') return <div key={group.id} className={`run-note ${lastRun.state === "failed" ? "negative" : ""}`} role="status" title={identityFor(lastRun)}><ActivityIcon name={runIcons[lastRun.state] ?? 'clock'} active={WORKING_RUN_STATES.includes(lastRun.state)} /><span>{thinking ? 'Thinking…' : runLabel(lastRun)}{lastGuest ? ` · ${lastGuest}` : ''}{lastRun.failure ? `: ${lastRun.failure}` : ""}</span></div>;
         if (group.type === "subagent") return <SubagentBlock key={group.id} text={group.message.text} status={group.message.status} messageId={group.message.id} sessionId={sessionId} onReview={onReview} />;
         if (group.type === "delegation") return <DelegationBlock key={group.id} text={group.message.text} status={group.message.status} delegations={delegations} wakeReason={group.wakeReason} onOpenSession={onOpenSession} />;
+        if (group.type === "tasks") return <TaskListBlock key={group.id} tasks={taskList} working={WORKING_RUN_STATES.includes(lastRun?.state)} />;
         if (group.type === "workflow") {
           // Only a card still worth showing is in the groups: once its workflow ended, the Activity panel is where it is.
           return <WorkflowCallBlock key={group.id} call={group.call} task={workflowTasks.get(group.id) ?? null} onOpenActivity={onOpenActivity} />;

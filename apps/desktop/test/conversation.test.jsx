@@ -475,7 +475,64 @@ test('the transcript\'s lines come from its messages and runs alone, so an activ
   expect(groups.map((group) => group.type)).toEqual(['message', 'workflow', 'activity']);
   expect(groups[1].call).toMatchObject({ name: 'demo' });
   expect(workflowCalls).toEqual([{ id: 'wf', name: 'demo', window: { from: Date.parse('2026-10-24T10:00:00.000Z') - 5000, to: Infinity } }]);
-  expect(groupMessages(messages, runs)).toEqual({ groups, workflowCalls });
+  expect(groupMessages(messages, runs)).toEqual({ groups, workflowCalls, taskCalls: [] });
+});
+
+describe("Claude's task list", () => {
+  const tool = (/** @type {string} */ id, /** @type {string} */ runId, /** @type {string} */ text) => ({ id, role: 'tool', kind: 'tool', runId, text, status: 'complete', renderedBytes: 0, committedBytes: 0 });
+  const made = (/** @type {string} */ id, /** @type {string} */ subject, runId = 'run') => tool(`c${id}`, runId, `TaskCreate ${JSON.stringify({ subject, activeForm: `Doing ${subject}` })}\nTask #${id} created successfully: ${subject}`);
+  const moved = (/** @type {string} */ id, /** @type {string} */ status, runId = 'run') => tool(`u${id}${status}`, runId, `TaskUpdate ${JSON.stringify({ taskId: id, status })}\nUpdated task #${id} status`);
+  const user = (runId = 'run') => ({ id: `q-${runId}`, role: 'user', kind: 'text', runId, text: 'go', status: 'complete', renderedBytes: 2, committedBytes: 2 });
+  const view = (/** @type {any[]} */ messages, /** @type {any[]} */ runs) => renderToStaticMarkup(<Conversation {...(/** @type {ConversationProps} */ ({ projection: { ordered: () => messages, runs: new Map(runs.map(run => [run.id, run])) }, hasProject: true }))} />);
+
+  test('its calls make no line of their own; each is kept with its run', () => {
+    const { groups, taskCalls } = groupMessages([user(), made('1', 'Read'), tool('ls', 'run', 'Bash {"command":"ls"}\n'), moved('1', 'in_progress')], new Map());
+    expect(groups.map(group => group.type)).toEqual(['message', 'activity']);
+    expect(groups[1].messages.map((/** @type {any} */ message) => message.id)).toEqual(['ls']);
+    expect(taskCalls.map(entry => [entry.runId, entry.call.kind])).toEqual([['run', 'create'], ['run', 'update']]);
+  });
+
+  test('pinned open under the conversation while work is left, the task in progress by what it is doing', () => {
+    const markup = view([user(), made('1', 'Read'), made('2', 'Write'), moved('1', 'completed'), moved('2', 'in_progress')], [{ id: 'run', state: 'model' }]);
+    expect(markup).toContain('class="claude-tasks"');
+    expect(markup).toContain('aria-label="Tasks, 1 of 2 done"');
+    expect(markup).toContain('Doing Write');
+    expect(markup).not.toContain('TaskCreate');
+    expect(markup.indexOf('claude-tasks')).toBeLessThan(markup.indexOf('run-note'));
+  });
+
+  test('a task in progress turns only while a run is going; once the run ended it is still and shown by its name', () => {
+    const messages = [user(), made('1', 'Read'), made('2', 'Write'), moved('1', 'in_progress')];
+    const going = view(messages, [{ id: 'run', state: 'tools' }]);
+    expect(going).toContain('task-mark activity-spin');
+    expect(going).toContain('Doing Read');
+    const ended = view(messages, [{ id: 'run', state: 'completed' }]);
+    expect(ended).toContain('class="claude-tasks"');
+    expect(ended).not.toContain('activity-spin');
+    expect(ended).toContain('task-mark-started');
+    expect(ended).not.toContain('Doing Read');
+    expect(ended).toContain('>Read<');
+  });
+
+  test('built from the newest list line alone, when the calls that made the tasks are not loaded', () => {
+    const list = [{ id: '1', subject: 'Read', status: 'completed' }, { id: '2', subject: 'Write', activeForm: 'Writing', status: 'in_progress' }];
+    const only = tool('u2', 'run', `TaskUpdate ${JSON.stringify({ taskId: '2', status: 'in_progress' })}\nUpdated task #2 status\nTask list: ${JSON.stringify(list)}`);
+    const markup = view([user(), only], [{ id: 'run', state: 'model' }]);
+    expect(markup).toContain('aria-label="Tasks, 1 of 2 done"');
+    expect(markup).toContain('Writing');
+    expect(markup).toContain('<span class="sr-only">, in progress</span>');
+  });
+
+  test('folded to one line once every task is done', () => {
+    const markup = view([user(), made('1', 'Read'), moved('1', 'completed')], [{ id: 'run', state: 'completed' }]);
+    expect(markup).toContain('<details class="claude-tasks done">');
+    expect(markup).toContain('1 task done');
+  });
+
+  test('gone once a later run leaves the list alone', () => {
+    const markup = view([user('a'), made('1', 'Read', 'a'), user('b')], [{ id: 'a', state: 'completed' }, { id: 'b', state: 'completed' }]);
+    expect(markup).not.toContain('claude-tasks');
+  });
 });
 
 describe('a tool line as Claude Code shows it', () => {

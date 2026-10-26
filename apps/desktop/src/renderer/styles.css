@@ -464,6 +464,22 @@ details.block.delegation-details summary .delegation-words { flex: 0 3 auto; }
 .run-note { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .run-note > span { min-width: 0; overflow-wrap: anywhere; }
 .run-note.negative { color: var(--red); }
+/* Claude's task list, pinned under the conversation: open while work is left, one quiet line once all of it is done. */
+.claude-tasks { max-width: 440px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.claude-tasks-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.claude-tasks-items li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; color: var(--text); }
+.claude-tasks-items li > span { min-width: 0; overflow-wrap: anywhere; }
+.claude-tasks-items li[data-status="completed"] { color: var(--muted); }
+.task-mark { flex: none; margin-top: 2px; color: var(--muted); }
+.claude-tasks-items li[data-status="in_progress"] .task-mark { color: var(--text); }
+.task-mark-pending { width: 12px; height: 12px; margin: 3px 1px 0; border: 1px dashed var(--muted); border-radius: 50%; box-sizing: border-box; }
+/* In progress with no run going: a still ring with a dot, the current step, as nothing works on it until Claude takes it up again. */
+.task-mark-started { width: 12px; height: 12px; margin: 3px 1px 0; border: 1px solid var(--text); border-radius: 50%; box-sizing: border-box; background: radial-gradient(circle, var(--text) 0 2px, transparent 2.5px); }
+.claude-tasks.done { padding: 0; border-color: transparent; }
+.claude-tasks.done > summary { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: pointer; list-style: none; }
+.claude-tasks.done > summary::-webkit-details-marker { display: none; }
+.claude-tasks.done[open] > summary { margin-bottom: 8px; }
+.claude-tasks.done[open] > summary .activity-disclosure { transform: rotate(90deg); }
 .change-summary { min-width: 0; font-size: 12px; }
 .change-summary-header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .change-summary-icon { color: var(--muted); }
